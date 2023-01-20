@@ -1,3 +1,22 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Hash Join related functionality used both on logical and physical plans
+//!
 use std::{fmt, usize};
 
 use ahash::RandomState;
@@ -67,7 +86,7 @@ pub fn update_hash(
     Ok(())
 }
 
-// Get left and right indices which is satisfies the on condition (include equal_conditon and filter_in_join) in the Join
+// Get build and probe indices which is satisfies the on condition (include equal_conditon and filter_in_join) in the Join
 #[allow(clippy::too_many_arguments)]
 pub fn build_join_indices(
     probe_batch: &RecordBatch,
@@ -438,7 +457,7 @@ pub fn equal_rows(
     err.unwrap_or(Ok(res))
 }
 
-// Returns the index of equal condition join result: left_indices and right_indices
+// Returns the index of equal condition join result: build_indices and probe_indices
 // On LEFT.b1 = RIGHT.b2
 // LEFT Table:
 //  a1  b1  c1
@@ -466,9 +485,9 @@ pub fn equal_rows(
 // "| 13 | 10 | 130 | 12 | 10 | 120 |",
 // "| 9  | 8  | 90  | 8  | 8  | 80  |",
 // "+----+----+-----+----+----+-----+"
-// And the result of left and right indices
-// left indices:  5, 6, 6, 4
-// right indices: 3, 4, 5, 3
+// And the result of build and probe indices
+// build indices:  5, 6, 6, 4
+// probe indices: 3, 4, 5, 3
 #[allow(clippy::too_many_arguments)]
 pub fn build_equal_condition_join_indices(
     build_hashmap: &JoinHashMap,
@@ -496,14 +515,14 @@ pub fn build_equal_condition_join_indices(
     hashes_buffer.resize(probe_batch.num_rows(), 0);
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
     // Using a buffer builder to avoid slower normal builder
-    let mut left_indices = UInt64BufferBuilder::new(0);
-    let mut right_indices = UInt32BufferBuilder::new(0);
+    let mut build_indices = UInt64BufferBuilder::new(0);
+    let mut probe_indices = UInt32BufferBuilder::new(0);
     let offset_value = offset.unwrap_or(0);
-    // Visit all of the right rows
+    // Visit all of the probe rows
     for (row, hash_value) in hash_values.iter().enumerate() {
         // Get the hash and find it in the build index
 
-        // For every item on the left and right we check if it matches
+        // For every item on the build and probe we check if it matches
         // This possibly contains rows with hash collisions,
         // So we have to check here whether rows are equal or not
         if let Some((_, indices)) = build_hashmap
@@ -521,34 +540,34 @@ pub fn build_equal_condition_join_indices(
                     &keys_values,
                     *null_equals_null,
                 )? {
-                    left_indices.append(offset_build_index as u64);
-                    right_indices.append(row as u32);
+                    build_indices.append(offset_build_index as u64);
+                    probe_indices.append(row as u32);
                 }
             }
         }
     }
-    let left = ArrayData::builder(DataType::UInt64)
-        .len(left_indices.len())
-        .add_buffer(left_indices.finish())
+    let build = ArrayData::builder(DataType::UInt64)
+        .len(build_indices.len())
+        .add_buffer(build_indices.finish())
         .build()
         .unwrap();
-    let right = ArrayData::builder(DataType::UInt32)
-        .len(right_indices.len())
-        .add_buffer(right_indices.finish())
+    let probe = ArrayData::builder(DataType::UInt32)
+        .len(probe_indices.len())
+        .add_buffer(probe_indices.finish())
         .build()
         .unwrap();
 
     Ok((
-        PrimitiveArray::<UInt64Type>::from(left),
-        PrimitiveArray::<UInt32Type>::from(right),
+        PrimitiveArray::<UInt64Type>::from(build),
+        PrimitiveArray::<UInt32Type>::from(probe),
     ))
 }
 
-// Maps a `u64` hash value based on the left ["on" values] to a list of indices with this key's value.
+// Maps a `u64` hash value based on the build ["on" values] to a list of indices with this key's value.
 //
 // Note that the `u64` keys are not stored in the hashmap (hence the `()` as key), but are only used
 // to put the indices in a certain bucket.
-// By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the left side,
+// By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
 // we make sure that we don't have to re-hash the hashmap, which needs access to the key (the hash in this case) value.
 // E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
 // As the key is a hash value, we need to check possible hash collisions in the probe stage

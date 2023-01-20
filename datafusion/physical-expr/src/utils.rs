@@ -270,6 +270,8 @@ fn add_physical_expr_to_graph<T>(
     graph: &mut StableGraph<T, usize>,
     input_node: T,
 ) -> NodeIndex {
+    // If we visited the node before, we just return it. That means, this node will be have multiple
+    // parents.
     match visited
         .iter()
         .find(|(visited_expr, _node)| visited_expr.eq(&input.expr()))
@@ -313,7 +315,6 @@ where
 {
     let init = Arc::new(ExprTreeNode::new(expr.clone()));
     let mut graph: StableGraph<T, usize> = StableGraph::new();
-    // TODO: Make membership check O(1)
     let mut visited_plans: Vec<(Arc<dyn PhysicalExpr>, NodeIndex)> = vec![];
     // Create a graph
     let root_tree_node = init.mutable_transform_up(&mut |expr| {

@@ -1,3 +1,22 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Interval arithmetics library
+//!
 use std::borrow::Borrow;
 
 use arrow::datatypes::DataType;
@@ -24,6 +43,15 @@ pub struct Range {
 impl Range {
     fn new(lower: ScalarValue, upper: ScalarValue) -> Range {
         Range { lower, upper }
+    }
+}
+
+impl Default for Range {
+    fn default() -> Self {
+        Range {
+            lower: ScalarValue::Null,
+            upper: ScalarValue::Null,
+        }
     }
 }
 
@@ -76,6 +104,12 @@ fn cast_scalar_value(
 pub enum Interval {
     Singleton(ScalarValue),
     Range(Range),
+}
+
+impl Default for Interval {
+    fn default() -> Self {
+        Interval::Range(Range::default())
+    }
 }
 
 impl Interval {
@@ -484,71 +518,6 @@ impl Interval {
     }
 
     pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
-        let rhs = other.borrow();
-        let result = match (self, rhs) {
-            (Interval::Singleton(val), Interval::Singleton(val2)) => {
-                Interval::Singleton(val.sub(val2).unwrap())
-            }
-            (Interval::Singleton(val), Interval::Range(Range { lower, upper })) => {
-                let new_lower = if lower.is_null() {
-                    lower.clone()
-                } else {
-                    lower.add(val)?.arithmetic_negate()?
-                };
-                let new_upper = if upper.is_null() {
-                    upper.clone()
-                } else {
-                    upper.add(val)?.arithmetic_negate()?
-                };
-                Interval::Range(Range {
-                    lower: new_lower,
-                    upper: new_upper,
-                })
-            }
-            (Interval::Range(Range { lower, upper }), Interval::Singleton(val)) => {
-                let new_lower = if lower.is_null() {
-                    lower.clone()
-                } else {
-                    lower.sub(val)?
-                };
-                let new_upper = if upper.is_null() {
-                    upper.clone()
-                } else {
-                    upper.sub(val)?
-                };
-                Interval::Range(Range {
-                    lower: new_lower,
-                    upper: new_upper,
-                })
-            }
-            (
-                Interval::Range(Range { lower, upper }),
-                Interval::Range(Range {
-                    lower: lower2,
-                    upper: upper2,
-                }),
-            ) => {
-                let new_lower = if lower.is_null() || upper2.is_null() {
-                    ScalarValue::try_from(&lower.get_datatype())?
-                } else {
-                    lower.sub(upper2)?
-                };
-
-                let new_upper = if upper.is_null() || lower2.is_null() {
-                    ScalarValue::try_from(&upper.get_datatype())?
-                } else {
-                    upper.sub(lower2)?
-                };
-
-                Interval::Range(Range {
-                    lower: new_lower,
-                    upper: new_upper,
-                })
-            }
-        };
-        Ok(result)
-    }
-    pub fn mul<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
         let result = match (self, rhs) {
             (Interval::Singleton(val), Interval::Singleton(val2)) => {

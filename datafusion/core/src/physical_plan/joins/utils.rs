@@ -17,12 +17,6 @@
 
 //! Join related functionality used both on logical and physical plans
 
-use std::cmp::max;
-use std::collections::HashSet;
-use std::future::Future;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::usize;
 use arrow::array::{
     new_null_array, Array, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
     UInt32Builder, UInt64Array,
@@ -34,9 +28,15 @@ use arrow::record_batch::RecordBatch;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use parking_lot::Mutex;
+use std::cmp::max;
+use std::collections::HashSet;
+use std::future::Future;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::usize;
 
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::ScalarValue;
+use datafusion_common::{ScalarValue, SharedResult};
 
 use datafusion_physical_expr::rewrite::TreeNodeRewritable;
 use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};

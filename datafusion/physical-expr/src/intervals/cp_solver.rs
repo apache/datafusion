@@ -1,3 +1,22 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! It solves constraint propagation problem for the custom PhysicalExpr
+//!
 use crate::expressions::{BinaryExpr, CastExpr, Literal};
 use crate::intervals::interval_aritmetics::{
     apply_operator, negate_ops, propagate_logical_operators, Interval,
@@ -20,7 +39,7 @@ use std::sync::Arc;
 /// Graph nodes contains interval information.
 pub struct ExprIntervalGraphNode {
     expr: Arc<dyn PhysicalExpr>,
-    interval: Option<Interval>,
+    interval: Interval,
 }
 
 impl Display for ExprIntervalGraphNode {
@@ -34,16 +53,15 @@ impl ExprIntervalGraphNode {
     pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
         ExprIntervalGraphNode {
             expr,
-            interval: None,
+            interval: Interval::default(),
         }
     }
     /// Specify interval
-    pub fn with_interval(mut self, interval: Interval) -> Self {
-        self.interval = Some(interval);
-        self
+    pub fn new_with_interval(expr: Arc<dyn PhysicalExpr>, interval: Interval) -> Self {
+        ExprIntervalGraphNode { expr, interval }
     }
     /// Get interval
-    pub fn interval(&self) -> &Option<Interval> {
+    pub fn interval(&self) -> &Interval {
         &self.interval
     }
 
@@ -54,7 +72,7 @@ impl ExprIntervalGraphNode {
         if let Some(literal) = plan_any.downcast_ref::<Literal>() {
             // Create interval
             let interval = Interval::Singleton(literal.value().clone());
-            ExprIntervalGraphNode::new(input.expr().clone()).with_interval(interval)
+            ExprIntervalGraphNode::new_with_interval(input.expr().clone(), interval)
         } else {
             ExprIntervalGraphNode::new(input.expr().clone())
         }
@@ -70,7 +88,7 @@ impl PartialEq for ExprIntervalGraphNode {
 pub struct ExprIntervalGraph(
     NodeIndex,
     StableGraph<ExprIntervalGraphNode, usize>,
-    Vec<(Arc<dyn PhysicalExpr>, usize)>,
+    pub Vec<(Arc<dyn PhysicalExpr>, usize)>,
 );
 
 /// This function calculates the current node interval
@@ -101,6 +119,7 @@ impl ExprIntervalGraph {
             build_physical_expr_graph(expr, &ExprIntervalGraphNode::expr_node_builder)?;
         let mut bfs = Bfs::new(&graph, root_node);
         let mut will_be_removed = vec![];
+        // We preserve the order with Vec<SortedFilterExpr> in SymmetricHashJoin.
         let mut expr_node_indices: Vec<(Arc<dyn PhysicalExpr>, usize)> = provided_expr
             .iter()
             .map(|e| (e.clone(), usize::MAX))
@@ -130,7 +149,7 @@ impl ExprIntervalGraph {
 
     pub fn calculate_new_intervals(
         &mut self,
-        expr_stats: &mut [(Arc<dyn PhysicalExpr>, Interval)],
+        expr_stats: &mut [(usize, Interval)],
     ) -> Result<()> {
         self.post_order_interval_calculation(expr_stats)?;
         self.pre_order_interval_propagation(expr_stats)?;
@@ -139,7 +158,7 @@ impl ExprIntervalGraph {
 
     fn post_order_interval_calculation(
         &mut self,
-        expr_stats: &[(Arc<dyn PhysicalExpr>, Interval)],
+        expr_stats: &[(usize, Interval)],
     ) -> Result<()> {
         let mut dfs = DfsPostOrder::new(&self.1, self.0);
         while let Some(node) = dfs.next(&self.1) {
@@ -150,10 +169,10 @@ impl ExprIntervalGraph {
             // Check if we have a interval information about given PhysicalExpr, if so, directly
             // propagate it to the upper.
             if let Some((_, interval)) =
-                expr_stats.iter().find(|(e, _interval)| expr.eq(e))
+                expr_stats.iter().find(|(e, _)| *e == node.index())
             {
                 let input = self.1.index_mut(node);
-                input.interval = Some(interval.clone());
+                input.interval = interval.clone();
                 continue;
             }
 
@@ -165,23 +184,14 @@ impl ExprIntervalGraph {
                 let first_child_node_index = edges.next_node(&self.1).unwrap();
                 // Do not use any reference from graph, MUST clone here.
                 let left_interval =
-                    match self.1.index(first_child_node_index).interval().as_ref() {
-                        Some(v) => v.clone(),
-                        None => continue,
-                    };
+                    self.1.index(first_child_node_index).interval().clone();
                 let right_interval =
-                    match self.1.index(second_child_node_index).interval().as_ref() {
-                        Some(v) => v.clone(),
-                        None => continue,
-                    };
+                    self.1.index(second_child_node_index).interval().clone();
                 // Since we release the reference, we can get mutable reference.
                 let input = self.1.index_mut(node);
                 // Calculate and replace the interval
-                input.interval = Some(apply_operator(
-                    &left_interval,
-                    binary.op(),
-                    &right_interval,
-                )?);
+                input.interval =
+                    apply_operator(&left_interval, binary.op(), &right_interval)?;
             } else if let Some(CastExpr {
                 cast_type,
                 cast_options,
@@ -192,14 +202,10 @@ impl ExprIntervalGraph {
                 let child_index = edges.next_node(&self.1).unwrap();
                 let child = self.1.index(child_index);
                 // Cast the interval
-                let new_interval = match &child.interval {
-                    Some(interval) => interval.cast_to(cast_type, cast_options)?,
-                    // If there is no child, continue
-                    None => continue,
-                };
+                let new_interval = child.interval.cast_to(cast_type, cast_options)?;
                 // Update the interval
                 let input = self.1.index_mut(node);
-                input.interval = Some(new_interval);
+                input.interval = new_interval;
             }
         }
         Ok(())
@@ -207,7 +213,7 @@ impl ExprIntervalGraph {
 
     pub fn pre_order_interval_propagation(
         &mut self,
-        expr_stats: &mut [(Arc<dyn PhysicalExpr>, Interval)],
+        expr_stats: &mut [(usize, Interval)],
     ) -> Result<()> {
         let mut bfs = Bfs::new(&self.1, self.0);
         while let Some(node) = bfs.next(&self.1) {
@@ -216,14 +222,12 @@ impl ExprIntervalGraph {
             let expr = input.expr.clone();
             // Get calculated interval. BinaryExpr will propagate the interval according to
             // this.
-            let parent_calculated_interval = match input.interval().as_ref() {
-                Some(i) => i.clone(),
-                None => continue,
-            };
+            let node_interval = input.interval().clone();
 
-            if let Some(index) = expr_stats.iter().position(|(e, _interval)| expr.eq(e)) {
-                let col_interval = expr_stats.get_mut(index).unwrap();
-                *col_interval = (col_interval.0.clone(), parent_calculated_interval);
+            if let Some((_, interval)) =
+                expr_stats.iter_mut().find(|(e, _)| *e == node.index())
+            {
+                *interval = node_interval;
                 continue;
             }
 
@@ -235,20 +239,14 @@ impl ExprIntervalGraph {
                 // Get right node.
                 let second_child_node_index = edges.next_node(&self.1).unwrap();
                 let second_child_interval =
-                    match self.1.index(second_child_node_index).interval().as_ref() {
-                        Some(v) => v,
-                        None => continue,
-                    };
+                    self.1.index(second_child_node_index).interval();
                 // Get left node.
                 let first_child_node_index = edges.next_node(&self.1).unwrap();
                 let first_child_interval =
-                    match self.1.index(first_child_node_index).interval().as_ref() {
-                        Some(v) => v,
-                        None => continue,
-                    };
+                    self.1.index(first_child_node_index).interval();
 
                 let (shrink_left_interval, shrink_right_interval) =
-                    if parent_calculated_interval.is_boolean() {
+                    if node_interval.is_boolean() {
                         propagate_logical_operators(
                             first_child_interval,
                             binary.op(),
@@ -257,13 +255,13 @@ impl ExprIntervalGraph {
                     } else {
                         let negated_op = negate_ops(*binary.op());
                         let new_right_operator = calculate_node_interval(
-                            &parent_calculated_interval,
+                            &node_interval,
                             second_child_interval,
                             negated_op,
                             first_child_interval,
                         )?;
                         let new_left_operator = calculate_node_interval(
-                            &parent_calculated_interval,
+                            &node_interval,
                             first_child_interval,
                             negated_op,
                             &new_right_operator,
@@ -271,27 +269,20 @@ impl ExprIntervalGraph {
                         (new_left_operator, new_right_operator)
                     };
                 let mutable_first_child = self.1.index_mut(first_child_node_index);
-                mutable_first_child.interval = Some(shrink_left_interval.clone());
+                mutable_first_child.interval = shrink_left_interval.clone();
                 let mutable_second_child = self.1.index_mut(second_child_node_index);
-                mutable_second_child.interval = Some(shrink_right_interval.clone())
+                mutable_second_child.interval = shrink_right_interval.clone();
             } else if let Some(cast) = expr_any.downcast_ref::<CastExpr>() {
                 // Calculate new interval
                 let child_index = edges.next_node(&self.1).unwrap();
                 let child = self.1.index(child_index);
-                // Get child's internal datatype. If None, propagate None.
-                let cast_type = match child.interval() {
-                    Some(interval) => interval.get_datatype(),
-                    None => continue,
-                };
+                // Get child's internal datatype.
+                let cast_type = child.interval().get_datatype();
                 let cast_options = cast.cast_options();
-                let new_child_interval = match &child.interval {
-                    Some(_) => {
-                        parent_calculated_interval.cast_to(&cast_type, cast_options)?
-                    }
-                    None => continue,
-                };
+                let new_child_interval =
+                    node_interval.cast_to(&cast_type, cast_options)?;
                 let mutable_child = self.1.index_mut(child_index);
-                mutable_child.interval = Some(new_child_interval.clone());
+                mutable_child.interval = new_child_interval.clone();
             }
         }
         Ok(())
@@ -319,7 +310,7 @@ mod tests {
         left_waited: (Option<i32>, Option<i32>),
         right_waited: (Option<i32>, Option<i32>),
     ) -> Result<()> {
-        let mut col_stats = vec![
+        let col_stats = vec![
             (
                 exprs.0.clone(),
                 Interval::Range(Range {
@@ -355,10 +346,21 @@ mod tests {
             expr,
             &col_stats.iter().map(|(e, _)| e.clone()).collect_vec(),
         )?;
-        graph.calculate_new_intervals(&mut col_stats)?;
-        col_stats
+        let mut col_stat_nodes = col_stats
             .iter()
-            .zip(expected.iter())
+            .zip(graph.2.iter())
+            .map(|((_, interval), (_, index))| (*index, interval.clone()))
+            .collect_vec();
+        let expected_nodes = expected
+            .iter()
+            .zip(graph.2.iter())
+            .map(|((_, interval), (_, index))| (*index, interval.clone()))
+            .collect_vec();
+
+        graph.calculate_new_intervals(&mut col_stat_nodes[..])?;
+        col_stat_nodes
+            .iter()
+            .zip(expected_nodes.iter())
             .for_each(|((_, res), (_, expected))| assert_eq!(res, expected));
         Ok(())
     }

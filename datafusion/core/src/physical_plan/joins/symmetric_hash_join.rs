@@ -49,8 +49,9 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::logical_expr::JoinType;
 use crate::physical_plan::common::merge_batches;
-use crate::physical_plan::joins::hash_join_utils::update_hash;
-use crate::physical_plan::joins::hash_join_utils::{build_join_indices, JoinHashMap};
+use crate::physical_plan::joins::hash_join_utils::{
+    build_join_indices, update_hash, JoinHashMap,
+};
 use crate::physical_plan::joins::utils::build_batch_from_indices;
 use crate::physical_plan::{
     expressions::Column,
@@ -80,7 +81,9 @@ pub struct SortedFilterExpr {
     // Sort option
     sort_option: SortOptions,
     // Interval
-    interval: Option<Interval>,
+    interval: Interval,
+    // NodeIndex in Graph
+    node_index: usize,
 }
 
 impl SortedFilterExpr {
@@ -96,7 +99,8 @@ impl SortedFilterExpr {
             origin_expr,
             filter_expr,
             sort_option,
-            interval: None,
+            interval: Interval::default(),
+            node_index: 0,
         }
     }
     /// Get origin expr information
@@ -112,12 +116,16 @@ impl SortedFilterExpr {
         self.sort_option
     }
     /// Get interval information
-    pub fn interval(&self) -> &Option<Interval> {
+    pub fn interval(&self) -> &Interval {
         &self.interval
     }
     /// Sets interval
-    pub fn set_interval(&mut self, interval: Option<Interval>) {
+    pub fn set_interval(&mut self, interval: Interval) {
         self.interval = interval;
+    }
+    /// Node index in ExprIntervalGraph
+    pub fn node_index(&self) -> usize {
+        self.node_index
     }
 }
 
@@ -407,6 +415,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         // TODO: Discuss unbounded mpsc and bounded one.
         let left_stream = self.left.execute(partition, context.clone())?;
         let right_stream = self.right.execute(partition, context)?;
+
         let physical_expr_graph = ExprIntervalGraph::try_new(
             self.filter.expression().clone(),
             &self
@@ -415,6 +424,18 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                 .map(|sorted_expr| sorted_expr.filter_expr())
                 .collect_vec(),
         )?;
+        // We inject calculated node indexes into SortedFilterExpr. In graph calculations,
+        // we will be using node index to put calculated intervals into Columns or BinaryExprs .
+        let node_injected_filter_exprs = self
+            .filter_columns
+            .iter()
+            .zip(physical_expr_graph.2.iter())
+            .map(|(sorted_expr, (_, index))| {
+                let mut temp = sorted_expr.clone();
+                temp.node_index = *index;
+                temp
+            })
+            .collect_vec();
 
         Ok(Box::pin(SymmetricHashJoinStream {
             left_stream,
@@ -431,7 +452,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             join_metrics: SymmetricHashJoinMetrics::new(partition, &self.metrics),
             physical_expr_graph,
             null_equals_null: self.null_equals_null,
-            filter_columns: self.filter_columns.clone(),
+            filter_columns: node_injected_filter_exprs,
             final_result: false,
             data_side: JoinSide::Left,
         }))
@@ -563,7 +584,7 @@ fn column_stats_two_side(
         };
         let value = ScalarValue::try_from_array(&array, 0)?;
         let infinite = ScalarValue::try_from(value.get_datatype())?;
-        *interval = Some(if sort_option.descending {
+        *interval = if sort_option.descending {
             Interval::Range(Range {
                 lower: infinite,
                 upper: value,
@@ -573,7 +594,7 @@ fn column_stats_two_side(
                 lower: value,
                 upper: infinite,
             })
-        });
+        };
     }
     Ok(())
 }
@@ -599,9 +620,9 @@ fn determine_prune_length(
                     .unwrap()
                     .into_array(buffer.num_rows());
                 let target = if sort_option.descending {
-                    interval.as_ref()?.upper_value()
+                    interval.upper_value()
                 } else {
-                    interval.as_ref()?.lower_value()
+                    interval.lower_value()
                 };
                 Some(bisect::<true>(&[batch_arr], &[target], &[*sort_option]))
             } else {
@@ -893,20 +914,26 @@ impl OneSideHashJoiner {
             filter_columns,
             self.build_side,
         )?;
-        let mut filter_intervals: Vec<(Arc<dyn PhysicalExpr>, Interval)> = filter_columns
+
+        // We use Vec<(usize, Interval)> instead of Hashmap<usize, Interval> since the expected
+        // filter exprs relatively low and conversion between Vec<SortedFilterExpr> and Hashmap
+        // back and forth may be slower.
+
+        // Get calculated interval from Vec<SortedFilterExpr> into a Vec.
+        // TODO: For ozan, abi hesaplamadan Vec<SortedFilterExpr> verebilirdik direkt,
+        // ancak cyclic dependency olusturuyor dosyalar arası. SortedFilterExpr struct'ı common'a
+        // alabiliriz ve bu hesaplama olmadan SortedFilterExpr dogrudan graf icinde kullanilabilir.
+        let mut filter_intervals: Vec<(usize, Interval)> = filter_columns
             .iter()
-            .map(|sorted_expr| {
-                (
-                    sorted_expr.filter_expr(),
-                    sorted_expr.interval().as_ref().unwrap().clone(),
-                )
-            })
+            .map(|sorted_expr| (sorted_expr.node_index(), sorted_expr.interval().clone()))
             .collect_vec();
+        // Use this vector to seed the child PhysicalExpr interval.
         physical_expr_graph.calculate_new_intervals(&mut filter_intervals)?;
+        // Mutate the Vec<SortedFilterExpr> for
         for (sorted_expr, (_, interval)) in
             filter_columns.iter_mut().zip(filter_intervals.into_iter())
         {
-            sorted_expr.set_interval(Some(interval.clone()))
+            sorted_expr.set_interval(interval.clone())
         }
 
         let prune_length =
@@ -963,161 +990,177 @@ impl SymmetricHashJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<ArrowResult<RecordBatch>>> {
-        if self.final_result {
-            return Poll::Ready(None);
-        }
-        if self.right.exhausted && self.left.exhausted {
-            let left_result = self.left.build_side_determined_results(
-                self.schema.clone(),
-                self.left.input_buffer.num_rows(),
-                self.right.input_buffer.schema(),
-                self.join_type,
-                &self.column_indices,
-            );
-            let right_result = self.right.build_side_determined_results(
-                self.schema.clone(),
-                self.right.input_buffer.num_rows(),
-                self.left.input_buffer.schema(),
-                self.join_type,
-                &self.column_indices,
-            );
-            self.final_result = true;
-            let result =
-                produce_batch_result(self.schema.clone(), left_result, right_result);
-            if let Ok(batch) = &result {
-                self.join_metrics.output_batches.add(1);
-                self.join_metrics.output_rows.add(batch.num_rows());
+        loop {
+            if self.final_result {
+                return Poll::Ready(None);
             }
-            return Poll::Ready(Some(result));
-        }
-        if self.data_side.eq(&JoinSide::Left) {
-            match self.left_stream.poll_next_unpin(cx) {
-                Poll::Ready(Some(Ok(probe_batch))) => {
-                    self.join_metrics.left_input_batches.add(1);
-                    self.join_metrics
-                        .left_input_rows
-                        .add(probe_batch.num_rows());
-                    match self.left.update_internal_state(
-                        &self.on_left,
-                        &probe_batch,
-                        &self.random_state,
-                    ) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            return Poll::Ready(Some(Err(ArrowError::ComputeError(
-                                e.to_string(),
-                            ))))
+            if self.right.exhausted && self.left.exhausted {
+                let left_result = self.left.build_side_determined_results(
+                    self.schema.clone(),
+                    self.left.input_buffer.num_rows(),
+                    self.right.input_buffer.schema(),
+                    self.join_type,
+                    &self.column_indices,
+                );
+                let right_result = self.right.build_side_determined_results(
+                    self.schema.clone(),
+                    self.right.input_buffer.num_rows(),
+                    self.left.input_buffer.schema(),
+                    self.join_type,
+                    &self.column_indices,
+                );
+                self.final_result = true;
+                let result =
+                    produce_batch_result(self.schema.clone(), left_result, right_result);
+                if let Ok(batch) = &result {
+                    self.join_metrics.output_batches.add(1);
+                    self.join_metrics.output_rows.add(batch.num_rows());
+                }
+                return Poll::Ready(Some(result));
+            }
+            if self.data_side.eq(&JoinSide::Left) {
+                match self.left_stream.poll_next_unpin(cx) {
+                    Poll::Ready(Some(Ok(probe_batch))) => {
+                        self.join_metrics.left_input_batches.add(1);
+                        self.join_metrics
+                            .left_input_rows
+                            .add(probe_batch.num_rows());
+                        match self.left.update_internal_state(
+                            &self.on_left,
+                            &probe_batch,
+                            &self.random_state,
+                        ) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                return Poll::Ready(Some(Err(ArrowError::ComputeError(
+                                    e.to_string(),
+                                ))))
+                            }
                         }
+                        // Using right as build side.
+                        let equal_result = self.right.record_batch_from_other_side(
+                            self.schema.clone(),
+                            self.join_type,
+                            &self.on_right,
+                            &self.on_left,
+                            Some(&self.filter),
+                            &probe_batch,
+                            &mut self.left.visited_rows,
+                            self.left.offset,
+                            &self.column_indices,
+                            &self.random_state,
+                            &self.null_equals_null,
+                        );
+                        self.left.offset += probe_batch.num_rows();
+                        // Right side will be pruned since the batch coming from left.
+                        let anti_result = self.right.prune_build_side(
+                            self.schema.clone(),
+                            &probe_batch,
+                            &mut self.filter_columns,
+                            self.join_type,
+                            &self.column_indices,
+                            &mut self.physical_expr_graph,
+                        );
+                        let result = produce_batch_result(
+                            self.schema.clone(),
+                            equal_result,
+                            anti_result,
+                        );
+                        if let Ok(batch) = &result {
+                            self.join_metrics.output_batches.add(1);
+                            self.join_metrics.output_rows.add(batch.num_rows());
+                        }
+                        if !self.right.exhausted {
+                            self.data_side = JoinSide::Right;
+                        }
+                        return Poll::Ready(Some(result));
                     }
-                    // Using right as build side.
-                    let equal_result = self.right.record_batch_from_other_side(
-                        self.schema.clone(),
-                        self.join_type,
-                        &self.on_right,
-                        &self.on_left,
-                        Some(&self.filter),
-                        &probe_batch,
-                        &mut self.left.visited_rows,
-                        self.left.offset,
-                        &self.column_indices,
-                        &self.random_state,
-                        &self.null_equals_null,
-                    );
-                    self.left.offset += probe_batch.num_rows();
-                    // Right side will be pruned since the batch coming from left.
-                    let anti_result = self.right.prune_build_side(
-                        self.schema.clone(),
-                        &probe_batch,
-                        &mut self.filter_columns,
-                        self.join_type,
-                        &self.column_indices,
-                        &mut self.physical_expr_graph,
-                    );
-                    let result = produce_batch_result(
-                        self.schema.clone(),
-                        equal_result,
-                        anti_result,
-                    );
-                    if let Ok(batch) = &result {
-                        self.join_metrics.output_batches.add(1);
-                        self.join_metrics.output_rows.add(batch.num_rows());
-                    }
-                    if !self.right.exhausted {
+                    Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
+                    Poll::Ready(None) => {
+                        self.left.exhausted = true;
                         self.data_side = JoinSide::Right;
+                        continue;
                     }
-                    Poll::Ready(Some(result))
-                }
-                Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
-                Poll::Ready(None) => {
-                    self.left.exhausted = true;
-                    self.data_side = JoinSide::Right;
-                    Poll::Ready(Some(Ok(RecordBatch::new_empty(self.schema()))))
-                }
-                Poll::Pending => Poll::Pending,
-            }
-        } else {
-            match self.right_stream.poll_next_unpin(cx) {
-                Poll::Ready(Some(Ok(probe_batch))) => {
-                    self.join_metrics.right_input_batches.add(1);
-                    self.join_metrics
-                        .right_input_rows
-                        .add(probe_batch.num_rows());
-                    // Right is build side
-                    match self.right.update_internal_state(
-                        &self.on_right,
-                        &probe_batch,
-                        &self.random_state,
-                    ) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            return Poll::Ready(Some(Err(ArrowError::ComputeError(
-                                e.to_string(),
-                            ))))
+                    Poll::Pending => {
+                        if !self.right.exhausted {
+                            self.data_side = JoinSide::Right;
+                            continue;
+                        } else {
+                            return Poll::Pending;
                         }
                     }
-                    let equal_result = self.left.record_batch_from_other_side(
-                        self.schema.clone(),
-                        self.join_type,
-                        &self.on_left,
-                        &self.on_right,
-                        Some(&self.filter),
-                        &probe_batch,
-                        &mut self.right.visited_rows,
-                        self.right.offset,
-                        &self.column_indices,
-                        &self.random_state,
-                        &self.null_equals_null,
-                    );
-                    self.right.offset += probe_batch.num_rows();
-                    let anti_result = self.left.prune_build_side(
-                        self.schema.clone(),
-                        &probe_batch,
-                        &mut self.filter_columns,
-                        self.join_type,
-                        &self.column_indices,
-                        &mut self.physical_expr_graph,
-                    );
-                    let result = produce_batch_result(
-                        self.schema.clone(),
-                        equal_result,
-                        anti_result,
-                    );
-                    if let Ok(batch) = &result {
-                        self.join_metrics.output_batches.add(1);
-                        self.join_metrics.output_rows.add(batch.num_rows());
+                }
+            } else {
+                match self.right_stream.poll_next_unpin(cx) {
+                    Poll::Ready(Some(Ok(probe_batch))) => {
+                        self.join_metrics.right_input_batches.add(1);
+                        self.join_metrics
+                            .right_input_rows
+                            .add(probe_batch.num_rows());
+                        // Right is build side
+                        match self.right.update_internal_state(
+                            &self.on_right,
+                            &probe_batch,
+                            &self.random_state,
+                        ) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                return Poll::Ready(Some(Err(ArrowError::ComputeError(
+                                    e.to_string(),
+                                ))))
+                            }
+                        }
+                        let equal_result = self.left.record_batch_from_other_side(
+                            self.schema.clone(),
+                            self.join_type,
+                            &self.on_left,
+                            &self.on_right,
+                            Some(&self.filter),
+                            &probe_batch,
+                            &mut self.right.visited_rows,
+                            self.right.offset,
+                            &self.column_indices,
+                            &self.random_state,
+                            &self.null_equals_null,
+                        );
+                        self.right.offset += probe_batch.num_rows();
+                        let anti_result = self.left.prune_build_side(
+                            self.schema.clone(),
+                            &probe_batch,
+                            &mut self.filter_columns,
+                            self.join_type,
+                            &self.column_indices,
+                            &mut self.physical_expr_graph,
+                        );
+                        let result = produce_batch_result(
+                            self.schema.clone(),
+                            equal_result,
+                            anti_result,
+                        );
+                        if let Ok(batch) = &result {
+                            self.join_metrics.output_batches.add(1);
+                            self.join_metrics.output_rows.add(batch.num_rows());
+                        }
+                        if !self.left.exhausted {
+                            self.data_side = JoinSide::Left;
+                        }
+                        return Poll::Ready(Some(result));
                     }
-                    if !self.left.exhausted {
+                    Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
+                    Poll::Ready(None) => {
+                        self.right.exhausted = true;
                         self.data_side = JoinSide::Left;
+                        continue;
                     }
-                    Poll::Ready(Some(result))
+                    Poll::Pending => {
+                        if !self.left.exhausted {
+                            self.data_side = JoinSide::Left;
+                            continue;
+                        } else {
+                            return Poll::Pending;
+                        }
+                    }
                 }
-                Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
-                Poll::Ready(None) => {
-                    self.right.exhausted = true;
-                    self.data_side = JoinSide::Left;
-                    Poll::Ready(Some(Ok(RecordBatch::new_empty(self.schema()))))
-                }
-                Poll::Pending => Poll::Pending,
             }
         }
     }
