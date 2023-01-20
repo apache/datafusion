@@ -20,7 +20,9 @@
 
 use arrow::array::ArrayRef;
 use arrow::compute::kernels::sort::SortOptions;
-use datafusion_common::bisect::{bisect, find_bisect_point};
+use datafusion_common::utils::{
+    compare_rows, find_bisect_point, get_row_at_idx, search_in_slice,
+};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use std::cmp::min;
@@ -69,6 +71,7 @@ impl<'a> WindowFrameContext<'a> {
         sort_options: &[SortOptions],
         length: usize,
         idx: usize,
+        last_range: &Range<usize>,
     ) -> Result<Range<usize>> {
         match *self {
             WindowFrameContext::Rows(window_frame) => {
@@ -85,6 +88,7 @@ impl<'a> WindowFrameContext<'a> {
                 sort_options,
                 length,
                 idx,
+                last_range,
             ),
             // sort_options is not used in GROUPS mode calculations as the inequality of two rows is the indicator
             // of a group change, and the ordering and the position of the nulls do not have impact on inequality.
@@ -170,6 +174,7 @@ impl WindowFrameStateRange {
         sort_options: &[SortOptions],
         length: usize,
         idx: usize,
+        last_range: &Range<usize>,
     ) -> Result<Range<usize>> {
         let start = match window_frame.start_bound {
             WindowFrameBound::Preceding(ref n) => {
@@ -182,6 +187,8 @@ impl WindowFrameStateRange {
                         sort_options,
                         idx,
                         Some(n),
+                        last_range,
+                        length,
                     )?
                 }
             }
@@ -194,6 +201,8 @@ impl WindowFrameStateRange {
                         sort_options,
                         idx,
                         None,
+                        last_range,
+                        length,
                     )?
                 }
             }
@@ -203,6 +212,8 @@ impl WindowFrameStateRange {
                     sort_options,
                     idx,
                     Some(n),
+                    last_range,
+                    length,
                 )?,
         };
         let end = match window_frame.end_bound {
@@ -212,6 +223,8 @@ impl WindowFrameStateRange {
                     sort_options,
                     idx,
                     Some(n),
+                    last_range,
+                    length,
                 )?,
             WindowFrameBound::CurrentRow => {
                 if range_columns.is_empty() {
@@ -222,6 +235,8 @@ impl WindowFrameStateRange {
                         sort_options,
                         idx,
                         None,
+                        last_range,
+                        length,
                     )?
                 }
             }
@@ -235,6 +250,8 @@ impl WindowFrameStateRange {
                         sort_options,
                         idx,
                         Some(n),
+                        last_range,
+                        length,
                     )?
                 }
             }
@@ -243,19 +260,18 @@ impl WindowFrameStateRange {
     }
 
     /// This function does the heavy lifting when finding range boundaries. It is meant to be
-    /// called twice, in succession, to get window frame start and end indices (with `BISECT_SIDE`
-    /// supplied as false and true, respectively).
-    fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
+    /// called twice, in succession, to get window frame start and end indices (with `SIDE`
+    /// supplied as true and false, respectively).
+    fn calculate_index_of_row<const SIDE: bool, const SEARCH_SIDE: bool>(
         &mut self,
         range_columns: &[ArrayRef],
         sort_options: &[SortOptions],
         idx: usize,
         delta: Option<&ScalarValue>,
+        last_range: &Range<usize>,
+        length: usize,
     ) -> Result<usize> {
-        let current_row_values = range_columns
-            .iter()
-            .map(|col| ScalarValue::try_from_array(col, idx))
-            .collect::<Result<Vec<ScalarValue>>>()?;
+        let current_row_values = get_row_at_idx(range_columns, idx)?;
         let end_range = if let Some(delta) = delta {
             let is_descending: bool = sort_options
                 .first()
@@ -285,8 +301,16 @@ impl WindowFrameStateRange {
         } else {
             current_row_values
         };
-        // `BISECT_SIDE` true means bisect_left, false means bisect_right
-        bisect::<BISECT_SIDE>(range_columns, &end_range, sort_options)
+        let search_start = if SIDE {
+            last_range.start
+        } else {
+            last_range.end
+        };
+        let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
+            let cmp = compare_rows(current, target, sort_options)?;
+            Ok(if SIDE { cmp.is_lt() } else { cmp.is_le() })
+        };
+        search_in_slice(range_columns, &end_range, compare_fn, search_start, length)
     }
 }
 

@@ -176,17 +176,17 @@ impl PartitionEvaluator for NthValueEvaluator {
     }
 
     fn evaluate_stateful(&mut self, values: &[ArrayRef]) -> Result<ScalarValue> {
-        if let Some(result) = &self.state.finalized_result {
+        if let Some(ref result) = self.state.finalized_result {
             Ok(result.clone())
         } else {
-            self.evaluate_inside_range(values, self.state.range.clone())
+            self.evaluate_inside_range(values, &self.state.range)
         }
     }
 
     fn evaluate_inside_range(
         &self,
         values: &[ArrayRef],
-        range: Range<usize>,
+        range: &Range<usize>,
     ) -> Result<ScalarValue> {
         // FIRST_VALUE, LAST_VALUE, NTH_VALUE window functions take a single column, values will have size 1.
         let arr = &values[0];
@@ -235,7 +235,7 @@ mod tests {
         let evaluator = expr.create_evaluator()?;
         let values = expr.evaluate_args(&batch)?;
         let result = ranges
-            .into_iter()
+            .iter()
             .map(|range| evaluator.evaluate_inside_range(&values, range))
             .into_iter()
             .collect::<Result<Vec<ScalarValue>>>()?;

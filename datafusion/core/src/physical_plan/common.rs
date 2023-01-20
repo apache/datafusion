@@ -284,7 +284,7 @@ impl<T> AbortOnDropSingle<T> {
 }
 
 impl<T> Future for AbortOnDropSingle<T> {
-    type Output = std::result::Result<T, tokio::task::JoinError>;
+    type Output = Result<T, tokio::task::JoinError>;
 
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();

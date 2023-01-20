@@ -89,7 +89,7 @@ pub trait PartitionEvaluator: Debug + Send {
     fn evaluate_inside_range(
         &self,
         _values: &[ArrayRef],
-        _range: Range<usize>,
+        _range: &Range<usize>,
     ) -> Result<ScalarValue> {
         Err(DataFusionError::NotImplemented(
             "evaluate_inside_range is not implemented by default".into(),

@@ -157,7 +157,7 @@ fn create_runtime_env() -> Result<RuntimeEnv> {
     RuntimeEnv::new(rn_config)
 }
 
-fn is_valid_file(dir: &str) -> std::result::Result<(), String> {
+fn is_valid_file(dir: &str) -> Result<(), String> {
     if Path::new(dir).is_file() {
         Ok(())
     } else {
@@ -165,7 +165,7 @@ fn is_valid_file(dir: &str) -> std::result::Result<(), String> {
     }
 }
 
-fn is_valid_data_dir(dir: &str) -> std::result::Result<(), String> {
+fn is_valid_data_dir(dir: &str) -> Result<(), String> {
     if Path::new(dir).is_dir() {
         Ok(())
     } else {
@@ -173,7 +173,7 @@ fn is_valid_data_dir(dir: &str) -> std::result::Result<(), String> {
     }
 }
 
-fn is_valid_batch_size(size: &str) -> std::result::Result<(), String> {
+fn is_valid_batch_size(size: &str) -> Result<(), String> {
     match size.parse::<usize>() {
         Ok(size) if size > 0 => Ok(()),
         _ => Err(format!("Invalid batch size '{}'", size)),

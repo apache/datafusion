@@ -247,6 +247,7 @@ pub trait AggregateWindowExpr: WindowExpr {
                 &sort_options,
                 length,
                 *idx,
+                last_range,
             )?;
             // Exit if the range extends all the way:
             if cur_range.end == length && not_end {
