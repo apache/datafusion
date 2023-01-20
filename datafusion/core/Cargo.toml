@@ -53,6 +53,8 @@ regex_expressions = ["datafusion-physical-expr/regex_expressions"]
 scheduler = ["rayon"]
 simd = ["arrow/simd"]
 unicode_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion-sql/unicode_expressions"]
+# Enables support for non scalar, binary operations on dictionaries (note this results in significant additional codegen)
+dictionary_expressions = ["datafusion-physical-expr/dictionary_expressions"]
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
@@ -102,7 +104,6 @@ xz2 = { version = "0.1", optional = true }
 
 
 [dev-dependencies]
-arrow = { version = "31.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
 async-trait = "0.1.53"
 criterion = "0.4"
 csv = "1.1.6"

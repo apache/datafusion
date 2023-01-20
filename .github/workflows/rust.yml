@@ -95,11 +95,11 @@ jobs:
       - name: Build tests
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --features avro,jit,scheduler,json --no-run
+          cargo test --features avro,jit,scheduler,json,dictionary_expressions --no-run
       - name: Run tests
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --features avro,jit,scheduler,json
+          cargo test --features avro,jit,scheduler,json,dictionary_expressions
       - name: Run examples
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
