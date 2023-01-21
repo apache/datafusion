@@ -78,7 +78,7 @@ impl Postgres {
         // hint to user what the connection string was
         let res = config.connect(tokio_postgres::NoTls).await;
         if let Err(_) = &res {
-            eprintln!("Error connecting to posgres using PG_URI={dsn}");
+            eprintln!("Error connecting to posgres using PG_URI={uri}");
         };
 
         let (client, connection) = res?;
@@ -88,6 +88,22 @@ impl Postgres {
                 log::error!("Postgres connection error: {:?}", e);
             }
         });
+
+        let schema = schema_name(&file_name);
+
+        // create a new clean schema for running the test
+        debug!("Creating new empty schema '{schema}'");
+        client
+            .execute(&format!("DROP SCHEMA IF EXISTS {} CASCADE", schema), &[])
+            .await?;
+
+        client
+            .execute(&format!("CREATE SCHEMA {}", schema), &[])
+            .await?;
+
+        client
+            .execute(&format!("SET search_path TO {}", schema), &[])
+            .await?;
 
         Ok(Self {
             client,
@@ -168,6 +184,16 @@ impl Postgres {
 /// 'filename' --> filename
 fn no_quotes(t: &str) -> &str {
     t.trim_start_matches('\'').trim_end_matches('\'')
+}
+
+/// Given a file name like pg_compat_foo.slt
+/// return a schema name
+fn schema_name(file_name: &str) -> &str {
+    file_name
+        .split(".")
+        .next()
+        .unwrap_or("default_schema")
+        .trim_start_matches("pg_")
 }
 
 impl Drop for Postgres {

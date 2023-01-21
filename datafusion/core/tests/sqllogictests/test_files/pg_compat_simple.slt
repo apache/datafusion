@@ -21,10 +21,6 @@
 
 onlyif postgres
 statement ok
-DROP TABLE IF EXISTS aggregate_test_100_by_sql;
-
-onlyif postgres
-statement ok
 CREATE TABLE aggregate_test_100_by_sql
 (
     c1  character varying NOT NULL,
