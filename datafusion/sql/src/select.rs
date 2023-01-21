@@ -231,8 +231,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    /// Generate a logic plan from selection clause, the function contain optimization for cross join to inner join
-    /// Related PR: <https://github.com/apache/arrow-datafusion/pull/1566>
     fn plan_selection(
         &self,
         selection: Option<SQLExpr>,
