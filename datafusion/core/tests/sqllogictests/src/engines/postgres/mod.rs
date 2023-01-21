@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::{str::FromStr, time::Duration};
 
 use async_trait::async_trait;
+use bytes::Bytes;
+use futures::{SinkExt, StreamExt};
 use log::debug;
 use sqllogictest::{ColumnType, DBOutput};
 use tokio::task::JoinHandle;
@@ -29,67 +30,155 @@ use postgres_types::Type;
 use rust_decimal::Decimal;
 use tokio_postgres::{Column, Row};
 
-pub mod image;
+// default connect string, can be overridden by environment PG_DSN
+const PG_DSN: &str = "postgresql://postgres@127.0.0.1/test";
+
+/// DataFusion sql-logicaltest error
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Postgres error: {0}")]
+    Postgres(#[from] tokio_postgres::error::Error),
+    #[error("Error handling copy command: {0}")]
+    Copy(String),
+}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct Postgres {
-    client: Arc<tokio_postgres::Client>,
+    client: tokio_postgres::Client,
     join_handle: JoinHandle<()>,
+    /// Filename, for display purposes
     file_name: String,
 }
 
 impl Postgres {
-    pub async fn connect_with_retry(
-        file_name: String,
-        host: &str,
-        port: u16,
-        db: &str,
-        user: &str,
-        pass: &str,
-    ) -> Result<Self, tokio_postgres::error::Error> {
+    /// Creates a runner for executiong queries against an existing
+    /// posgres connection. `file_name` is used for display output
+    ///
+    /// The database connection details can be overridden by the
+    /// `PG_DSN` environment variable.
+    ///
+    /// This defaults to
+    ///
+    /// ```text
+    /// PG_DSN="postgresql://postgres@127.0.0.1/test"
+    /// ```
+    ///
+    /// See https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html#url for format
+    pub async fn connect(file_name: impl Into<String>) -> Result<Self> {
+        let file_name = file_name.into();
+
+        let dsn = if let Ok(val) = std::env::var("PG_DSN") {
+            val
+        } else {
+            PG_DSN.to_string()
+        };
+
+        debug!("Using posgres dsn: {dsn}");
+
+        let config = tokio_postgres::Config::from_str(&dsn)?;
+
         let mut retry = 0;
+
         loop {
-            let connection_result =
-                Postgres::connect(file_name.clone(), host, port, db, user, pass).await;
+            let connection_result = config.connect(tokio_postgres::NoTls).await;
+
             match connection_result {
                 Err(e) if retry <= 3 => {
                     debug!("Retrying connection error '{:?}'", e);
                     retry += 1;
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
-                result => break result,
+                Err(e) => return Err(Error::from(e)),
+                Ok((client, connection)) => {
+                    let join_handle = tokio::spawn(async move {
+                        if let Err(e) = connection.await {
+                            log::error!("Postgres connection error: {:?}", e);
+                        }
+                    });
+
+                    return Ok(Self {
+                        client,
+                        join_handle,
+                        file_name,
+                    });
+                }
             }
         }
     }
 
-    async fn connect(
-        file_name: String,
-        host: &str,
-        port: u16,
-        db: &str,
-        user: &str,
-        pass: &str,
-    ) -> Result<Self, tokio_postgres::error::Error> {
-        let (client, connection) = tokio_postgres::Config::new()
-            .host(host)
-            .port(port)
-            .dbname(db)
-            .user(user)
-            .password(pass)
-            .connect(tokio_postgres::NoTls)
-            .await?;
+    /// Special COPY command support. "COPY 'filename'" requires the
+    /// server to read the file which may not be possible (maybe it is
+    /// remote or running in some other docker container).
+    ///
+    /// Thus, we rewrite  sql statements like
+    ///
+    /// ```sql
+    /// COPY ... FROM 'filename' ...
+    /// ```
+    ///
+    /// Into
+    ///
+    /// ```sql
+    /// COPY ... FROM STDIN ...
+    /// ```
+    ///
+    /// And read the file locally.
+    async fn run_copy_command(&mut self, sql: &str) -> Result<DBOutput> {
+        let canonical_sql = sql.trim_start().to_ascii_lowercase();
 
-        let join_handle = tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                log::error!("Postgres connection error: {:?}", e);
+        debug!("Handling COPY command: {sql}");
+
+        // Hacky way to  find the 'filename' in the statement
+        let mut tokens = canonical_sql.split_whitespace().peekable();
+        let mut filename = None;
+
+        // COPY FROM '/opt/data/csv/aggregate_test_100.csv' ...
+        //
+        // into
+        //
+        // COPY FROM STDIN ...
+
+        let mut new_sql = vec![];
+        while let Some(tok) = tokens.next() {
+            new_sql.push(tok);
+            // rewrite FROM <file> to FROM STDIN
+            if tok == "from" {
+                filename = tokens.next();
+                new_sql.push("STDIN");
             }
-        });
+        }
 
-        Ok(Self {
-            client: Arc::new(client),
-            join_handle,
-            file_name,
-        })
+        let filename = filename.map(no_quotes).ok_or_else(|| {
+            Error::Copy(format!("Can not find filename in COPY: {sql}"))
+        })?;
+
+        let new_sql = new_sql.join(" ");
+        debug!("Copying data from file {filename} using sql: {new_sql}");
+
+        // start the COPY command and get location to write data to
+        let tx = self.client.transaction().await?;
+        let sink = tx.copy_in(&new_sql).await?;
+        let mut sink = Box::pin(sink);
+
+        // read the input file as a string ans feed it to the copy command
+        let data = std::fs::read_to_string(filename)
+            .map_err(|e| Error::Copy(format!("Error reading {}: {}", filename, e)))?;
+
+        let mut data_stream = futures::stream::iter(vec![Ok(Bytes::from(data))]).boxed();
+
+        sink.send_all(&mut data_stream).await?;
+        sink.close().await?;
+        tx.commit().await?;
+        Ok(DBOutput::StatementComplete(0))
     }
+}
+
+/// remove single quotes from the start and end of the string
+///
+/// 'filename' --> filename
+fn no_quotes(t: &str) -> &str {
+    t.trim_start_matches('\'').trim_end_matches('\'')
 }
 
 impl Drop for Postgres {
@@ -142,13 +231,14 @@ fn cell_to_string(row: &Row, column: &Column, idx: usize) -> String {
 
 #[async_trait]
 impl sqllogictest::AsyncDB for Postgres {
-    type Error = tokio_postgres::error::Error;
+    type Error = Error;
 
     async fn run(&mut self, sql: &str) -> Result<DBOutput, Self::Error> {
         println!("[{}] Running query: \"{}\"", self.file_name, sql);
 
+        let lower_sql = sql.trim_start().to_ascii_lowercase();
+
         let is_query_sql = {
-            let lower_sql = sql.trim_start().to_ascii_lowercase();
             lower_sql.starts_with("select")
                 || lower_sql.starts_with("values")
                 || lower_sql.starts_with("show")
@@ -159,6 +249,11 @@ impl sqllogictest::AsyncDB for Postgres {
                     || lower_sql.starts_with("delete"))
                     && lower_sql.contains("returning"))
         };
+
+        if lower_sql.starts_with("copy") {
+            return self.run_copy_command(sql).await;
+        }
+
         if !is_query_sql {
             self.client.execute(sql, &[]).await?;
             return Ok(DBOutput::StatementComplete(0));
