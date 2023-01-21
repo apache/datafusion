@@ -56,6 +56,7 @@ PG_COMPAT=true PG_DSN="postgresql://postgres@127.0.0.1/postgres" cargo test -p d
 ```
 
 The environemnt variables:
+
 1. `PG_COMPAT` instructs sqllogictest to run against Postgres (not DataFusion)
 2. `PG_DSN` contains a `libpq` style connection string, whose format is described in
    [the docs](https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html#url)
@@ -72,7 +73,6 @@ docker run \
   -e POSTGRES_HOST_AUTH_METHOD=trust \
   postgres
 ```
-
 
 #### Updating tests: Completion Mode
 
