@@ -1106,7 +1106,7 @@ pub fn binary(
     let rhs_type = &rhs.data_type(input_schema)?;
     if !lhs_type.eq(rhs_type) {
         return Err(DataFusionError::Internal(format!(
-            "The type of {lhs_type} {op} {rhs_type} of binary physical should be same"
+            "The type of {lhs_type} {op:?} {rhs_type} of binary physical should be same"
         )));
     }
     Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
