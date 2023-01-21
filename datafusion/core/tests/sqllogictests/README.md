@@ -44,6 +44,19 @@ Run only the tests in `information_schema.slt`:
 cargo test -p datafusion --test sqllogictests -- information
 ```
 
+#### Running tests: Postgres compatibility
+
+Test files that start with prefix `pg_compat_` verify compatibility with Postgres.
+Datafusion runs these test files during normal sqllogictest runs.
+
+In order to run sqllogictests with Postgres execute:
+
+```shell
+PG_COMPAT=true cargo test -p datafusion --test sqllogictests
+```
+
+This command requires a docker binary. Check that docker is properly installed with `which docker`.
+
 #### Updating tests: Completion Mode
 
 In test script completion mode, `sqllogictests` reads a prototype script and runs the statements and queries against the database engine. The output is is a full script that is a copy of the prototype script with result inserted.
