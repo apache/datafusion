@@ -96,13 +96,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         param_data_types: &[DataType],
     ) -> Result<Expr> {
         // Parse the placeholder as a number because it is the only support from sqlparser and postgres
+        // __timeTo is not supported and should return a Plan Error #5005
         let index = param[1..].parse::<usize>();
         let idx = match index {
             Ok(index) => index - 1,
             Err(_) => {
-                return Err(DataFusionError::Internal(format!(
-                    "Invalid placeholder, not a number: {param}"
-                )));
+                if &param[1..] == "__timeTo" {
+                    return Err(DataFusionError::Plan(format!(
+                        "Placeholder not supported: {param}"
+                    )));
+                } else {
+                    return Err(DataFusionError::Internal(format!(
+                        "Invalid placeholder, not a number: {param}"
+                    )));
+                }
             }
         };
         // Check if the placeholder is in the parameter list

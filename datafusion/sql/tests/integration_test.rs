@@ -3113,6 +3113,15 @@ fn test_prepare_statement_to_plan_panic_param_format() {
 }
 
 #[test]
+#[should_panic(expected = "value: Plan(\"Placeholder not supported: $__timeTo\"")]
+fn test_prepare_statement_to_plan_panic_param_format_timeto() {
+    // param __timeTo is currently not supported
+    // panic due to error returned from the parser
+    let sql = "select $__timeTo";
+    logical_plan(sql).unwrap();
+}
+
+#[test]
 #[should_panic(expected = "value: SQL(ParserError(\"Expected AS, found: SELECT\"))")]
 fn test_prepare_statement_to_plan_panic_prepare_wrong_syntax() {
     // param is not number following the $ sign
