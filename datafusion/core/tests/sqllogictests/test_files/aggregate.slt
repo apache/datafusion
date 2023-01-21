@@ -1183,3 +1183,47 @@ query RRRR
 select var(sq.column1), var_pop(sq.column1), stddev(sq.column1), stddev_pop(sq.column1) from (values (1.0), (3.0)) as sq;
 ----
 2 1 1.4142135623730951 1
+
+
+# sum / count for all nulls
+statement ok
+create table the_nulls as values (null::bigint, 1), (null::bigint, 1), (null::bigint, 2);
+
+# counts should be zeros (even for nulls)
+query II
+SELECT count(column1), column2 from the_nulls group by column2 order by column2;
+----
+0 1
+0 2
+
+# sums should be null
+query II
+SELECT sum(column1), column2 from the_nulls group by column2 order by column2;
+----
+NULL 1
+NULL 2
+
+# avg should be null
+query II
+SELECT avg(column1), column2 from the_nulls group by column2 order by column2;
+----
+NULL 1
+NULL 2
+
+# min should be null
+query II
+SELECT min(column1), column2 from the_nulls group by column2 order by column2;
+----
+NULL 1
+NULL 2
+
+# max should be null
+query II
+SELECT max(column1), column2 from the_nulls group by column2 order by column2;
+----
+NULL 1
+NULL 2
+
+
+statement ok
+drop table the_nulls;

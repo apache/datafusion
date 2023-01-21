@@ -261,7 +261,7 @@ impl RowAccumulator for AvgRowAccumulator {
         assert_eq!(self.sum_datatype, DataType::Float64);
         Ok(match accessor.get_u64_opt(self.state_index()) {
             None => ScalarValue::Float64(None),
-            Some(0) => ScalarValue::Float64(Some(0.0)),
+            Some(0) => ScalarValue::Float64(None),
             Some(n) => ScalarValue::Float64(
                 accessor
                     .get_f64_opt(self.state_index() + 1)
