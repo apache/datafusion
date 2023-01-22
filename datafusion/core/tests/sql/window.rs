@@ -18,6 +18,7 @@
 use super::*;
 use ::parquet::arrow::arrow_writer::ArrowWriter;
 use ::parquet::file::properties::WriterProperties;
+use datafusion::execution::options::ReadOptions;
 
 /// for window functions without order by the first, last, and nth function call does not make sense
 #[tokio::test]
@@ -2459,7 +2460,7 @@ async fn get_test_context(tmpdir: &TempDir) -> Result<SessionContext> {
         .collect::<Vec<_>>();
 
     let options_sort = parquet_read_options
-        .to_listing_options(&ctx.copied_config())
+        .to_listing_options(ctx.copied_config().target_partitions())
         .with_file_sort_order(Some(file_sort_order));
 
     write_test_data_to_parquet(tmpdir, 1)?;

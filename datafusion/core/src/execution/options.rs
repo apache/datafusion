@@ -19,22 +19,25 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
+use async_trait::async_trait;
+use datafusion_common::DataFusionError;
 
+use super::context::{SessionConfig, SessionState};
 use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
 use crate::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
 use crate::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
+use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::{
     file_format::{
         avro::AvroFormat, csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat,
     },
     listing::ListingOptions,
 };
-
-use super::context::SessionConfig;
+use crate::error::Result;
 
 /// Options that control the reading of CSV files.
 ///
@@ -149,23 +152,6 @@ impl<'a> CsvReadOptions<'a> {
         self.file_compression_type = file_compression_type;
         self
     }
-
-    /// Helper to convert these user facing options to `ListingTable` options
-    pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
-        let file_format = CsvFormat::default()
-            .with_has_header(self.has_header)
-            .with_delimiter(self.delimiter)
-            .with_schema_infer_max_rec(Some(self.schema_infer_max_records))
-            .with_file_compression_type(self.file_compression_type.to_owned());
-
-        ListingOptions::new(Arc::new(file_format))
-            .with_file_extension(self.file_extension)
-            .with_target_partitions(target_partitions)
-            .with_table_partition_cols(self.table_partition_cols.clone())
-            // TODO: Add file sort order into CsvReadOptions and introduce here.
-            .with_file_sort_order(None)
-            .with_infinite_source(self.infinite)
-    }
 }
 
 /// Options that control the reading of Parquet files.
@@ -226,18 +212,6 @@ impl<'a> ParquetReadOptions<'a> {
         self.table_partition_cols = table_partition_cols;
         self
     }
-
-    /// Helper to convert these user facing options to `ListingTable` options
-    pub fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
-        let file_format = ParquetFormat::new()
-            .with_enable_pruning(self.parquet_pruning)
-            .with_skip_metadata(self.skip_metadata);
-
-        ListingOptions::new(Arc::new(file_format))
-            .with_file_extension(self.file_extension)
-            .with_target_partitions(config.target_partitions())
-            .with_table_partition_cols(self.table_partition_cols.clone())
-    }
 }
 
 /// Options that control the reading of AVRO files.
@@ -279,17 +253,6 @@ impl<'a> AvroReadOptions<'a> {
     ) -> Self {
         self.table_partition_cols = table_partition_cols;
         self
-    }
-
-    /// Helper to convert these user facing options to `ListingTable` options
-    pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
-        let file_format = AvroFormat::default();
-
-        ListingOptions::new(Arc::new(file_format))
-            .with_file_extension(self.file_extension)
-            .with_target_partitions(target_partitions)
-            .with_table_partition_cols(self.table_partition_cols.clone())
-            .with_infinite_source(self.infinite)
     }
 
     /// Configure mark_infinite setting
@@ -377,9 +340,112 @@ impl<'a> NdJsonReadOptions<'a> {
         self.schema = Some(schema);
         self
     }
+}
 
+#[async_trait]
+///
+pub trait ReadOptions<'a> {
     /// Helper to convert these user facing options to `ListingTable` options
-    pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
+    fn to_listing_options(&self, target_partitions: usize) -> ListingOptions;
+    ///
+    async fn get_resolved_schema(
+        &self,
+        target_partitions: usize,
+        state: SessionState,
+        table_path: ListingTableUrl,
+    ) -> Result<SchemaRef>;
+
+    ///
+    async fn _get_resolved_schema(
+        &'a self,
+        target_partitions: usize,
+        state: SessionState,
+        table_path: ListingTableUrl,
+        schema: Option<&'a Schema>,
+        infinite: bool,
+    ) -> Result<SchemaRef>
+    where
+        'a: 'async_trait,
+    {
+        match (schema, infinite) {
+            (Some(s), _) => Ok(Arc::new(s.to_owned())),
+            (None, false) => Ok(self
+                .to_listing_options(target_partitions)
+                .infer_schema(&state, &table_path)
+                .await?),
+            (None, true) => Err(DataFusionError::Plan(
+                "Schema inference for infinite data sources is not supported."
+                    .to_string(),
+            )),
+        }
+    }
+}
+
+#[async_trait]
+impl ReadOptions<'_> for CsvReadOptions<'_> {
+    fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
+        let file_format = CsvFormat::default()
+            .with_has_header(self.has_header)
+            .with_delimiter(self.delimiter)
+            .with_schema_infer_max_rec(Some(self.schema_infer_max_records))
+            .with_file_compression_type(self.file_compression_type.to_owned());
+
+        ListingOptions::new(Arc::new(file_format))
+            .with_file_extension(self.file_extension)
+            .with_target_partitions(target_partitions)
+            .with_table_partition_cols(self.table_partition_cols.clone())
+            // TODO: Add file sort order into CsvReadOptions and introduce here.
+            .with_file_sort_order(None)
+            .with_infinite_source(self.infinite)
+    }
+
+    async fn get_resolved_schema(
+        &self,
+        target_partitions: usize,
+        state: SessionState,
+        table_path: ListingTableUrl,
+    ) -> Result<SchemaRef> {
+        self._get_resolved_schema(
+            target_partitions,
+            state,
+            table_path,
+            self.schema,
+            self.infinite,
+        )
+        .await
+    }
+}
+
+#[async_trait]
+impl ReadOptions<'_> for ParquetReadOptions<'_> {
+    fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
+        let file_format = ParquetFormat::new()
+            .with_enable_pruning(self.parquet_pruning)
+            .with_skip_metadata(self.skip_metadata);
+
+        ListingOptions::new(Arc::new(file_format))
+            .with_file_extension(self.file_extension)
+            .with_target_partitions(target_partitions)
+            .with_table_partition_cols(self.table_partition_cols.clone())
+    }
+
+    async fn get_resolved_schema(
+        &self,
+        target_partitions: usize,
+        state: SessionState,
+        table_path: ListingTableUrl,
+    ) -> Result<SchemaRef> {
+        // with parquet we resolve the schema in all cases
+        Ok(self
+            .to_listing_options(target_partitions)
+            .infer_schema(&state, &table_path)
+            .await?)
+    }
+}
+
+#[async_trait]
+impl ReadOptions<'_> for NdJsonReadOptions<'_> {
+    fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
         let file_format = JsonFormat::default()
             .with_file_compression_type(self.file_compression_type.to_owned());
 
@@ -388,5 +454,50 @@ impl<'a> NdJsonReadOptions<'a> {
             .with_target_partitions(target_partitions)
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_infinite_source(self.infinite)
+    }
+
+    async fn get_resolved_schema(
+        &self,
+        target_partitions: usize,
+        state: SessionState,
+        table_path: ListingTableUrl,
+    ) -> Result<SchemaRef> {
+        self._get_resolved_schema(
+            target_partitions,
+            state,
+            table_path,
+            self.schema,
+            self.infinite,
+        )
+        .await
+    }
+}
+
+#[async_trait]
+impl ReadOptions<'_> for AvroReadOptions<'_> {
+    fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
+        let file_format = AvroFormat::default();
+
+        ListingOptions::new(Arc::new(file_format))
+            .with_file_extension(self.file_extension)
+            .with_target_partitions(target_partitions)
+            .with_table_partition_cols(self.table_partition_cols.clone())
+            .with_infinite_source(self.infinite)
+    }
+
+    async fn get_resolved_schema(
+        &self,
+        target_partitions: usize,
+        state: SessionState,
+        table_path: ListingTableUrl,
+    ) -> Result<SchemaRef> {
+        self._get_resolved_schema(
+            target_partitions,
+            state,
+            table_path,
+            self.schema,
+            self.infinite,
+        )
+        .await
     }
 }

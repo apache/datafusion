@@ -781,6 +781,7 @@ mod tests {
     use crate::prelude::*;
     use crate::{
         datasource::file_format::{avro::AvroFormat, parquet::ParquetFormat},
+        execution::options::ReadOptions,
         logical_expr::{col, lit},
         test::{columns, object_store::register_test_store},
     };
