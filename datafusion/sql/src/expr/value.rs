@@ -100,7 +100,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let idx = match index {
             Ok(index) => index - 1,
             Err(_) => {
-                return Err(DataFusionError::Internal(format!(
+                return Err(DataFusionError::Plan(format!(
                     "Invalid placeholder, not a number: {param}"
                 )));
             }
