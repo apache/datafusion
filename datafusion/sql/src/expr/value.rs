@@ -95,6 +95,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         param: String,
         param_data_types: &[DataType],
     ) -> Result<Expr> {
+        // Parse the placeholder as a number because it is the only support from sqlparser and postgres
         let index = param[1..].parse::<usize>();
         let idx = match index {
             Ok(index) => index - 1,
