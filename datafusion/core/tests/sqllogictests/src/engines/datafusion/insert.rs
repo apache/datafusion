@@ -15,10 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod util;
-
-use self::util::LogicTestContextProvider;
 use super::error::Result;
+use crate::engines::datafusion::util::LogicTestContextProvider;
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;

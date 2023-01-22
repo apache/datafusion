@@ -419,3 +419,49 @@ SELECT * FROM aggregate_simple order by c1 DESC LIMIT 1;
 
 statement ok
 DROP TABLE aggregate_simple
+
+
+# Should create an empty table
+statement ok
+CREATE TABLE table_without_values(field1 BIGINT, field2 BIGINT);
+
+
+# Should skip existing table
+statement ok
+CREATE TABLE IF NOT EXISTS table_without_values(field1 BIGINT, field2 BIGINT);
+
+
+# Should not recreate the same table
+statement error Table 'table_without_values' already exists
+CREATE TABLE table_without_values(field1 BIGINT, field2 BIGINT);
+
+
+# 'IF NOT EXISTS' cannot coexist with 'REPLACE'
+statement error Execution error: 'IF NOT EXISTS' cannot coexist with 'REPLACE'
+CREATE OR REPLACE TABLE IF NOT EXISTS table_without_values(field1 BIGINT, field2 BIGINT);
+
+# Should insert into an empty table
+statement ok
+insert into table_without_values values (1, 2), (2, 3), (2, 4);
+
+query II rowsort
+select * from table_without_values;
+----
+1 2
+2 3
+2 4
+
+
+# Should recreate existing table
+statement ok
+CREATE OR REPLACE TABLE table_without_values(field1 BIGINT, field2 BIGINT);
+
+
+# Should insert into a recreated table
+statement ok
+insert into table_without_values values (10, 20);
+
+query II rowsort
+select * from table_without_values;
+----
+10 20
