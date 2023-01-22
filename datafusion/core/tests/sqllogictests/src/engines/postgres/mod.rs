@@ -52,7 +52,7 @@ pub struct Postgres {
 }
 
 impl Postgres {
-    /// Creates a runner for executiong queries against an existing
+    /// Creates a runner for executing queries against an existing
     /// posgres connection. `file_name` is used for display output
     ///
     /// The database connection details can be overridden by the
@@ -68,11 +68,8 @@ impl Postgres {
     pub async fn connect(file_name: impl Into<String>) -> Result<Self> {
         let file_name = file_name.into();
 
-        let dsn = if let Ok(val) = std::env::var("PG_DSN") {
-            val
-        } else {
-            PG_DSN.to_string()
-        };
+     let dsn =
+            std::env::var("PG_DSN").map_or(PG_DSN.to_string(), std::convert::identity);
 
         debug!("Using posgres dsn: {dsn}");
 
