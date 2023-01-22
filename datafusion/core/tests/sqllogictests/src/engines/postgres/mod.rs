@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{str::FromStr, time::Duration};
+use std::str::FromStr;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -68,40 +68,32 @@ impl Postgres {
     pub async fn connect(file_name: impl Into<String>) -> Result<Self> {
         let file_name = file_name.into();
 
-     let dsn =
+        let dsn =
             std::env::var("PG_DSN").map_or(PG_DSN.to_string(), std::convert::identity);
 
         debug!("Using posgres dsn: {dsn}");
 
         let config = tokio_postgres::Config::from_str(&dsn)?;
 
-        let mut retry = 0;
+        // hint to user what the connection string was
+        let res = config.connect(tokio_postgres::NoTls).await;
+        if let Err(_) = &res {
+            eprintln!("Error connecting to posgres using PG_DSN={dsn}");
+        };
 
-        loop {
-            let connection_result = config.connect(tokio_postgres::NoTls).await;
+        let (client, connection) = res?;
 
-            match connection_result {
-                Err(e) if retry <= 3 => {
-                    debug!("Retrying connection error '{:?}'", e);
-                    retry += 1;
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                }
-                Err(e) => return Err(Error::from(e)),
-                Ok((client, connection)) => {
-                    let join_handle = tokio::spawn(async move {
-                        if let Err(e) = connection.await {
-                            log::error!("Postgres connection error: {:?}", e);
-                        }
-                    });
-
-                    return Ok(Self {
-                        client,
-                        join_handle,
-                        file_name,
-                    });
-                }
+        let join_handle = tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                log::error!("Postgres connection error: {:?}", e);
             }
-        }
+        });
+
+        Ok(Self {
+            client,
+            join_handle,
+            file_name,
+        })
     }
 
     /// Special COPY command support. "COPY 'filename'" requires the
