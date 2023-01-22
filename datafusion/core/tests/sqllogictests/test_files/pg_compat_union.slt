@@ -228,3 +228,9 @@ SELECT 1 num UNION ALL SELECT 2 num ORDER BY num;
 ----
 1
 2
+
+########
+# Clean up after the test
+########
+statement ok
+DROP TABLE aggregate_test_100_by_sql

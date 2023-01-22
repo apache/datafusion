@@ -1482,3 +1482,9 @@ NULL 7 279 282 NULL
 5 4 86 90 NULL
 1 5 245 246 NULL
 4 6 18 21 NULL
+
+########
+# Clean up after the test
+########
+statement ok
+DROP TABLE aggregate_test_100_by_sql
