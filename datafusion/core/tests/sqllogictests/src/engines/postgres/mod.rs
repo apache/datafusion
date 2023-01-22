@@ -30,8 +30,8 @@ use postgres_types::Type;
 use rust_decimal::Decimal;
 use tokio_postgres::{Column, Row};
 
-// default connect string, can be overridden by environment PG_DSN
-const PG_DSN: &str = "postgresql://postgres@127.0.0.1/test";
+// default connect string, can be overridden by the `PG_URL` environment variable
+const PG_URI: &str = "postgresql://postgres@127.0.0.1/test";
 
 /// DataFusion sql-logicaltest error
 #[derive(Debug, thiserror::Error)]
@@ -56,29 +56,29 @@ impl Postgres {
     /// posgres connection. `file_name` is used for display output
     ///
     /// The database connection details can be overridden by the
-    /// `PG_DSN` environment variable.
+    /// `PG_URI` environment variable.
     ///
     /// This defaults to
     ///
     /// ```text
-    /// PG_DSN="postgresql://postgres@127.0.0.1/test"
+    /// PG_URI="postgresql://postgres@127.0.0.1/test"
     /// ```
     ///
     /// See https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html#url for format
     pub async fn connect(file_name: impl Into<String>) -> Result<Self> {
         let file_name = file_name.into();
 
-        let dsn =
-            std::env::var("PG_DSN").map_or(PG_DSN.to_string(), std::convert::identity);
+        let uri =
+            std::env::var("PG_URI").map_or(PG_URI.to_string(), std::convert::identity);
 
-        debug!("Using posgres dsn: {dsn}");
+        debug!("Using posgres connection string: {uri}");
 
-        let config = tokio_postgres::Config::from_str(&dsn)?;
+        let config = tokio_postgres::Config::from_str(&uri)?;
 
         // hint to user what the connection string was
         let res = config.connect(tokio_postgres::NoTls).await;
         if let Err(_) = &res {
-            eprintln!("Error connecting to posgres using PG_DSN={dsn}");
+            eprintln!("Error connecting to posgres using PG_URI={dsn}");
         };
 
         let (client, connection) = res?;
