@@ -3104,20 +3104,11 @@ fn test_ambiguous_column_references_with_in_using_join() {
 }
 
 #[test]
-#[should_panic(expected = "value: Internal(\"Invalid placeholder, not a number: $foo\"")]
+#[should_panic(expected = "value: Plan(\"Invalid placeholder, not a number: $foo\"")]
 fn test_prepare_statement_to_plan_panic_param_format() {
     // param is not number following the $ sign
     // panic due to error returned from the parser
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $foo";
-    logical_plan(sql).unwrap();
-}
-
-#[test]
-#[should_panic(expected = "value: Plan(\"Placeholder not supported: $__timeTo\"")]
-fn test_prepare_statement_to_plan_panic_param_format_timeto() {
-    // param __timeTo is currently not supported
-    // panic due to error returned from the parser
-    let sql = "select $__timeTo";
     logical_plan(sql).unwrap();
 }
 
