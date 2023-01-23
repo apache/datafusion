@@ -47,34 +47,37 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
     let options = Options::new();
 
-    for (path, file_name) in read_test_files(&options) {
+    for (path, relative_path) in read_test_files(&options) {
         if options.complete_mode {
-            run_complete_file(&path, file_name).await?;
+            run_complete_file(&path, relative_path).await?;
         } else if options.postgres_runner {
-            run_test_file_with_postgres(&path, file_name).await?;
+            run_test_file_with_postgres(&path, relative_path).await?;
         } else {
-            run_test_file(&path, file_name).await?;
+            run_test_file(&path, relative_path).await?;
         }
     }
 
     Ok(())
 }
 
-async fn run_test_file(path: &PathBuf, file_name: String) -> Result<(), Box<dyn Error>> {
-    println!("Running with DataFusion runner: {}", path.display());
-    let ctx = context_for_test_file(&file_name).await;
-    let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, file_name));
+async fn run_test_file(
+    path: &Path,
+    relative_path: PathBuf,
+) -> Result<(), Box<dyn Error>> {
+    info!("Running with DataFusion runner: {}", path.display());
+    let ctx = context_for_test_file(&relative_path).await;
+    let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, relative_path));
     runner.run_file_async(path).await?;
     Ok(())
 }
 
 async fn run_test_file_with_postgres(
-    path: &PathBuf,
-    file_name: String,
+    path: &Path,
+    relative_path: PathBuf,
 ) -> Result<(), Box<dyn Error>> {
     info!("Running with Postgres runner: {}", path.display());
 
-    let postgres_client = Postgres::connect(file_name).await?;
+    let postgres_client = Postgres::connect(relative_path).await?;
 
     sqllogictest::Runner::new(postgres_client)
         .run_file_async(path)
@@ -84,17 +87,15 @@ async fn run_test_file_with_postgres(
 }
 
 async fn run_complete_file(
-    path: &PathBuf,
-    file_name: String,
+    path: &Path,
+    relative_path: PathBuf,
 ) -> Result<(), Box<dyn Error>> {
     use sqllogictest::{default_validator, update_test_file};
 
     info!("Using complete mode to complete: {}", path.display());
 
-    let ctx = context_for_test_file(&file_name).await;
-    let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, file_name));
-
-    info!("Using complete mode to complete {}", path.display());
+    let ctx = context_for_test_file(&relative_path).await;
+    let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, relative_path));
     let col_separator = " ";
     let validator = default_validator;
     update_test_file(path, &mut runner, col_separator, validator)
@@ -106,19 +107,18 @@ async fn run_complete_file(
 
 fn read_test_files<'a>(
     options: &'a Options,
-) -> Box<dyn Iterator<Item = (PathBuf, String)> + 'a> {
+) -> Box<dyn Iterator<Item = (PathBuf, PathBuf)> + 'a> {
     Box::new(
         read_dir_recursive(TEST_DIRECTORY)
             .map(|path| {
                 (
                     path.clone(),
-                    path.to_string_lossy()
-                        .strip_prefix(TEST_DIRECTORY)
-                        .unwrap()
-                        .to_string(),
+                    PathBuf::from(
+                        path.to_string_lossy().strip_prefix(TEST_DIRECTORY).unwrap(),
+                    ),
                 )
             })
-            .filter(|(_, file_name)| options.check_test_file(file_name))
+            .filter(|(_, relative_path)| options.check_test_file(relative_path))
             .filter(|(path, _)| options.check_pg_compat_file(path.as_path())),
     )
 }
@@ -139,8 +139,8 @@ fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Box<dyn Iterator<Item = PathBu
 }
 
 /// Create a SessionContext, configured for the specific test
-async fn context_for_test_file(file_name: &str) -> SessionContext {
-    match file_name {
+async fn context_for_test_file(relative_path: &Path) -> SessionContext {
+    match relative_path.file_name().unwrap().to_str().unwrap() {
         "aggregate.slt" | "select.slt" => {
             info!("Registering aggregate tables");
             let ctx = SessionContext::new();
@@ -204,13 +204,15 @@ impl Options {
     /// To be compatible with this, treat the command line arguments as a
     /// filter and that does a substring match on each input.  returns
     /// true f this path should be run
-    fn check_test_file(&self, file_name: &str) -> bool {
+    fn check_test_file(&self, relative_path: &Path) -> bool {
         if self.filters.is_empty() {
             return true;
         }
 
         // otherwise check if any filter matches
-        self.filters.iter().any(|filter| file_name.contains(filter))
+        self.filters
+            .iter()
+            .any(|filter| relative_path.to_string_lossy().contains(filter))
     }
 
     /// Postgres runner executes only tests in files with specific names
