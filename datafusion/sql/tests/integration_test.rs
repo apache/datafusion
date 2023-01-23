@@ -3430,7 +3430,7 @@ Dml: op=[Insert] table=[person]
 }
 
 #[test]
-#[should_panic(expected = "value: Plan(\"Column not found\")")]
+#[should_panic(expected = "Placeholder $4 refers to a non existent column")]
 fn test_prepare_statement_insert_infer_gt() {
     let sql = "insert into person (id, first_name, last_name) values ($1, $2, $3, $4)";
 

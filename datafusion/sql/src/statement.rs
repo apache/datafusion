@@ -776,7 +776,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             })? - 1;
                         let col = columns.get(idx).ok_or_else(|| {
                             DataFusionError::Plan(format!(
-                                "Placeholder ${idx} refers to a non existent column"
+                                "Placeholder ${} refers to a non existent column",
+                                idx + 1
                             ))
                         })?;
                         let field =
