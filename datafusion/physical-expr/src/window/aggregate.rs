@@ -168,6 +168,9 @@ impl AggregateWindowExpr for PlainAggregateWindowExpr {
 
     /// For a given range, calculate accumulation result inside the range on
     /// `value_slice` and update accumulator state.
+    // We assume that `cur_range` contains `last_range` and their start points
+    // are same. In summary if `last_range` is `Range{start: a,end: b}` and
+    // `cur_range` is `Range{start: a1, end: b1}`, it is guaranteed that a1=a and b1>=b.
     fn get_aggregate_result_inside_range(
         &self,
         last_range: &Range<usize>,
