@@ -446,21 +446,23 @@ impl SessionContext {
         &self,
         cmd: &CreateExternalTable,
     ) -> Result<DataFrame> {
+        let exist = self.table_exist(&cmd.name)?;
+        if exist {
+            match cmd.if_not_exists {
+                true => return self.return_empty_dataframe(),
+                false => {
+                    return Err(DataFusionError::Execution(format!(
+                        "Table '{}' already exists",
+                        cmd.name
+                    )));
+                }
+            }
+        }
+
         let table_provider: Arc<dyn TableProvider> =
             self.create_custom_table(cmd).await?;
-
-        let table = self.table(&cmd.name).await;
-        match (cmd.if_not_exists, table) {
-            (true, Ok(_)) => self.return_empty_dataframe(),
-            (_, Err(_)) => {
-                self.register_table(&cmd.name, table_provider)?;
-                self.return_empty_dataframe()
-            }
-            (false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                "Table '{}' already exists",
-                cmd.name
-            ))),
-        }
+        self.register_table(&cmd.name, table_provider)?;
+        self.return_empty_dataframe()
     }
 
     async fn create_custom_table(
