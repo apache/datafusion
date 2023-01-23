@@ -44,19 +44,19 @@ LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 query R
 SELECT avg(c12) FROM aggregate_test_100
 ----
-0.5089725099127211
+0.508972509913
 
 # csv_query_covariance_1
 query R
 SELECT covar_pop(c2, c12) FROM aggregate_test_100
 ----
--0.07916932235380847
+-0.079169322354
 
 # csv_query_covariance_2
 query R
 SELECT covar(c2, c12) FROM aggregate_test_100
 ----
--0.07996901247859442
+-0.079969012479
 
 # single_row_query_covar_1
 query R
@@ -100,13 +100,13 @@ with data as (
 select covar_samp(f, b), covar_pop(f, b)
 from data
 ----
-1 0.6666666666666666
+1 0.666666666667
 
 # csv_query_correlation
 query R
 SELECT corr(c2, c12) FROM aggregate_test_100
 ----
--0.19064544190576607
+-0.190645441906
 
 # single_row_query_correlation
 query R
@@ -162,25 +162,25 @@ SELECT var_pop(c6) FROM aggregate_test_100
 query R
 SELECT var_pop(c12) FROM aggregate_test_100
 ----
-0.09234223721582163
+0.092342237216
 
 # csv_query_variance_4
 query R
 SELECT var(c2) FROM aggregate_test_100
 ----
-1.8863636363636365
+1.886363636364
 
 # csv_query_variance_5
 query R
 SELECT var_samp(c2) FROM aggregate_test_100
 ----
-1.8863636363636365
+1.886363636364
 
 # csv_query_stddev_1
 query R
 SELECT stddev_pop(c2) FROM aggregate_test_100
 ----
-1.3665650368716449
+1.366565036872
 
 # csv_query_stddev_2
 query R
@@ -192,25 +192,25 @@ SELECT stddev_pop(c6) FROM aggregate_test_100
 query R
 SELECT stddev_pop(c12) FROM aggregate_test_100
 ----
-0.30387865541334363
+0.303878655413
 
 # csv_query_stddev_4
 query R
 SELECT stddev(c12) FROM aggregate_test_100
 ----
-0.3054095399405338
+0.305409539941
 
 # csv_query_stddev_5
 query R
 SELECT stddev_samp(c12) FROM aggregate_test_100
 ----
-0.3054095399405338
+0.305409539941
 
 # csv_query_stddev_6
 query R
 select stddev(sq.column1) from (values (1.1), (2.0), (3.0)) as sq
 ----
-0.9504384952922168
+0.950438495292
 
 # csv_query_approx_median_1
 query I
@@ -228,7 +228,7 @@ SELECT approx_median(c6) FROM aggregate_test_100
 query R
 SELECT approx_median(c12) FROM aggregate_test_100
 ----
-0.5550065410522981
+0.555006541052
 
 # csv_query_median_1
 query I
@@ -246,7 +246,7 @@ SELECT median(c6) FROM aggregate_test_100
 query R
 SELECT median(c12) FROM aggregate_test_100
 ----
-0.5513900544385053
+0.551390054439
 
 # median_i8
 query I
@@ -628,40 +628,40 @@ query TIR
 SELECT c1, c2, AVG(c3) FROM aggregate_test_100_by_sql GROUP BY CUBE (c1, c2) ORDER BY c1, c2
 ----
 a 1 -17.6
-a 2 -15.333333333333334
+a 2 -15.333333333333
 a 3 -4.5
 a 4 -32
 a 5 -32
-a NULL -18.333333333333332
-b 1 31.666666666666668
+a NULL -18.333333333333
+b 1 31.666666666667
 b 2 25.5
 b 3 -42
 b 4 -44.6
 b 5 -0.2
-b NULL -5.842105263157895
+b NULL -5.842105263158
 c 1 47.5
-c 2 -55.57142857142857
+c 2 -55.571428571429
 c 3 47.5
 c 4 -10.75
 c 5 12
-c NULL -1.3333333333333333
-d 1 -8.142857142857142
-d 2 109.33333333333333
-d 3 41.333333333333336
+c NULL -1.333333333333
+d 1 -8.142857142857
+d 2 109.333333333333
+d 3 41.333333333333
 d 4 54
 d 5 -49.5
-d NULL 25.444444444444443
-e 1 75.66666666666667
+d NULL 25.444444444444
+e 1 75.666666666667
 e 2 37.8
 e 3 48
-e 4 37.285714285714285
+e 4 37.285714285714
 e 5 -11
-e NULL 40.333333333333336
-NULL 1 16.681818181818183
-NULL 2 8.363636363636363
-NULL 3 20.789473684210527
-NULL 4 1.2608695652173914
-NULL 5 -13.857142857142858
+e NULL 40.333333333333
+NULL 1 16.681818181818
+NULL 2 8.363636363636
+NULL 3 20.789473684211
+NULL 4 1.260869565217
+NULL 5 -13.857142857143
 NULL NULL 7.81
 
 # csv_query_rollup_avg
@@ -693,7 +693,7 @@ a 5 -101 -12484
 a 5 -31 -12907
 a 5 36 -16974
 a 5 NULL -14121.666666666666
-a NULL NULL 306.04761904761904
+a NULL NULL 306.047619047619
 b 1 12 7652
 b 1 29 -18218
 b 1 54 -18410
@@ -972,11 +972,11 @@ SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 
 query IIRIII
 select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by c2 order by c2
 ----
-1 367  16.681818181818183  125 -99  22
-2 184  8.363636363636363   122 -117 22
-3 395  20.789473684210527  123 -101 19
-4 29   1.2608695652173914  123 -117 23
-5 -194 -13.857142857142858 118 -101 14
+1 367 16.681818181818 125 -99 22
+2 184 8.363636363636 122 -117 22
+3 395 20.789473684211 123 -101 19
+4 29 1.260869565217 123 -117 23
+5 -194 -13.857142857143 118 -101 14
 
 # TODO: csv_query_array_agg_unsupported
 # statement error
@@ -987,40 +987,40 @@ query TIIRIII
 select c1, c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by CUBE (c1,c2) order by c1, c2
 ----
 a 1 -88 -17.6 83 -85 5
-a 2 -46 -15.333333333333334 45 -48 3
+a 2 -46 -15.333333333333 45 -48 3
 a 3 -27 -4.5 17 -72 6
 a 4 -128 -32 65 -101 4
 a 5 -96 -32 36 -101 3
-a NULL -385 -18.333333333333332 83 -101 21
-b 1 95 31.666666666666668 54 12 3
+a NULL -385 -18.333333333333 83 -101 21
+b 1 95 31.666666666667 54 12 3
 b 2 102 25.5 68 -60 4
 b 3 -84 -42 17 -101 2
 b 4 -223 -44.6 47 -117 5
 b 5 -1 -0.2 68 -82 5
-b NULL -111 -5.842105263157895 68 -117 19
+b NULL -111 -5.842105263158 68 -117 19
 c 1 190 47.5 103 -24 4
-c 2 -389 -55.57142857142857 29 -117 7
+c 2 -389 -55.571428571429 29 -117 7
 c 3 190 47.5 97 -2 4
 c 4 -43 -10.75 123 -90 4
 c 5 24 12 118 -94 2
-c NULL -28 -1.3333333333333333 123 -117 21
-d 1 -57 -8.142857142857142 125 -99 7
-d 2 328 109.33333333333333 122 93 3
-d 3 124 41.333333333333336 123 -76 3
+c NULL -28 -1.333333333333 123 -117 21
+d 1 -57 -8.142857142857 125 -99 7
+d 2 328 109.333333333333 122 93 3
+d 3 124 41.333333333333 123 -76 3
 d 4 162 54 102 5 3
 d 5 -99 -49.5 -40 -59 2
-d NULL 458 25.444444444444443 125 -99 18
-e 1 227 75.66666666666667 120 36 3
+d NULL 458 25.444444444444 125 -99 18
+e 1 227 75.666666666667 120 36 3
 e 2 189 37.8 97 -61 5
 e 3 192 48 112 -95 4
-e 4 261 37.285714285714285 97 -56 7
+e 4 261 37.285714285714 97 -56 7
 e 5 -22 -11 64 -86 2
-e NULL 847 40.333333333333336 120 -95 21
-NULL 1 367 16.681818181818183 125 -99 22
-NULL 2 184 8.363636363636363 122 -117 22
-NULL 3 395 20.789473684210527 123 -101 19
-NULL 4 29 1.2608695652173914 123 -117 23
-NULL 5 -194 -13.857142857142858 118 -101 14
+e NULL 847 40.333333333333 120 -95 21
+NULL 1 367 16.681818181818 125 -99 22
+NULL 2 184 8.363636363636 122 -117 22
+NULL 3 395 20.789473684211 123 -101 19
+NULL 4 29 1.260869565217 123 -117 23
+NULL 5 -194 -13.857142857143 118 -101 14
 NULL NULL 781 7.81 125 -117 100
 
 # csv_query_array_agg_distinct
@@ -1082,14 +1082,14 @@ select max(c1) from d_table
 query R
 select sum(c1) from d_table
 ----
-100.000
+100
 
 # FIX: doesn't check datatype
 # aggregate_decimal_avg
 query R
 select avg(c1) from d_table
 ----
-5.0000000
+5
 
 # FIX: different test table
 # aggregate
@@ -1204,7 +1204,7 @@ NULL 0 NULL 0
 query RRRR
 select var(sq.column1), var_pop(sq.column1), stddev(sq.column1), stddev_pop(sq.column1) from (values (1.0), (3.0)) as sq;
 ----
-2 1 1.4142135623730951 1
+2 1 1.414213562373 1
 
 
 # sum / count for all nulls
