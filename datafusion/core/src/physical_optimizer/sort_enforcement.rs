@@ -115,7 +115,9 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
                         for (idx, maintains) in
                             item.plan.maintains_input_order().into_iter().enumerate()
                         {
-                            if maintains || is_sort {
+                            if (maintains || is_sort)
+                                && !item.sort_onwards[idx].is_empty()
+                            {
                                 res = item.sort_onwards[idx].clone();
                                 break;
                             }
@@ -384,17 +386,15 @@ fn convert_to_sort_exec(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&SortExec> 
 fn remove_corresponding_sort_from_sub_plan(
     sort_onwards: &mut Vec<(usize, Arc<dyn ExecutionPlan>)>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let (sort_child_idx, sort_any) = sort_onwards[0].clone();
+    let (_, sort_any) = sort_onwards[0].clone();
     let sort_exec = convert_to_sort_exec(&sort_any)?;
     let mut prev_layer = sort_exec.input().clone();
-    let mut prev_child_idx = sort_child_idx;
     // In the loop below, se start from 1 as the first one is a SortExec
     // and we are removing it from the plan.
     for (child_idx, layer) in sort_onwards.iter().skip(1) {
         let mut children = layer.children();
-        children[prev_child_idx] = prev_layer;
+        children[*child_idx] = prev_layer;
         prev_layer = layer.clone().with_new_children(children)?;
-        prev_child_idx = *child_idx;
     }
     // We have removed the sort, hence empty the sort_onwards:
     sort_onwards.clear();
