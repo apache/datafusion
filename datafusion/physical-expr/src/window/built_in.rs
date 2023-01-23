@@ -214,7 +214,7 @@ impl WindowExpr for BuiltInWindowExpr {
                 if let BuiltinWindowState::NthValue(nth_value_state) =
                     &mut evaluator_state
                 {
-                    prune_nth_value(state, nth_value_state)?;
+                    memoize_nth_value(state, nth_value_state)?;
                     evaluator.set_state(&evaluator_state)?;
                 }
             }
@@ -246,11 +246,12 @@ impl WindowExpr for BuiltInWindowExpr {
     }
 }
 
-// When the window frame has a fixed beginning (e.g UNBOUNDED PRECEDING), we
-// can prune our datasets for FIRST_VALUE, LAST_VALUE and NTH_VALUE functions.
-// Once the result is final, it will be always stay the same. Hence, we do not
-// need to keep past data as we process the entire dataset.
-fn prune_nth_value(
+// When the window frame has a fixed beginning (e.g UNBOUNDED PRECEDING), for
+// FIRST_VALUE, LAST_VALUE and NTH_VALUE functions: we can memoize result.
+// Once result is calculated it will always stay same. Hence, we do not
+// need to keep past data as we process the entire dataset. This feature
+// enables us to prune rows from  table.
+fn memoize_nth_value(
     state: &mut WindowAggState,
     nth_value_state: &mut NthValueState,
 ) -> Result<()> {
