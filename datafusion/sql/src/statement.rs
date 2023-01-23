@@ -40,7 +40,7 @@ use datafusion_expr::{
 };
 use sqlparser::ast;
 use sqlparser::ast::{
-    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query,
+    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query, SetExpr,
     ShowCreateObject, ShowStatementFilter, Statement, TableFactor, TableWithJoins,
     UnaryOperator, Value,
 };
@@ -762,8 +762,37 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let arrow_schema = (*provider.schema()).clone();
         let table_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
 
+        // infer types for Values clause... other types should be resolvable the regular way
+        let mut prepare_param_data_types = BTreeMap::new();
+        if let SetExpr::Values(ast::Values { rows, .. }) = (*source.body).clone() {
+            for row in rows.iter() {
+                for (idx, val) in row.iter().enumerate() {
+                    if let ast::Expr::Value(Value::Placeholder(name)) = val {
+                        let name =
+                            name.replace('$', "").parse::<usize>().map_err(|_| {
+                                DataFusionError::Plan(format!(
+                                    "Can't parse placeholder: {name}"
+                                ))
+                            })? - 1;
+                        let col = columns.get(idx).ok_or_else(|| {
+                            DataFusionError::Plan(format!(
+                                "Placeholder ${} refers to a non existent column",
+                                idx + 1
+                            ))
+                        })?;
+                        let field =
+                            table_schema.field_with_name(None, col.value.as_str())?;
+                        let dt = field.field().data_type().clone();
+                        let _ = prepare_param_data_types.insert(name, dt);
+                    }
+                }
+            }
+        }
+        let prepare_param_data_types = prepare_param_data_types.into_values().collect();
+
         // Projection
-        let mut planner_context = PlannerContext::new();
+        let mut planner_context =
+            PlannerContext::new_with_prepare_param_data_types(prepare_param_data_types);
         let source = self.query_to_plan(*source, &mut planner_context)?;
         if columns.len() != source.schema().fields().len() {
             Err(DataFusionError::Plan(
