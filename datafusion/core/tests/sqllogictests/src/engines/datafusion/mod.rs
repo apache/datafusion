@@ -21,15 +21,18 @@ use sqllogictest::DBOutput;
 
 use self::error::{DFSqlLogicTestError, Result};
 use async_trait::async_trait;
+use create_table::create_table;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
 use datafusion_sql::parser::{DFParser, Statement};
 use insert::insert;
 use sqlparser::ast::Statement as SQLStatement;
 
+mod create_table;
 mod error;
 mod insert;
 mod normalize;
+mod util;
 
 pub struct DataFusion {
     ctx: SessionContext,
@@ -74,9 +77,28 @@ async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DBOut
         let statement0 = statements.pop_front().expect("at least one SQL statement");
         if let Statement::Statement(statement) = statement0 {
             let statement = *statement;
-            if matches!(&statement, SQLStatement::Insert { .. }) {
-                return insert(ctx, statement).await;
-            }
+            match statement {
+                SQLStatement::Insert { .. } => return insert(ctx, statement).await,
+                SQLStatement::CreateTable {
+                    query,
+                    constraints,
+                    table_properties,
+                    with_options,
+                    name,
+                    columns,
+                    if_not_exists,
+                    or_replace,
+                    ..
+                } if query.is_none()
+                    && constraints.is_empty()
+                    && table_properties.is_empty()
+                    && with_options.is_empty() =>
+                {
+                    return create_table(ctx, name, columns, if_not_exists, or_replace)
+                        .await
+                }
+                _ => {}
+            };
         }
     }
     let df = ctx.sql(sql.as_str()).await?;

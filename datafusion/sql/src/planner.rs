@@ -114,7 +114,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    pub(crate) fn build_schema(&self, columns: Vec<SQLColumnDef>) -> Result<Schema> {
+    pub fn build_schema(&self, columns: Vec<SQLColumnDef>) -> Result<Schema> {
         let mut fields = Vec::with_capacity(columns.len());
 
         for column in columns {
