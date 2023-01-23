@@ -34,20 +34,11 @@ mod normalize;
 pub struct DataFusion {
     ctx: SessionContext,
     file_name: String,
-    is_pg_compatibility_test: bool,
 }
 
 impl DataFusion {
-    pub fn new(
-        ctx: SessionContext,
-        file_name: String,
-        postgres_compatible: bool,
-    ) -> Self {
-        Self {
-            ctx,
-            file_name,
-            is_pg_compatibility_test: postgres_compatible,
-        }
+    pub fn new(ctx: SessionContext, file_name: String) -> Self {
+        Self { ctx, file_name }
     }
 }
 
@@ -57,7 +48,7 @@ impl sqllogictest::AsyncDB for DataFusion {
 
     async fn run(&mut self, sql: &str) -> Result<DBOutput> {
         println!("[{}] Running query: \"{}\"", self.file_name, sql);
-        let result = run_query(&self.ctx, sql, self.is_pg_compatibility_test).await?;
+        let result = run_query(&self.ctx, sql).await?;
         Ok(result)
     }
 
@@ -76,11 +67,7 @@ impl sqllogictest::AsyncDB for DataFusion {
     }
 }
 
-async fn run_query(
-    ctx: &SessionContext,
-    sql: impl Into<String>,
-    is_pg_compatibility_test: bool,
-) -> Result<DBOutput> {
+async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DBOutput> {
     let sql = sql.into();
     // Check if the sql is `insert`
     if let Ok(mut statements) = DFParser::parse_sql(&sql) {
@@ -94,7 +81,6 @@ async fn run_query(
     }
     let df = ctx.sql(sql.as_str()).await?;
     let results: Vec<RecordBatch> = df.collect().await?;
-    let formatted_batches =
-        normalize::convert_batches(results, is_pg_compatibility_test)?;
+    let formatted_batches = normalize::convert_batches(results)?;
     Ok(formatted_batches)
 }
