@@ -77,7 +77,7 @@ impl Postgres {
 
         // hint to user what the connection string was
         let res = config.connect(tokio_postgres::NoTls).await;
-        if let Err(_) = &res {
+        if res.is_err() {
             eprintln!("Error connecting to posgres using PG_URI={uri}");
         };
 
@@ -190,7 +190,7 @@ fn no_quotes(t: &str) -> &str {
 /// return a schema name
 fn schema_name(file_name: &str) -> &str {
     file_name
-        .split(".")
+        .split('.')
         .next()
         .unwrap_or("default_schema")
         .trim_start_matches("pg_")
