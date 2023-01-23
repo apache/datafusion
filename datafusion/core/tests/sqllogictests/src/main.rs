@@ -19,13 +19,10 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 
 use log::info;
-use testcontainers::clients::Cli as Docker;
 
 use datafusion::prelude::SessionContext;
 
 use crate::engines::datafusion::DataFusion;
-use crate::engines::postgres;
-use crate::engines::postgres::image::{PG_DB, PG_PASSWORD, PG_PORT, PG_USER};
 use crate::engines::postgres::Postgres;
 
 mod engines;
@@ -83,21 +80,12 @@ async fn run_test_file_with_postgres(
 ) -> Result<(), Box<dyn Error>> {
     info!("Running with Postgres runner: {}", path.display());
 
-    let docker = Docker::default();
-    let postgres_container = docker.run(postgres::image::postgres_docker_image());
+    let postgres_client = Postgres::connect(file_name).await?;
 
-    let postgres_client = Postgres::connect_with_retry(
-        file_name,
-        "127.0.0.1",
-        postgres_container.get_host_port_ipv4(PG_PORT),
-        PG_DB,
-        PG_USER,
-        PG_PASSWORD,
-    )
-    .await?;
-    let mut postgres_runner = sqllogictest::Runner::new(postgres_client);
+    sqllogictest::Runner::new(postgres_client)
+        .run_file_async(path)
+        .await?;
 
-    postgres_runner.run_file_async(path).await?;
     Ok(())
 }
 
@@ -138,12 +126,6 @@ async fn context_for_test_file(file_name: &str) -> SessionContext {
             info!("Registering aggregate tables");
             let ctx = SessionContext::new();
             setup::register_aggregate_tables(&ctx).await;
-            ctx
-        }
-        _ if file_name.starts_with(PG_COMPAT_FILE_PREFIX) => {
-            info!("Registering pg compatibility tables");
-            let ctx = SessionContext::new();
-            setup::register_aggregate_csv_by_sql(&ctx).await;
             ctx
         }
         _ => {
