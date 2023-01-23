@@ -775,7 +775,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 ))
                             })? - 1;
                         let col = columns.get(idx).ok_or_else(|| {
-                            DataFusionError::Plan("Column not found".to_string())
+                            DataFusionError::Plan(format!("Placeholder ${idx} refers to a non existent column")
                         })?;
                         let field =
                             table_schema.field_with_name(None, col.value.as_str())?;
