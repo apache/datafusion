@@ -551,6 +551,9 @@ impl SessionContext {
     }
 
     /// Creates a [`DataFrame`] for reading an Avro data source.
+    ///
+    /// For more control such as reading multiple files, you can use
+    /// [`read_table`](Self::read_table) with a [`ListingTable`].
     pub async fn read_avro(
         &self,
         table_path: impl AsRef<str>,
@@ -584,6 +587,9 @@ impl SessionContext {
     }
 
     /// Creates a [`DataFrame`] for reading an Json data source.
+    ///
+    /// For more control such as reading multiple files, you can use
+    /// [`read_table`](Self::read_table) with a [`ListingTable`].
     pub async fn read_json(
         &self,
         table_path: impl AsRef<str>,
@@ -625,6 +631,9 @@ impl SessionContext {
     }
 
     /// Creates a [`DataFrame`] for reading a CSV data source.
+    ///
+    /// For more control such as reading multiple files, you can use
+    /// [`read_table`](Self::read_table) with a [`ListingTable`].
     pub async fn read_csv(
         &self,
         table_path: impl AsRef<str>,
@@ -656,6 +665,9 @@ impl SessionContext {
     }
 
     /// Creates a [`DataFrame`] for reading a Parquet data source.
+    ///
+    /// For more control such as reading multiple files, you can use
+    /// [`read_table`](Self::read_table) with a [`ListingTable`].
     pub async fn read_parquet(
         &self,
         table_path: impl AsRef<str>,
@@ -677,7 +689,8 @@ impl SessionContext {
         self.read_table(Arc::new(provider))
     }
 
-    /// Creates a [`DataFrame`] for reading a custom [`TableProvider`].
+    /// Creates a [`DataFrame`] for a [`TableProvider`] such as a
+    /// [`ListingTable`] or a custom user defined provider.
     pub fn read_table(&self, provider: Arc<dyn TableProvider>) -> Result<DataFrame> {
         Ok(DataFrame::new(
             self.state(),
@@ -1636,22 +1649,34 @@ impl SessionState {
         self
     }
 
-    /// Creates a [`LogicalPlan`] from the provided SQL string
-    ///
-    /// See [`SessionContext::sql`] for a higher-level interface that also handles DDL
-    pub async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
-        use crate::catalog::information_schema::INFORMATION_SCHEMA_TABLES;
-        use datafusion_sql::parser::Statement as DFStatement;
-        use sqlparser::ast::*;
-        use std::collections::hash_map::Entry;
-
+    /// Convert a sql string into an ast Statement
+    pub fn sql_to_statement(
+        &self,
+        sql: &str,
+    ) -> Result<datafusion_sql::parser::Statement> {
         let mut statements = DFParser::parse_sql(sql)?;
-        if statements.len() != 1 {
+        if statements.len() > 1 {
             return Err(DataFusionError::NotImplemented(
                 "The context currently only supports a single SQL statement".to_string(),
             ));
         }
-        let statement = statements.pop_front().unwrap();
+        let statement = statements.pop_front().ok_or_else(|| {
+            DataFusionError::NotImplemented(
+                "The context requires a statement!".to_string(),
+            )
+        })?;
+        Ok(statement)
+    }
+
+    /// Convert an ast Statement into a LogicalPlan
+    pub async fn statement_to_plan(
+        &self,
+        statement: datafusion_sql::parser::Statement,
+    ) -> Result<LogicalPlan> {
+        use crate::catalog::information_schema::INFORMATION_SCHEMA_TABLES;
+        use datafusion_sql::parser::Statement as DFStatement;
+        use sqlparser::ast::*;
+        use std::collections::hash_map::Entry;
 
         // Getting `TableProviders` is async but planing is not -- thus pre-fetch
         // table providers for all relations referenced in this query
@@ -1727,6 +1752,15 @@ impl SessionState {
 
         let query = SqlToRel::new(&provider);
         query.statement_to_plan(statement)
+    }
+
+    /// Creates a [`LogicalPlan`] from the provided SQL string
+    ///
+    /// See [`SessionContext::sql`] for a higher-level interface that also handles DDL
+    pub async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
+        let statement = self.sql_to_statement(sql)?;
+        let plan = self.statement_to_plan(statement).await?;
+        Ok(plan)
     }
 
     /// Optimizes the logical plan by applying optimizer rules.

@@ -904,7 +904,7 @@ fn resolve_bytes(v: &Value) -> Option<Vec<u8>> {
             items
                 .iter()
                 .map(resolve_u8)
-                .collect::<std::result::Result<Vec<_>, _>>()
+                .collect::<Result<Vec<_>, _>>()
                 .ok()?,
         )),
         other => Err(AvroError::GetBytes(other.into())),

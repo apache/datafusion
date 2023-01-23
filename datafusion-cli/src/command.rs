@@ -174,7 +174,7 @@ fn all_commands_info() -> RecordBatch {
 impl FromStr for Command {
     type Err = ();
 
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (c, arg) = if let Some((a, b)) = s.split_once(' ') {
             (a, Some(b))
         } else {
@@ -208,7 +208,7 @@ impl FromStr for Command {
 impl FromStr for OutputFormat {
     type Err = ();
 
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (c, arg) = if let Some((a, b)) = s.split_once(' ') {
             (a, Some(b))
         } else {

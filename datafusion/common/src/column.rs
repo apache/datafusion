@@ -148,12 +148,10 @@ impl Column {
 
         Err(DataFusionError::SchemaError(SchemaError::FieldNotFound {
             field: Column::new(self.relation.clone(), self.name),
-            valid_fields: Some(
-                schemas
-                    .iter()
-                    .flat_map(|s| s.fields().iter().map(|f| f.qualified_column()))
-                    .collect(),
-            ),
+            valid_fields: schemas
+                .iter()
+                .flat_map(|s| s.fields().iter().map(|f| f.qualified_column()))
+                .collect(),
         }))
     }
 }
@@ -181,7 +179,7 @@ impl From<String> for Column {
 impl FromStr for Column {
     type Err = Infallible;
 
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(s.into())
     }
 }

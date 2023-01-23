@@ -496,7 +496,7 @@ mod tests {
             "AggregateExec: mode=Final, gby=[], aggr=[]",
             "CoalescePartitionsExec",
             "AggregateExec: mode=Partial, gby=[], aggr=[]",
-            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 
@@ -513,7 +513,7 @@ mod tests {
             "CoalescePartitionsExec",
             "AggregateExec: mode=Partial, gby=[], aggr=[]",
             "FilterExec: c1@0",
-            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 
@@ -531,7 +531,7 @@ mod tests {
             "LocalLimitExec: fetch=100",
             "FilterExec: c1@0",
             // nothing sorts the data, so the local limit doesn't require sorted data either
-            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 
@@ -549,7 +549,7 @@ mod tests {
             "LocalLimitExec: fetch=100",
             "FilterExec: c1@0",
             // nothing sorts the data, so the local limit doesn't require sorted data either
-            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 
@@ -599,13 +599,13 @@ mod tests {
             "AggregateExec: mode=Final, gby=[], aggr=[]",
             "CoalescePartitionsExec",
             "AggregateExec: mode=Partial, gby=[], aggr=[]",
-            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "GlobalLimitExec: skip=0, fetch=100",
             "CoalescePartitionsExec",
             "LocalLimitExec: fetch=100",
             "FilterExec: c1@0",
             // repartition should happen prior to the filter to maximize parallelism
-            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "GlobalLimitExec: skip=0, fetch=100",
             "LocalLimitExec: fetch=100",
             // Expect no repartition to happen for local limit
@@ -626,13 +626,13 @@ mod tests {
             "AggregateExec: mode=Final, gby=[], aggr=[]",
             "CoalescePartitionsExec",
             "AggregateExec: mode=Partial, gby=[], aggr=[]",
-            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "GlobalLimitExec: skip=5, fetch=100",
             "CoalescePartitionsExec",
             "LocalLimitExec: fetch=100",
             "FilterExec: c1@0",
             // repartition should happen prior to the filter to maximize parallelism
-            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "GlobalLimitExec: skip=0, fetch=100",
             "LocalLimitExec: fetch=100",
             // Expect no repartition to happen for local limit
@@ -672,7 +672,7 @@ mod tests {
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
             "SortExec: [c1@0 ASC]",
-            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 
@@ -755,7 +755,7 @@ mod tests {
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
             // union input 2: should repartition
             "FilterExec: c1@0",
-            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 
@@ -773,7 +773,7 @@ mod tests {
             "SortPreservingMergeExec: [c1@0 ASC]",
             "SortExec: [c1@0 ASC]",
             "ProjectionExec: expr=[c1@0 as c1]",
-            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 
@@ -807,7 +807,7 @@ mod tests {
             // Expect repartition on the input to the sort (as it can benefit from additional parallelism)
             "SortExec: [c1@0 ASC]",
             "ProjectionExec: expr=[c1@0 as c1]",
-            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 
@@ -825,7 +825,7 @@ mod tests {
             // Expect repartition on the input to the sort (as it can benefit from additional parallelism)
             "SortExec: [c1@0 ASC]",
             "FilterExec: c1@0",
-            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 
@@ -847,7 +847,7 @@ mod tests {
             "ProjectionExec: expr=[c1@0 as c1]",
             "FilterExec: c1@0",
             // repartition is lowest down
-            "RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 

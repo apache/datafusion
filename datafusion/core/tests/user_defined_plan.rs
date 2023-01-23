@@ -563,7 +563,7 @@ fn accumulate_batch(
 }
 
 impl Stream for TopKReader {
-    type Item = std::result::Result<RecordBatch, ArrowError>;
+    type Item = Result<RecordBatch, ArrowError>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,

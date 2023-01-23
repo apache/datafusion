@@ -36,7 +36,7 @@ mod tests {
         let plan_ref = df_ref.into_optimized_plan()?;
         // Test
         // Write substrait plan to file
-        serializer::serialize(sql, &ctx, &path).await?;
+        serializer::serialize(sql, &ctx, path).await?;
         // Read substrait plan from file
         let proto = serializer::deserialize(path).await?;
         // Check plan equality
