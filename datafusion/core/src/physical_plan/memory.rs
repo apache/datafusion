@@ -46,6 +46,8 @@ pub struct MemoryExec {
     projected_schema: SchemaRef,
     /// Optional projection
     projection: Option<Vec<usize>>,
+    // Optional sort information
+    sort_information: Option<Vec<PhysicalSortExpr>>,
 }
 
 impl fmt::Debug for MemoryExec {
@@ -78,7 +80,10 @@ impl ExecutionPlan for MemoryExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+        match self.sort_information.as_ref() {
+            None => None,
+            Some(sort) => Some(sort.as_slice()),
+        }
     }
 
     fn with_new_children(
@@ -145,6 +150,25 @@ impl MemoryExec {
             schema,
             projected_schema,
             projection,
+            sort_information: None,
+        })
+    }
+    /// Create a new execution plan for reading in-memory record batches
+    /// The provided `schema` should not have the projection applied. Also, you can specify sort
+    /// information on PhysicalExprs.
+    pub fn try_new_with_sort_information(
+        partitions: &[Vec<RecordBatch>],
+        schema: SchemaRef,
+        projection: Option<Vec<usize>>,
+        sort_information: Option<Vec<PhysicalSortExpr>>,
+    ) -> Result<Self> {
+        let projected_schema = project_schema(&schema, projection.as_ref())?;
+        Ok(Self {
+            partitions: partitions.to_vec(),
+            schema,
+            projected_schema,
+            projection,
+            sort_information,
         })
     }
 }

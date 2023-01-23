@@ -20,6 +20,7 @@
 use std::{fmt, usize};
 
 use ahash::RandomState;
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::{
     array::{
@@ -39,15 +40,26 @@ use arrow::{
 use hashbrown::raw::RawTable;
 use smallvec::{smallvec, SmallVec};
 
+use crate::common::Result;
+use arrow::compute::CastOptions;
 use datafusion_common::cast::{as_dictionary_array, as_string_array};
-use datafusion_common::DataFusionError;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_expr::Operator;
+use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr, Column, Literal};
 use datafusion_physical_expr::hash_utils::create_hashes;
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::intervals::interval_aritmetics::Interval;
+use datafusion_physical_expr::physical_expr_visitor::{
+    PhysicalExprVisitable, PhysicalExpressionVisitor, Recursion,
+};
+use datafusion_physical_expr::rewrite::TreeNodeRewritable;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::physical_plan::joins::utils::{
     apply_join_filter_to_indices, JoinFilter, JoinSide,
 };
+use crate::physical_plan::sorts::sort::SortOptions;
 
 /// Updates `hash` with new entries from [RecordBatch] evaluated against the expressions `on`,
 /// assuming that the [RecordBatch] corresponds to the `index`th
@@ -58,12 +70,12 @@ pub fn update_hash(
     offset: usize,
     random_state: &RandomState,
     hashes_buffer: &mut Vec<u64>,
-) -> datafusion_common::Result<()> {
+) -> Result<()> {
     // evaluate the keys
     let keys_values = on
         .iter()
         .map(|c| Ok(c.evaluate(batch)?.into_array(batch.num_rows())))
-        .collect::<datafusion_common::Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?;
 
     // calculate the hash values
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
@@ -100,7 +112,7 @@ pub fn build_join_indices(
     hashes_buffer: &mut Vec<u64>,
     offset: Option<usize>,
     build_side: JoinSide,
-) -> datafusion_common::Result<(UInt64Array, UInt32Array)> {
+) -> Result<(UInt64Array, UInt32Array)> {
     // Get the indices which is satisfies the equal join condition, like `left.a1 = right.a2`
     let (build_indices, probe_indices) = build_equal_condition_join_indices(
         build_hashmap,
@@ -201,7 +213,7 @@ pub fn equal_rows(
     left_arrays: &[ArrayRef],
     right_arrays: &[ArrayRef],
     null_equals_null: bool,
-) -> datafusion_common::Result<bool> {
+) -> Result<bool> {
     let mut err = None;
     let res = left_arrays
         .iter()
@@ -499,18 +511,18 @@ pub fn build_equal_condition_join_indices(
     null_equals_null: &bool,
     hashes_buffer: &mut Vec<u64>,
     offset: Option<usize>,
-) -> datafusion_common::Result<(UInt64Array, UInt32Array)> {
+) -> Result<(UInt64Array, UInt32Array)> {
     let keys_values = probe_on
         .iter()
         .map(|c| Ok(c.evaluate(probe_batch)?.into_array(probe_batch.num_rows())))
-        .collect::<datafusion_common::Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?;
     let build_join_values = build_on
         .iter()
         .map(|c| {
             Ok(c.evaluate(build_input_buffer)?
                 .into_array(build_input_buffer.num_rows()))
         })
-        .collect::<datafusion_common::Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?;
     hashes_buffer.clear();
     hashes_buffer.resize(probe_batch.num_rows(), 0);
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
@@ -579,6 +591,477 @@ pub struct JoinHashMap(pub RawTable<(u64, SmallVec<[u64; 1]>)>);
 
 impl fmt::Debug for JoinHashMap {
     fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct CheckFilterExprContainsSortInformation<'a> {
+    /// Supported state
+    pub contains: &'a mut bool,
+    pub checked_expr: Arc<dyn PhysicalExpr>,
+}
+
+impl<'a> CheckFilterExprContainsSortInformation<'a> {
+    pub fn new(contains: &'a mut bool, checked_expr: Arc<dyn PhysicalExpr>) -> Self {
+        Self {
+            contains,
+            checked_expr,
+        }
+    }
+}
+
+impl PhysicalExpressionVisitor for CheckFilterExprContainsSortInformation<'_> {
+    fn pre_visit(self, expr: Arc<dyn PhysicalExpr>) -> Result<Recursion<Self>> {
+        *self.contains = *self.contains || self.checked_expr.eq(&expr);
+        if *self.contains {
+            Ok(Recursion::Stop(self))
+        } else {
+            Ok(Recursion::Continue(self))
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct PhysicalExprColumnCollector<'a> {
+    pub columns: &'a mut Vec<Column>,
+}
+
+impl<'a> PhysicalExprColumnCollector<'a> {
+    pub fn new(columns: &'a mut Vec<Column>) -> Self {
+        Self { columns }
+    }
+}
+
+impl PhysicalExpressionVisitor for PhysicalExprColumnCollector<'_> {
+    fn pre_visit(self, expr: Arc<dyn PhysicalExpr>) -> Result<Recursion<Self>> {
+        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            self.columns.push(column.clone())
+        }
+        Ok(Recursion::Continue(self))
+    }
+}
+
+/// Create main_col -> filter_col one to one mapping from filter column indices.
+/// A column index looks like
+///            ColumnIndex {
+//                 index: 0, -> field index in main schema
+//                 side: JoinSide::Left, -> child side
+//             },
+fn map_origin_col_to_filter_col(
+    filter: &JoinFilter,
+    main_schema: SchemaRef,
+    side: JoinSide,
+) -> Result<HashMap<Column, Column>> {
+    let mut col_to_col_map: HashMap<Column, Column> = HashMap::new();
+    for (filter_schema_index, index) in filter.column_indices().iter().enumerate() {
+        if index.side.eq(&side) {
+            // Get main field from column index
+            let main_field = main_schema.field(index.index);
+            // Create a column PhysicalExpr
+            let main_col =
+                Column::new_with_schema(main_field.name(), main_schema.as_ref())?;
+            // Since the filter.column_indices() order directly same with intermediate schema fields, we can
+            // get the column.
+            let filter_field = filter.schema().field(filter_schema_index);
+            let filter_col = Column::new(filter_field.name(), filter_schema_index);
+            // Insert mapping
+            col_to_col_map.insert(main_col, filter_col);
+        }
+    }
+    Ok(col_to_col_map)
+}
+/// If converted PhysicalExpr is inside the Filter, we use the sort information. The visitor
+/// visits each node and checks if the filter expression includes the converted expr.
+///
+/// We want to filter out the expression if the filter is a + b > c + 10 AND a + b < c + 100
+///     - a + d is sorted. D is not part of the filter.
+///     - d is sorted. D is not part of the filter.
+///     - a + b + c  is sorted. All columns are represented in filter expression however there is no exact match.
+/// These expression does not indicate prune.
+///
+fn rewrite_sort_information_for_filter(
+    side: JoinSide,
+    filter: &JoinFilter,
+    col_to_col_map: &HashMap<Column, Column>,
+    child_order: &[PhysicalSortExpr],
+) -> Result<Vec<SortedFilterExpr>> {
+    let mut sorted_exps = vec![];
+    for sort_expr in child_order {
+        let expr = sort_expr.expr.clone();
+        // Get main schema columns
+        let mut expr_columns = vec![];
+        expr.clone()
+            .accept(PhysicalExprColumnCollector::new(&mut expr_columns))?;
+        // Calculation is possible with col_to_col_map since sort exprs belong to a child.
+        let all_columns_are_included = expr_columns
+            .iter()
+            .all(|col| col_to_col_map.contains_key(col));
+        if all_columns_are_included {
+            // Since we are sure that one to one column mapping includes all column, we convert
+            // the sort expression into Filter expression.
+            let converted_filter_expr =
+                expr.transform_up(&|p| convert_filter_columns(p, col_to_col_map))?;
+            let mut contains = false;
+            // Search converted PhysicalExpr in filter expression
+            filter.expression().clone().accept(
+                CheckFilterExprContainsSortInformation::new(
+                    &mut contains,
+                    converted_filter_expr.clone(),
+                ),
+            )?;
+            // If the exact match is encountered, use this sorted expression in graph traversals.
+            if contains {
+                sorted_exps.push(SortedFilterExpr::new(
+                    side,
+                    sort_expr.expr.clone(),
+                    converted_filter_expr.clone(),
+                    sort_expr.options,
+                ));
+            }
+        }
+    }
+    Ok(sorted_exps)
+}
+
+/// Here, we map the main column information to filter intermediate schema.
+/// child_orders are derived from child schemas. However, filter schema is different. We enforce
+/// that we get the column order for each corresponding [ColumnIndex]. If not, we return None and
+/// assume this expression is not capable of pruning.
+pub fn build_filter_input_order(
+    filter: &JoinFilter,
+    left_main_schema: SchemaRef,
+    right_main_schema: SchemaRef,
+    left_order: &[PhysicalSortExpr],
+    right_order: &[PhysicalSortExpr],
+) -> Result<Vec<SortedFilterExpr>> {
+    // Get left mapping
+    let left_hashmap: HashMap<Column, Column> =
+        map_origin_col_to_filter_col(filter, left_main_schema, JoinSide::Left)?;
+    // Get right mapping
+    let right_hashmap: HashMap<Column, Column> =
+        map_origin_col_to_filter_col(filter, right_main_schema, JoinSide::Right)?;
+    // Extract sorted expression that belongs to the filter expression
+    let left_sorted_filter_exprs = rewrite_sort_information_for_filter(
+        JoinSide::Left,
+        filter,
+        &left_hashmap,
+        left_order,
+    )?;
+    let right_sorted_filter_exprs = rewrite_sort_information_for_filter(
+        JoinSide::Right,
+        filter,
+        &right_hashmap,
+        right_order,
+    )?;
+    Ok([left_sorted_filter_exprs, right_sorted_filter_exprs].concat())
+}
+
+fn convert_filter_columns(
+    input: Arc<dyn PhysicalExpr>,
+    column_change_information: &HashMap<Column, Column>,
+) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+    if let Some(col) = input.as_any().downcast_ref::<Column>() {
+        let filter_col = column_change_information.get(col).unwrap().clone();
+        Ok(Some(Arc::new(filter_col)))
+    } else {
+        Ok(Some(input))
+    }
+}
+
+#[derive(Debug, Clone)]
+/// The SortedFilterExpr struct is used to represent a sorted filter expression in the
+/// [SymmetricHashJoinExec] struct. It contains information about the join side, the origin
+/// expression, the filter expression, and the sort option.
+/// The struct has several methods to access and modify its fields.
+pub struct SortedFilterExpr {
+    /// Column side
+    pub join_side: JoinSide,
+    /// Sorted expr from a particular join side (child)
+    pub origin_expr: Arc<dyn PhysicalExpr>,
+    /// For interval calculations, one to one mapping of the columns according to filter expression,
+    /// and column indices.
+    pub filter_expr: Arc<dyn PhysicalExpr>,
+    /// Sort option
+    pub sort_option: SortOptions,
+    /// Interval
+    pub interval: Interval,
+    /// NodeIndex in Graph
+    pub node_index: usize,
+}
+
+impl SortedFilterExpr {
+    /// Constructor
+    pub fn new(
+        join_side: JoinSide,
+        origin_expr: Arc<dyn PhysicalExpr>,
+        filter_expr: Arc<dyn PhysicalExpr>,
+        sort_option: SortOptions,
+    ) -> Self {
+        Self {
+            join_side,
+            origin_expr,
+            filter_expr,
+            sort_option,
+            interval: Interval::default(),
+            node_index: 0,
+        }
+    }
+    /// Get origin expr information
+    pub fn origin_expr(&self) -> Arc<dyn PhysicalExpr> {
+        self.origin_expr.clone()
+    }
+    /// Get filter expr information
+    pub fn filter_expr(&self) -> Arc<dyn PhysicalExpr> {
+        self.filter_expr.clone()
+    }
+    /// Get sort information
+    pub fn sort_option(&self) -> SortOptions {
+        self.sort_option
+    }
+    /// Get interval information
+    pub fn interval(&self) -> &Interval {
+        &self.interval
+    }
+    /// Sets interval
+    pub fn set_interval(&mut self, interval: Interval) {
+        self.interval = interval;
+    }
+    /// Node index in ExprIntervalGraph
+    pub fn node_index(&self) -> usize {
+        self.node_index
+    }
+    /// Node index setter in ExprIntervalGraph
+    pub fn set_node_index(&mut self, node_index: usize) {
+        self.node_index = node_index;
+    }
+}
+/// Filter expr for a + b > c + 10 AND a + b < c + 100
+#[allow(dead_code)]
+pub(crate) fn complicated_filter() -> Arc<dyn PhysicalExpr> {
+    let left_expr = BinaryExpr {
+        left: Arc::new(CastExpr {
+            expr: Arc::new(BinaryExpr {
+                left: Arc::new(Column {
+                    name: "0".to_string(),
+                    index: 0,
+                }),
+                op: Operator::Plus,
+                right: Arc::new(Column {
+                    name: "1".to_string(),
+                    index: 1,
+                }),
+            }),
+            cast_type: DataType::Int64,
+            cast_options: CastOptions { safe: false },
+        }),
+        op: Operator::Gt,
+        right: Arc::new(BinaryExpr {
+            left: Arc::new(CastExpr {
+                expr: Arc::new(Column {
+                    name: "2".to_string(),
+                    index: 2,
+                }),
+                cast_type: DataType::Int64,
+                cast_options: CastOptions { safe: false },
+            }),
+            op: Operator::Plus,
+            right: Arc::new(Literal::new(ScalarValue::Int64(Some(10)))),
+        }),
+    };
+    let right_expr = BinaryExpr {
+        left: Arc::new(CastExpr {
+            expr: Arc::new(BinaryExpr {
+                left: Arc::new(Column {
+                    name: "0".to_string(),
+                    index: 0,
+                }),
+                op: Operator::Plus,
+                right: Arc::new(Column {
+                    name: "1".to_string(),
+                    index: 1,
+                }),
+            }),
+            cast_type: DataType::Int64,
+            cast_options: CastOptions { safe: false },
+        }),
+        op: Operator::Lt,
+        right: Arc::new(BinaryExpr {
+            left: Arc::new(CastExpr {
+                expr: Arc::new(Column {
+                    name: "2".to_string(),
+                    index: 2,
+                }),
+                cast_type: DataType::Int64,
+                cast_options: CastOptions { safe: false },
+            }),
+            op: Operator::Plus,
+            right: Arc::new(Literal::new(ScalarValue::Int64(Some(100)))),
+        }),
+    };
+    Arc::new(BinaryExpr::new(
+        Arc::new(left_expr),
+        Operator::And,
+        Arc::new(right_expr),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::physical_plan::{
+        expressions::Column,
+        expressions::PhysicalSortExpr,
+        joins::utils::{ColumnIndex, JoinFilter, JoinSide},
+    };
+    use arrow::compute::{CastOptions, SortOptions};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use std::sync::Arc;
+    #[test]
+    fn find_expr_inside_expr() -> Result<()> {
+        let filter_expr = complicated_filter();
+
+        let mut contains1 = false;
+        let expr_1 = Arc::new(Column::new("gnz", 0));
+        filter_expr
+            .clone()
+            .accept(CheckFilterExprContainsSortInformation::new(
+                &mut contains1,
+                expr_1,
+            ))?;
+        assert!(!contains1);
+
+        let mut contains2 = false;
+        let expr_2 = Arc::new(Column::new("1", 1));
+        filter_expr
+            .clone()
+            .accept(CheckFilterExprContainsSortInformation::new(
+                &mut contains2,
+                expr_2,
+            ))?;
+        assert!(contains2);
+
+        let mut contains3 = false;
+        let expr_3 = Arc::new(CastExpr {
+            expr: Arc::new(BinaryExpr {
+                left: Arc::new(Column {
+                    name: "0".to_string(),
+                    index: 0,
+                }),
+                op: Operator::Plus,
+                right: Arc::new(Column {
+                    name: "1".to_string(),
+                    index: 1,
+                }),
+            }),
+            cast_type: DataType::Int64,
+            cast_options: CastOptions { safe: false },
+        });
+        filter_expr
+            .clone()
+            .accept(CheckFilterExprContainsSortInformation::new(
+                &mut contains3,
+                expr_3,
+            ))?;
+        assert!(contains3);
+
+        let mut contains4 = false;
+        let expr_4 = Arc::new(Column::new("1", 42));
+        filter_expr
+            .clone()
+            .accept(CheckFilterExprContainsSortInformation::new(
+                &mut contains4,
+                expr_4,
+            ))?;
+        assert!(!contains4);
+
+        Ok(())
+    }
+
+    #[test]
+    fn build_sorted_expr() -> Result<()> {
+        let left_schema = Arc::new(Schema::new(vec![
+            Field::new("la1", DataType::Int32, false),
+            Field::new("lb1", DataType::Int32, false),
+            Field::new("lc1", DataType::Int32, false),
+            Field::new("lt1", DataType::Int32, false),
+            Field::new("la2", DataType::Int32, false),
+            Field::new("la1_des", DataType::Int32, false),
+        ]));
+
+        let right_schema = Arc::new(Schema::new(vec![
+            Field::new("ra1", DataType::Int32, false),
+            Field::new("rb1", DataType::Int32, false),
+            Field::new("rc1", DataType::Int32, false),
+            Field::new("rt1", DataType::Int32, false),
+            Field::new("ra2", DataType::Int32, false),
+            Field::new("ra1_des", DataType::Int32, false),
+        ]));
+
+        let filter_col_0 = Arc::new(Column::new("0", 0));
+        let filter_col_1 = Arc::new(Column::new("1", 1));
+        let filter_col_2 = Arc::new(Column::new("2", 2));
+
+        let column_indices = vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 4,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+        ];
+        let intermediate_schema = Schema::new(vec![
+            Field::new(filter_col_0.name(), DataType::Int32, true),
+            Field::new(filter_col_1.name(), DataType::Int32, true),
+            Field::new(filter_col_2.name(), DataType::Int32, true),
+        ]);
+
+        let filter_expr = complicated_filter();
+
+        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+
+        // Only two of them in Filter PhysicalExpr (la1, la2)
+        let left_sorted = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("lt1", 3)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("la2", 4)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("la1", 0)),
+                options: SortOptions::default(),
+            },
+        ];
+        // Only "ra1" in Filter PhysicalExpr
+        let right_sorted = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("ra1", 0)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("rt1", 3)),
+                options: SortOptions::default(),
+            },
+        ];
+
+        let sorted = build_filter_input_order(
+            &filter,
+            left_schema,
+            right_schema,
+            &left_sorted,
+            &right_sorted,
+        )?;
+        assert_eq!(sorted.len(), 3);
+
         Ok(())
     }
 }

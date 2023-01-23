@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::expressions::{
-    BinaryExpr, CastExpr, Column, DateTimeIntervalExpr, GetIndexedFieldExpr, InListExpr,
+    BinaryExpr, CastExpr, DateTimeIntervalExpr, GetIndexedFieldExpr, InListExpr,
 };
 use crate::PhysicalExpr;
 
@@ -34,18 +34,18 @@ pub enum Recursion<V: PhysicalExpressionVisitor> {
 }
 
 /// Encode the traversal of an expression tree. When passed to
-/// `Expr::accept`, `PhysicalExpressionVisitor::visit` is invoked
+/// `Arc<dyn PhysicalExpr>::accept`, `PhysicalExpressionVisitor::visit` is invoked
 /// recursively on all nodes of an expression tree. See the comments
-/// on `Expr::accept` for details on its use
-pub trait PhysicalExpressionVisitor<E: ExprVisitable = Arc<dyn PhysicalExpr>>:
+/// on `Arc<dyn PhysicalExpr>::accept` for details on its use
+pub trait PhysicalExpressionVisitor<E: PhysicalExprVisitable = Arc<dyn PhysicalExpr>>:
     Sized
 {
-    /// Invoked before any children of `expr` are visited.
+    /// Invoked before any children of `Arc<dyn PhysicalExpr>` are visited.
     fn pre_visit(self, expr: E) -> Result<Recursion<Self>>
     where
         Self: PhysicalExpressionVisitor;
 
-    /// Invoked after all children of `expr` are visited. Default
+    /// Invoked after all children of `Arc<dyn PhysicalExpr>` are visited. Default
     /// implementation does nothing.
     fn post_visit(self, _expr: E) -> Result<Self> {
         Ok(self)
@@ -53,13 +53,12 @@ pub trait PhysicalExpressionVisitor<E: ExprVisitable = Arc<dyn PhysicalExpr>>:
 }
 
 /// trait for types that can be visited by [`ExpressionVisitor`]
-pub trait ExprVisitable: Sized {
+pub trait PhysicalExprVisitable: Sized {
     /// accept a visitor, calling `visit` on all children of this
     fn accept<V: PhysicalExpressionVisitor<Self>>(self, visitor: V) -> Result<V>;
 }
 
-// TODO: Widen the options.
-impl ExprVisitable for Arc<dyn PhysicalExpr> {
+impl PhysicalExprVisitable for Arc<dyn PhysicalExpr> {
     fn accept<V: PhysicalExpressionVisitor<Self>>(self, visitor: V) -> Result<V> {
         let visitor = match visitor.pre_visit(self.clone())? {
             Recursion::Continue(visitor) => visitor,
@@ -97,19 +96,5 @@ impl ExprVisitable for Arc<dyn PhysicalExpr> {
                 Ok(visitor)
             }?;
         visitor.post_visit(self.clone())
-    }
-}
-
-#[derive(Default, Debug)]
-pub struct PostOrderPhysicalColumnCollector {
-    pub columns: Vec<Column>,
-}
-
-impl PhysicalExpressionVisitor for PostOrderPhysicalColumnCollector {
-    fn pre_visit(mut self, expr: Arc<dyn PhysicalExpr>) -> Result<Recursion<Self>> {
-        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-            self.columns.push(column.clone())
-        }
-        Ok(Recursion::Continue(self))
     }
 }

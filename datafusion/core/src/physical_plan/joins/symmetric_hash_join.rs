@@ -29,7 +29,7 @@ use std::{any::Any, usize};
 use ahash::RandomState;
 use arrow::array::PrimitiveArray;
 use arrow::array::{ArrowPrimitiveType, NativeAdapter, PrimitiveBuilder};
-use arrow::compute::{concat_batches, SortOptions};
+use arrow::compute::concat_batches;
 use arrow::datatypes::ArrowNativeType;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
@@ -50,7 +50,8 @@ use crate::execution::context::TaskContext;
 use crate::logical_expr::JoinType;
 use crate::physical_plan::common::merge_batches;
 use crate::physical_plan::joins::hash_join_utils::{
-    build_join_indices, update_hash, JoinHashMap,
+    build_filter_input_order, build_join_indices, update_hash, JoinHashMap,
+    SortedFilterExpr,
 };
 use crate::physical_plan::joins::utils::build_batch_from_indices;
 use crate::physical_plan::{
@@ -64,70 +65,6 @@ use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
     PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-
-#[derive(Debug, Clone)]
-/// The SortedFilterExpr struct is used to represent a sorted filter expression in the
-/// [SymmetricHashJoinExec] struct. It contains information about the join side, the origin
-/// expression, the filter expression, and the sort option.
-/// The struct has several methods to access and modify its fields.
-pub struct SortedFilterExpr {
-    // Column side
-    join_side: JoinSide,
-    // Sorted expr from a particular join side (child)
-    origin_expr: Arc<dyn PhysicalExpr>,
-    // For interval calculations, one to one mapping of the columns according to filter expression,
-    // and column indices.
-    filter_expr: Arc<dyn PhysicalExpr>,
-    // Sort option
-    sort_option: SortOptions,
-    // Interval
-    interval: Interval,
-    // NodeIndex in Graph
-    node_index: usize,
-}
-
-impl SortedFilterExpr {
-    /// Constructor
-    pub fn new(
-        join_side: JoinSide,
-        origin_expr: Arc<dyn PhysicalExpr>,
-        filter_expr: Arc<dyn PhysicalExpr>,
-        sort_option: SortOptions,
-    ) -> Self {
-        Self {
-            join_side,
-            origin_expr,
-            filter_expr,
-            sort_option,
-            interval: Interval::default(),
-            node_index: 0,
-        }
-    }
-    /// Get origin expr information
-    pub fn origin_expr(&self) -> Arc<dyn PhysicalExpr> {
-        self.origin_expr.clone()
-    }
-    /// Get filter expr information
-    pub fn filter_expr(&self) -> Arc<dyn PhysicalExpr> {
-        self.filter_expr.clone()
-    }
-    /// Get sort information
-    pub fn sort_option(&self) -> SortOptions {
-        self.sort_option
-    }
-    /// Get interval information
-    pub fn interval(&self) -> &Interval {
-        &self.interval
-    }
-    /// Sets interval
-    pub fn set_interval(&mut self, interval: Interval) {
-        self.interval = interval;
-    }
-    /// Node index in ExprIntervalGraph
-    pub fn node_index(&self) -> usize {
-        self.node_index
-    }
-}
 
 /// The symmetric hash join is a special type of hash join designed for data streams and large
 /// datasets.
@@ -150,6 +87,8 @@ pub struct SymmetricHashJoinExec {
     pub(crate) join_type: JoinType,
     /// Order information of filter columns
     filter_columns: Vec<SortedFilterExpr>,
+    /// Expression graph for interval calculations
+    physical_expr_graph: ExprIntervalGraph,
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Shares the `RandomState` for the hashing algorithm
@@ -218,7 +157,6 @@ impl SymmetricHashJoinExec {
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
         filter: JoinFilter,
-        filter_columns: Vec<SortedFilterExpr>,
         join_type: &JoinType,
         null_equals_null: &bool,
     ) -> Result<Self> {
@@ -237,13 +175,41 @@ impl SymmetricHashJoinExec {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
+        //
+        let mut filter_columns = build_filter_input_order(
+            &filter,
+            left.schema(),
+            right.schema(),
+            left.output_ordering().unwrap(),
+            right.output_ordering().unwrap(),
+        )?;
+
+        // Create expression graph for PhysicalExpr.
+        let physical_expr_graph = ExprIntervalGraph::try_new(
+            filter.expression().clone(),
+            &filter_columns
+                .iter()
+                .map(|sorted_expr| sorted_expr.filter_expr())
+                .collect_vec(),
+        )?;
+        // We inject calculated node indexes into SortedFilterExpr. In graph calculations,
+        // we will be using node index to put calculated intervals into Columns or BinaryExprs .
+        filter_columns
+            .iter_mut()
+            .zip(physical_expr_graph.2.iter())
+            .map(|(sorted_expr, (_, index))| {
+                sorted_expr.set_node_index(*index);
+            })
+            .collect_vec();
+
         Ok(SymmetricHashJoinExec {
             left,
             right,
             on,
             filter,
-            filter_columns,
             join_type: *join_type,
+            filter_columns,
+            physical_expr_graph,
             schema: Arc::new(schema),
             random_state,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -373,7 +339,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             children[1].clone(),
             self.on.clone(),
             self.filter.clone(),
-            self.filter_columns.clone(),
             &self.join_type,
             &self.null_equals_null,
         )?))
@@ -416,27 +381,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         let left_stream = self.left.execute(partition, context.clone())?;
         let right_stream = self.right.execute(partition, context)?;
 
-        let physical_expr_graph = ExprIntervalGraph::try_new(
-            self.filter.expression().clone(),
-            &self
-                .filter_columns
-                .iter()
-                .map(|sorted_expr| sorted_expr.filter_expr())
-                .collect_vec(),
-        )?;
-        // We inject calculated node indexes into SortedFilterExpr. In graph calculations,
-        // we will be using node index to put calculated intervals into Columns or BinaryExprs .
-        let node_injected_filter_exprs = self
-            .filter_columns
-            .iter()
-            .zip(physical_expr_graph.2.iter())
-            .map(|(sorted_expr, (_, index))| {
-                let mut temp = sorted_expr.clone();
-                temp.node_index = *index;
-                temp
-            })
-            .collect_vec();
-
         Ok(Box::pin(SymmetricHashJoinStream {
             left_stream,
             right_stream,
@@ -450,9 +394,9 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             right: right_side_joiner,
             column_indices: self.column_indices.clone(),
             join_metrics: SymmetricHashJoinMetrics::new(partition, &self.metrics),
-            physical_expr_graph,
+            physical_expr_graph: self.physical_expr_graph.clone(),
             null_equals_null: self.null_equals_null,
-            filter_columns: node_injected_filter_exprs,
+            filter_columns: self.filter_columns.clone(),
             final_result: false,
             data_side: JoinSide::Left,
         }))
@@ -918,11 +862,6 @@ impl OneSideHashJoiner {
         // We use Vec<(usize, Interval)> instead of Hashmap<usize, Interval> since the expected
         // filter exprs relatively low and conversion between Vec<SortedFilterExpr> and Hashmap
         // back and forth may be slower.
-
-        // Get calculated interval from Vec<SortedFilterExpr> into a Vec.
-        // TODO: For ozan, abi hesaplamadan Vec<SortedFilterExpr> verebilirdik direkt,
-        // ancak cyclic dependency olusturuyor dosyalar arası. SortedFilterExpr struct'ı common'a
-        // alabiliriz ve bu hesaplama olmadan SortedFilterExpr dogrudan graf icinde kullanilabilir.
         let mut filter_intervals: Vec<(usize, Interval)> = filter_columns
             .iter()
             .map(|sorted_expr| (sorted_expr.node_index(), sorted_expr.interval().clone()))
@@ -1170,19 +1109,20 @@ impl SymmetricHashJoinStream {
 mod tests {
     use std::fs::File;
 
-    use arrow::array::ArrayRef;
+    use arrow::array::{Array, ArrayRef};
     use arrow::array::{Int32Array, TimestampNanosecondArray};
-    use arrow::compute::CastOptions;
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::util::pretty::pretty_format_batches;
     use rstest::*;
     use tempfile::TempDir;
 
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr, Column, Literal};
+    use datafusion_physical_expr::expressions::{BinaryExpr, Column};
     use datafusion_physical_expr::utils;
 
     use crate::physical_plan::collect;
+    use crate::physical_plan::joins::hash_join_utils::complicated_filter;
     use crate::physical_plan::joins::{HashJoinExec, PartitionMode};
     use crate::physical_plan::{
         common, memory::MemoryExec, repartition::RepartitionExec,
@@ -1191,6 +1131,15 @@ mod tests {
     use crate::test_util;
 
     use super::*;
+
+    const TABLE_SIZE: i32 = 1_000;
+
+    // TODO: Lazy statistics for same record batches.
+    // use lazy_static::lazy_static;
+    //
+    // lazy_static! {
+    //     static ref SIDE_BATCH: Result<(RecordBatch, RecordBatch)> = build_sides_record_batches(TABLE_SIZE, (10, 11));
+    // }
 
     fn compare_batches(collected_1: &[RecordBatch], collected_2: &[RecordBatch]) {
         // compare
@@ -1219,7 +1168,6 @@ mod tests {
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
         filter: JoinFilter,
-        sorted_filter_columns: Vec<SortedFilterExpr>,
         join_type: &JoinType,
         null_equals_null: bool,
         context: Arc<TaskContext>,
@@ -1247,7 +1195,6 @@ mod tests {
             )?),
             on,
             filter,
-            sorted_filter_columns,
             join_type,
             &null_equals_null,
         )?;
@@ -1334,28 +1281,21 @@ mod tests {
         Ok(result)
     }
 
-    fn build_table(columns: Vec<(&str, ArrayRef)>) -> Arc<dyn ExecutionPlan> {
+    fn build_record_batch(columns: Vec<(&str, ArrayRef)>) -> Result<RecordBatch> {
         let schema = Schema::new(
             columns
                 .iter()
-                .map(|(name, array)| Field::new(*name, array.data_type().clone(), false))
+                .map(|(name, array)| {
+                    let null = array.null_count() > 0;
+                    Field::new(*name, array.data_type().clone(), null)
+                })
                 .collect(),
         );
         let batch = RecordBatch::try_new(
             Arc::new(schema),
             columns.into_iter().map(|(_, array)| array).collect(),
-        )
-        .unwrap();
-
-        let schema = batch.schema();
-        Arc::new(
-            MemoryExec::try_new(
-                &[split_record_batches(&batch, 13).unwrap()],
-                schema,
-                None,
-            )
-            .unwrap(),
-        )
+        )?;
+        Ok(batch)
     }
 
     fn join_expr_tests_fixture(
@@ -1432,13 +1372,15 @@ mod tests {
             _ => unreachable!(),
         }
     }
-
-    fn create_memory_table(
+    fn build_sides_record_batches(
         table_size: i32,
         key_cardinality: (i32, i32),
-    ) -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>) {
+    ) -> Result<(RecordBatch, RecordBatch)> {
+        let null_ratio: f64 = 0.4;
         let initial_range = 0..table_size;
-        let left = build_table(vec![
+        let index = (table_size as f64 * null_ratio).round() as i32;
+        let rest_of = index..table_size;
+        let left = build_record_batch(vec![
             (
                 "la1",
                 Arc::new(Int32Array::from_iter(
@@ -1481,8 +1423,36 @@ mod tests {
                     initial_range.clone().rev().collect::<Vec<i32>>(),
                 )),
             ),
-        ]);
-        let right = build_table(vec![
+            (
+                "l_asc_null_first",
+                Arc::new(Int32Array::from_iter({
+                    std::iter::repeat(None)
+                        .take(index as usize)
+                        .chain(rest_of.clone().map(Some))
+                        .collect::<Vec<Option<i32>>>()
+                })),
+            ),
+            (
+                "l_asc_null_last",
+                Arc::new(Int32Array::from_iter({
+                    rest_of
+                        .clone()
+                        .map(Some)
+                        .chain(std::iter::repeat(None).take(index as usize))
+                        .collect::<Vec<Option<i32>>>()
+                })),
+            ),
+            (
+                "l_desc_null_first",
+                Arc::new(Int32Array::from_iter({
+                    std::iter::repeat(None)
+                        .take(index as usize)
+                        .chain(rest_of.clone().rev().map(Some))
+                        .collect::<Vec<Option<i32>>>()
+                })),
+            ),
+        ])?;
+        let right = build_record_batch(vec![
             (
                 "ra1",
                 Arc::new(Int32Array::from_iter(
@@ -1525,80 +1495,94 @@ mod tests {
                     initial_range.rev().collect::<Vec<i32>>(),
                 )),
             ),
-        ]);
-        (left, right)
+            (
+                "r_asc_null_first",
+                Arc::new(Int32Array::from_iter({
+                    std::iter::repeat(None)
+                        .take(index as usize)
+                        .chain(rest_of.clone().map(Some))
+                        .collect::<Vec<Option<i32>>>()
+                })),
+            ),
+            (
+                "r_asc_null_last",
+                Arc::new(Int32Array::from_iter({
+                    rest_of
+                        .clone()
+                        .map(Some)
+                        .chain(std::iter::repeat(None).take(index as usize))
+                        .collect::<Vec<Option<i32>>>()
+                })),
+            ),
+            (
+                "r_desc_null_first",
+                Arc::new(Int32Array::from_iter({
+                    std::iter::repeat(None)
+                        .take(index as usize)
+                        .chain(rest_of.rev().map(Some))
+                        .collect::<Vec<Option<i32>>>()
+                })),
+            ),
+        ])?;
+        Ok((left, right))
     }
 
-    fn complicated_fiter() -> Arc<dyn PhysicalExpr> {
-        let left_expr = BinaryExpr {
-            left: Arc::new(CastExpr {
-                expr: Arc::new(BinaryExpr {
-                    left: Arc::new(Column {
-                        name: "0".to_string(),
-                        index: 0,
-                    }),
-                    op: Operator::Plus,
-                    right: Arc::new(Column {
-                        name: "1".to_string(),
-                        index: 1,
-                    }),
-                }),
-                cast_type: DataType::Int64,
-                cast_options: CastOptions { safe: false },
-            }),
-            op: Operator::Gt,
-            right: Arc::new(BinaryExpr {
-                left: Arc::new(CastExpr {
-                    expr: Arc::new(Column {
-                        name: "2".to_string(),
-                        index: 2,
-                    }),
-                    cast_type: DataType::Int64,
-                    cast_options: CastOptions { safe: false },
-                }),
-                op: Operator::Plus,
-                right: Arc::new(Literal::new(ScalarValue::Int64(Some(10)))),
-            }),
-        };
-        let right_expr = BinaryExpr {
-            left: Arc::new(CastExpr {
-                expr: Arc::new(BinaryExpr {
-                    left: Arc::new(Column {
-                        name: "0".to_string(),
-                        index: 0,
-                    }),
-                    op: Operator::Plus,
-                    right: Arc::new(Column {
-                        name: "1".to_string(),
-                        index: 1,
-                    }),
-                }),
-                cast_type: DataType::Int64,
-                cast_options: CastOptions { safe: false },
-            }),
-            op: Operator::Lt,
-            right: Arc::new(BinaryExpr {
-                left: Arc::new(CastExpr {
-                    expr: Arc::new(Column {
-                        name: "2".to_string(),
-                        index: 2,
-                    }),
-                    cast_type: DataType::Int64,
-                    cast_options: CastOptions { safe: false },
-                }),
-                op: Operator::Plus,
-                right: Arc::new(Literal::new(ScalarValue::Int64(Some(100)))),
-            }),
-        };
-        Arc::new(BinaryExpr::new(
-            Arc::new(left_expr),
-            Operator::And,
-            Arc::new(right_expr),
+    fn create_memory_table(
+        left_batch: RecordBatch,
+        right_batch: RecordBatch,
+        left_sorted: Vec<PhysicalSortExpr>,
+        right_sorted: Vec<PhysicalSortExpr>,
+    ) -> Result<(Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>)> {
+        Ok((
+            Arc::new(MemoryExec::try_new_with_sort_information(
+                &[split_record_batches(&left_batch, 13).unwrap()],
+                left_batch.schema(),
+                None,
+                Some(left_sorted),
+            )?),
+            Arc::new(MemoryExec::try_new_with_sort_information(
+                &[split_record_batches(&right_batch, 13).unwrap()],
+                right_batch.schema(),
+                None,
+                Some(right_sorted),
+            )?),
         ))
     }
 
+    async fn experiment(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        filter: JoinFilter,
+        join_type: JoinType,
+        on: JoinOn,
+        task_ctx: Arc<TaskContext>,
+    ) -> Result<()> {
+        let first_batches = partitioned_sym_join_with_filter(
+            left.clone(),
+            right.clone(),
+            on.clone(),
+            filter.clone(),
+            &join_type,
+            false,
+            task_ctx.clone(),
+        )
+        .await?;
+        let second_batches = partitioned_hash_join_with_filter(
+            left.clone(),
+            right.clone(),
+            on.clone(),
+            filter.clone(),
+            &join_type,
+            false,
+            task_ctx.clone(),
+        )
+        .await?;
+        compare_batches(&first_batches, &second_batches);
+        Ok(())
+    }
+
     #[rstest]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    #[tokio::test(flavor = "multi_thread")]
     async fn complex_join_all_one_ascending_numeric(
         #[values(
             JoinType::Inner,
@@ -1623,7 +1607,23 @@ mod tests {
         let config = SessionConfig::new().with_repartition_joins(false);
         let session_ctx = SessionContext::with_config(config);
         let task_ctx = session_ctx.task_ctx();
-        let (left, right) = create_memory_table(1000, cardinality);
+        let (left_batch, right_batch) =
+            build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_sorted = vec![PhysicalSortExpr {
+            expr: Arc::new(BinaryExpr {
+                left: Arc::new(Column::new_with_schema("la1", &left_batch.schema())?),
+                op: Operator::Plus,
+                right: Arc::new(Column::new_with_schema("la2", &left_batch.schema())?),
+            }),
+            options: SortOptions::default(),
+        }];
+
+        let right_sorted = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new_with_schema("ra1", &right_batch.schema())?),
+            options: SortOptions::default(),
+        }];
+        let (left, right) =
+            create_memory_table(left_batch, right_batch, left_sorted, right_sorted)?;
 
         let on = vec![(
             Column::new_with_schema("lc1", &left.schema())?,
@@ -1633,36 +1633,6 @@ mod tests {
         let filter_col_0 = Arc::new(Column::new("0", 0));
         let filter_col_1 = Arc::new(Column::new("1", 1));
         let filter_col_2 = Arc::new(Column::new("2", 2));
-
-        let main_sorted_binary = Arc::new(BinaryExpr {
-            left: Arc::new(Column::new_with_schema("la1", &left.schema())?),
-            op: Operator::Plus,
-            right: Arc::new(Column::new_with_schema("la2", &left.schema())?),
-        });
-
-        let filter_sorted_binary = Arc::new(BinaryExpr {
-            left: filter_col_0.clone(),
-            op: Operator::Plus,
-            right: filter_col_1.clone(),
-        });
-
-        let right_main_sorted_col =
-            Arc::new(Column::new_with_schema("ra1", &right.schema())?);
-
-        let sorted_filter_columns = vec![
-            SortedFilterExpr::new(
-                JoinSide::Left,
-                main_sorted_binary,
-                filter_sorted_binary,
-                SortOptions::default(),
-            ),
-            SortedFilterExpr::new(
-                JoinSide::Right,
-                right_main_sorted_col.clone(),
-                filter_col_2.clone(),
-                SortOptions::default(),
-            ),
-        ];
 
         let column_indices = vec![
             ColumnIndex {
@@ -1684,7 +1654,7 @@ mod tests {
             Field::new(filter_col_2.name(), DataType::Int32, true),
         ]);
 
-        let filter_expr = complicated_fiter();
+        let filter_expr = complicated_filter();
 
         let filter = JoinFilter::new(
             filter_expr,
@@ -1692,33 +1662,12 @@ mod tests {
             intermediate_schema.clone(),
         );
 
-        let first_batches = partitioned_sym_join_with_filter(
-            left.clone(),
-            right.clone(),
-            on.clone(),
-            filter.clone(),
-            sorted_filter_columns,
-            &join_type,
-            false,
-            task_ctx.clone(),
-        )
-        .await?;
-        let second_batches = partitioned_hash_join_with_filter(
-            left.clone(),
-            right.clone(),
-            on.clone(),
-            filter.clone(),
-            &join_type,
-            false,
-            task_ctx.clone(),
-        )
-        .await?;
-        compare_batches(&first_batches, &second_batches);
+        experiment(left, right, filter, join_type, on, task_ctx).await?;
         Ok(())
     }
 
     #[rstest]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    #[tokio::test(flavor = "multi_thread")]
     async fn join_all_one_ascending_numeric(
         #[values(
             JoinType::Inner,
@@ -1743,7 +1692,18 @@ mod tests {
         let config = SessionConfig::new().with_repartition_joins(false);
         let session_ctx = SessionContext::with_config(config);
         let task_ctx = session_ctx.task_ctx();
-        let (left, right) = create_memory_table(1000, cardinality);
+        let (left_batch, right_batch) =
+            build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_sorted = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new_with_schema("la1", &left_batch.schema())?),
+            options: SortOptions::default(),
+        }];
+        let right_sorted = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new_with_schema("ra1", &right_batch.schema())?),
+            options: SortOptions::default(),
+        }];
+        let (left, right) =
+            create_memory_table(left_batch, right_batch, left_sorted, right_sorted)?;
 
         let on = vec![(
             Column::new_with_schema("lc1", &left.schema())?,
@@ -1752,21 +1712,6 @@ mod tests {
 
         let left_col = Arc::new(Column::new("left", 0));
         let right_col = Arc::new(Column::new("right", 1));
-
-        let sorted_filter_columns = vec![
-            SortedFilterExpr::new(
-                JoinSide::Left,
-                Arc::new(Column::new_with_schema("la1", &left.schema())?),
-                left_col.clone(),
-                SortOptions::default(),
-            ),
-            SortedFilterExpr::new(
-                JoinSide::Right,
-                Arc::new(Column::new_with_schema("ra1", &right.schema())?),
-                right_col.clone(),
-                SortOptions::default(),
-            ),
-        ];
 
         let column_indices = vec![
             ColumnIndex {
@@ -1792,33 +1737,12 @@ mod tests {
             intermediate_schema.clone(),
         );
 
-        let first_batches = partitioned_sym_join_with_filter(
-            left.clone(),
-            right.clone(),
-            on.clone(),
-            filter.clone(),
-            sorted_filter_columns,
-            &join_type,
-            false,
-            task_ctx.clone(),
-        )
-        .await?;
-        let second_batches = partitioned_hash_join_with_filter(
-            left.clone(),
-            right.clone(),
-            on.clone(),
-            filter.clone(),
-            &join_type,
-            false,
-            task_ctx.clone(),
-        )
-        .await?;
-        compare_batches(&first_batches, &second_batches);
+        experiment(left, right, filter, join_type, on, task_ctx).await?;
         Ok(())
     }
 
     #[rstest]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    #[tokio::test(flavor = "multi_thread")]
     async fn join_all_one_descending_numeric_particular(
         #[values(
             JoinType::Inner,
@@ -1843,7 +1767,24 @@ mod tests {
         let config = SessionConfig::new().with_repartition_joins(false);
         let session_ctx = SessionContext::with_config(config);
         let task_ctx = session_ctx.task_ctx();
-        let (left, right) = create_memory_table(20, cardinality);
+        let (left_batch, right_batch) =
+            build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_sorted = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new_with_schema("la1_des", &left_batch.schema())?),
+            options: SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+        }];
+        let right_sorted = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new_with_schema("ra1_des", &right_batch.schema())?),
+            options: SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+        }];
+        let (left, right) =
+            create_memory_table(left_batch, right_batch, left_sorted, right_sorted)?;
 
         let on = vec![(
             Column::new_with_schema("lc1", &left.schema())?,
@@ -1852,27 +1793,6 @@ mod tests {
 
         let left_col = Arc::new(Column::new("left", 0));
         let right_col = Arc::new(Column::new("right", 1));
-
-        let sorted_filter_columns = vec![
-            SortedFilterExpr::new(
-                JoinSide::Left,
-                Arc::new(Column::new_with_schema("la1_des", &left.schema())?),
-                left_col.clone(),
-                SortOptions {
-                    descending: true,
-                    nulls_first: true,
-                },
-            ),
-            SortedFilterExpr::new(
-                JoinSide::Right,
-                Arc::new(Column::new_with_schema("ra1_des", &right.schema())?),
-                right_col.clone(),
-                SortOptions {
-                    descending: true,
-                    nulls_first: true,
-                },
-            ),
-        ];
 
         let column_indices = vec![
             ColumnIndex {
@@ -1898,28 +1818,7 @@ mod tests {
             intermediate_schema.clone(),
         );
 
-        let first_batches = partitioned_sym_join_with_filter(
-            left.clone(),
-            right.clone(),
-            on.clone(),
-            filter.clone(),
-            sorted_filter_columns,
-            &join_type,
-            false,
-            task_ctx.clone(),
-        )
-        .await?;
-        let second_batches = partitioned_hash_join_with_filter(
-            left.clone(),
-            right.clone(),
-            on.clone(),
-            filter.clone(),
-            &join_type,
-            false,
-            task_ctx.clone(),
-        )
-        .await?;
-        compare_batches(&first_batches, &second_batches);
+        experiment(left, right, filter, join_type, on, task_ctx).await?;
         Ok(())
     }
 
@@ -1949,11 +1848,216 @@ mod tests {
         let task_ctx = ctx.task_ctx();
         let results = collect(physical_plan.clone(), task_ctx).await.unwrap();
         let formatted = pretty_format_batches(&results).unwrap().to_string();
-        println!("Query Output:\n\n{formatted}");
         let found = formatted
             .lines()
             .any(|line| line.contains("SymmetricHashJoinExec"));
         assert!(found);
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn build_null_columns_first() -> Result<()> {
+        let join_type = JoinType::Full;
+        let cardinality = (10, 11);
+        let case_expr = 1;
+        let config = SessionConfig::new().with_repartition_joins(false);
+        let session_ctx = SessionContext::with_config(config);
+        let task_ctx = session_ctx.task_ctx();
+        let (left_batch, right_batch) =
+            build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_sorted = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new_with_schema(
+                "l_asc_null_first",
+                &left_batch.schema(),
+            )?),
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        }];
+        let right_sorted = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new_with_schema(
+                "r_asc_null_first",
+                &right_batch.schema(),
+            )?),
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        }];
+        let (left, right) =
+            create_memory_table(left_batch, right_batch, left_sorted, right_sorted)?;
+
+        let on = vec![(
+            Column::new_with_schema("lc1", &left.schema())?,
+            Column::new_with_schema("rc1", &right.schema())?,
+        )];
+
+        let left_col = Arc::new(Column::new("left", 0));
+        let right_col = Arc::new(Column::new("right", 1));
+
+        let column_indices = vec![
+            ColumnIndex {
+                index: 6,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 6,
+                side: JoinSide::Right,
+            },
+        ];
+        let intermediate_schema = Schema::new(vec![
+            Field::new(left_col.name(), DataType::Int32, true),
+            Field::new(right_col.name(), DataType::Int32, true),
+        ]);
+
+        let filter_expr =
+            join_expr_tests_fixture(case_expr, left_col.clone(), right_col.clone());
+
+        let filter = JoinFilter::new(
+            filter_expr,
+            column_indices.clone(),
+            intermediate_schema.clone(),
+        );
+        experiment(left, right, filter, join_type, on, task_ctx).await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn build_null_columns_last() -> Result<()> {
+        let join_type = JoinType::Full;
+        let cardinality = (10, 11);
+        let case_expr = 1;
+        let config = SessionConfig::new().with_repartition_joins(false);
+        let session_ctx = SessionContext::with_config(config);
+        let task_ctx = session_ctx.task_ctx();
+        let (left_batch, right_batch) =
+            build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_sorted = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new_with_schema(
+                "l_asc_null_last",
+                &left_batch.schema(),
+            )?),
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }];
+        let right_sorted = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new_with_schema(
+                "r_asc_null_last",
+                &right_batch.schema(),
+            )?),
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }];
+        let (left, right) =
+            create_memory_table(left_batch, right_batch, left_sorted, right_sorted)?;
+
+        let on = vec![(
+            Column::new_with_schema("lc1", &left.schema())?,
+            Column::new_with_schema("rc1", &right.schema())?,
+        )];
+
+        let left_col = Arc::new(Column::new("left", 0));
+        let right_col = Arc::new(Column::new("right", 1));
+
+        let column_indices = vec![
+            ColumnIndex {
+                index: 7,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 7,
+                side: JoinSide::Right,
+            },
+        ];
+        let intermediate_schema = Schema::new(vec![
+            Field::new(left_col.name(), DataType::Int32, true),
+            Field::new(right_col.name(), DataType::Int32, true),
+        ]);
+
+        let filter_expr =
+            join_expr_tests_fixture(case_expr, left_col.clone(), right_col.clone());
+
+        let filter = JoinFilter::new(
+            filter_expr,
+            column_indices.clone(),
+            intermediate_schema.clone(),
+        );
+
+        experiment(left, right, filter, join_type, on, task_ctx).await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn build_null_columns_first_descending() -> Result<()> {
+        let join_type = JoinType::Full;
+        let cardinality = (10, 11);
+        let case_expr = 1;
+        let config = SessionConfig::new().with_repartition_joins(false);
+        let session_ctx = SessionContext::with_config(config);
+        let task_ctx = session_ctx.task_ctx();
+        let (left_batch, right_batch) =
+            build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_sorted = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new_with_schema(
+                "l_desc_null_first",
+                &left_batch.schema(),
+            )?),
+            options: SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+        }];
+        let right_sorted = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new_with_schema(
+                "r_desc_null_first",
+                &right_batch.schema(),
+            )?),
+            options: SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+        }];
+        let (left, right) =
+            create_memory_table(left_batch, right_batch, left_sorted, right_sorted)?;
+
+        let on = vec![(
+            Column::new_with_schema("lc1", &left.schema())?,
+            Column::new_with_schema("rc1", &right.schema())?,
+        )];
+
+        let left_col = Arc::new(Column::new("left", 0));
+        let right_col = Arc::new(Column::new("right", 1));
+
+        let column_indices = vec![
+            ColumnIndex {
+                index: 8,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 8,
+                side: JoinSide::Right,
+            },
+        ];
+        let intermediate_schema = Schema::new(vec![
+            Field::new(left_col.name(), DataType::Int32, true),
+            Field::new(right_col.name(), DataType::Int32, true),
+        ]);
+
+        let filter_expr =
+            join_expr_tests_fixture(case_expr, left_col.clone(), right_col.clone());
+
+        let filter = JoinFilter::new(
+            filter_expr,
+            column_indices.clone(),
+            intermediate_schema.clone(),
+        );
+
+        experiment(left, right, filter, join_type, on, task_ctx).await?;
         Ok(())
     }
 }

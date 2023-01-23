@@ -29,24 +29,19 @@ use crate::physical_optimizer::pipeline_checker::{
     check_finiteness_requirements, PipelineStatePropagator,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::joins::utils::{JoinFilter, JoinSide};
-use crate::physical_plan::joins::{
-    HashJoinExec, PartitionMode, SortedFilterExpr, SymmetricHashJoinExec,
-};
+use crate::physical_plan::joins::{HashJoinExec, PartitionMode, SymmetricHashJoinExec};
 use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::ExecutionPlan;
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::DataType;
 use datafusion_common::DataFusionError;
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr, Column, Literal};
 use datafusion_physical_expr::physical_expr_visitor::{
-    ExprVisitable, PhysicalExpressionVisitor, Recursion,
+    PhysicalExprVisitable, PhysicalExpressionVisitor, Recursion,
 };
-use datafusion_physical_expr::rewrite::TreeNodeRewritable as physical;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_expr::PhysicalExpr;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// The [PipelineFixer] rule tries to modify a given plan so that it can
@@ -149,118 +144,26 @@ impl PhysicalExpressionVisitor for UnsupportedPhysicalExprVisitor<'_> {
 // Sorting information must cover every column in filter expression.
 // Float is unsupported
 // Anything beside than BinaryExpr, Col, Literal and operations Ge and Le is currently unsupported.
-fn is_suitable_for_symmetric_hash_join(filter: &JoinFilter) -> Result<bool> {
-    let expr: Arc<dyn PhysicalExpr> = filter.expression().clone();
-    let mut is_expr_supported = true;
-    expr.accept(UnsupportedPhysicalExprVisitor {
-        supported: &mut is_expr_supported,
-    })?;
-    let is_fields_supported = filter
-        .schema()
-        .fields()
-        .iter()
-        .all(|f| is_datatype_supported(f.data_type()));
-    Ok(is_expr_supported && is_fields_supported)
-}
-
-// TODO: Implement CollectLeft, CollectRight and CollectBoth modes for SymmetricHashJoin
-fn enforce_symmetric_hash_join(
-    hash_join: &HashJoinExec,
-    sorted_columns: Vec<SortedFilterExpr>,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let left = hash_join.left();
-    let right = hash_join.right();
-    let new_join = Arc::new(SymmetricHashJoinExec::try_new(
-        Arc::clone(left),
-        Arc::clone(right),
-        hash_join
-            .on()
-            .iter()
-            .map(|(l, r)| (l.clone(), r.clone()))
-            .collect(),
-        hash_join.filter().unwrap().clone(),
-        sorted_columns,
-        hash_join.join_type(),
-        hash_join.null_equals_null(),
-    )?);
-    Ok(new_join)
-}
-
-/// We assume that the sort information is on a column, not a binary expr.
-/// If a + b is sorted, we can not find intervals for 'a" and 'b".
-///
-/// Here, we map the main column information to filter intermediate schema.
-/// child_orders are derived from child schemas. However, filter schema is different. We enforce
-/// that we get the column order for each corresponding [ColumnIndex]. If not, we return None and
-/// assume this expression is not capable of pruning.
-fn build_filter_input_order(
-    filter: &JoinFilter,
-    left_main_schema: SchemaRef,
-    right_main_schema: SchemaRef,
-    child_orders: Vec<Option<&[PhysicalSortExpr]>>,
-) -> Result<Option<Vec<SortedFilterExpr>>> {
-    let left_child = child_orders[0];
-    let right_child = child_orders[1];
-    let mut left_hashmap: HashMap<Column, Column> = HashMap::new();
-    let mut right_hashmap: HashMap<Column, Column> = HashMap::new();
-    if left_child.is_none() || right_child.is_none() {
-        return Ok(None);
-    }
-    let left_sort_information = left_child.unwrap();
-    let right_sort_information = right_child.unwrap();
-    for (filter_schema_index, index) in filter.column_indices().iter().enumerate() {
-        if index.side.eq(&JoinSide::Left) {
-            let main_field = left_main_schema.field(index.index);
-            let main_col =
-                Column::new_with_schema(main_field.name(), left_main_schema.as_ref())?;
-            let filter_field = filter.schema().field(filter_schema_index);
-            let filter_col = Column::new(filter_field.name(), filter_schema_index);
-            left_hashmap.insert(main_col, filter_col);
-        } else {
-            let main_field = right_main_schema.field(index.index);
-            let main_col =
-                Column::new_with_schema(main_field.name(), right_main_schema.as_ref())?;
-            let filter_field = filter.schema().field(filter_schema_index);
-            let filter_col = Column::new(filter_field.name(), filter_schema_index);
-            right_hashmap.insert(main_col, filter_col);
+fn is_suitable_for_symmetric_hash_join(hash_join: &HashJoinExec) -> Result<bool> {
+    let are_children_ordered = hash_join.left().output_ordering().is_some()
+        && hash_join.right().output_ordering().is_some();
+    let is_filter_supported = match hash_join.filter() {
+        None => false,
+        Some(filter) => {
+            let expr: Arc<dyn PhysicalExpr> = filter.expression().clone();
+            let mut is_expr_supported = true;
+            expr.accept(UnsupportedPhysicalExprVisitor {
+                supported: &mut is_expr_supported,
+            })?;
+            let is_fields_supported = filter
+                .schema()
+                .fields()
+                .iter()
+                .all(|f| is_datatype_supported(f.data_type()));
+            is_expr_supported && is_fields_supported
         }
-    }
-    let mut sorted_exps = vec![];
-    for sort_expr in left_sort_information {
-        let expr = sort_expr.expr.clone();
-        let new_expr =
-            expr.transform_up(&|p| convert_filter_columns(p, &left_hashmap))?;
-        sorted_exps.push(SortedFilterExpr::new(
-            JoinSide::Left,
-            sort_expr.expr.clone(),
-            new_expr.clone(),
-            sort_expr.options,
-        ));
-    }
-    for sort_expr in right_sort_information {
-        let expr = sort_expr.expr.clone();
-        let new_expr =
-            expr.transform_up(&|p| convert_filter_columns(p, &right_hashmap))?;
-        sorted_exps.push(SortedFilterExpr::new(
-            JoinSide::Right,
-            sort_expr.expr.clone(),
-            new_expr.clone(),
-            sort_expr.options,
-        ));
-    }
-    Ok(Some(sorted_exps))
-}
-
-fn convert_filter_columns(
-    input: Arc<dyn PhysicalExpr>,
-    column_change_information: &HashMap<Column, Column>,
-) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-    if let Some(col) = input.as_any().downcast_ref::<Column>() {
-        let filter_col = column_change_information.get(col).unwrap().clone();
-        Ok(Some(Arc::new(filter_col)))
-    } else {
-        Ok(Some(input))
-    }
+    };
+    Ok(are_children_ordered && is_filter_supported)
 }
 
 fn hash_join_convert_symmetric_subrule(
@@ -271,35 +174,25 @@ fn hash_join_convert_symmetric_subrule(
     if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
         let (left_unbounded, right_unbounded) = (children[0], children[1]);
         let new_plan = if left_unbounded && right_unbounded {
-            match hash_join.filter() {
-                Some(filter) => match is_suitable_for_symmetric_hash_join(filter) {
-                    Ok(suitable) => {
-                        if suitable {
-                            let children = input.plan.children();
-                            let input_order = children
-                                .iter()
-                                .map(|c| c.output_ordering())
-                                .collect::<Vec<_>>();
-                            match build_filter_input_order(
-                                filter,
-                                hash_join.left().schema(),
-                                hash_join.right().schema(),
-                                input_order,
-                            ) {
-                                Ok(Some(sort_columns)) => {
-                                    enforce_symmetric_hash_join(hash_join, sort_columns)
-                                }
-                                Ok(None) => Ok(plan),
-                                Err(e) => return Some(Err(e)),
-                            }
-                        } else {
-                            Ok(plan)
-                        }
-                    }
-                    Err(e) => return Some(Err(e)),
-                },
-                None => Ok(plan),
-            }
+            Ok(match is_suitable_for_symmetric_hash_join(hash_join) {
+                Ok(true) => Arc::new(
+                    SymmetricHashJoinExec::try_new(
+                        hash_join.left().clone(),
+                        hash_join.right().clone(),
+                        hash_join
+                            .on()
+                            .iter()
+                            .map(|(l, r)| (l.clone(), r.clone()))
+                            .collect(),
+                        hash_join.filter().unwrap().clone(),
+                        hash_join.join_type(),
+                        hash_join.null_equals_null(),
+                    )
+                    .unwrap(),
+                ),
+                Ok(false) => plan,
+                Err(e) => return Some(Err(e)),
+            })
         } else {
             Ok(plan)
         };

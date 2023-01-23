@@ -85,6 +85,7 @@ impl PartialEq for ExprIntervalGraphNode {
     }
 }
 
+#[derive(Clone)]
 pub struct ExprIntervalGraph(
     NodeIndex,
     StableGraph<ExprIntervalGraphNode, usize>,
