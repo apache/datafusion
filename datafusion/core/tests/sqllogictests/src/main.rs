@@ -29,7 +29,7 @@ mod engines;
 mod setup;
 mod utils;
 
-const TEST_DIRECTORY: &str = "tests/sqllogictests/test_files";
+const TEST_DIRECTORY: &str = "tests/sqllogictests/test_files/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
 
 #[tokio::main]
@@ -47,13 +47,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
     let options = Options::new();
 
-    let files: Vec<_> = read_test_files(&options);
-
-    info!("Running test files {:?}", files);
-
-    for path in files {
-        let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
-
+    for (path, file_name) in read_test_files(&options) {
         if options.complete_mode {
             run_complete_file(&path, file_name).await?;
         } else if options.postgres_runner {
@@ -110,13 +104,38 @@ async fn run_complete_file(
     Ok(())
 }
 
-fn read_test_files(options: &Options) -> Vec<PathBuf> {
-    std::fs::read_dir(TEST_DIRECTORY)
-        .unwrap()
-        .map(|path| path.unwrap().path())
-        .filter(|path| options.check_test_file(path.as_path()))
-        .filter(|path| options.check_pg_compat_file(path.as_path()))
-        .collect()
+fn read_test_files<'a>(
+    options: &'a Options,
+) -> Box<dyn Iterator<Item = (PathBuf, String)> + 'a> {
+    Box::new(
+        read_dir_recursive(TEST_DIRECTORY)
+            .map(|path| {
+                (
+                    path.clone(),
+                    path.to_string_lossy()
+                        .strip_prefix(TEST_DIRECTORY)
+                        .unwrap()
+                        .to_string(),
+                )
+            })
+            .filter(|(_, file_name)| options.check_test_file(file_name))
+            .filter(|(path, _)| options.check_pg_compat_file(path.as_path())),
+    )
+}
+
+fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Box<dyn Iterator<Item = PathBuf>> {
+    Box::new(
+        std::fs::read_dir(path)
+            .expect("Readable directory")
+            .map(|path| path.expect("Readable entry").path())
+            .flat_map(|path| {
+                if path.is_dir() {
+                    read_dir_recursive(path)
+                } else {
+                    Box::new(std::iter::once(path))
+                }
+            }),
+    )
 }
 
 /// Create a SessionContext, configured for the specific test
@@ -185,14 +204,13 @@ impl Options {
     /// To be compatible with this, treat the command line arguments as a
     /// filter and that does a substring match on each input.  returns
     /// true f this path should be run
-    fn check_test_file(&self, path: &Path) -> bool {
+    fn check_test_file(&self, file_name: &str) -> bool {
         if self.filters.is_empty() {
             return true;
         }
 
         // otherwise check if any filter matches
-        let path_str = path.to_string_lossy();
-        self.filters.iter().any(|filter| path_str.contains(filter))
+        self.filters.iter().any(|filter| file_name.contains(filter))
     }
 
     /// Postgres runner executes only tests in files with specific names
