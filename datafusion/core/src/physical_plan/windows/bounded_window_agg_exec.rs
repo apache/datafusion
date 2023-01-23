@@ -548,13 +548,14 @@ impl SortedPartitionByBoundedWindowStream {
         for window_agg_state in self.window_agg_states.iter_mut() {
             window_agg_state.retain(|_, WindowState { state, .. }| !state.is_end);
             for (partition_row, WindowState { state: value, .. }) in window_agg_state {
+                let n_prune =
+                    min(value.window_frame_range.start, value.last_calculated_index);
                 if let Some(state) = n_prune_each_partition.get_mut(partition_row) {
-                    if value.window_frame_range.start < *state {
-                        *state = value.window_frame_range.start;
+                    if n_prune < *state {
+                        *state = n_prune;
                     }
                 } else {
-                    n_prune_each_partition
-                        .insert(partition_row.clone(), value.window_frame_range.start);
+                    n_prune_each_partition.insert(partition_row.clone(), n_prune);
                 }
             }
         }

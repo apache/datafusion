@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array};
 use arrow::compute::{concat_batches, SortOptions};
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use hashbrown::HashMap;
@@ -38,7 +39,7 @@ use datafusion_expr::{
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::expressions::{col, lit};
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use test_utils::add_empty_batches;
 
 #[cfg(test)]
@@ -51,7 +52,7 @@ mod tests {
         let distincts = vec![1, 100];
         for distinct in distincts {
             let mut handles = Vec::new();
-            for i in 1..n {
+            for i in 0..n {
                 let job = tokio::spawn(run_window_test(
                     make_staggered_batches::<true>(1000, distinct, i),
                     i,
@@ -74,7 +75,7 @@ mod tests {
             // since we have sorted pairs (a,b) to not violate per partition soring
             // partition should be field a, order by should be field b
             let mut handles = Vec::new();
-            for i in 1..n {
+            for i in 0..n {
                 let job = tokio::spawn(run_window_test(
                     make_staggered_batches::<true>(1000, distinct, i),
                     i,
@@ -90,17 +91,11 @@ mod tests {
     }
 }
 
-/// Perform batch and running window same input
-/// and verify outputs of `WindowAggExec` and `BoundedWindowAggExec` are equal
-async fn run_window_test(
-    input1: Vec<RecordBatch>,
-    random_seed: u64,
-    orderby_columns: Vec<&str>,
-    partition_by_columns: Vec<&str>,
-) {
-    let mut rng = StdRng::seed_from_u64(random_seed);
-    let schema = input1[0].schema();
-    let mut args = vec![col("x", &schema).unwrap()];
+fn get_random_function(
+    schema: &SchemaRef,
+    rng: &mut StdRng,
+) -> (WindowFunction, Vec<Arc<dyn PhysicalExpr>>, String) {
+    let mut args = vec![col("x", schema).unwrap()];
     let mut window_fn_map = HashMap::new();
     // HashMap values consists of tuple first element is WindowFunction, second is additional argument
     // window function requires if any. For most of the window functions additional argument is empty
@@ -188,16 +183,44 @@ async fn run_window_test(
         ),
     );
 
-    let session_config = SessionConfig::new().with_batch_size(50);
-    let ctx = SessionContext::with_config(session_config);
     let rand_fn_idx = rng.gen_range(0..window_fn_map.len());
     let fn_name = window_fn_map.keys().collect::<Vec<_>>()[rand_fn_idx];
     let (window_fn, new_args) = window_fn_map.values().collect::<Vec<_>>()[rand_fn_idx];
     for new_arg in new_args {
         args.push(new_arg.clone());
     }
-    let preceding = rng.gen_range(0..50);
-    let following = rng.gen_range(0..50);
+
+    (window_fn.clone(), args, fn_name.to_string())
+}
+
+fn get_random_window_frame(rng: &mut StdRng) -> WindowFrame {
+    struct Utils {
+        val: i32,
+        is_preceding: bool,
+    }
+    let first_bound = Utils {
+        val: rng.gen_range(0..50),
+        is_preceding: rng.gen_range(0..2) == 0,
+    };
+    let second_bound = Utils {
+        val: rng.gen_range(0..50),
+        is_preceding: rng.gen_range(0..2) == 0,
+    };
+    let (start_bound, end_bound) =
+        if first_bound.is_preceding == second_bound.is_preceding {
+            if (first_bound.val > second_bound.val && first_bound.is_preceding)
+                || (first_bound.val < second_bound.val && !first_bound.is_preceding)
+            {
+                (first_bound, second_bound)
+            } else {
+                (second_bound, first_bound)
+            }
+        } else if first_bound.is_preceding {
+            (first_bound, second_bound)
+        } else {
+            (second_bound, first_bound)
+        };
+    // 0 means Range, 1 means Rows, 2 means GROUPS
     let rand_num = rng.gen_range(0..3);
     let units = if rand_num < 1 {
         WindowFrameUnits::Range
@@ -208,26 +231,83 @@ async fn run_window_test(
         // TODO: once GROUPS handling is available, use WindowFrameUnits::GROUPS in randomized tests also.
         WindowFrameUnits::Range
     };
-    let window_frame = match units {
+    match units {
         // In range queries window frame boundaries should match column type
-        WindowFrameUnits::Range => WindowFrame {
-            units,
-            start_bound: WindowFrameBound::Preceding(ScalarValue::Int32(Some(preceding))),
-            end_bound: WindowFrameBound::Following(ScalarValue::Int32(Some(following))),
-        },
+        WindowFrameUnits::Range => {
+            let start_bound = if start_bound.is_preceding {
+                WindowFrameBound::Preceding(ScalarValue::Int32(Some(start_bound.val)))
+            } else {
+                WindowFrameBound::Following(ScalarValue::Int32(Some(start_bound.val)))
+            };
+            let end_bound = if end_bound.is_preceding {
+                WindowFrameBound::Preceding(ScalarValue::Int32(Some(end_bound.val)))
+            } else {
+                WindowFrameBound::Following(ScalarValue::Int32(Some(end_bound.val)))
+            };
+            let mut window_frame = WindowFrame {
+                units,
+                start_bound,
+                end_bound,
+            };
+            // with 10% use unbounded preceding in tests
+            if rng.gen_range(0..10) == 0 {
+                window_frame.start_bound =
+                    WindowFrameBound::Preceding(ScalarValue::Int32(None));
+            }
+            window_frame
+        }
         // In window queries, window frame boundary should be Uint64
-        WindowFrameUnits::Rows => WindowFrame {
-            units,
-            start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(Some(
-                preceding as u64,
-            ))),
-            end_bound: WindowFrameBound::Following(ScalarValue::UInt64(Some(
-                following as u64,
-            ))),
-        },
+        WindowFrameUnits::Rows => {
+            let start_bound = if start_bound.is_preceding {
+                WindowFrameBound::Preceding(ScalarValue::UInt64(Some(
+                    start_bound.val as u64,
+                )))
+            } else {
+                WindowFrameBound::Following(ScalarValue::UInt64(Some(
+                    start_bound.val as u64,
+                )))
+            };
+            let end_bound = if end_bound.is_preceding {
+                WindowFrameBound::Preceding(ScalarValue::UInt64(Some(
+                    end_bound.val as u64,
+                )))
+            } else {
+                WindowFrameBound::Following(ScalarValue::UInt64(Some(
+                    end_bound.val as u64,
+                )))
+            };
+            let mut window_frame = WindowFrame {
+                units,
+                start_bound,
+                end_bound,
+            };
+            // with 10% use unbounded preceding in tests
+            if rng.gen_range(0..10) == 0 {
+                window_frame.start_bound =
+                    WindowFrameBound::Preceding(ScalarValue::UInt64(None));
+            }
+            window_frame
+        }
         // Once GROUPS support is added construct window frame for this case also
         _ => todo!(),
-    };
+    }
+}
+
+/// Perform batch and running window same input
+/// and verify outputs of `WindowAggExec` and `BoundedWindowAggExec` are equal
+async fn run_window_test(
+    input1: Vec<RecordBatch>,
+    random_seed: u64,
+    orderby_columns: Vec<&str>,
+    partition_by_columns: Vec<&str>,
+) {
+    let mut rng = StdRng::seed_from_u64(random_seed);
+    let schema = input1[0].schema();
+    let session_config = SessionConfig::new().with_batch_size(50);
+    let ctx = SessionContext::with_config(session_config);
+    let (window_fn, args, fn_name) = get_random_function(&schema, &mut rng);
+
+    let window_frame = get_random_window_frame(&mut rng);
     let mut orderby_exprs = vec![];
     for column in orderby_columns {
         orderby_exprs.push(PhysicalSortExpr {
@@ -257,8 +337,8 @@ async fn run_window_test(
     let usual_window_exec = Arc::new(
         WindowAggExec::try_new(
             vec![create_window_expr(
-                window_fn,
-                fn_name.to_string(),
+                &window_fn,
+                fn_name.clone(),
                 &args,
                 &partitionby_exprs,
                 &orderby_exprs,
@@ -278,8 +358,8 @@ async fn run_window_test(
     let running_window_exec = Arc::new(
         BoundedWindowAggExec::try_new(
             vec![create_window_expr(
-                window_fn,
-                fn_name.to_string(),
+                &window_fn,
+                fn_name,
                 &args,
                 &partitionby_exprs,
                 &orderby_exprs,
