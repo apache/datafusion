@@ -120,10 +120,3 @@ query I
 select true::BOOLEAN, 'false'::BOOLEAN
 ----
 true false
-
-
-########
-# Clean up after the test
-########
-statement ok
-DROP TABLE aggregate_test_100_by_sql
