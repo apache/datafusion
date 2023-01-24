@@ -19,7 +19,7 @@
 
 set -ue
 
-if [ "$#" -ne 3 ]; then
+if [ "$#" -ne 4 ]; then
   echo "Usage: $0 <version> <github-user> <github-token> <homebrew-default-branch-name>"
   exit 1
 fi
