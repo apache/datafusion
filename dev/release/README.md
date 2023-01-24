@@ -317,13 +317,27 @@ The CLI needs a `--no-verify` argument because `build.rs` generates source into 
 
 ### Publish datafusion-cli on Homebrew
 
-Run `publish_homebrew.sh` to publish `datafusion-cli` on Homebrew.
+Run `publish_homebrew.sh` to publish `datafusion-cli` on Homebrew. Note that it is necessary to
+have Homebrew installed on your macOS/Linux/WSL2 and properly configured. Please visit https://brew.sh/ to
+obtain Homebrew. Please check out https://docs.brew.sh/Homebrew-on-Linux if you are on Linux or WSL2.
 
+Before running the script make sure that you can run the following command in your bash to make sure
+that `brew` has been installed and configured properly:
+
+```bash
+brew --version
 ```
+
+After confirming that `brew` works properly execute the following command:
+
+```bash
 dev/release/publish_homebrew.sh <version> <github-user> <github-token> <homebrew-default-branch-name>
 ```
+Note that sometimes someone else has already submitted a PR to update the datafusion formula in homebrew.
+In this case you will get an error with a message that your PR is a duplicate of an existing one. In this
+case no further action is required.
 
-Alternatively manually send a simple PR to update tag and commit hash for the datafusion
+Alternatively manually submit a simple PR to update tag and commit hash for the datafusion
 formula in homebrew-core. Here is an example PR:
 https://github.com/Homebrew/homebrew-core/pull/89562.
 
