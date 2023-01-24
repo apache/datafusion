@@ -27,6 +27,7 @@ use crate::{
         optimizer::PhysicalOptimizerRule,
     },
 };
+use datafusion_expr::DescribeTable;
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
@@ -42,8 +43,11 @@ use std::{
 };
 use std::{ops::ControlFlow, sync::Weak};
 
-use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow::{
+    array::StringBuilder,
+    datatypes::{DataType, Field, Schema, SchemaRef},
+};
 
 use crate::catalog::{
     catalog::{CatalogProvider, MemoryCatalogProvider},
@@ -360,6 +364,10 @@ impl SessionContext {
                 self.return_empty_dataframe()
             }
 
+            LogicalPlan::DescribeTable(DescribeTable { schema, .. }) => {
+                self.return_describe_table_dataframe(schema).await
+            }
+
             LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
                 schema_name,
                 if_not_exists,
@@ -440,6 +448,53 @@ impl SessionContext {
     fn return_empty_dataframe(&self) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::empty(false).build()?;
         Ok(DataFrame::new(self.state(), plan))
+    }
+
+    // return an record_batch which describe table
+    async fn return_describe_table_record_batch(
+        &self,
+        schema: Arc<Schema>,
+    ) -> Result<RecordBatch> {
+        let record_batch_schema = Arc::new(Schema::new(vec![
+            Field::new("column_name", DataType::Utf8, false),
+            Field::new("data_type", DataType::Utf8, false),
+            Field::new("is_nullable", DataType::Utf8, false),
+        ]));
+
+        let mut column_names = StringBuilder::new();
+        let mut data_types = StringBuilder::new();
+        let mut is_nullables = StringBuilder::new();
+        for (_, field) in schema.fields().iter().enumerate() {
+            column_names.append_value(field.name());
+
+            // "System supplied type" --> Use debug format of the datatype
+            let data_type = field.data_type();
+            data_types.append_value(format!("{data_type:?}"));
+
+            // "YES if the column is possibly nullable, NO if it is known not nullable. "
+            let nullable_str = if field.is_nullable() { "YES" } else { "NO" };
+            is_nullables.append_value(nullable_str);
+        }
+
+        let record_batch = RecordBatch::try_new(
+            record_batch_schema,
+            vec![
+                Arc::new(column_names.finish()),
+                Arc::new(data_types.finish()),
+                Arc::new(is_nullables.finish()),
+            ],
+        )?;
+
+        Ok(record_batch)
+    }
+
+    // return an dataframe which describe file
+    async fn return_describe_table_dataframe(
+        &self,
+        schema: Arc<Schema>,
+    ) -> Result<DataFrame> {
+        let record_batch = self.return_describe_table_record_batch(schema).await?;
+        self.read_batch(record_batch)
     }
 
     async fn create_external_table(
@@ -1719,7 +1774,7 @@ impl SessionState {
             DFStatement::CreateExternalTable(table) => {
                 relations.insert(ObjectName(vec![Ident::from(table.name.as_str())]));
             }
-            DFStatement::DescribeTable(table) => {
+            DFStatement::DescribeTableStmt(table) => {
                 relations
                     .get_or_insert_with(&table.table_name, |_| table.table_name.clone());
             }
@@ -2058,7 +2113,6 @@ mod tests {
     use crate::test_util::parquet_test_data;
     use crate::variable::VarType;
     use arrow::array::ArrayRef;
-    use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
     use datafusion_expr::{create_udaf, create_udf, Expr, Volatility};

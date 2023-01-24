@@ -409,6 +409,7 @@ fn optimize_plan(
         | LogicalPlan::DropTable(_)
         | LogicalPlan::DropView(_)
         | LogicalPlan::SetVariable(_)
+        | LogicalPlan::DescribeTable(_)
         | LogicalPlan::CrossJoin(_)
         | LogicalPlan::Dml(_)
         | LogicalPlan::Extension { .. }
