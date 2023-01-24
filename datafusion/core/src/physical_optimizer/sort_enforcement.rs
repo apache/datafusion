@@ -107,23 +107,18 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
             let sort_onwards = children_requirements
                 .iter()
                 .map(|item| {
-                    if item.sort_onwards.is_empty() {
-                        vec![]
-                    } else {
+                    let onwards = &item.sort_onwards;
+                    if !onwards.is_empty() {
                         let is_sort = item.plan.as_any().is::<SortExec>();
-                        let mut res = vec![];
-                        for (idx, maintains) in
-                            item.plan.maintains_input_order().into_iter().enumerate()
+                        let flags = item.plan.maintains_input_order();
+                        for (maintains, element) in flags.into_iter().zip(onwards.iter())
                         {
-                            if (maintains || is_sort)
-                                && !item.sort_onwards[idx].is_empty()
-                            {
-                                res = item.sort_onwards[idx].clone();
-                                break;
+                            if (maintains || is_sort) && !element.is_empty() {
+                                return element.clone();
                             }
                         }
-                        res
                     }
+                    vec![]
                 })
                 .collect::<Vec<_>>();
             let plan = with_new_children_if_necessary(self.plan, children_plans)?;

@@ -220,54 +220,55 @@ impl ExecutionPlan for UnionExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        // Return the output ordering of first child where maintains_input_order is `true`.
-        // If none of the children preserves ordering. Return `None`.
-        for (idx, maintains) in self.maintains_input_order().into_iter().enumerate() {
-            if maintains {
-                return self.inputs[idx].output_ordering();
+        // If the Union is partition aware, there is no output ordering.
+        // Otherwise, the output ordering is the "meet" of its input orderings.
+        // The meet is the finest ordering that satisfied by all the input
+        // orderings, see https://en.wikipedia.org/wiki/Join_and_meet.
+        if self.partition_aware {
+            return None;
+        }
+        // To find the meet, we first find the smallest input ordering.
+        let mut smallest: Option<&[PhysicalSortExpr]> = None;
+        for item in self.inputs.iter() {
+            if let Some(ordering) = item.output_ordering() {
+                smallest = match smallest {
+                    None => Some(ordering),
+                    Some(expr) if ordering.len() < expr.len() => Some(ordering),
+                    _ => continue,
+                }
+            } else {
+                return None;
             }
         }
-        None
+        // Check if the smallest ordering is a meet or not:
+        if self.inputs.iter().all(|child| {
+            ordering_satisfy(child.output_ordering(), smallest, || {
+                child.equivalence_properties()
+            })
+        }) {
+            smallest
+        } else {
+            None
+        }
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        // If the Union is not partition aware and output is sorted at least one of the children
-        // maintains ordering.
-        // For instance assume: child1 is SortExpr('a','b','c'), child2 is SortExpr('a','b') and
-        // child3 is SortExpr('a','b'). Output ordering would be
-        // SortExpr('a','b') (Common subset of all input orderings). In this scheme, this function will return
-        // vec![false, true, true]. Indicating ordering for 2nd and 3rd child is preserved but 1st child is not.
-        let mut smallest: Option<&[PhysicalSortExpr]> = None;
-        for elem in self.inputs.iter() {
-            if let Some(elem_ordering) = elem.output_ordering() {
-                if smallest.is_none()
-                    || smallest.is_some() && elem_ordering.len() < smallest.unwrap().len()
-                {
-                    smallest = Some(elem_ordering);
-                }
-            } else {
-                smallest = None;
-                break;
-            }
-        }
-        if !self.partition_aware
-            && self.inputs.iter().all(|child| {
-                ordering_satisfy(child.output_ordering(), smallest, || {
+        // If the Union has an output ordering, it maintains at least one
+        // child's ordering (i.e. the meet).
+        // For instance, assume that the first child is SortExpr('a','b','c'),
+        // the second child is SortExpr('a','b') and the third child is
+        // SortExpr('a','b'). The output ordering would be SortExpr('a','b'),
+        // which is the "meet" of all input orderings. In this example, this
+        // function will return vec![false, true, true], indicating that we
+        // preserve the orderings for the 2nd and the 3rd children.
+        self.inputs()
+            .iter()
+            .map(|child| {
+                ordering_satisfy(self.output_ordering(), child.output_ordering(), || {
                     child.equivalence_properties()
                 })
             })
-        {
-            // smallest is the output_ordering
-            let mut res = vec![];
-            for child in &self.inputs {
-                res.push(ordering_satisfy(smallest, child.output_ordering(), || {
-                    child.equivalence_properties()
-                }))
-            }
-            res
-        } else {
-            vec![false; self.inputs.len()]
-        }
+            .collect()
     }
 
     fn with_new_children(
