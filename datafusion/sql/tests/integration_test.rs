@@ -163,7 +163,7 @@ fn plan_insert() {
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
     let plan = r#"
 Dml: op=[Insert] table=[person]
-  Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+  Projection: CAST(column1 AS id AS UInt32), column2 AS first_name, column3 AS last_name
     Values: (Int64(1), Utf8("Alan"), Utf8("Turing"))
     "#
     .trim();
@@ -3388,27 +3388,6 @@ Dml: op=[Update] table=[person]
     let plan = plan.replace_params_with_values(&param_values).unwrap();
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
-}
-
-#[test]
-fn test_insert_infer() {
-    let sql =
-        "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
-
-    let expected_plan = r#"
-Dml: op=[Insert] table=[person]
-  Projection: CAST(column1 AS id AS UInt32), column2 AS first_name, column3 AS last_name
-    Values: (Int64(1), Utf8("Alan"), Utf8("Turing"))
-    "#
-    .trim();
-
-    let expected_dt = "[UInt32]";
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
-    let field = plan.schema().field_with_name(None, "id").unwrap();
-    match field.data_type() {
-        DataType::UInt32 => {}
-        _ => panic!("Expected UInt32, found {}", field.data_type()),
-    }
 }
 
 #[test]
