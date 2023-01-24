@@ -34,6 +34,20 @@ use crate::aggregate::min_max::{max, min};
 use arrow::compute::{kernels, CastOptions};
 use std::ops::{Add, Sub};
 
+///
+/// At the moment, it only supports addition and subtraction,
+/// but we are constantly expanding its features to provide more capabilities in the future.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Interval {
+    Singleton(ScalarValue),
+    Range(Range),
+}
+
+impl Default for Interval {
+    fn default() -> Self {
+        Interval::Range(Range::default())
+    }
+}
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub struct Range {
     pub lower: ScalarValue,
@@ -98,18 +112,6 @@ fn cast_scalar_value(
     let cast_array =
         kernels::cast::cast_with_options(&scalar_array, data_type, cast_options)?;
     ScalarValue::try_from_array(&cast_array, 0)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Interval {
-    Singleton(ScalarValue),
-    Range(Range),
-}
-
-impl Default for Interval {
-    fn default() -> Self {
-        Interval::Range(Range::default())
-    }
 }
 
 impl Interval {
@@ -466,6 +468,12 @@ impl Interval {
         })
     }
 
+    /// The interval addition operation takes two intervals, say [a1, b1] and [a2, b2],
+    /// and returns a new interval that represents the range of possible values obtained by adding
+    /// any value from the first interval to any value from the second interval.
+    /// The resulting interval is defined as [a1 + a2, b1 + b2]. For example,
+    /// if we have the intervals [1, 2] and [3, 4], the interval addition
+    /// operation would return the interval [4, 6].
     pub fn add<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
         let result = match (self, rhs) {
@@ -517,6 +525,10 @@ impl Interval {
         Ok(result)
     }
 
+    /// The interval subtraction operation is similar to the addition operation,
+    /// but it subtracts one interval from another. The resulting interval is defined as [a1 - b2, b1 - a2].
+    /// For example, if we have the intervals [1, 2] and [3, 4], the interval subtraction operation
+    /// would return the interval [-3, -1].
     pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
         let result = match (self, rhs) {

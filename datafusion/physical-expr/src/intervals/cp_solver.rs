@@ -35,56 +35,83 @@ use petgraph::stable_graph::StableGraph;
 use std::ops::{Index, IndexMut};
 use std::sync::Arc;
 
-#[derive(Clone, Debug)]
-/// Graph nodes contains interval information.
-pub struct ExprIntervalGraphNode {
-    expr: Arc<dyn PhysicalExpr>,
-    interval: Interval,
-}
-
-impl Display for ExprIntervalGraphNode {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.expr)
-    }
-}
-
-impl ExprIntervalGraphNode {
-    // Construct ExprIntervalGraphNode
-    pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
-        ExprIntervalGraphNode {
-            expr,
-            interval: Interval::default(),
-        }
-    }
-    /// Specify interval
-    pub fn new_with_interval(expr: Arc<dyn PhysicalExpr>, interval: Interval) -> Self {
-        ExprIntervalGraphNode { expr, interval }
-    }
-    /// Get interval
-    pub fn interval(&self) -> &Interval {
-        &self.interval
-    }
-
-    /// Within this static method, one can customize how PhysicalExpr generator constructs its nodes
-    pub fn expr_node_builder(input: Arc<ExprTreeNode>) -> ExprIntervalGraphNode {
-        let binding = input.expr();
-        let plan_any = binding.as_any();
-        if let Some(literal) = plan_any.downcast_ref::<Literal>() {
-            // Create interval
-            let interval = Interval::Singleton(literal.value().clone());
-            ExprIntervalGraphNode::new_with_interval(input.expr().clone(), interval)
-        } else {
-            ExprIntervalGraphNode::new(input.expr().clone())
-        }
-    }
-}
-
-impl PartialEq for ExprIntervalGraphNode {
-    fn eq(&self, other: &ExprIntervalGraphNode) -> bool {
-        self.expr.eq(&other.expr)
-    }
-}
-
+///
+/// Interval arithmetic provides a way to perform mathematical operations on intervals,
+/// which represents a range of possible values rather than a single point value.
+/// This allows for the propagation of ranges through mathematical operations,
+/// and can be used to compute bounds for a complicated expression.The key idea is that by
+/// breaking down a complicated expression into simpler terms, and then combining the bounds for
+/// those simpler terms, one can obtain bounds for the overall expression.
+///
+/// For example, consider a mathematical expression such as x^2 + y = 4. Since it would be
+/// a binary tree in [PhysicalExpr] notation, this type of an hierarchical
+/// computation is well-suited for a graph based implementation. In such an implementation,
+/// an equation system f(x) = 0 is represented by a directed acyclic expression
+/// graph (DAEG).
+///
+/// To use interval arithmetic to compute bounds for this expression, one would first determine
+/// intervals that represent the possible values of x and y.
+/// Let's say that the interval for x is [1, 2] and the interval for y is [-3, 1]. Below, you can
+/// see how the computation happens.
+///
+/// This way of using interval arithmetic to compute bounds for a complicated expression by
+/// combining the bounds for the simpler terms within the original expression allows us to
+/// reason about the range of possible values of the expression. This information later can be
+/// used in range pruning of the unused parts of the [RecordBatch]es.
+///
+/// References
+/// 1 - Kabak, Mehmet Ozan. Analog Circuit Start-Up Behavior Analysis: An Interval
+/// Arithmetic Based Approach. Stanford University, 2015.
+/// 2 - Moore, Ramon E. Interval analysis. Vol. 4. Englewood Cliffs: Prentice-Hall, 1966.
+/// 3 - F. Messine, "Deterministic global optimization using interval constraint
+/// propagation techniques," RAIRO-Operations Research, vol. 38, no. 04,
+/// pp. 277{293, 2004.
+///
+/// ``` text
+/// Computing bounds for an expression using interval arithmetic.           Constraint propagation through a top-down evaluation of the expression
+///                                                                         graph using inverse semantics.
+///
+///                                                                                 [-2, 5] ∩ [4, 4] = [4, 4]              [4, 4]
+///             +-----+                        +-----+                                      +-----+                        +-----+
+///        +----|  +  |----+              +----|  +  |----+                            +----|  +  |----+              +----|  +  |----+
+///        |    |     |    |              |    |     |    |                            |    |     |    |              |    |     |    |
+///        |    +-----+    |              |    +-----+    |                            |    +-----+    |              |    +-----+    |
+///        |               |              |               |                            |               |              |               |
+///    +-----+           +-----+      +-----+           +-----+                    +-----+           +-----+      +-----+           +-----+
+///    |   2 |           |  y  |      |   2 | [1, 4]    |  y  |                    |   2 | [1, 4]    |  y  |      |   2 | [1, 4]    |  y  | [0, 1]*
+///    |[.]  |           |     |      |[.]  |           |     |                    |[.]  |           |     |      |[.]  |           |     |
+///    +-----+           +-----+      +-----+           +-----+                    +-----+           +-----+      +-----+           +-----+
+///       |                              |                                            |              [-3, 1]         |
+///       |                              |                                            |                              |
+///     +---+                          +---+                                        +---+                          +---+
+///     | x | [1, 2]                   | x | [1, 2]                                 | x | [1, 2]                   | x | [1, 2]
+///     +---+                          +---+                                        +---+                          +---+
+///
+///  (a) Bottom-up evaluation: Step1 (b) Bottom up evaluation: Step2             (a) Top-down propagation: Step1 (b) Top-down propagation: Step2
+///
+///                                        [1 - 3, 4 + 1] = [-2, 5]                                                    [1 - 3, 4 + 1] = [-2, 5]
+///             +-----+                        +-----+                                      +-----+                        +-----+
+///        +----|  +  |----+              +----|  +  |----+                            +----|  +  |----+              +----|  +  |----+
+///        |    |     |    |              |    |     |    |                            |    |     |    |              |    |     |    |
+///        |    +-----+    |              |    +-----+    |                            |    +-----+    |              |    +-----+    |
+///        |               |              |               |                            |               |              |               |
+///    +-----+           +-----+      +-----+           +-----+                    +-----+           +-----+      +-----+           +-----+
+///    |   2 |[1, 4]     |  y  |      |   2 |[1, 4]     |  y  |                    |   2 |[3, 4]**   |  y  |      |   2 |[1, 4]     |  y  |
+///    |[.]  |           |     |      |[.]  |           |     |                    |[.]  |           |     |      |[.]  |           |     |
+///    +-----+           +-----+      +-----+           +-----+                    +-----+           +-----+      +-----+           +-----+
+///       |              [-3, 1]         |              [-3, 1]                       |              [0, 1]          |              [-3, 1]
+///       |                              |                                            |                              |
+///     +---+                          +---+                                        +---+                          +---+
+///     | x | [1, 2]                   | x | [1, 2]                                 | x | [1, 2]                   | x | [sqrt(3), 2]***
+///     +---+                          +---+                                        +---+                          +---+
+///
+///  (c) Bottom-up evaluation: Step3 (d) Bottom-up evaluation: Step4             (c) Top-down propagation: Step3  (d) Top-down propagation: Step4
+///
+///                                                                             * [-3, 1] ∩ ([4, 4] - [1, 4]) = [0, 1]
+///                                                                             ** [1, 4] ∩ ([4, 4] - [0, 1]) = [3, 4]
+///                                                                             *** [1, 2] ∩ [sqrt(3), sqrt(4)] = [sqrt(3), 2]
+/// ```
+///
 #[derive(Clone)]
 pub struct ExprIntervalGraph(
     NodeIndex,
@@ -108,10 +135,42 @@ fn calculate_node_interval(
 }
 
 impl ExprIntervalGraph {
-    /// We initiate [ExprIntervalGraph] with [PhysicalExpr] and the ones with we provide internals.
-    /// Let's say we have "a@0 + b@1 > 3" expression.
-    /// We can provide initial interval information for "a@0" and "b@1". Also, we can provide
-    /// information
+    /// Constructs
+    ///
+    /// # Arguments
+    /// * `expr` - Arc<dyn PhysicalExpr>. The complex expression that we compute bounds on by
+    /// traversing the graph.
+    /// * `provided_expr` - Arc<dyn PhysicalExpr> that is used for child nodes. If one of them is
+    /// a Arc<dyn PhysicalExpr> with multiple child, the child nodes of this node
+    /// will be pruned, since we do not need them while traversing.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    ///  use std::sync::Arc;
+    ///  use datafusion_common::ScalarValue;
+    ///  use datafusion_expr::Operator;
+    ///  use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+    ///  use datafusion_physical_expr::intervals::ExprIntervalGraph;
+    ///  // syn > gnz + 1 AND syn < gnz + 10
+    ///  let syn = Arc::new(Column::new("syn", 0));
+    ///  let left_and_2 = Arc::new(BinaryExpr::new(
+    ///  Arc::new(Column::new("gnz", 0)),
+    ///  Operator::Plus,
+    ///  Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+    ///  ));
+    ///  let right_and_2 = Arc::new(BinaryExpr::new(
+    ///  Arc::new(Column::new("gnz", 0)),
+    ///  Operator::Plus,
+    ///  Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+    ///  ));
+    ///  let left_expr = Arc::new(BinaryExpr::new(syn, Operator::Gt, left_and_2));
+    ///  let right_expr = Arc::new(BinaryExpr::new(syn, Operator::Lt, right_and_2));
+    ///  let expr = Arc::new(BinaryExpr::new(left_expr, Operator::And, right_expr));
+    ///  let provided_exprs = vec![left_and_2.clone()];
+    ///  // You can provide exprs for child prunning.
+    ///  let graph = ExprIntervalGraph::try_new(expr, &provided_exprs);
+    /// ```
     pub fn try_new(
         expr: Arc<dyn PhysicalExpr>,
         provided_expr: &[Arc<dyn PhysicalExpr>],
@@ -147,7 +206,11 @@ impl ExprIntervalGraph {
         }
         Ok(Self(root_node, graph, expr_node_indices))
     }
-
+    /// Calculates new intervals and mutate the vector without changing the order.
+    ///
+    /// # Arguments
+    ///
+    /// * `expr_stats` - PhysicalExpr intervals. They are the child nodes for the interval calculation.
     pub fn calculate_new_intervals(
         &mut self,
         expr_stats: &mut [(usize, Interval)],
@@ -156,7 +219,7 @@ impl ExprIntervalGraph {
         self.pre_order_interval_propagation(expr_stats)?;
         Ok(())
     }
-
+    /// Computing bounds for an expression using interval arithmetic.
     fn post_order_interval_calculation(
         &mut self,
         expr_stats: &[(usize, Interval)],
@@ -287,6 +350,56 @@ impl ExprIntervalGraph {
             }
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+/// Graph nodes contains interval information.
+pub struct ExprIntervalGraphNode {
+    expr: Arc<dyn PhysicalExpr>,
+    interval: Interval,
+}
+
+impl Display for ExprIntervalGraphNode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.expr)
+    }
+}
+
+impl ExprIntervalGraphNode {
+    // Construct ExprIntervalGraphNode
+    pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
+        ExprIntervalGraphNode {
+            expr,
+            interval: Interval::default(),
+        }
+    }
+    /// Specify interval
+    pub fn new_with_interval(expr: Arc<dyn PhysicalExpr>, interval: Interval) -> Self {
+        ExprIntervalGraphNode { expr, interval }
+    }
+    /// Get interval
+    pub fn interval(&self) -> &Interval {
+        &self.interval
+    }
+
+    /// Within this static method, one can customize how PhysicalExpr generator constructs its nodes
+    pub fn expr_node_builder(input: Arc<ExprTreeNode>) -> ExprIntervalGraphNode {
+        let binding = input.expr();
+        let plan_any = binding.as_any();
+        if let Some(literal) = plan_any.downcast_ref::<Literal>() {
+            // Create interval
+            let interval = Interval::Singleton(literal.value().clone());
+            ExprIntervalGraphNode::new_with_interval(input.expr().clone(), interval)
+        } else {
+            ExprIntervalGraphNode::new(input.expr().clone())
+        }
+    }
+}
+
+impl PartialEq for ExprIntervalGraphNode {
+    fn eq(&self, other: &ExprIntervalGraphNode) -> bool {
+        self.expr.eq(&other.expr)
     }
 }
 
