@@ -108,7 +108,8 @@ pub fn to_substrait_rel(
                         common: None,
                         base_schema: Some(NamedStruct {
                             names: scan
-                                .projected_schema
+                                .source
+                                .schema()
                                 .fields()
                                 .iter()
                                 .map(|f| f.name().to_owned())
