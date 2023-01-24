@@ -251,6 +251,18 @@ impl From<object_store::Error> for DataFusionError {
     }
 }
 
+impl From<DataFusionError> for object_store::Error {
+    fn from(e: DataFusionError) -> Self {
+        match e {
+            DataFusionError::ObjectStore(e) => e,
+            _ => Self::Generic {
+                store: "datafusion",
+                source: Box::new(e),
+            },
+        }
+    }
+}
+
 #[cfg(feature = "object_store")]
 impl From<object_store::path::Error> for DataFusionError {
     fn from(e: object_store::path::Error) -> Self {

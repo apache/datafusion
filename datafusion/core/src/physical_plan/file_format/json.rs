@@ -21,7 +21,6 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::SessionState;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::file_format::delimited_stream::newline_delimited_stream;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -35,8 +34,9 @@ use arrow::{datatypes::SchemaRef, json};
 
 use bytes::Buf;
 
+use arrow::error::ArrowError;
 use futures::{StreamExt, TryStreamExt};
-use object_store::{GetResult, ObjectStore};
+use object_store::{delimited::newline_delimited_stream, GetResult, ObjectStore};
 use std::any::Any;
 use std::fs;
 use std::path::Path;
@@ -182,10 +182,12 @@ impl FileOpener for JsonOpener {
                     Ok(futures::stream::iter(reader).boxed())
                 }
                 GetResult::Stream(s) => {
-                    let s = s.map_err(Into::into);
-                    let decoder = file_compression_type.convert_stream(s)?;
+                    let decoder = file_compression_type
+                        .convert_stream(s.map_err(DataFusionError::from))?
+                        .map_err(object_store::Error::from);
 
                     Ok(newline_delimited_stream(decoder)
+                        .map_err(|e| ArrowError::from(DataFusionError::from(e)))
                         .map_ok(move |bytes| {
                             let reader = json::Reader::new(
                                 bytes.reader(),

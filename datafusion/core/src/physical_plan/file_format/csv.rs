@@ -21,7 +21,6 @@ use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::{SessionState, TaskContext};
 use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::file_format::delimited_stream::newline_delimited_stream;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -32,11 +31,10 @@ use crate::physical_plan::{
 };
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
-
+use arrow::error::ArrowError;
 use bytes::Buf;
-
 use futures::{StreamExt, TryStreamExt};
-use object_store::{GetResult, ObjectStore};
+use object_store::{delimited::newline_delimited_stream, GetResult, ObjectStore};
 use std::any::Any;
 use std::fs;
 use std::path::Path;
@@ -224,9 +222,13 @@ impl FileOpener for CsvOpener {
                 }
                 GetResult::Stream(s) => {
                     let mut first_chunk = true;
-                    let s = s.map_err(Into::<DataFusionError>::into);
-                    let decoder = file_compression_type.convert_stream(s)?;
+                    let s = s.map_err(DataFusionError::from);
+                    let decoder = file_compression_type
+                        .convert_stream(s)?
+                        .map_err(object_store::Error::from);
+
                     Ok(newline_delimited_stream(decoder)
+                        .map_err(|e| ArrowError::from(DataFusionError::from(e)))
                         .map_ok(move |bytes| {
                             let reader = config.open(bytes.reader(), first_chunk);
                             first_chunk = false;
