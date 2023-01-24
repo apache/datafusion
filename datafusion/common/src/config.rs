@@ -196,6 +196,9 @@ config_namespace! {
         /// Should DataFusion collect statistics after listing files
         pub collect_statistics: bool, default = false
 
+        /// Enables parallel file scanning. Currently supported only for Parquet format
+        pub parallel_file_scan: bool, default = false
+
         /// Number of partitions for query execution. Increasing partitions can increase
         /// concurrency. Defaults to the number of cpu cores on the system
         pub target_partitions: usize, default = num_cpus::get()

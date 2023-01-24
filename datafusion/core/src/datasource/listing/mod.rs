@@ -48,6 +48,9 @@ pub struct FileRange {
     pub end: i64,
 }
 
+/// Represents file blocks which could be used as Scan units
+pub type FileRanges = Vec<Option<FileRange>>;
+
 #[derive(Debug, Clone)]
 /// A single file or part of a file that should be read, along with its schema, statistics
 /// A single file that should be read, along with its schema, statistics

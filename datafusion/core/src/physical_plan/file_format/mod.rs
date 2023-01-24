@@ -208,6 +208,10 @@ impl<'a> Display for FileGroupsDisplay<'a> {
                 first_file = false;
 
                 write!(f, "{}", pf.object_meta.location.as_ref())?;
+
+                if let Some(range) = pf.range.as_ref() {
+                    write!(f, ":{}..{}", range.start, range.end)?;
+                }
             }
             write!(f, "]")?;
         }

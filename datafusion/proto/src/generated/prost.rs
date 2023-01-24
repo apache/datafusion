@@ -150,6 +150,8 @@ pub struct ListingTableScanNode {
     pub target_partitions: u32,
     #[prost(message, repeated, tag = "13")]
     pub file_sort_order: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    #[prost(bool, tag = "14")]
+    pub parallel_file_scan: bool,
     #[prost(oneof = "listing_table_scan_node::FileFormatType", tags = "10, 11, 12")]
     pub file_format_type: ::core::option::Option<
         listing_table_scan_node::FileFormatType,

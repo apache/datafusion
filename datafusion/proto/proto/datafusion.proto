@@ -112,6 +112,7 @@ message ListingTableScanNode {
     AvroFormat avro = 12;
   }
   repeated LogicalExprNode file_sort_order = 13;
+  bool parallel_file_scan = 14;
 }
 
 message ViewTableScanNode {

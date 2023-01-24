@@ -793,7 +793,9 @@ mod tests {
             ),
         };
 
-        let (meta, _files) = store_parquet(batches, page_index_predicate).await.unwrap();
+        let (meta, _files) = store_parquet(batches, page_index_predicate, None)
+            .await
+            .unwrap();
         let file_groups = meta.into_iter().map(Into::into).collect();
 
         // prepare the scan

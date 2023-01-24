@@ -1276,6 +1276,11 @@ impl SessionConfig {
         self.options.execution.collect_statistics
     }
 
+    /// Are file scans parallelized during execution?
+    pub fn parallel_file_scan(&self) -> bool {
+        self.options.execution.parallel_file_scan
+    }
+
     /// Selects a name for the default catalog and schema
     pub fn with_default_catalog_and_schema(
         mut self,
@@ -1331,6 +1336,12 @@ impl SessionConfig {
     /// Enables or disables the collection of statistics after listing files
     pub fn with_collect_statistics(mut self, enabled: bool) -> Self {
         self.options.execution.collect_statistics = enabled;
+        self
+    }
+
+    /// Enables or disables parallel file scanning after listing files
+    pub fn with_parallel_file_scan(mut self, enabled: bool) -> Self {
+        self.options.execution.parallel_file_scan = enabled;
         self
     }
 

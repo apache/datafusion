@@ -18,6 +18,7 @@
 //! Parquet format abstractions
 
 use std::any::Any;
+use std::iter::once;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
@@ -27,21 +28,22 @@ use bytes::{BufMut, BytesMut};
 use datafusion_common::DataFusionError;
 use datafusion_optimizer::utils::conjunction;
 use hashbrown::HashMap;
+use itertools::Itertools;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::parquet_to_arrow_schema;
 use parquet::file::footer::{decode_footer, decode_metadata};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 
-use super::FileFormat;
 use super::FileScanConfig;
+use super::{FileFormat, FormatScanMetadata};
 use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
 };
 use crate::arrow::datatypes::{DataType, Field};
 use crate::config::ConfigOptions;
 
-use crate::datasource::{create_max_min_accs, get_col_stats};
+use crate::datasource::{create_max_min_accs, get_col_stats, listing::FileRange};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
@@ -168,21 +170,25 @@ impl FileFormat for ParquetFormat {
         Ok(Arc::new(schema))
     }
 
-    async fn infer_stats(
+    async fn fetch_format_scan_metadata(
         &self,
         _state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         object: &ObjectMeta,
-    ) -> Result<Statistics> {
-        let stats = fetch_statistics(
+        collect_statistics: bool,
+        collect_file_ranges: bool,
+    ) -> Result<FormatScanMetadata> {
+        let format_metadata = fetch_format_scan_metadata(
             store.as_ref(),
             table_schema,
             object,
             self.metadata_size_hint,
+            collect_statistics,
+            collect_file_ranges,
         )
         .await?;
-        Ok(stats)
+        Ok(format_metadata)
     }
 
     async fn create_physical_plan(
@@ -452,14 +458,11 @@ async fn fetch_schema(
     Ok(schema)
 }
 
-/// Read and parse the statistics of the Parquet file at location `path`
-async fn fetch_statistics(
-    store: &dyn ObjectStore,
+/// Read and parse the statistics of the Parquet file from [ParquetMetaData] object
+fn extract_statistics_from_metadata(
+    metadata: &ParquetMetaData,
     table_schema: SchemaRef,
-    file: &ObjectMeta,
-    metadata_size_hint: Option<usize>,
 ) -> Result<Statistics> {
-    let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
     let file_metadata = metadata.file_metadata();
 
     let file_schema = parquet_to_arrow_schema(
@@ -539,6 +542,44 @@ async fn fetch_statistics(
     Ok(statistics)
 }
 
+async fn fetch_format_scan_metadata(
+    store: &dyn ObjectStore,
+    table_schema: SchemaRef,
+    file: &ObjectMeta,
+    metadata_size_hint: Option<usize>,
+    collect_statistics: bool,
+    collect_file_ranges: bool,
+) -> Result<FormatScanMetadata> {
+    let mut format_scan_metadata = FormatScanMetadata::default();
+
+    if !collect_statistics && !collect_file_ranges {
+        return Ok(format_scan_metadata);
+    }
+
+    let parquet_metadata =
+        fetch_parquet_metadata(store, file, metadata_size_hint).await?;
+
+    if collect_statistics {
+        format_scan_metadata = format_scan_metadata.with_statistics(
+            extract_statistics_from_metadata(&parquet_metadata, table_schema)?,
+        );
+    };
+
+    if collect_file_ranges {
+        let file_ranges = parquet_metadata
+            .row_groups()
+            .iter()
+            .map(|rg| rg.column(0).file_offset())
+            .chain(once(file.size as i64))
+            .tuple_windows()
+            .map(|(start, end)| Some(FileRange { start, end }))
+            .collect::<Vec<_>>();
+        format_scan_metadata = format_scan_metadata.with_file_ranges(file_ranges);
+    };
+
+    Ok(format_scan_metadata)
+}
+
 #[cfg(test)]
 pub(crate) mod test_util {
     use super::*;
@@ -551,12 +592,18 @@ pub(crate) mod test_util {
     pub async fn store_parquet(
         batches: Vec<RecordBatch>,
         multi_page: bool,
+        row_group_size: Option<usize>,
     ) -> Result<(Vec<ObjectMeta>, Vec<NamedTempFile>)> {
         if multi_page {
             // All batches write in to one file, each batch must have same schema.
             let mut output = NamedTempFile::new().expect("creating temp file");
-            let mut builder = WriterProperties::builder();
-            builder = builder.set_data_page_row_count_limit(2);
+
+            let mut builder =
+                WriterProperties::builder().set_data_page_row_count_limit(2);
+            if let Some(row_group_size) = row_group_size {
+                builder = builder.set_max_row_group_size(row_group_size);
+            }
+
             let proper = builder.build();
             let mut writer =
                 ArrowWriter::try_new(&mut output, batches[0].schema(), Some(proper))
@@ -573,7 +620,11 @@ pub(crate) mod test_util {
                 .map(|batch| {
                     let mut output = NamedTempFile::new().expect("creating temp file");
 
-                    let props = WriterProperties::builder().build();
+                    let mut builder = WriterProperties::builder();
+                    if let Some(row_group_size) = row_group_size {
+                        builder = builder.set_max_row_group_size(row_group_size);
+                    }
+                    let props = builder.build();
                     let mut writer =
                         ArrowWriter::try_new(&mut output, batch.schema(), Some(props))
                             .expect("creating writer");
@@ -636,15 +687,17 @@ mod tests {
         let batch2 = RecordBatch::try_from_iter(vec![("c2", c2)]).unwrap();
 
         let store = Arc::new(LocalFileSystem::new()) as _;
-        let (meta, _files) = store_parquet(vec![batch1, batch2], false).await?;
+        let (meta, _files) = store_parquet(vec![batch1, batch2], false, None).await?;
 
         let session = SessionContext::new();
         let ctx = session.state();
         let format = ParquetFormat::default();
         let schema = format.infer_schema(&ctx, &store, &meta).await.unwrap();
 
-        let stats =
-            fetch_statistics(store.as_ref(), schema.clone(), &meta[0], None).await?;
+        let metadata =
+            fetch_parquet_metadata(store.as_ref(), &meta[0], format.metadata_size_hint)
+                .await?;
+        let stats = extract_statistics_from_metadata(&metadata, schema.clone())?;
 
         assert_eq!(stats.num_rows, Some(3));
         let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
@@ -652,7 +705,10 @@ mod tests {
         assert_eq!(c1_stats.null_count, Some(1));
         assert_eq!(c2_stats.null_count, Some(3));
 
-        let stats = fetch_statistics(store.as_ref(), schema, &meta[1], None).await?;
+        let metadata =
+            fetch_parquet_metadata(store.as_ref(), &meta[1], format.metadata_size_hint)
+                .await?;
+        let stats = extract_statistics_from_metadata(&metadata, schema.clone())?;
         assert_eq!(stats.num_rows, Some(3));
         let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
         let c2_stats = &stats.column_statistics.as_ref().expect("missing c2 stats")[1];
@@ -777,7 +833,7 @@ mod tests {
         let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
             LocalFileSystem::new(),
         )));
-        let (meta, _files) = store_parquet(vec![batch1, batch2], false).await?;
+        let (meta, _files) = store_parquet(vec![batch1, batch2], false, None).await?;
 
         // Use a size hint larger than the parquet footer but smaller than the actual metadata, requiring a second fetch
         // for the remaining metadata
@@ -795,9 +851,8 @@ mod tests {
             .await
             .unwrap();
 
-        let stats =
-            fetch_statistics(store.upcast().as_ref(), schema.clone(), &meta[0], Some(9))
-                .await?;
+        let metadata = fetch_parquet_metadata(store.as_ref(), &meta[0], Some(9)).await?;
+        let stats = extract_statistics_from_metadata(&metadata, schema.clone())?;
 
         assert_eq!(stats.num_rows, Some(3));
         let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
@@ -824,13 +879,11 @@ mod tests {
             .infer_schema(&ctx, &store.upcast(), &meta)
             .await
             .unwrap();
-        let stats = fetch_statistics(
-            store.upcast().as_ref(),
-            schema.clone(),
-            &meta[0],
-            Some(size_hint),
-        )
-        .await?;
+
+        let metadata =
+            fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint))
+                .await?;
+        let stats = extract_statistics_from_metadata(&metadata, schema.clone())?;
 
         assert_eq!(stats.num_rows, Some(3));
         let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
@@ -1192,6 +1245,44 @@ mod tests {
             .metadata()
             .clone();
         check_page_index_validation(builder.page_indexes(), builder.offset_indexes());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_read_parquet_file_ranges() -> Result<()> {
+        let c1: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("Foo"),
+            None,
+            Some("bar"),
+            Some("baz"),
+            Some("qux"),
+        ]));
+
+        let batch1 = RecordBatch::try_from_iter(vec![("c1", c1)]).unwrap();
+
+        let store = Arc::new(LocalFileSystem::new()) as _;
+        let (meta, _files) = store_parquet(vec![batch1], false, Some(2)).await?;
+
+        let session = SessionContext::new();
+        let ctx = session.state();
+        let format = ParquetFormat::default();
+        let schema = format.infer_schema(&ctx, &store, &meta).await.unwrap();
+
+        let format_scan_metadata = format
+            .fetch_format_scan_metadata(&ctx, &store, schema, &meta[0], false, true)
+            .await?;
+
+        let actual = format_scan_metadata
+            .file_ranges
+            .into_iter()
+            .map(|opt| opt.unwrap())
+            .map(|rg| (rg.start, rg.end))
+            .collect::<Vec<_>>();
+
+        let expected = vec![(64, 169), (169, 268), (268, meta[0].size as i64)];
+
+        assert_eq!(actual, expected);
 
         Ok(())
     }

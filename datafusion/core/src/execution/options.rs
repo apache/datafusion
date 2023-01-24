@@ -237,6 +237,7 @@ impl<'a> ParquetReadOptions<'a> {
             .with_file_extension(self.file_extension)
             .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
+            .with_parallel_file_scan(config.parallel_file_scan())
     }
 }
 

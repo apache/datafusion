@@ -34,7 +34,7 @@ use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::datasource::{
     file_format::{
         avro::AvroFormat, csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat,
-        FileFormat,
+        FileFormat, FormatScanMetadata,
     },
     get_statistics_with_limit,
     listing::ListingTableUrl,
@@ -53,7 +53,7 @@ use crate::{
     },
 };
 
-use super::PartitionedFile;
+use super::{FileRanges, PartitionedFile};
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 
@@ -238,6 +238,8 @@ pub struct ListingOptions {
     /// In order to support infinite inputs, DataFusion may adjust query
     /// plans (e.g. joins) to run the given query in full pipelining mode.
     pub infinite_source: bool,
+    /// Enables parallel file scanning
+    pub parallel_file_scan: bool,
 }
 
 impl ListingOptions {
@@ -256,6 +258,7 @@ impl ListingOptions {
             target_partitions: 1,
             file_sort_order: None,
             infinite_source: false,
+            parallel_file_scan: false,
         }
     }
 
@@ -381,6 +384,24 @@ impl ListingOptions {
         self
     }
 
+    /// Set file sort order on [`ListingOptions`] and returns self.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    ///
+    /// let listing_options = ListingOptions::new(Arc::new(
+    ///     ParquetFormat::default()
+    ///   ))
+    ///   .with_parallel_file_scan(true);
+    ///
+    /// assert_eq!(listing_options.parallel_file_scan, true);
+    /// ```
+    pub fn with_parallel_file_scan(mut self, parallel_file_scan: bool) -> Self {
+        self.parallel_file_scan = parallel_file_scan;
+        self
+    }
+
     /// Infer the schema of the files at the given path on the provided object store.
     /// The inferred schema does not include the partitioning columns.
     ///
@@ -403,36 +424,36 @@ impl ListingOptions {
     }
 }
 
-/// Collected statistics for files
+/// Fetched [FormatScanMetadata] for files
 /// Cache is invalided when file size or last modification has changed
 #[derive(Default)]
-struct StatisticsCache {
-    statistics: DashMap<Path, (ObjectMeta, Statistics)>,
+struct FormatScanMetadataCache {
+    format_scan_metadata: DashMap<Path, (ObjectMeta, FormatScanMetadata)>,
 }
 
-impl StatisticsCache {
-    /// Get `Statistics` for file location. Returns None if file has changed or not found.
-    fn get(&self, meta: &ObjectMeta) -> Option<Statistics> {
-        self.statistics
+impl FormatScanMetadataCache {
+    /// Get [FormatScanMetadata] for file location. Returns None if file has changed or not found.
+    fn get(&self, meta: &ObjectMeta) -> Option<FormatScanMetadata> {
+        self.format_scan_metadata
             .get(&meta.location)
             .map(|s| {
-                let (saved_meta, statistics) = s.value();
+                let (saved_meta, format_scan_metadata) = s.value();
                 if saved_meta.size != meta.size
                     || saved_meta.last_modified != meta.last_modified
                 {
                     // file has changed
                     None
                 } else {
-                    Some(statistics.clone())
+                    Some(format_scan_metadata.clone())
                 }
             })
             .unwrap_or(None)
     }
 
-    /// Save collected file statistics
-    fn save(&self, meta: ObjectMeta, statistics: Statistics) {
-        self.statistics
-            .insert(meta.location.clone(), (meta, statistics));
+    /// Save collected file format metadata
+    fn save(&self, meta: ObjectMeta, format_scan_metadata: FormatScanMetadata) {
+        self.format_scan_metadata
+            .insert(meta.location.clone(), (meta, format_scan_metadata));
     }
 }
 
@@ -509,7 +530,7 @@ pub struct ListingTable {
     table_schema: SchemaRef,
     options: ListingOptions,
     definition: Option<String>,
-    collected_statistics: StatisticsCache,
+    format_scan_metadata_cache: FormatScanMetadataCache,
     infinite_source: bool,
 }
 
@@ -550,7 +571,7 @@ impl ListingTable {
             table_schema: Arc::new(Schema::new(table_fields)),
             options,
             definition: None,
-            collected_statistics: Default::default(),
+            format_scan_metadata_cache: Default::default(),
             infinite_source,
         };
 
@@ -739,36 +760,53 @@ impl ListingTable {
         // collect the statistics if required by the config
         let files = file_list.then(|part_file| async {
             let part_file = part_file?;
-            let statistics = if self.options.collect_stat {
-                match self.collected_statistics.get(&part_file.object_meta) {
-                    Some(statistics) => statistics,
-                    None => {
-                        let statistics = self
-                            .options
-                            .format
-                            .infer_stats(
-                                ctx,
-                                &store,
-                                self.file_schema.clone(),
-                                &part_file.object_meta,
-                            )
-                            .await?;
-                        self.collected_statistics
-                            .save(part_file.object_meta.clone(), statistics.clone());
-                        statistics
+
+            let format_scan_metadata =
+                if self.options.collect_stat || self.options.parallel_file_scan {
+                    match self.format_scan_metadata_cache.get(&part_file.object_meta) {
+                        Some(format_scan_metadata) => format_scan_metadata,
+                        None => {
+                            let format_scan_metadata = self
+                                .options
+                                .format
+                                .fetch_format_scan_metadata(
+                                    ctx,
+                                    &store,
+                                    self.file_schema.clone(),
+                                    &part_file.object_meta,
+                                    self.options.collect_stat,
+                                    self.options.parallel_file_scan,
+                                )
+                                .await?;
+
+                            self.format_scan_metadata_cache.save(
+                                part_file.object_meta.clone(),
+                                format_scan_metadata.clone(),
+                            );
+
+                            format_scan_metadata
+                        }
                     }
-                }
-            } else {
-                Statistics::default()
-            };
-            Ok((part_file, statistics)) as Result<(PartitionedFile, Statistics)>
+                } else {
+                    FormatScanMetadata::default()
+                };
+
+            Ok((
+                part_file,
+                format_scan_metadata.file_ranges,
+                format_scan_metadata.statistics,
+            )) as Result<(PartitionedFile, FileRanges, Statistics)>
         });
 
-        let (files, statistics) =
+        let (files_with_ranges, statistics) =
             get_statistics_with_limit(files, self.schema(), limit).await?;
 
         Ok((
-            split_files(files, self.options.target_partitions),
+            split_files(
+                files_with_ranges,
+                self.options.target_partitions,
+                self.options.parallel_file_scan,
+            ),
             statistics,
         ))
     }
@@ -1342,7 +1380,7 @@ mod tests {
     }
 
     #[test]
-    fn test_statistics_cache() {
+    fn test_format_scan_metadata_cache() {
         let meta = ObjectMeta {
             location: Path::from("test"),
             last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")
@@ -1351,10 +1389,10 @@ mod tests {
             size: 1024,
         };
 
-        let cache = StatisticsCache::default();
+        let cache = FormatScanMetadataCache::default();
         assert!(cache.get(&meta).is_none());
 
-        cache.save(meta.clone(), Statistics::default());
+        cache.save(meta.clone(), FormatScanMetadata::default());
         assert!(cache.get(&meta).is_some());
 
         // file size changed
