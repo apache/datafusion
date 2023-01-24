@@ -175,7 +175,7 @@ fn plan_update() {
     let sql = "update person set last_name='Kay' where id=1";
     let plan = r#"
 Dml: op=[Update] table=[person]
-  Projection: person.age AS age, person.birth_date AS birth_date, person.first_name AS first_name, person.id AS id, Utf8("Kay") AS last_name, person.salary AS salary, person.state AS state, person.😀 AS 😀
+  Projection: person.id AS id, person.first_name AS first_name, Utf8("Kay") AS last_name, person.age AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
     Filter: id = Int64(1)
       TableScan: person
       "#
@@ -3360,7 +3360,7 @@ fn test_prepare_statement_update_infer() {
 
     let expected_plan = r#"
 Dml: op=[Update] table=[person]
-  Projection: $1 AS age, person.birth_date AS birth_date, person.first_name AS first_name, person.id AS id, person.last_name AS last_name, person.salary AS salary, person.state AS state, person.😀 AS 😀
+  Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
     Filter: id = $2
       TableScan: person
         "#
@@ -3380,7 +3380,7 @@ Dml: op=[Update] table=[person]
     let param_values = vec![ScalarValue::Int32(Some(42)), ScalarValue::UInt32(Some(1))];
     let expected_plan = r#"
 Dml: op=[Update] table=[person]
-  Projection: Int32(42) AS age, person.birth_date AS birth_date, person.first_name AS first_name, person.id AS id, person.last_name AS last_name, person.salary AS salary, person.state AS state, person.😀 AS 😀
+  Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
     Filter: id = UInt32(1)
       TableScan: person
         "#
