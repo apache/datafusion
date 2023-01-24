@@ -198,7 +198,7 @@ fn schema_name(relative_path: &Path) -> String {
                 .trim_start_matches("pg_")
                 .to_string()
         })
-        .unwrap_or("default_schema".to_string())
+        .unwrap_or_else(|| "default_schema".to_string())
 }
 
 impl Drop for Postgres {
