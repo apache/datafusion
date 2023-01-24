@@ -45,7 +45,7 @@ use sqlparser::ast::{
     UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -661,27 +661,35 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .get_table_provider((&table_name).into())?;
         let arrow_schema = (*provider.schema()).clone();
         let table_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
-        let mut values: BTreeMap<_, _> = table_schema
-            .fields()
-            .iter()
-            .map(|f| {
-                (
-                    f.name().clone(),
-                    ast::Expr::Identifier(ast::Ident::from(f.name().as_str())),
-                )
-            })
-            .collect();
+        let values = table_schema.fields().iter().map(|f| {
+            (
+                f.name().clone(),
+                ast::Expr::Identifier(ast::Ident::from(f.name().as_str())),
+            )
+        });
 
         // Overwrite with assignment expressions
         let mut planner_context = PlannerContext::new();
-        for assign in assignments.iter() {
-            let col_name: &Ident = assign
-                .id
-                .iter()
-                .last()
-                .ok_or(DataFusionError::Plan("Empty column id".to_string()))?;
-            let _ = values.insert(col_name.value.clone(), assign.value.clone());
-        }
+        let assign_map = assignments
+            .iter()
+            .map(|assign| {
+                let col_name: &Ident = assign
+                    .id
+                    .iter()
+                    .last()
+                    .ok_or(DataFusionError::Plan("Empty column id".to_string()))?;
+                Ok((col_name.value.clone(), assign.value.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut assign_map: HashMap<String, ast::Expr> =
+            HashMap::from_iter(assign_map.into_iter());
+        let values = values
+            .into_iter()
+            .map(|(k, v)| {
+                let val = assign_map.remove(&k).unwrap_or(v);
+                (k, val)
+            })
+            .collect::<Vec<_>>();
 
         // Build scan
         let from = from.unwrap_or(table);
