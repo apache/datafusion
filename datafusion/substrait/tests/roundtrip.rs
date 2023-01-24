@@ -182,6 +182,22 @@ mod tests {
         .await
     }
 
+    #[tokio::test]
+    async fn roundtrip_left_join() -> Result<()> {
+        roundtrip("SELECT data.a FROM data LEFT JOIN data2 ON data.a = data2.a").await
+    }
+
+    #[tokio::test]
+    async fn roundtrip_right_join() -> Result<()> {
+        roundtrip("SELECT data.a FROM data RIGHT JOIN data2 ON data.a = data2.a").await
+    }
+
+    #[tokio::test]
+    async fn roundtrip_outer_join() -> Result<()> {
+        roundtrip("SELECT data.a FROM data FULL OUTER JOIN data2 ON data.a = data2.a")
+            .await
+    }
+
     async fn assert_expected_plan(sql: &str, expected_plan_str: &str) -> Result<()> {
         let mut ctx = create_context().await?;
         let df = ctx.sql(sql).await?;
