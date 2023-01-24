@@ -342,7 +342,7 @@ To create a Github Personal Access Token, please visit https://docs.github.com/e
 
 - Make sure to select either **All repositories** or **Only selected repositories** so that you have access to **Repository permissions**.
 - If you only use the token for selected repos make sure you include your
-fork of `homebrew-core` in the list of repos under **Selected repositories**.
+  fork of `homebrew-core` in the list of repos under **Selected repositories**.
 - Make sure to have **Read and write** access enabled for pull requests in your **Repository permissions**.
 
 After all of the above is complete execute the following command:
@@ -350,6 +350,7 @@ After all of the above is complete execute the following command:
 ```bash
 dev/release/publish_homebrew.sh <version> <github-user> <github-token> <homebrew-default-branch-name>
 ```
+
 Note that sometimes someone else has already submitted a PR to update the datafusion formula in homebrew.
 In this case you will get an error with a message that your PR is a duplicate of an existing one. In this
 case no further action is required.
