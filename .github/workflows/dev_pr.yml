@@ -17,6 +17,10 @@
 
 name: Labeler
 
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
 on:
   pull_request_target:
     types:

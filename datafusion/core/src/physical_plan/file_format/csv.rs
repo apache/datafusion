@@ -25,7 +25,7 @@ use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::physical_plan::file_format::FileMeta;
-use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
+use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
@@ -151,7 +151,7 @@ impl ExecutionPlan for CsvExec {
             file_compression_type: self.file_compression_type.to_owned(),
         };
         let stream =
-            FileStream::new(&self.base_config, partition, opener, self.metrics.clone())?;
+            FileStream::new(&self.base_config, partition, opener, &self.metrics)?;
         Ok(Box::pin(stream) as SendableRecordBatchStream)
     }
 
@@ -176,6 +176,10 @@ impl ExecutionPlan for CsvExec {
 
     fn statistics(&self) -> Statistics {
         self.projected_statistics.clone()
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 }
 
@@ -517,6 +521,13 @@ mod tests {
             "+----+------------+",
         ];
         crate::assert_batches_eq!(expected, &[batch.slice(0, 5)]);
+
+        let metrics = csv.metrics().expect("doesn't found metrics");
+        let time_elapsed_processing = get_value(&metrics, "time_elapsed_processing");
+        assert!(
+            time_elapsed_processing > 0,
+            "Expected time_elapsed_processing greater than 0",
+        );
         Ok(())
     }
 
@@ -677,5 +688,16 @@ mod tests {
         assert_eq!(allparts_count, 80);
 
         Ok(())
+    }
+
+    fn get_value(metrics: &MetricsSet, metric_name: &str) -> usize {
+        match metrics.sum_by_name(metric_name) {
+            Some(v) => v.as_usize(),
+            _ => {
+                panic!(
+                    "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
+                );
+            }
+        }
     }
 }
