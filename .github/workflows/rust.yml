@@ -95,11 +95,11 @@ jobs:
       - name: Build tests
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --features avro,jit,scheduler,json --no-run
+          cargo test --features avro,jit,scheduler,json,dictionary_expressions --no-run
       - name: Run tests
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --features avro,jit,scheduler,json
+          cargo test --features avro,jit,scheduler,json,dictionary_expressions
       - name: Run examples
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
@@ -227,6 +227,37 @@ jobs:
           POSTGRES_DB: db_test
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
+
+  sqllogictest-postgres:
+    name: "Run sqllogictest with Postgres runner"
+    needs: [linux-build-lib]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: db_test
+          POSTGRES_INITDB_ARGS: --encoding=UTF-8 --lc-collate=C --lc-ctype=C
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+      - name: Setup toolchain
+        run: |
+          rustup toolchain install stable
+          rustup default stable
+      - name: Run sqllogictest
+        run: PG_COMPAT=true PG_URI="postgresql://postgres:postgres@localhost:$POSTGRES_PORT/db_test" cargo test -p datafusion --test sqllogictests
+        env:
+          POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}
 
   windows:
     name: cargo test (win64)

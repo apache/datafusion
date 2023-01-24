@@ -24,7 +24,7 @@ repository = "https://github.com/apache/arrow-datafusion"
 readme = "README.md"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 license = "Apache-2.0"
-keywords = [ "arrow", "query", "sql" ]
+keywords = ["arrow", "query", "sql"]
 edition = "2021"
 rust-version = "1.62"
 
@@ -35,12 +35,15 @@ path = "src/lib.rs"
 [features]
 crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
 default = ["crypto_expressions", "regex_expressions", "unicode_expressions"]
+# Enables support for non-scalar, binary operations on dictionaries
+# Note: this results in significant additional codegen
+dictionary_expressions = ["arrow/dyn_cmp_dict", "arrow/dyn_arith_dict"]
 regex_expressions = ["regex"]
 unicode_expressions = ["unicode-segmentation"]
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-arrow = { version = "31.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
+arrow = { version = "31.0.0", features = ["prettyprint"] }
 arrow-buffer = "31.0.0"
 arrow-schema = "31.0.0"
 blake2 = { version = "^0.10.2", optional = true }

@@ -1106,7 +1106,7 @@ pub fn binary(
     let rhs_type = &rhs.data_type(input_schema)?;
     if !lhs_type.eq(rhs_type) {
         return Err(DataFusionError::Internal(format!(
-            "The type of {lhs_type} {op} {rhs_type} of binary physical should be same"
+            "The type of {lhs_type} {op:?} {rhs_type} of binary physical should be same"
         )));
     }
     Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
@@ -1502,6 +1502,7 @@ mod tests {
     // is no way at the time of this writing to create a dictionary
     // array using the `From` trait
     #[test]
+    #[cfg(feature = "dictionary_expressions")]
     fn test_dictionary_type_to_array_coersion() -> Result<()> {
         // Test string  a string dictionary
         let dict_type =

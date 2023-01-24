@@ -3104,7 +3104,7 @@ fn test_ambiguous_column_references_with_in_using_join() {
 }
 
 #[test]
-#[should_panic(expected = "value: Internal(\"Invalid placeholder, not a number: $foo\"")]
+#[should_panic(expected = "value: Plan(\"Invalid placeholder, not a number: $foo\"")]
 fn test_prepare_statement_to_plan_panic_param_format() {
     // param is not number following the $ sign
     // panic due to error returned from the parser
@@ -3388,6 +3388,75 @@ Dml: op=[Update] table=[person]
     let plan = plan.replace_params_with_values(&param_values).unwrap();
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+}
+
+#[test]
+fn test_prepare_statement_insert_infer() {
+    let sql = "insert into person (id, first_name, last_name) values ($1, $2, $3)";
+
+    let expected_plan = r#"
+Dml: op=[Insert] table=[person]
+  Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+    Values: ($1, $2, $3)
+        "#
+    .trim();
+
+    let expected_dt = "[Int32]";
+    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([
+        ("$1".to_string(), Some(DataType::UInt32)),
+        ("$2".to_string(), Some(DataType::Utf8)),
+        ("$3".to_string(), Some(DataType::Utf8)),
+    ]);
+    assert_eq!(actual_types, expected_types);
+
+    // replace params with values
+    let param_values = vec![
+        ScalarValue::UInt32(Some(1)),
+        ScalarValue::Utf8(Some("Alan".to_string())),
+        ScalarValue::Utf8(Some("Turing".to_string())),
+    ];
+    let expected_plan = r#"
+Dml: op=[Insert] table=[person]
+  Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+    Values: (UInt32(1), Utf8("Alan"), Utf8("Turing"))
+        "#
+    .trim();
+    let plan = plan.replace_params_with_values(&param_values).unwrap();
+
+    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+}
+
+#[test]
+#[should_panic(expected = "Placeholder $4 refers to a non existent column")]
+fn test_prepare_statement_insert_infer_gt() {
+    let sql = "insert into person (id, first_name, last_name) values ($1, $2, $3, $4)";
+
+    let expected_plan = r#""#.trim();
+    let expected_dt = "[Int32]";
+    let _ = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+}
+
+#[test]
+#[should_panic(expected = "value: Plan(\"Column count doesn't match insert query!\")")]
+fn test_prepare_statement_insert_infer_lt() {
+    let sql = "insert into person (id, first_name, last_name) values ($1, $2)";
+
+    let expected_plan = r#""#.trim();
+    let expected_dt = "[Int32]";
+    let _ = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+}
+
+#[test]
+#[should_panic(expected = "value: Plan(\"Placeholder type could not be resolved\")")]
+fn test_prepare_statement_insert_infer_gap() {
+    let sql = "insert into person (id, first_name, last_name) values ($2, $4, $6)";
+
+    let expected_plan = r#""#.trim();
+    let expected_dt = "[Int32]";
+    let _ = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 }
 
 #[test]

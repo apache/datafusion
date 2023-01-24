@@ -33,7 +33,6 @@ use std::sync::Arc;
 use crate::utils;
 
 pub async fn register_aggregate_tables(ctx: &SessionContext) {
-    register_aggregate_csv_by_sql(ctx).await;
     register_aggregate_test_100(ctx).await;
     register_decimal_table(ctx);
     register_median_test_tables(ctx);
@@ -109,44 +108,6 @@ fn register_median_test_tables(ctx: &SessionContext) {
         let table_name = &format!("median_{name}");
         ctx.register_batch(table_name, batch).unwrap();
     }
-}
-
-async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
-    let test_data = datafusion::test_util::arrow_test_data();
-
-    let df = ctx
-        .sql(&format!(
-            "
-    CREATE EXTERNAL TABLE aggregate_test_100_by_sql (
-        c1  VARCHAR NOT NULL,
-        c2  TINYINT NOT NULL,
-        c3  SMALLINT NOT NULL,
-        c4  SMALLINT NOT NULL,
-        c5  INTEGER NOT NULL,
-        c6  BIGINT NOT NULL,
-        c7  SMALLINT NOT NULL,
-        c8  INT NOT NULL,
-        c9  INT UNSIGNED NOT NULL,
-        c10 BIGINT UNSIGNED NOT NULL,
-        c11 FLOAT NOT NULL,
-        c12 DOUBLE NOT NULL,
-        c13 VARCHAR NOT NULL
-    )
-    STORED AS CSV
-    WITH HEADER ROW
-    LOCATION '{test_data}/csv/aggregate_test_100.csv'
-    "
-        ))
-        .await
-        .expect("Creating dataframe for CREATE EXTERNAL TABLE");
-
-    // Mimic the CLI and execute the resulting plan -- even though it
-    // is effectively a no-op (returns zero rows)
-    let results = df.collect().await.expect("Executing CREATE EXTERNAL TABLE");
-    assert!(
-        results.is_empty(),
-        "Expected no rows from executing CREATE EXTERNAL TABLE"
-    );
 }
 
 fn register_test_data(ctx: &SessionContext) {

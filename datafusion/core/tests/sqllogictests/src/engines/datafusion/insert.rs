@@ -15,10 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod util;
-
-use crate::error::Result;
-use crate::insert::util::LogicTestContextProvider;
+use super::error::Result;
+use crate::engines::datafusion::util::LogicTestContextProvider;
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
@@ -72,7 +70,7 @@ pub async fn insert(ctx: &SessionContext, insert_stmt: SQLStatement) -> Result<D
                     &mut PlannerContext::new(),
                 )
             })
-            .collect::<std::result::Result<Vec<DFExpr>, DataFusionError>>()?;
+            .collect::<Result<Vec<DFExpr>, DataFusionError>>()?;
         // Directly use `select` to get `RecordBatch`
         let dataframe = ctx.read_empty()?;
         origin_batches.extend(dataframe.select(logical_exprs)?.collect().await?)

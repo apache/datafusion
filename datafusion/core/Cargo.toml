@@ -43,6 +43,9 @@ avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 compression = ["xz2", "bzip2", "flate2", "async-compression"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions"]
 default = ["crypto_expressions", "regex_expressions", "unicode_expressions", "compression"]
+# Enables support for non-scalar, binary operations on dictionaries
+# Note: this results in significant additional codegen
+dictionary_expressions = ["datafusion-physical-expr/dictionary_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
 # Used to enable JIT code generation
@@ -102,19 +105,22 @@ xz2 = { version = "0.1", optional = true }
 
 
 [dev-dependencies]
-arrow = { version = "31.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
 async-trait = "0.1.53"
+bigdecimal = "0.3.0"
 criterion = "0.4"
 csv = "1.1.6"
 ctor = "0.1.22"
 doc-comment = "0.3"
 env_logger = "0.10"
+half = "2.2.1"
 parquet-test-utils = { path = "../../parquet-test-utils" }
+postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
 rstest = "0.16.0"
-sqllogictest = "0.10.0"
+rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
+sqllogictest = "0.11.1"
 test-utils = { path = "../../test-utils" }
 thiserror = "1.0.37"
-
+tokio-postgres = "0.7.7"
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = "0.26.1"
 

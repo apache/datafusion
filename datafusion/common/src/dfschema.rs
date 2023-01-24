@@ -452,7 +452,7 @@ impl From<&DFSchema> for Schema {
 /// Create a `DFSchema` from an Arrow schema
 impl TryFrom<Schema> for DFSchema {
     type Error = DataFusionError;
-    fn try_from(schema: Schema) -> std::result::Result<Self, Self::Error> {
+    fn try_from(schema: Schema) -> Result<Self, Self::Error> {
         Self::new_with_metadata(
             schema
                 .fields()

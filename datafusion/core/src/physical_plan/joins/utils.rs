@@ -695,10 +695,7 @@ impl<T: 'static> OnceFut<T> {
     }
 
     /// Get the result of the computation if it is ready, without consuming it
-    pub(crate) fn get(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<&T, ArrowError>> {
+    pub(crate) fn get(&mut self, cx: &mut Context<'_>) -> Poll<Result<&T, ArrowError>> {
         if let OnceFutState::Pending(fut) = &mut self.state {
             let r = ready!(fut.poll_unpin(cx));
             self.state = OnceFutState::Ready(r);
