@@ -18,14 +18,11 @@
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
-use log::{debug, info};
-use testcontainers::clients::Cli as Docker;
+use log::info;
 
 use datafusion::prelude::SessionContext;
 
 use crate::engines::datafusion::DataFusion;
-use crate::engines::postgres;
-use crate::engines::postgres::image::{PG_DB, PG_PASSWORD, PG_PORT, PG_USER};
 use crate::engines::postgres::Postgres;
 
 mod engines;
@@ -56,36 +53,23 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
     for path in files {
         let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
-        let is_pg_compatibility_test = file_name.starts_with(PG_COMPAT_FILE_PREFIX);
 
         if options.complete_mode {
-            run_complete_file(&path, file_name, is_pg_compatibility_test).await?;
+            run_complete_file(&path, file_name).await?;
         } else if options.postgres_runner {
-            if is_pg_compatibility_test {
-                run_test_file_with_postgres(&path, file_name).await?;
-            } else {
-                debug!("Skipping test file {:?}", path);
-            }
+            run_test_file_with_postgres(&path, file_name).await?;
         } else {
-            run_test_file(&path, file_name, is_pg_compatibility_test).await?;
+            run_test_file(&path, file_name).await?;
         }
     }
 
     Ok(())
 }
 
-async fn run_test_file(
-    path: &PathBuf,
-    file_name: String,
-    is_pg_compatibility_test: bool,
-) -> Result<(), Box<dyn Error>> {
+async fn run_test_file(path: &PathBuf, file_name: String) -> Result<(), Box<dyn Error>> {
     println!("Running with DataFusion runner: {}", path.display());
-    let ctx = context_for_test_file(&file_name, is_pg_compatibility_test).await;
-    let mut runner = sqllogictest::Runner::new(DataFusion::new(
-        ctx,
-        file_name,
-        is_pg_compatibility_test,
-    ));
+    let ctx = context_for_test_file(&file_name).await;
+    let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, file_name));
     runner.run_file_async(path).await?;
     Ok(())
 }
@@ -96,39 +80,25 @@ async fn run_test_file_with_postgres(
 ) -> Result<(), Box<dyn Error>> {
     info!("Running with Postgres runner: {}", path.display());
 
-    let docker = Docker::default();
-    let postgres_container = docker.run(postgres::image::postgres_docker_image());
+    let postgres_client = Postgres::connect(file_name).await?;
 
-    let postgres_client = Postgres::connect_with_retry(
-        file_name,
-        "127.0.0.1",
-        postgres_container.get_host_port_ipv4(PG_PORT),
-        PG_DB,
-        PG_USER,
-        PG_PASSWORD,
-    )
-    .await?;
-    let mut postgres_runner = sqllogictest::Runner::new(postgres_client);
+    sqllogictest::Runner::new(postgres_client)
+        .run_file_async(path)
+        .await?;
 
-    postgres_runner.run_file_async(path).await?;
     Ok(())
 }
 
 async fn run_complete_file(
     path: &PathBuf,
     file_name: String,
-    is_pg_compatibility_test: bool,
 ) -> Result<(), Box<dyn Error>> {
     use sqllogictest::{default_validator, update_test_file};
 
     info!("Using complete mode to complete: {}", path.display());
 
-    let ctx = context_for_test_file(&file_name, is_pg_compatibility_test).await;
-    let mut runner = sqllogictest::Runner::new(DataFusion::new(
-        ctx,
-        file_name,
-        is_pg_compatibility_test,
-    ));
+    let ctx = context_for_test_file(&file_name).await;
+    let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, file_name));
 
     info!("Using complete mode to complete {}", path.display());
     let col_separator = " ";
@@ -145,31 +115,22 @@ fn read_test_files(options: &Options) -> Vec<PathBuf> {
         .unwrap()
         .map(|path| path.unwrap().path())
         .filter(|path| options.check_test_file(path.as_path()))
+        .filter(|path| options.check_pg_compat_file(path.as_path()))
         .collect()
 }
 
 /// Create a SessionContext, configured for the specific test
-async fn context_for_test_file(
-    file_name: &str,
-    is_pg_compatibility_test: bool,
-) -> SessionContext {
-    if is_pg_compatibility_test {
-        info!("Registering pg compatibility tables");
-        let ctx = SessionContext::new();
-        setup::register_aggregate_csv_by_sql(&ctx).await;
-        ctx
-    } else {
-        match file_name {
-            "aggregate.slt" | "select.slt" => {
-                info!("Registering aggregate tables");
-                let ctx = SessionContext::new();
-                setup::register_aggregate_tables(&ctx).await;
-                ctx
-            }
-            _ => {
-                info!("Using default SessionContext");
-                SessionContext::new()
-            }
+async fn context_for_test_file(file_name: &str) -> SessionContext {
+    match file_name {
+        "aggregate.slt" | "select.slt" => {
+            info!("Registering aggregate tables");
+            let ctx = SessionContext::new();
+            setup::register_aggregate_tables(&ctx).await;
+            ctx
+        }
+        _ => {
+            info!("Using default SessionContext");
+            SessionContext::new()
         }
     }
 }
@@ -232,5 +193,11 @@ impl Options {
         // otherwise check if any filter matches
         let path_str = path.to_string_lossy();
         self.filters.iter().any(|filter| path_str.contains(filter))
+    }
+
+    /// Postgres runner executes only tests in files with specific names
+    fn check_pg_compat_file(&self, path: &Path) -> bool {
+        let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
+        !self.postgres_runner || file_name.starts_with(PG_COMPAT_FILE_PREFIX)
     }
 }

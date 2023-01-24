@@ -121,6 +121,8 @@ pub enum LogicalPlan {
     Prepare(Prepare),
     /// Insert / Update / Delete
     Dml(DmlStatement),
+    /// Describe the schema of table
+    DescribeTable(DescribeTable),
 }
 
 impl LogicalPlan {
@@ -161,6 +163,9 @@ impl LogicalPlan {
             LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
             LogicalPlan::DropView(DropView { schema, .. }) => schema,
             LogicalPlan::SetVariable(SetVariable { schema, .. }) => schema,
+            LogicalPlan::DescribeTable(DescribeTable { dummy_schema, .. }) => {
+                dummy_schema
+            }
             LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
         }
     }
@@ -221,6 +226,7 @@ impl LogicalPlan {
             | LogicalPlan::Prepare(Prepare { input, .. }) => input.all_schemas(),
             LogicalPlan::DropTable(_)
             | LogicalPlan::DropView(_)
+            | LogicalPlan::DescribeTable(_)
             | LogicalPlan::SetVariable(_) => vec![],
             LogicalPlan::Dml(DmlStatement { table_schema, .. }) => vec![table_schema],
         }
@@ -322,6 +328,7 @@ impl LogicalPlan {
             | LogicalPlan::Union(_)
             | LogicalPlan::Distinct(_)
             | LogicalPlan::Dml(_)
+            | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Prepare(_) => Ok(()),
         }
     }
@@ -363,7 +370,8 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
             | LogicalPlan::SetVariable(_)
-            | LogicalPlan::DropView(_) => vec![],
+            | LogicalPlan::DropView(_)
+            | LogicalPlan::DescribeTable(_) => vec![],
         }
     }
 
@@ -561,7 +569,8 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
             | LogicalPlan::SetVariable(_)
-            | LogicalPlan::DropView(_) => true,
+            | LogicalPlan::DropView(_)
+            | LogicalPlan::DescribeTable(_) => true,
         };
         if !recurse {
             return Ok(false);
@@ -1170,6 +1179,9 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "Prepare: {name:?} {data_types:?} ")
                     }
+                    LogicalPlan::DescribeTable(DescribeTable { .. }) => {
+                        write!(f, "DescribeTable")
+                    }
                 }
             }
         }
@@ -1623,6 +1635,15 @@ pub struct Prepare {
     pub data_types: Vec<DataType>,
     /// The logical plan of the statements
     pub input: Arc<LogicalPlan>,
+}
+
+/// Describe the schema of table
+#[derive(Clone)]
+pub struct DescribeTable {
+    /// Table schema
+    pub schema: Arc<Schema>,
+    /// Dummy schema
+    pub dummy_schema: DFSchemaRef,
 }
 
 /// Produces a relation with string representations of
