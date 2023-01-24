@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::parser::{
-    CreateExternalTable, DFParser, DescribeTable, Statement as DFStatement,
+    CreateExternalTable, DFParser, DescribeTableStmt, Statement as DFStatement,
 };
 use crate::planner::{
     object_name_to_qualifier, object_name_to_table_reference, ContextProvider,
@@ -35,12 +35,12 @@ use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DmlStatement, DropTable, DropView, Explain, Filter, LogicalPlan, LogicalPlanBuilder,
-    PlanType, SetVariable, ToStringifiedPlan, WriteOp,
+    DescribeTable, DmlStatement, DropTable, DropView, Explain, Filter, LogicalPlan,
+    LogicalPlanBuilder, PlanType, SetVariable, ToStringifiedPlan, WriteOp,
 };
 use sqlparser::ast;
 use sqlparser::ast::{
-    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query,
+    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query, SetExpr,
     ShowCreateObject, ShowStatementFilter, Statement, TableFactor, TableWithJoins,
     UnaryOperator, Value,
 };
@@ -54,7 +54,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match statement {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
-            DFStatement::DescribeTable(s) => self.describe_table_to_plan(s),
+            DFStatement::DescribeTableStmt(s) => self.describe_table_to_plan(s),
         }
     }
 
@@ -381,30 +381,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    fn describe_table_to_plan(&self, statement: DescribeTable) -> Result<LogicalPlan> {
-        let DescribeTable { table_name } = statement;
-
-        let where_clause = object_name_to_qualifier(&table_name);
+    fn describe_table_to_plan(
+        &self,
+        statement: DescribeTableStmt,
+    ) -> Result<LogicalPlan> {
+        let DescribeTableStmt { table_name } = statement;
         let table_ref = object_name_to_table_reference(table_name)?;
 
-        // check if table_name exists
-        let _ = self
+        let table_source = self
             .schema_provider
             .get_table_provider((&table_ref).into())?;
 
-        if self.has_table("information_schema", "tables") {
-            let sql = format!(
-                "SELECT column_name, data_type, is_nullable \
-                                FROM information_schema.columns WHERE {where_clause};"
-            );
-            let mut rewrite = DFParser::parse_sql(&sql)?;
-            self.statement_to_plan(rewrite.pop_front().unwrap())
-        } else {
-            Err(DataFusionError::Plan(
-                "DESCRIBE TABLE is not supported unless information_schema is enabled"
-                    .to_string(),
-            ))
-        }
+        let schema = table_source.schema();
+
+        Ok(LogicalPlan::DescribeTable(DescribeTable {
+            schema,
+            dummy_schema: DFSchemaRef::new(DFSchema::empty()),
+        }))
     }
 
     /// Generate a logical plan from a CREATE EXTERNAL TABLE statement
@@ -762,8 +755,37 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let arrow_schema = (*provider.schema()).clone();
         let table_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
 
+        // infer types for Values clause... other types should be resolvable the regular way
+        let mut prepare_param_data_types = BTreeMap::new();
+        if let SetExpr::Values(ast::Values { rows, .. }) = (*source.body).clone() {
+            for row in rows.iter() {
+                for (idx, val) in row.iter().enumerate() {
+                    if let ast::Expr::Value(Value::Placeholder(name)) = val {
+                        let name =
+                            name.replace('$', "").parse::<usize>().map_err(|_| {
+                                DataFusionError::Plan(format!(
+                                    "Can't parse placeholder: {name}"
+                                ))
+                            })? - 1;
+                        let col = columns.get(idx).ok_or_else(|| {
+                            DataFusionError::Plan(format!(
+                                "Placeholder ${} refers to a non existent column",
+                                idx + 1
+                            ))
+                        })?;
+                        let field =
+                            table_schema.field_with_name(None, col.value.as_str())?;
+                        let dt = field.field().data_type().clone();
+                        let _ = prepare_param_data_types.insert(name, dt);
+                    }
+                }
+            }
+        }
+        let prepare_param_data_types = prepare_param_data_types.into_values().collect();
+
         // Projection
-        let mut planner_context = PlannerContext::new();
+        let mut planner_context =
+            PlannerContext::new_with_prepare_param_data_types(prepare_param_data_types);
         let source = self.query_to_plan(*source, &mut planner_context)?;
         if columns.len() != source.schema().fields().len() {
             Err(DataFusionError::Plan(

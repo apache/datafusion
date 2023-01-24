@@ -46,16 +46,33 @@ cargo test -p datafusion --test sqllogictests -- information
 
 #### Running tests: Postgres compatibility
 
-Test files that start with prefix `pg_compat_` verify compatibility with Postgres.
-Datafusion runs these test files during normal sqllogictest runs.
+Test files that start with prefix `pg_compat_` verify compatibility
+with Postgres by running the same script files both with DataFusion and with Posgres
 
-In order to run sqllogictests with Postgres execute:
+In order to run the sqllogictests running against a previously running Postgres instance, do:
 
 ```shell
-PG_COMPAT=true cargo test -p datafusion --test sqllogictests
+PG_COMPAT=true PG_URI="postgresql://postgres@127.0.0.1/postgres" cargo test -p datafusion --test sqllogictests
 ```
 
-This command requires a docker binary. Check that docker is properly installed with `which docker`.
+The environemnt variables:
+
+1. `PG_COMPAT` instructs sqllogictest to run against Postgres (not DataFusion)
+2. `PG_URI` contains a `libpq` style connection string, whose format is described in
+   [the docs](https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html#url)
+
+One way to create a suitable a posgres container in docker is to use
+the [Official Image](https://hub.docker.com/_/postgres) with a command
+such as the following. Note the collation **must** be set to `C` otherwise
+`ORDER BY` will not match DataFusion and the tests will diff.
+
+```shell
+docker run \
+  -p5432:5432 \
+  -e POSTGRES_INITDB_ARGS="--encoding=UTF-8 --lc-collate=C --lc-ctype=C" \
+  -e POSTGRES_HOST_AUTH_METHOD=trust \
+  postgres
+```
 
 #### Updating tests: Completion Mode
 

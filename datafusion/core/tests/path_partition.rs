@@ -204,7 +204,7 @@ async fn csv_filter_with_file_col() -> Result<()> {
     );
 
     let result = ctx
-        .sql("SELECT c1, c2 FROM t WHERE date='2021-10-27' and date!=c1 LIMIT 5")
+        .sql("SELECT c1, c2 FROM t WHERE date='2021-10-27' and c1!='2021-10-27' LIMIT 5")
         .await?
         .collect()
         .await?;

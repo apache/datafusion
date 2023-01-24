@@ -16,6 +16,57 @@
 # under the License.
 
 
+onlyif postgres
+statement ok
+CREATE TABLE aggregate_test_100_by_sql
+(
+    c1  character varying NOT NULL,
+    c2  smallint          NOT NULL,
+    c3  smallint          NOT NULL,
+    c4  smallint,
+    c5  integer,
+    c6  bigint            NOT NULL,
+    c7  smallint          NOT NULL,
+    c8  integer           NOT NULL,
+    c9  bigint            NOT NULL,
+    c10 character varying NOT NULL,
+    c11 real              NOT NULL,
+    c12 double precision  NOT NULL,
+    c13 character varying NOT NULL
+);
+
+# Copy the data
+onlyif postgres
+statement ok
+COPY aggregate_test_100_by_sql
+    FROM '../../testing/data/csv/aggregate_test_100.csv'
+    DELIMITER ','
+    CSV HEADER;
+
+###
+## Setup test for datafusion
+###
+onlyif DataFusion
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100_by_sql (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+
 query IIIIIIIIII
 SELECT
   c9,
@@ -1431,3 +1482,9 @@ NULL 7 279 282 NULL
 5 4 86 90 NULL
 1 5 245 246 NULL
 4 6 18 21 NULL
+
+########
+# Clean up after the test
+########
+statement ok
+DROP TABLE aggregate_test_100_by_sql
