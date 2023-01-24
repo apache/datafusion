@@ -166,7 +166,7 @@ impl<F: FileOpener> FileStream<F> {
         config: &FileScanConfig,
         partition: usize,
         file_reader: F,
-        metrics: ExecutionPlanMetricsSet,
+        metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
         let (projected_schema, _) = config.project();
         let pc_projector = PartitionColumnProjector::new(
@@ -187,8 +187,8 @@ impl<F: FileOpener> FileStream<F> {
             file_reader,
             pc_projector,
             state: FileStreamState::Idle,
-            file_stream_metrics: FileStreamMetrics::new(&metrics, partition),
-            baseline_metrics: BaselineMetrics::new(&metrics, partition),
+            file_stream_metrics: FileStreamMetrics::new(metrics, partition),
+            baseline_metrics: BaselineMetrics::new(metrics, partition),
         })
     }
 
@@ -353,9 +353,8 @@ mod tests {
             output_ordering: None,
             infinite_source: false,
         };
-
-        let file_stream =
-            FileStream::new(&config, 0, reader, ExecutionPlanMetricsSet::new()).unwrap();
+        let metrics_set = ExecutionPlanMetricsSet::new();
+        let file_stream = FileStream::new(&config, 0, reader, &metrics_set).unwrap();
 
         file_stream
             .map(|b| b.expect("No error expected in stream"))
