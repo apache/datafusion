@@ -50,7 +50,7 @@ if ! git remote | grep -q --fixed-strings ${github_user}; then
 fi
 
 echo "Updating working copy"
-git fetch --all --prune --tags --force -j$(num_processing_units)
+git fetch --all --prune --tags --force -j$num_processing_units
 
 branch=apache-arrow-datafusion-${version}
 echo "Creating branch: ${branch}"
