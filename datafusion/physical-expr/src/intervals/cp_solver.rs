@@ -135,7 +135,7 @@ fn calculate_node_interval(
 }
 
 impl ExprIntervalGraph {
-    /// Constructs
+    /// Constructs ExprIntervalGraph
     ///
     /// # Arguments
     /// * `expr` - Arc<dyn PhysicalExpr>. The complex expression that we compute bounds on by
@@ -152,6 +152,7 @@ impl ExprIntervalGraph {
     ///  use datafusion_expr::Operator;
     ///  use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
     ///  use datafusion_physical_expr::intervals::ExprIntervalGraph;
+    ///  use datafusion_physical_expr::PhysicalExpr;
     ///  // syn > gnz + 1 AND syn < gnz + 10
     ///  let syn = Arc::new(Column::new("syn", 0));
     ///  let left_and_2 = Arc::new(BinaryExpr::new(
@@ -164,12 +165,12 @@ impl ExprIntervalGraph {
     ///  Operator::Plus,
     ///  Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
     ///  ));
-    ///  let left_expr = Arc::new(BinaryExpr::new(syn, Operator::Gt, left_and_2));
+    ///  let left_expr = Arc::new(BinaryExpr::new(syn.clone(), Operator::Gt, left_and_2.clone()));
     ///  let right_expr = Arc::new(BinaryExpr::new(syn, Operator::Lt, right_and_2));
     ///  let expr = Arc::new(BinaryExpr::new(left_expr, Operator::And, right_expr));
-    ///  let provided_exprs = vec![left_and_2.clone()];
+    ///  let provided_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![left_and_2];
     ///  // You can provide exprs for child prunning.
-    ///  let graph = ExprIntervalGraph::try_new(expr, &provided_exprs);
+    ///  let graph = ExprIntervalGraph::try_new(expr, provided_exprs.as_slice());
     /// ```
     pub fn try_new(
         expr: Arc<dyn PhysicalExpr>,

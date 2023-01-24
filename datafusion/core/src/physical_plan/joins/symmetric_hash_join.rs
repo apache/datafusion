@@ -39,7 +39,7 @@ use hashbrown::raw::RawTable;
 use hashbrown::HashSet;
 use itertools::Itertools;
 
-use datafusion_common::bisect::bisect;
+use datafusion_common::utils::bisect;
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::intervals::interval_aritmetics::{Interval, Range};
 use datafusion_physical_expr::intervals::ExprIntervalGraph;
