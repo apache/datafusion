@@ -43,6 +43,7 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution::context::TaskContext;
+use crate::physical_plan::common::get_meet_of_orderings;
 use crate::{
     error::Result,
     physical_plan::{expressions, metrics::BaselineMetrics},
@@ -227,29 +228,7 @@ impl ExecutionPlan for UnionExec {
         if self.partition_aware {
             return None;
         }
-        // To find the meet, we first find the smallest input ordering.
-        let mut smallest: Option<&[PhysicalSortExpr]> = None;
-        for item in self.inputs.iter() {
-            if let Some(ordering) = item.output_ordering() {
-                smallest = match smallest {
-                    None => Some(ordering),
-                    Some(expr) if ordering.len() < expr.len() => Some(ordering),
-                    _ => continue,
-                }
-            } else {
-                return None;
-            }
-        }
-        // Check if the smallest ordering is a meet or not:
-        if self.inputs.iter().all(|child| {
-            ordering_satisfy(child.output_ordering(), smallest, || {
-                child.equivalence_properties()
-            })
-        }) {
-            smallest
-        } else {
-            None
-        }
+        get_meet_of_orderings(&self.inputs)
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

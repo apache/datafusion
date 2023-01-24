@@ -109,11 +109,14 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
                 .map(|item| {
                     let onwards = &item.sort_onwards;
                     if !onwards.is_empty() {
-                        let is_sort = item.plan.as_any().is::<SortExec>();
                         let flags = item.plan.maintains_input_order();
+                        // `onwards` starts from sort introducing executor(e.g `SortExec`, `SortPreservingMergeExec`) till the current executor
+                        // if the executors in between maintain input ordering. If we are at
+                        // the beginning both `SortExec` and `SortPreservingMergeExec` doesn't maintain ordering(they introduce ordering).
+                        // However, we want to propagate them above anyway.
                         for (maintains, element) in flags.into_iter().zip(onwards.iter())
                         {
-                            if (maintains || is_sort) && !element.is_empty() {
+                            if (maintains || is_sort(&item.plan)) && !element.is_empty() {
                                 return element.clone();
                             }
                         }
@@ -146,6 +149,12 @@ impl PhysicalOptimizerRule for EnforceSorting {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+// Checks whether executor is Sort
+// TODO: Add support for SortPreservingMergeExec also.
+fn is_sort(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<SortExec>()
 }
 
 fn ensure_sorting(
@@ -258,7 +267,7 @@ fn ensure_sorting(
                 trace.push((idx, new_plan.clone()));
             } else {
                 trace.clear();
-                if new_plan.as_any().is::<SortExec>() {
+                if is_sort(&new_plan) {
                     trace.push((idx, new_plan.clone()));
                 }
             }
@@ -865,7 +874,10 @@ mod tests {
         let union = union_exec(vec![source2, sort]);
         let physical_plan = sort_preserving_merge_exec(sort_exprs, union);
 
-        // one input to the union is already sorted, one is not.
+        // Input is an invalid plan. In this case rule should add required sorting in appropriate places.
+        // First ParquetExec has output ordering(nullable_col@0 ASC). However, it doesn't satisfy required ordering
+        // of SortPreservingMergeExec. Hence rule should remove unnecessary sort for second child of the UnionExec
+        // and put a sort above Union to satisfy required ordering.
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "  UnionExec",
