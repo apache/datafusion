@@ -1191,6 +1191,11 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: SetVariable must be root of the plan".to_string(),
                     ))
                 }
+                LogicalPlan::DescribeTable(_) => {
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: DescribeTable must be root of the plan".to_string(),
+                    ))
+                }
                 LogicalPlan::Explain(_) => Err(DataFusionError::Internal(
                     "Unsupported logical plan: Explain must be root of the plan".to_string(),
                 )),

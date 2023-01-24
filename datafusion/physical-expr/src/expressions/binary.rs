@@ -1502,6 +1502,7 @@ mod tests {
     // is no way at the time of this writing to create a dictionary
     // array using the `From` trait
     #[test]
+    #[cfg(feature = "dictionary_expressions")]
     fn test_dictionary_type_to_array_coersion() -> Result<()> {
         // Test string  a string dictionary
         let dict_type =
