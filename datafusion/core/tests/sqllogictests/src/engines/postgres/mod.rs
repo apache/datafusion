@@ -187,16 +187,18 @@ fn no_quotes(t: &str) -> &str {
 
 /// Given a file name like pg_compat_foo.slt
 /// return a schema name
-fn schema_name(relative_path: &Path) -> &str {
+fn schema_name(relative_path: &Path) -> String {
     relative_path
         .file_name()
-        .map(|name| name.to_str())
-        .flatten()
-        .expect("A file with a UTF-8 name")
-        .split('.')
-        .next()
-        .unwrap_or("default_schema")
-        .trim_start_matches("pg_")
+        .map(|name| {
+            name.to_string_lossy()
+                .chars()
+                .filter(|ch| ch.is_ascii_alphabetic())
+                .collect::<String>()
+                .trim_start_matches("pg_")
+                .to_string()
+        })
+        .unwrap_or("default_schema".to_string())
 }
 
 impl Drop for Postgres {
