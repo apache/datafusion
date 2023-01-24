@@ -190,9 +190,9 @@ fn no_quotes(t: &str) -> &str {
 fn schema_name(relative_path: &Path) -> &str {
     relative_path
         .file_name()
-        .unwrap()
-        .to_str()
-        .unwrap()
+        .map(|name| name.to_str())
+        .flatten()
+        .expect("A file with a UTF-8 name")
         .split('.')
         .next()
         .unwrap_or("default_schema")
