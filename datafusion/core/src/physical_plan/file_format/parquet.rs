@@ -306,12 +306,8 @@ impl ExecutionPlan for ParquetExec {
             enable_page_index: self.enable_page_index(config_options),
         };
 
-        let stream = FileStream::new(
-            &self.base_config,
-            partition_index,
-            opener,
-            self.metrics.clone(),
-        )?;
+        let stream =
+            FileStream::new(&self.base_config, partition_index, opener, &self.metrics)?;
 
         Ok(Box::pin(stream))
     }
