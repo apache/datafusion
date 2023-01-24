@@ -38,7 +38,7 @@ use substrait::proto::{
     },
     extensions::simple_extension_declaration::MappingType,
     function_argument::ArgType,
-    plan_rel,
+    join_rel, plan_rel,
     read_rel::ReadType,
     rel::RelType,
     sort_field::{SortDirection, SortKind::*},
@@ -317,19 +317,7 @@ pub async fn from_substrait_rel(
             let right = LogicalPlanBuilder::from(
                 from_substrait_rel(ctx, join.right.as_ref().unwrap(), extensions).await?,
             );
-            let join_type = match join.r#type {
-                1 => JoinType::Inner,
-                2 => JoinType::Left,
-                3 => JoinType::Right,
-                4 => JoinType::Full,
-                5 => JoinType::LeftAnti,
-                6 => JoinType::LeftSemi,
-                _ => {
-                    return Err(DataFusionError::Internal(
-                        "invalid join type".to_string(),
-                    ))
-                }
-            };
+            let join_type = from_substrait_jointype(join.r#type)?;
             let schema =
                 build_join_schema(left.schema(), right.schema(), &JoinType::Inner)?;
             let on = from_substrait_rex(
@@ -429,6 +417,30 @@ pub async fn from_substrait_rel(
             "Unsupported RelType: {:?}",
             rel.rel_type
         ))),
+    }
+}
+
+fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
+    if let Some(substrait_join_type) = join_rel::JoinType::from_i32(join_type) {
+        match substrait_join_type {
+            join_rel::JoinType::Inner => Ok(JoinType::Inner),
+            join_rel::JoinType::Left => Ok(JoinType::Left),
+            join_rel::JoinType::Right => Ok(JoinType::Right),
+            join_rel::JoinType::Outer => Ok(JoinType::Full),
+            join_rel::JoinType::Anti => Ok(JoinType::LeftAnti),
+            join_rel::JoinType::Semi => Ok(JoinType::LeftSemi),
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "unsupported join type {:?}",
+                    substrait_join_type
+                )))
+            }
+        }
+    } else {
+        return Err(DataFusionError::Internal(format!(
+            "invalid join type variant {:?}",
+            join_type
+        )));
     }
 }
 
