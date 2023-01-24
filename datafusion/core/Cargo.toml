@@ -50,7 +50,7 @@ dictionary_expressions = ["datafusion-physical-expr/dictionary_expressions"]
 force_hash_collisions = []
 # Used to enable JIT code generation
 jit = ["datafusion-jit", "datafusion-row/jit"]
-pyarrow = ["pyo3", "arrow/pyarrow", "datafusion-common/pyarrow"]
+pyarrow = ["datafusion-common/pyarrow"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions"]
 # Used to enable scheduler
 scheduler = ["rayon"]
@@ -90,7 +90,6 @@ parquet = { version = "31.0.0", features = ["arrow", "async"] }
 paste = "^1.0"
 percent-encoding = "2.2.0"
 pin-project-lite = "^0.2.7"
-pyo3 = { version = "0.17.1", optional = true }
 rand = "0.8"
 rayon = { version = "1.5", optional = true }
 smallvec = { version = "1.6", features = ["union"] }
