@@ -317,9 +317,17 @@ The CLI needs a `--no-verify` argument because `build.rs` generates source into 
 
 ### Publish datafusion-cli on Homebrew
 
-Run `publish_homebrew.sh` to publish `datafusion-cli` on Homebrew. Note that it is necessary to
-have Homebrew installed on your macOS/Linux/WSL2 and properly configured. Please visit https://brew.sh/ to
-obtain Homebrew. Please check out https://docs.brew.sh/Homebrew-on-Linux if you are on Linux or WSL2.
+Run `publish_homebrew.sh` to publish `datafusion-cli` on Homebrew. In order to do so it is necessary to
+fork the `homebrew-core` repo https://github.com/Homebrew/homebrew-core/, have Homebrew installed on your
+macOS/Linux/WSL2 and properly configured and have a Github Personal Access Token that has permission to file pull requests in the `homebrew-core` repo.
+
+#### Fork the `homebrew-core` repo
+
+Go to https://github.com/Homebrew/homebrew-core/ and fork the repo.
+
+#### Install and configure Homebrew
+
+Please visit https://brew.sh/ to obtain Homebrew. In addition to that please check out https://docs.brew.sh/Homebrew-on-Linux if you are on Linux or WSL2.
 
 Before running the script make sure that you can run the following command in your bash to make sure
 that `brew` has been installed and configured properly:
@@ -328,7 +336,16 @@ that `brew` has been installed and configured properly:
 brew --version
 ```
 
-After confirming that `brew` works properly execute the following command:
+#### Create a Github Personal Access Token
+
+To create a Github Personal Access Token, please visit https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token for instructions.
+
+- Make sure to select either **All repositories** or **Only selected repositories** so that you have access to **Repository permissions**.
+- If you only use the token for selected repos make sure you include your
+fork of `homebrew-core` in the list of repos under **Selected repositories**.
+- Make sure to have **Read and write** access enabled for pull requests in your **Repository permissions**.
+
+After all of the above is complete execute the following command:
 
 ```bash
 dev/release/publish_homebrew.sh <version> <github-user> <github-token> <homebrew-default-branch-name>
