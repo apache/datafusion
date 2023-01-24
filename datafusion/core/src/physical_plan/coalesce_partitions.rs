@@ -80,6 +80,12 @@ impl ExecutionPlan for CoalescePartitionsExec {
         vec![self.input.clone()]
     }
 
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        Ok(children[0])
+    }
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
@@ -108,8 +114,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         // CoalescePartitionsExec produces a single partition
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
-                "CoalescePartitionsExec invalid partition {}",
-                partition
+                "CoalescePartitionsExec invalid partition {partition}"
             )));
         }
 

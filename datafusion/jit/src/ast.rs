@@ -170,8 +170,7 @@ impl TryFrom<(datafusion_expr::Expr, DFSchemaRef)> for Expr {
                     datafusion_expr::Operator::Divide => BinaryExpr::Div,
                     _ => {
                         return Err(DataFusionError::NotImplemented(format!(
-                            "Compiling binary expression {} not yet supported",
-                            value
+                            "Compiling binary expression {value} not yet supported"
                         )))
                     }
                 };
@@ -196,16 +195,14 @@ impl TryFrom<(datafusion_expr::Expr, DFSchemaRef)> for Expr {
                     ScalarValue::Int64(Some(i)) => TypedLit::Int(*i),
                     _ => {
                         return Err(DataFusionError::NotImplemented(format!(
-                            "Compiling Scalar {} not yet supported in JIT mode",
-                            s
+                            "Compiling Scalar {s} not yet supported in JIT mode"
                         )))
                     }
                 };
                 Ok(Expr::Literal(Literal::Typed(lit)))
             }
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Compiling {} not yet supported",
-                value
+                "Compiling {value} not yet supported"
             ))),
         }
     }
@@ -286,8 +283,7 @@ impl TryFrom<&DataType> for JITType {
             DataType::Boolean => Ok(BOOL),
 
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Compiling Expression with type {} not yet supported in JIT mode",
-                df_type
+                "Compiling Expression with type {df_type} not yet supported in JIT mode"
             ))),
         }
     }
@@ -302,25 +298,25 @@ impl Stmt {
         }
         match self {
             Stmt::IfElse(cond, then_stmts, else_stmts) => {
-                writeln!(f, "{}if {} {{", ident_str, cond)?;
+                writeln!(f, "{ident_str}if {cond} {{")?;
                 for stmt in then_stmts {
                     stmt.fmt_ident(ident + 4, f)?;
                 }
-                writeln!(f, "{}}} else {{", ident_str)?;
+                writeln!(f, "{ident_str}}} else {{")?;
                 for stmt in else_stmts {
                     stmt.fmt_ident(ident + 4, f)?;
                 }
-                writeln!(f, "{}}}", ident_str)
+                writeln!(f, "{ident_str}}}")
             }
             Stmt::WhileLoop(cond, stmts) => {
-                writeln!(f, "{}while {} {{", ident_str, cond)?;
+                writeln!(f, "{ident_str}while {cond} {{")?;
                 for stmt in stmts {
                     stmt.fmt_ident(ident + 4, f)?;
                 }
-                writeln!(f, "{}}}", ident_str)
+                writeln!(f, "{ident_str}}}")
             }
             Stmt::Assign(name, expr) => {
-                writeln!(f, "{}{} = {};", ident_str, name, expr)
+                writeln!(f, "{ident_str}{name} = {expr};")
             }
             Stmt::Call(name, args) => {
                 writeln!(
@@ -335,10 +331,10 @@ impl Stmt {
                 )
             }
             Stmt::Declare(name, ty) => {
-                writeln!(f, "{}let {}: {};", ident_str, name, ty)
+                writeln!(f, "{ident_str}let {name}: {ty};")
             }
             Stmt::Store(value, ptr) => {
-                writeln!(f, "{}*({}) = {}", ident_str, ptr, value)
+                writeln!(f, "{ident_str}*({ptr}) = {value}")
             }
         }
     }
@@ -354,9 +350,9 @@ impl Display for Stmt {
 impl Display for Expr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Expr::Literal(l) => write!(f, "{}", l),
-            Expr::Identifier(name, _) => write!(f, "{}", name),
-            Expr::Binary(be) => write!(f, "{}", be),
+            Expr::Literal(l) => write!(f, "{l}"),
+            Expr::Identifier(name, _) => write!(f, "{name}"),
+            Expr::Binary(be) => write!(f, "{be}"),
             Expr::Call(name, exprs, _) => {
                 write!(
                     f,
@@ -369,7 +365,7 @@ impl Display for Expr {
                         .join(", ")
                 )
             }
-            Expr::Load(ptr, _) => write!(f, "*({})", ptr,),
+            Expr::Load(ptr, _) => write!(f, "*({ptr})",),
         }
     }
 }
@@ -377,8 +373,8 @@ impl Display for Expr {
 impl Display for Literal {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Literal::Parsing(str, _) => write!(f, "{}", str),
-            Literal::Typed(tl) => write!(f, "{}", tl),
+            Literal::Parsing(str, _) => write!(f, "{str}"),
+            Literal::Typed(tl) => write!(f, "{tl}"),
         }
     }
 }
@@ -386,10 +382,10 @@ impl Display for Literal {
 impl Display for TypedLit {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            TypedLit::Bool(b) => write!(f, "{}", b),
-            TypedLit::Int(i) => write!(f, "{}", i),
-            TypedLit::Float(fl) => write!(f, "{}", fl),
-            TypedLit::Double(d) => write!(f, "{}", d),
+            TypedLit::Bool(b) => write!(f, "{b}"),
+            TypedLit::Int(i) => write!(f, "{i}"),
+            TypedLit::Float(fl) => write!(f, "{fl}"),
+            TypedLit::Double(d) => write!(f, "{d}"),
         }
     }
 }
@@ -397,23 +393,23 @@ impl Display for TypedLit {
 impl Display for BinaryExpr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            BinaryExpr::Eq(lhs, rhs) => write!(f, "{} == {}", lhs, rhs),
-            BinaryExpr::Ne(lhs, rhs) => write!(f, "{} != {}", lhs, rhs),
-            BinaryExpr::Lt(lhs, rhs) => write!(f, "{} < {}", lhs, rhs),
-            BinaryExpr::Le(lhs, rhs) => write!(f, "{} <= {}", lhs, rhs),
-            BinaryExpr::Gt(lhs, rhs) => write!(f, "{} > {}", lhs, rhs),
-            BinaryExpr::Ge(lhs, rhs) => write!(f, "{} >= {}", lhs, rhs),
-            BinaryExpr::Add(lhs, rhs) => write!(f, "{} + {}", lhs, rhs),
-            BinaryExpr::Sub(lhs, rhs) => write!(f, "{} - {}", lhs, rhs),
-            BinaryExpr::Mul(lhs, rhs) => write!(f, "{} * {}", lhs, rhs),
-            BinaryExpr::Div(lhs, rhs) => write!(f, "{} / {}", lhs, rhs),
+            BinaryExpr::Eq(lhs, rhs) => write!(f, "{lhs} == {rhs}"),
+            BinaryExpr::Ne(lhs, rhs) => write!(f, "{lhs} != {rhs}"),
+            BinaryExpr::Lt(lhs, rhs) => write!(f, "{lhs} < {rhs}"),
+            BinaryExpr::Le(lhs, rhs) => write!(f, "{lhs} <= {rhs}"),
+            BinaryExpr::Gt(lhs, rhs) => write!(f, "{lhs} > {rhs}"),
+            BinaryExpr::Ge(lhs, rhs) => write!(f, "{lhs} >= {rhs}"),
+            BinaryExpr::Add(lhs, rhs) => write!(f, "{lhs} + {rhs}"),
+            BinaryExpr::Sub(lhs, rhs) => write!(f, "{lhs} - {rhs}"),
+            BinaryExpr::Mul(lhs, rhs) => write!(f, "{lhs} * {rhs}"),
+            BinaryExpr::Div(lhs, rhs) => write!(f, "{lhs} / {rhs}"),
         }
     }
 }
 
 impl std::fmt::Display for JITType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -447,7 +443,7 @@ impl From<&str> for JITType {
             "f64" => F64,
             "small_ptr" => R32,
             "ptr" => R64,
-            _ => panic!("unknown type: {}", x),
+            _ => panic!("unknown type: {x}"),
         }
     }
 }

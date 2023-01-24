@@ -19,6 +19,7 @@
 
 mod cross_join;
 mod hash_join;
+mod nested_loop_join;
 mod sort_merge_join;
 pub mod utils;
 
@@ -29,10 +30,14 @@ pub enum PartitionMode {
     Partitioned,
     /// Left side will collected into one partition
     CollectLeft,
+    /// When set to Auto, DataFusion optimizer will decide which PartitionMode mode(Partitioned/CollectLeft) is optimal based on statistics.
+    /// It will also consider swapping the left and right inputs for the Join
+    Auto,
 }
 
 pub use cross_join::CrossJoinExec;
 pub use hash_join::HashJoinExec;
+pub use nested_loop_join::NestedLoopJoinExec;
 
 // Note: SortMergeJoin is not used in plans yet
 pub use sort_merge_join::SortMergeJoinExec;

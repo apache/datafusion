@@ -60,8 +60,8 @@ pub trait TableProvider: Sync + Send {
     /// parallelized or distributed.
     async fn scan(
         &self,
-        ctx: &SessionState,
-        projection: &Option<Vec<usize>>,
+        state: &SessionState,
+        projection: Option<&Vec<usize>>,
         filters: &[Expr],
         // limit can be used to reduce the amount scanned
         // from the datasource as a performance optimization.
@@ -94,7 +94,7 @@ pub trait TableProviderFactory: Sync + Send {
     /// Create a TableProvider with the given url
     async fn create(
         &self,
-        ctx: &SessionState,
+        state: &SessionState,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>>;
 }

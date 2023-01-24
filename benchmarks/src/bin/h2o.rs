@@ -18,12 +18,13 @@
 //! DataFusion h2o benchmarks
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::datasource::MemTable;
-use datafusion::prelude::{CsvReadOptions, SessionConfig};
+use datafusion::prelude::CsvReadOptions;
 use datafusion::{arrow::util::pretty, error::Result, prelude::SessionContext};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -55,7 +56,7 @@ struct GroupBy {
 #[tokio::main]
 async fn main() -> Result<()> {
     let opt = Opt::from_args();
-    println!("Running benchmarks with the following options: {:?}", opt);
+    println!("Running benchmarks with the following options: {opt:?}");
     match opt {
         Opt::GroupBy(config) => group_by(&config).await,
     }
@@ -63,9 +64,10 @@ async fn main() -> Result<()> {
 
 async fn group_by(opt: &GroupBy) -> Result<()> {
     let path = opt.path.to_str().unwrap();
-    let config = SessionConfig::from_env().with_batch_size(65535);
+    let mut config = ConfigOptions::from_env()?;
+    config.execution.batch_size = 65535;
 
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::with_config(config.into());
 
     let schema = Schema::new(vec![
         Field::new("id1", DataType::Utf8, false),
@@ -107,7 +109,7 @@ async fn group_by(opt: &GroupBy) -> Result<()> {
         _ => unimplemented!(),
     };
 
-    println!("Executing {}", sql);
+    println!("Executing {sql}");
     let start = Instant::now();
     let df = ctx.sql(sql).await?;
     let batches = df.collect().await?;

@@ -116,6 +116,7 @@ mod tests {
         datatypes::*,
         record_batch::RecordBatch,
     };
+    use datafusion_common::cast::as_boolean_array;
     use std::sync::Arc;
 
     #[test]
@@ -128,10 +129,8 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
 
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
-        let result = result
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("failed to downcast to BooleanArray");
+        let result =
+            as_boolean_array(&result).expect("failed to downcast to BooleanArray");
 
         let expected = &BooleanArray::from(vec![false, true]);
 

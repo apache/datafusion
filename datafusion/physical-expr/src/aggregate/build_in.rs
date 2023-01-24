@@ -1062,8 +1062,7 @@ mod tests {
         )?;
         if coerced_phy_exprs.is_empty() {
             return Err(DataFusionError::Plan(format!(
-                "Invalid or wrong number of arguments passed to aggregate: '{}'",
-                name,
+                "Invalid or wrong number of arguments passed to aggregate: '{name}'",
             )));
         }
         create_aggregate_expr(fun, distinct, &coerced_phy_exprs, input_schema, name)

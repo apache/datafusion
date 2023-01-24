@@ -1,25 +1,26 @@
 Sort: all_nations.o_year ASC NULLS LAST
   Projection: all_nations.o_year, SUM(CASE WHEN all_nations.nation = Utf8("BRAZIL") THEN all_nations.volume ELSE Int64(0) END) / SUM(all_nations.volume) AS mkt_share
     Aggregate: groupBy=[[all_nations.o_year]], aggr=[[SUM(CASE WHEN all_nations.nation = Utf8("BRAZIL") THEN all_nations.volume ELSE Decimal128(Some(0),38,4) END) AS SUM(CASE WHEN all_nations.nation = Utf8("BRAZIL") THEN all_nations.volume ELSE Int64(0) END), SUM(all_nations.volume)]]
-      Projection: o_year, volume, nation, alias=all_nations
+      SubqueryAlias: all_nations
         Projection: datepart(Utf8("YEAR"), orders.o_orderdate) AS o_year, CAST(lineitem.l_extendedprice AS Decimal128(38, 4)) * CAST(Decimal128(Some(100),23,2) - CAST(lineitem.l_discount AS Decimal128(23, 2)) AS Decimal128(38, 4)) AS volume, n2.n_name AS nation
-          Inner Join: n1.n_regionkey = region.r_regionkey
-            Inner Join: supplier.s_nationkey = n2.n_nationkey
-              Inner Join: customer.c_nationkey = n1.n_nationkey
-                Inner Join: orders.o_custkey = customer.c_custkey
-                  Inner Join: lineitem.l_orderkey = orders.o_orderkey
-                    Inner Join: lineitem.l_suppkey = supplier.s_suppkey
-                      Inner Join: part.p_partkey = lineitem.l_partkey
-                        Filter: part.p_type = Utf8("ECONOMY ANODIZED STEEL")
-                          TableScan: part projection=[p_partkey, p_type]
-                        TableScan: lineitem projection=[l_orderkey, l_partkey, l_suppkey, l_extendedprice, l_discount]
-                      TableScan: supplier projection=[s_suppkey, s_nationkey]
-                    Filter: orders.o_orderdate >= Date32("9131") AND orders.o_orderdate <= Date32("9861")
-                      TableScan: orders projection=[o_orderkey, o_custkey, o_orderdate]
-                  TableScan: customer projection=[c_custkey, c_nationkey]
-                SubqueryAlias: n1
-                  TableScan: nation projection=[n_nationkey, n_regionkey]
-              SubqueryAlias: n2
-                TableScan: nation projection=[n_nationkey, n_name]
-            Filter: region.r_name = Utf8("AMERICA")
-              TableScan: region projection=[r_regionkey, r_name]
+          Projection: lineitem.l_extendedprice, lineitem.l_discount, orders.o_orderdate, n2.n_name
+            Inner Join: n1.n_regionkey = region.r_regionkey
+              Inner Join: supplier.s_nationkey = n2.n_nationkey
+                Inner Join: customer.c_nationkey = n1.n_nationkey
+                  Inner Join: orders.o_custkey = customer.c_custkey
+                    Inner Join: lineitem.l_orderkey = orders.o_orderkey
+                      Inner Join: lineitem.l_suppkey = supplier.s_suppkey
+                        Inner Join: part.p_partkey = lineitem.l_partkey
+                          Filter: part.p_type = Utf8("ECONOMY ANODIZED STEEL")
+                            TableScan: part projection=[p_partkey, p_type]
+                          TableScan: lineitem projection=[l_orderkey, l_partkey, l_suppkey, l_extendedprice, l_discount]
+                        TableScan: supplier projection=[s_suppkey, s_nationkey]
+                      Filter: orders.o_orderdate >= Date32("9131") AND orders.o_orderdate <= Date32("9861")
+                        TableScan: orders projection=[o_orderkey, o_custkey, o_orderdate]
+                    TableScan: customer projection=[c_custkey, c_nationkey]
+                  SubqueryAlias: n1
+                    TableScan: nation projection=[n_nationkey, n_regionkey]
+                SubqueryAlias: n2
+                  TableScan: nation projection=[n_nationkey, n_name]
+              Filter: region.r_name = Utf8("AMERICA")
+                TableScan: region projection=[r_regionkey, r_name]

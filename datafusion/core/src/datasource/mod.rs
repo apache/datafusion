@@ -26,6 +26,7 @@ pub mod listing;
 pub mod listing_table_factory;
 pub mod memory;
 pub mod object_store;
+pub mod streaming;
 pub mod view;
 
 use futures::Stream;
@@ -47,7 +48,6 @@ use futures::StreamExt;
 /// Get all files as well as the file level summary statistics (no statistic for partition columns).
 /// If the optional `limit` is provided, includes only sufficient files.
 /// Needed to read up to `limit` number of rows.
-/// TODO fix case where `num_rows` and `total_byte_size` are not defined (stat should be None instead of Some(0))
 pub async fn get_statistics_with_limit(
     all_files: impl Stream<Item = Result<(PartitionedFile, Statistics)>>,
     file_schema: SchemaRef,
@@ -55,21 +55,35 @@ pub async fn get_statistics_with_limit(
 ) -> Result<(Vec<PartitionedFile>, Statistics)> {
     let mut result_files = vec![];
 
-    let mut total_byte_size = 0;
     let mut null_counts = vec![0; file_schema.fields().len()];
     let mut has_statistics = false;
     let (mut max_values, mut min_values) = create_max_min_accs(&file_schema);
 
-    let mut num_rows = 0;
     let mut is_exact = true;
+
+    // The number of rows and the total byte size can be calculated as long as
+    // at least one file has them. If none of the files provide them, then they
+    // will be omitted from the statistics. The missing values will be counted
+    // as zero.
+    let mut num_rows = None;
+    let mut total_byte_size = None;
+
     // fusing the stream allows us to call next safely even once it is finished
     let mut all_files = Box::pin(all_files.fuse());
     while let Some(res) = all_files.next().await {
         let (file, file_stats) = res?;
         result_files.push(file);
         is_exact &= file_stats.is_exact;
-        num_rows += file_stats.num_rows.unwrap_or(0);
-        total_byte_size += file_stats.total_byte_size.unwrap_or(0);
+        num_rows = if let Some(num_rows) = num_rows {
+            Some(num_rows + file_stats.num_rows.unwrap_or(0))
+        } else {
+            file_stats.num_rows
+        };
+        total_byte_size = if let Some(total_byte_size) = total_byte_size {
+            Some(total_byte_size + file_stats.total_byte_size.unwrap_or(0))
+        } else {
+            file_stats.total_byte_size
+        };
         if let Some(vec) = &file_stats.column_statistics {
             has_statistics = true;
             for (i, cs) in vec.iter().enumerate() {
@@ -102,7 +116,12 @@ pub async fn get_statistics_with_limit(
                 }
             }
         }
-        if num_rows > limit.unwrap_or(usize::MAX) {
+
+        // If the number of rows exceeds the limit, we can stop processing
+        // files. This only applies when we know the number of rows. It also
+        // currently ignores tables that have no statistics regarding the
+        // number of rows.
+        if num_rows.unwrap_or(usize::MIN) > limit.unwrap_or(usize::MAX) {
             break;
         }
     }
@@ -125,8 +144,8 @@ pub async fn get_statistics_with_limit(
     };
 
     let statistics = Statistics {
-        num_rows: Some(num_rows),
-        total_byte_size: Some(total_byte_size),
+        num_rows,
+        total_byte_size,
         column_statistics: column_stats,
         is_exact,
     };

@@ -32,18 +32,15 @@ async fn main() -> Result<()> {
     let testdata = datafusion::test_util::parquet_test_data();
 
     // Configure listing options
-    let file_format = ParquetFormat::default().with_enable_pruning(true);
+    let file_format = ParquetFormat::default().with_enable_pruning(Some(true));
     let listing_options = ListingOptions::new(Arc::new(file_format))
-        .with_file_extension(FileType::PARQUET.get_ext())
-        .with_table_partition_cols(vec![])
-        .with_collect_stat(true)
-        .with_target_partitions(1);
+        .with_file_extension(FileType::PARQUET.get_ext());
 
     // Register a listing table - this will use all files in the directory as data sources
     // for the query
     ctx.register_listing_table(
         "my_table",
-        &format!("file://{}", testdata),
+        &format!("file://{testdata}"),
         listing_options,
         None,
         None,

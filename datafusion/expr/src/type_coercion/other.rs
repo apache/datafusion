@@ -39,7 +39,7 @@ pub fn get_coerce_type_for_list(
 /// Returns the common data type for `then_types` and `else_type`
 pub fn get_coerce_type_for_case_when(
     then_types: &[DataType],
-    else_type: &Option<DataType>,
+    else_type: Option<&DataType>,
 ) -> Option<DataType> {
     let else_type = match else_type {
         None => then_types[0].clone(),

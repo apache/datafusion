@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
     // register parquet file with the execution context
     ctx.register_parquet(
         "alltypes_plain",
-        &format!("{}/alltypes_plain.parquet", testdata),
+        &format!("{testdata}/alltypes_plain.parquet"),
         ParquetReadOptions::default(),
     )
     .await?;

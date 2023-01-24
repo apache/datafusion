@@ -175,11 +175,11 @@ async fn limit_multi_partitions() -> Result<()> {
     assert_eq!(num_rows, 15);
 
     for limit in 1..10 {
-        let query = format!("SELECT i FROM t limit {}", limit);
+        let query = format!("SELECT i FROM t limit {limit}");
         let results = plan_and_collect(&ctx, &query).await.unwrap();
 
         let num_rows: usize = results.into_iter().map(|b| b.num_rows()).sum();
-        assert_eq!(num_rows, limit, "mismatch with query {}", query);
+        assert_eq!(num_rows, limit, "mismatch with query {query}");
     }
 
     Ok(())

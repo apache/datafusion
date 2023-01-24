@@ -34,7 +34,7 @@ impl FromStr for ObjectStoreScheme {
     fn from_str(input: &str) -> Result<Self> {
         match input {
             "s3" => Ok(ObjectStoreScheme::S3),
-            "gcs" => Ok(ObjectStoreScheme::GCS),
+            "gs" | "gcs" => Ok(ObjectStoreScheme::GCS),
             _ => Err(DataFusionError::Execution(format!(
                 "Unsupported object store scheme {}",
                 input
@@ -60,7 +60,7 @@ fn build_s3_object_store(url: &Url) -> Result<Arc<dyn object_store::ObjectStore>
     let host = get_host_name(url)?;
     match AmazonS3Builder::from_env().with_bucket_name(host).build() {
         Ok(s3) => Ok(Arc::new(s3)),
-        Err(err) => Err(DataFusionError::Execution(err.to_string())),
+        Err(err) => Err(DataFusionError::External(Box::new(err))),
     }
 }
 
@@ -73,7 +73,7 @@ fn build_gcs_object_store(url: &Url) -> Result<Arc<dyn object_store::ObjectStore
     }
     match builder.build() {
         Ok(gcs) => Ok(Arc::new(gcs)),
-        Err(err) => Err(DataFusionError::Execution(err.to_string())),
+        Err(err) => Err(DataFusionError::External(Box::new(err))),
     }
 }
 
@@ -98,6 +98,18 @@ mod tests {
     #[test]
     fn s3_provider_no_host() {
         let no_host_url = "s3:///";
+        let provider = DatafusionCliObjectStoreProvider {};
+        let err = provider
+            .get_by_url(&Url::from_str(no_host_url).unwrap())
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Not able to parse hostname from url"))
+    }
+
+    #[test]
+    fn gs_provider_no_host() {
+        let no_host_url = "gs:///";
         let provider = DatafusionCliObjectStoreProvider {};
         let err = provider
             .get_by_url(&Url::from_str(no_host_url).unwrap())
@@ -145,7 +157,7 @@ mod tests {
         let res = provider.get_by_url(&url);
         let msg = match res {
             Err(e) => format!("{}", e),
-            Ok(_) => "".to_string()
+            Ok(_) => "".to_string(),
         };
         assert_eq!("".to_string(), msg); // Fail with error message
         env::remove_var("AWS_REGION");

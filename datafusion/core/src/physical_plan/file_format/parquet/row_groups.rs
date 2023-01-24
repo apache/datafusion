@@ -23,23 +23,31 @@ use datafusion_common::Column;
 use datafusion_common::ScalarValue;
 use log::debug;
 
-use parquet::{
-    file::{metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics},
-    schema::types::ColumnDescriptor,
+use parquet::file::{
+    metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics,
 };
 
+use crate::physical_plan::file_format::parquet::{
+    from_bytes_to_i128, parquet_to_arrow_decimal_type,
+};
 use crate::{
     datasource::listing::FileRange,
     physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
 };
-use parquet::basic::{ConvertedType, LogicalType};
 
 use super::ParquetFileMetrics;
 
+/// Returns a vector of indexes into `groups` which should be scanned.
+///
+/// If an index is NOT present in the returned Vec it means the
+/// predicate filtered all the row group.
+///
+/// If an index IS present in the returned Vec it means the predicate
+/// did not filter out that row group.
 pub(crate) fn prune_row_groups(
     groups: &[RowGroupMetaData],
     range: Option<FileRange>,
-    predicate: Option<PruningPredicate>,
+    predicate: Option<&PruningPredicate>,
     metrics: &ParquetFileMetrics,
 ) -> Vec<usize> {
     let mut filtered = Vec::with_capacity(groups.len());
@@ -51,7 +59,7 @@ pub(crate) fn prune_row_groups(
             }
         }
 
-        if let Some(predicate) = &predicate {
+        if let Some(predicate) = predicate {
             let pruning_stats = RowGroupPruningStatistics {
                 row_group_metadata: metadata,
                 parquet_schema: predicate.schema().as_ref(),
@@ -83,23 +91,6 @@ pub(crate) fn prune_row_groups(
 struct RowGroupPruningStatistics<'a> {
     row_group_metadata: &'a RowGroupMetaData,
     parquet_schema: &'a Schema,
-}
-
-// TODO: consolidate code with arrow-rs
-// Convert the bytes array to i128.
-// The endian of the input bytes array must be big-endian.
-// Copy from the arrow-rs
-fn from_bytes_to_i128(b: &[u8]) -> i128 {
-    assert!(b.len() <= 16, "Decimal128Array supports only up to size 16");
-    let first_bit = b[0] & 128u8 == 128u8;
-    let mut result = if first_bit { [255u8; 16] } else { [0u8; 16] };
-    for (i, v) in b.iter().enumerate() {
-        result[i + (16 - b.len())] = *v;
-    }
-    // The bytes array are from parquet file and must be the big-endian.
-    // The endian is defined by parquet format, and the reference document
-    // https://github.com/apache/parquet-format/blob/54e53e5d7794d383529dd30746378f19a12afd58/src/main/thrift/parquet.thrift#L66
-    i128::from_be_bytes(result)
 }
 
 /// Extract the min/max statistics from a `ParquetStatistics` object
@@ -141,11 +132,22 @@ macro_rules! get_statistic {
             ParquetStatistics::Float(s) => Some(ScalarValue::Float32(Some(*s.$func()))),
             ParquetStatistics::Double(s) => Some(ScalarValue::Float64(Some(*s.$func()))),
             ParquetStatistics::ByteArray(s) => {
-                // TODO support decimal type for byte array type
-                let s = std::str::from_utf8(s.$bytes_func())
-                    .map(|s| s.to_string())
-                    .ok();
-                Some(ScalarValue::Utf8(s))
+                match $target_arrow_type {
+                    // decimal data type
+                    Some(DataType::Decimal128(precision, scale)) => {
+                        Some(ScalarValue::Decimal128(
+                            Some(from_bytes_to_i128(s.$bytes_func())),
+                            precision,
+                            scale,
+                        ))
+                    }
+                    _ => {
+                        let s = std::str::from_utf8(s.$bytes_func())
+                            .map(|s| s.to_string())
+                            .ok();
+                        Some(ScalarValue::Utf8(s))
+                    }
+                }
             }
             // type not supported yet
             ParquetStatistics::FixedLenByteArray(s) => {
@@ -217,24 +219,6 @@ macro_rules! get_null_count_values {
     }};
 }
 
-// Convert parquet column schema to arrow data type, and just consider the
-// decimal data type.
-fn parquet_to_arrow_decimal_type(parquet_column: &ColumnDescriptor) -> Option<DataType> {
-    let type_ptr = parquet_column.self_type_ptr();
-    match type_ptr.get_basic_info().logical_type() {
-        Some(LogicalType::Decimal { scale, precision }) => {
-            Some(DataType::Decimal128(precision as u8, scale as u8))
-        }
-        _ => match type_ptr.get_basic_info().converted_type() {
-            ConvertedType::DECIMAL => Some(DataType::Decimal128(
-                type_ptr.get_precision() as u8,
-                type_ptr.get_scale() as u8,
-            )),
-            _ => None,
-        },
-    }
-}
-
 impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         get_min_max_values!(self, column, min, min_bytes)
@@ -297,7 +281,7 @@ mod tests {
 
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(pruning_predicate), &metrics),
+            prune_row_groups(&[rgm1, rgm2], None, Some(&pruning_predicate), &metrics),
             vec![1]
         );
     }
@@ -331,7 +315,7 @@ mod tests {
         // missing statistics for first row group mean that the result from the predicate expression
         // is null / undefined so the first row group can't be filtered out
         assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(pruning_predicate), &metrics),
+            prune_row_groups(&[rgm1, rgm2], None, Some(&pruning_predicate), &metrics),
             vec![0, 1]
         );
     }
@@ -372,7 +356,7 @@ mod tests {
         // the first row group is still filtered out because the predicate expression can be partially evaluated
         // when conditions are joined using AND
         assert_eq!(
-            prune_row_groups(groups, None, Some(pruning_predicate), &metrics),
+            prune_row_groups(groups, None, Some(&pruning_predicate), &metrics),
             vec![1]
         );
 
@@ -384,7 +368,7 @@ mod tests {
         // if conditions in predicate are joined with OR and an unsupported expression is used
         // this bypasses the entire predicate expression and no row groups are filtered out
         assert_eq!(
-            prune_row_groups(groups, None, Some(pruning_predicate), &metrics),
+            prune_row_groups(groups, None, Some(&pruning_predicate), &metrics),
             vec![0, 1]
         );
     }
@@ -426,7 +410,7 @@ mod tests {
         let metrics = parquet_file_metrics();
         // First row group was filtered out because it contains no null value on "c2".
         assert_eq!(
-            prune_row_groups(&groups, None, Some(pruning_predicate), &metrics),
+            prune_row_groups(&groups, None, Some(&pruning_predicate), &metrics),
             vec![1]
         );
     }
@@ -451,7 +435,7 @@ mod tests {
         // bool = NULL always evaluates to NULL (and thus will not
         // pass predicates. Ideally these should both be false
         assert_eq!(
-            prune_row_groups(&groups, None, Some(pruning_predicate), &metrics),
+            prune_row_groups(&groups, None, Some(&pruning_predicate), &metrics),
             vec![1]
         );
     }
@@ -498,10 +482,21 @@ mod tests {
             // c1 > 5, this row group will not be included in the results.
             vec![ParquetStatistics::int32(Some(10), Some(20), None, 0, false)],
         );
+        let rgm3 = get_row_group_meta_data(
+            &schema_descr,
+            // [1, None]
+            // c1 > 5, this row group can not be filtered out, so will be included in the results.
+            vec![ParquetStatistics::int32(Some(100), None, None, 0, false)],
+        );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(pruning_predicate), &metrics),
-            vec![0]
+            prune_row_groups(
+                &[rgm1, rgm2, rgm3],
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
+            vec![0, 2]
         );
 
         // INT32: c1 > 5, but parquet decimal type has different precision or scale to arrow decimal
@@ -551,15 +546,21 @@ mod tests {
             // c1 > 5, this row group will not be included in the results.
             vec![ParquetStatistics::int32(Some(0), Some(2), None, 0, false)],
         );
+        let rgm4 = get_row_group_meta_data(
+            &schema_descr,
+            // [None, 2]
+            // c1 > 5, this row group can not be filtered out, so will be included in the results.
+            vec![ParquetStatistics::int32(None, Some(2), None, 0, false)],
+        );
         let metrics = parquet_file_metrics();
         assert_eq!(
             prune_row_groups(
-                &[rgm1, rgm2, rgm3],
+                &[rgm1, rgm2, rgm3, rgm4],
                 None,
-                Some(pruning_predicate),
+                Some(&pruning_predicate),
                 &metrics
             ),
-            vec![0, 1]
+            vec![0, 1, 3]
         );
 
         // INT64: c1 < 5, the c1 is decimal(18,2)
@@ -595,10 +596,20 @@ mod tests {
             // [0.1, 0.2]
             vec![ParquetStatistics::int64(Some(10), Some(20), None, 0, false)],
         );
+        let rgm3 = get_row_group_meta_data(
+            &schema_descr,
+            // [0.1, 0.2]
+            vec![ParquetStatistics::int64(None, None, None, 0, false)],
+        );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(pruning_predicate), &metrics),
-            vec![1]
+            prune_row_groups(
+                &[rgm1, rgm2, rgm3],
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
+            vec![1, 2]
         );
 
         // FIXED_LENGTH_BYTE_ARRAY: c1 = decimal128(100000, 28, 3), the c1 is decimal(18,2)
@@ -654,13 +665,83 @@ mod tests {
                 false,
             )],
         );
+
+        let rgm3 = get_row_group_meta_data(
+            &schema_descr,
+            vec![ParquetStatistics::fixed_len_byte_array(
+                None, None, None, 0, false,
+            )],
+        );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(pruning_predicate), &metrics),
-            vec![1]
+            prune_row_groups(
+                &[rgm1, rgm2, rgm3],
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
+            vec![1, 2]
         );
 
-        // TODO: BYTE_ARRAY support read decimal from parquet, after the 20.0.0 arrow-rs release
+        // BYTE_ARRAY: c1 = decimal128(100000, 28, 3), the c1 is decimal(18,2)
+        // the type of parquet is decimal(18,2)
+        let schema =
+            Schema::new(vec![Field::new("c1", DataType::Decimal128(18, 2), false)]);
+        // cast the type of c1 to decimal(28,3)
+        let left = cast(col("c1"), DataType::Decimal128(28, 3));
+        let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
+        let schema_descr = get_test_schema_descr(vec![(
+            "c1",
+            PhysicalType::BYTE_ARRAY,
+            Some(LogicalType::Decimal {
+                scale: 2,
+                precision: 18,
+            }),
+            Some(18),
+            Some(2),
+            Some(16),
+        )]);
+        let pruning_predicate =
+            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+        // we must use the big-endian when encode the i128 to bytes or vec[u8].
+        let rgm1 = get_row_group_meta_data(
+            &schema_descr,
+            vec![ParquetStatistics::byte_array(
+                // 5.00
+                Some(ByteArray::from(500i128.to_be_bytes().to_vec())),
+                // 80.00
+                Some(ByteArray::from(8000i128.to_be_bytes().to_vec())),
+                None,
+                0,
+                false,
+            )],
+        );
+        let rgm2 = get_row_group_meta_data(
+            &schema_descr,
+            vec![ParquetStatistics::byte_array(
+                // 5.00
+                Some(ByteArray::from(500i128.to_be_bytes().to_vec())),
+                // 200.00
+                Some(ByteArray::from(20000i128.to_be_bytes().to_vec())),
+                None,
+                0,
+                false,
+            )],
+        );
+        let rgm3 = get_row_group_meta_data(
+            &schema_descr,
+            vec![ParquetStatistics::byte_array(None, None, None, 0, false)],
+        );
+        let metrics = parquet_file_metrics();
+        assert_eq!(
+            prune_row_groups(
+                &[rgm1, rgm2, rgm3],
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
+            vec![1, 2]
+        );
     }
 
     fn get_row_group_meta_data(

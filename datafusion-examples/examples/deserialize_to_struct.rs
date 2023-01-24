@@ -26,7 +26,7 @@ use serde::Deserialize;
 #[tokio::main]
 async fn main() -> Result<()> {
     let data_list = Data::new().await?;
-    println!("{:#?}", data_list);
+    println!("{data_list:#?}");
     Ok(())
 }
 
@@ -48,7 +48,7 @@ impl Data {
 
             ctx.register_parquet(
                 "alltypes_plain",
-                &format!("{}/alltypes_plain.parquet", testdata),
+                &format!("{testdata}/alltypes_plain.parquet"),
                 ParquetReadOptions::default(),
             )
             .await?;
@@ -57,7 +57,7 @@ impl Data {
                 .sql("SELECT int_col, double_col FROM alltypes_plain")
                 .await?;
 
-            df.show().await?;
+            df.clone().show().await?;
 
             df.collect().await?
         };

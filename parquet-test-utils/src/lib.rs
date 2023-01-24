@@ -23,10 +23,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion::common::ToDFSchema;
-use datafusion::config::{
-    ConfigOptions, OPT_PARQUET_ENABLE_PAGE_INDEX, OPT_PARQUET_PUSHDOWN_FILTERS,
-    OPT_PARQUET_REORDER_FILTERS,
-};
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::error::Result;
@@ -37,7 +34,7 @@ use datafusion::physical_plan::file_format::{FileScanConfig, ParquetExec};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::metrics::MetricsSet;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::Expr;
+use datafusion::prelude::{Expr, SessionConfig};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
@@ -58,6 +55,17 @@ pub struct ParquetScanOptions {
     pub enable_page_index: bool,
 }
 
+impl ParquetScanOptions {
+    /// Returns a [`SessionConfig`] with the given options
+    pub fn config(&self) -> SessionConfig {
+        let mut config = ConfigOptions::new();
+        config.execution.parquet.pushdown_filters = self.pushdown_filters;
+        config.execution.parquet.reorder_filters = self.reorder_filters;
+        config.execution.parquet.enable_page_index = self.enable_page_index;
+        config.into()
+    }
+}
+
 impl TestParquetFile {
     /// Creates a new parquet file at the specified location with the
     /// given properties
@@ -75,17 +83,15 @@ impl TestParquetFile {
         let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props)).unwrap();
 
         writer.write(&first_batch).unwrap();
-        writer.flush()?;
         let mut num_rows = first_batch.num_rows();
 
         for batch in batches {
             writer.write(&batch).unwrap();
-            writer.flush()?;
             num_rows += batch.num_rows();
         }
         writer.close().unwrap();
 
-        println!("Generated test dataset with {} rows", num_rows);
+        println!("Generated test dataset with {num_rows} rows");
 
         let size = std::fs::metadata(&path)?.len() as usize;
 
@@ -119,22 +125,7 @@ impl TestParquetFile {
     /// (FilterExec)
     ///   (ParquetExec)
     /// ```
-    pub async fn create_scan(
-        &self,
-        filter: Expr,
-        scan_options: ParquetScanOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let ParquetScanOptions {
-            pushdown_filters,
-            reorder_filters,
-            enable_page_index,
-        } = scan_options;
-
-        let mut config_options = ConfigOptions::new();
-        config_options.set_bool(OPT_PARQUET_PUSHDOWN_FILTERS, pushdown_filters);
-        config_options.set_bool(OPT_PARQUET_REORDER_FILTERS, reorder_filters);
-        config_options.set_bool(OPT_PARQUET_ENABLE_PAGE_INDEX, enable_page_index);
-
+    pub async fn create_scan(&self, filter: Expr) -> Result<Arc<dyn ExecutionPlan>> {
         let scan_config = FileScanConfig {
             object_store_url: self.object_store_url.clone(),
             file_schema: self.schema.clone(),
@@ -148,8 +139,8 @@ impl TestParquetFile {
             projection: None,
             limit: None,
             table_partition_cols: vec![],
-            config_options: config_options.into_shareable(),
             output_ordering: None,
+            infinite_source: false,
         };
 
         let df_schema = self.schema.clone().to_dfschema_ref()?;

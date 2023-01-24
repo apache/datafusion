@@ -132,8 +132,7 @@ pub fn try_cast(
         Ok(Arc::new(TryCastExpr::new(expr, cast_type)))
     } else {
         Err(DataFusionError::NotImplemented(format!(
-            "Unsupported CAST from {:?} to {:?}",
-            expr_type, cast_type
+            "Unsupported CAST from {expr_type:?} to {cast_type:?}"
         )))
     }
 }
@@ -547,7 +546,7 @@ mod tests {
     }
 
     // create decimal array with the specified precision and scale
-    fn create_decimal_array(array: &[i128], precision: u8, scale: u8) -> Decimal128Array {
+    fn create_decimal_array(array: &[i128], precision: u8, scale: i8) -> Decimal128Array {
         let mut decimal_builder = Decimal128Builder::with_capacity(array.len());
         for value in array {
             decimal_builder.append_value(*value);

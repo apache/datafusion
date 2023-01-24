@@ -20,9 +20,15 @@
 use ahash::RandomState;
 use arrow::array::*;
 use arrow::datatypes::*;
+use arrow::row::Rows;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use arrow_buffer::i256;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{
+    cast::{
+        as_boolean_array, as_generic_binary_array, as_primitive_array, as_string_array,
+    },
+    DataFusionError, Result,
+};
 use std::sync::Arc;
 
 // Combines two hashes into one hash
@@ -211,21 +217,21 @@ pub fn create_hashes<'a>(
         downcast_primitive_array! {
             array => hash_array(array, random_state, hashes_buffer, multi_col),
             DataType::Null => hash_null(random_state, hashes_buffer, multi_col),
-            DataType::Boolean => hash_array(as_boolean_array(array), random_state, hashes_buffer, multi_col),
-            DataType::Utf8 => hash_array(as_string_array(array), random_state, hashes_buffer, multi_col),
+            DataType::Boolean => hash_array(as_boolean_array(array)?, random_state, hashes_buffer, multi_col),
+            DataType::Utf8 => hash_array(as_string_array(array)?, random_state, hashes_buffer, multi_col),
             DataType::LargeUtf8 => hash_array(as_largestring_array(array), random_state, hashes_buffer, multi_col),
-            DataType::Binary => hash_array(as_generic_binary_array::<i32>(array), random_state, hashes_buffer, multi_col),
-            DataType::LargeBinary => hash_array(as_generic_binary_array::<i64>(array), random_state, hashes_buffer, multi_col),
+            DataType::Binary => hash_array(as_generic_binary_array::<i32>(array)?, random_state, hashes_buffer, multi_col),
+            DataType::LargeBinary => hash_array(as_generic_binary_array::<i64>(array)?, random_state, hashes_buffer, multi_col),
             DataType::FixedSizeBinary(_) => {
                 let array: &FixedSizeBinaryArray = array.as_any().downcast_ref().unwrap();
                 hash_array(array, random_state, hashes_buffer, multi_col)
             }
             DataType::Decimal128(_, _) => {
-                let array = as_primitive_array::<Decimal128Type>(array);
+                let array = as_primitive_array::<Decimal128Type>(array)?;
                 hash_array(array, random_state, hashes_buffer, multi_col)
             }
             DataType::Decimal256(_, _) => {
-                let array = as_primitive_array::<Decimal256Type>(array);
+                let array = as_primitive_array::<Decimal256Type>(array)?;
                 hash_array(array, random_state, hashes_buffer, multi_col)
             }
             DataType::Dictionary(_, _) => downcast_dictionary_array! {
@@ -240,6 +246,38 @@ pub fn create_hashes<'a>(
                 )));
             }
         }
+    }
+    Ok(hashes_buffer)
+}
+
+/// Test version of `create_row_hashes_v2` that produces the same value for
+/// all hashes (to test collisions)
+///
+/// See comments on `hashes_buffer` for more details
+#[cfg(feature = "force_hash_collisions")]
+pub fn create_row_hashes_v2<'a>(
+    _rows: &Rows,
+    _random_state: &RandomState,
+    hashes_buffer: &'a mut Vec<u64>,
+) -> Result<&'a mut Vec<u64>> {
+    for hash in hashes_buffer.iter_mut() {
+        *hash = 0
+    }
+    Ok(hashes_buffer)
+}
+
+/// Creates hash values for every row, based on their raw bytes.
+#[cfg(not(feature = "force_hash_collisions"))]
+pub fn create_row_hashes_v2<'a>(
+    rows: &Rows,
+    random_state: &RandomState,
+    hashes_buffer: &'a mut Vec<u64>,
+) -> Result<&'a mut Vec<u64>> {
+    for hash in hashes_buffer.iter_mut() {
+        *hash = 0
+    }
+    for (i, hash) in hashes_buffer.iter_mut().enumerate() {
+        *hash = random_state.hash_one(rows.row(i));
     }
     Ok(hashes_buffer)
 }

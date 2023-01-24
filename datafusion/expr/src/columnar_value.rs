@@ -20,7 +20,6 @@
 use arrow::array::ArrayRef;
 use arrow::array::NullArray;
 use arrow::datatypes::DataType;
-use arrow::record_batch::RecordBatch;
 use datafusion_common::ScalarValue;
 use std::sync::Arc;
 
@@ -54,15 +53,10 @@ impl ColumnarValue {
             ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows),
         }
     }
-}
 
-/// null columnar values are implemented as a null array in order to pass batch
-/// num_rows
-pub type NullColumnarValue = ColumnarValue;
-
-impl From<&RecordBatch> for NullColumnarValue {
-    fn from(batch: &RecordBatch) -> Self {
-        let num_rows = batch.num_rows();
+    /// null columnar values are implemented as a null array in order to pass batch
+    /// num_rows
+    pub fn create_null_array(num_rows: usize) -> Self {
         ColumnarValue::Array(Arc::new(NullArray::new(num_rows)))
     }
 }

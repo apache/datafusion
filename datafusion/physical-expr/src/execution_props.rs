@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::var_provider::{VarProvider, VarType};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -44,14 +44,16 @@ impl ExecutionProps {
     /// Creates a new execution props
     pub fn new() -> Self {
         ExecutionProps {
-            query_execution_start_time: chrono::Utc::now(),
+            // Set this to a fixed sentinel to make it obvious if this is
+            // not being updated / propagated correctly
+            query_execution_start_time: Utc.timestamp_nanos(0),
             var_providers: None,
         }
     }
 
     /// Marks the execution of query started timestamp
     pub fn start_execution(&mut self) -> &Self {
-        self.query_execution_start_time = chrono::Utc::now();
+        self.query_execution_start_time = Utc::now();
         &*self
     }
 

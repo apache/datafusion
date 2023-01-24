@@ -18,8 +18,7 @@
 //! Defines the sort preserving merge plan
 
 use std::any::Any;
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, VecDeque};
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -33,7 +32,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use futures::stream::{Fuse, FusedStream};
-use futures::{Stream, StreamExt};
+use futures::{ready, Stream, StreamExt};
 use log::debug;
 use tokio::sync::mpsc;
 
@@ -165,12 +164,12 @@ impl ExecutionPlan for SortPreservingMergeExec {
         );
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
-                "SortPreservingMergeExec invalid partition {}",
-                partition
+                "SortPreservingMergeExec invalid partition {partition}"
             )));
         }
 
-        let tracking_metrics = MemTrackingMetrics::new(&self.metrics, partition);
+        let tracking_metrics =
+            MemTrackingMetrics::new(&self.metrics, context.memory_pool(), partition);
 
         let input_partitions = self.input.output_partitioning().partition_count();
         debug!(
@@ -304,10 +303,6 @@ pub(crate) struct SortPreservingMergeStream {
     /// their rows have been yielded to the output
     batches: Vec<VecDeque<RecordBatch>>,
 
-    /// Maintain a flag for each stream denoting if the current cursor
-    /// has finished and needs to poll from the stream
-    cursor_finished: Vec<bool>,
-
     /// The accumulated row indexes for the next record batch
     in_progress: Vec<RowIndex>,
 
@@ -323,8 +318,28 @@ pub(crate) struct SortPreservingMergeStream {
     /// An id to uniquely identify the input stream batch
     next_batch_id: usize,
 
-    /// Heap that yields [`SortKeyCursor`] in increasing order
-    heap: BinaryHeap<Reverse<SortKeyCursor>>,
+    /// Vector that holds all [`SortKeyCursor`]s
+    cursors: Vec<Option<SortKeyCursor>>,
+
+    /// A loser tree that always produces the minimum cursor
+    ///
+    /// Node 0 stores the top winner, Nodes 1..num_streams store
+    /// the loser nodes
+    ///
+    /// This implements a "Tournament Tree" (aka Loser Tree) to keep
+    /// track of the current smallest element at the top. When the top
+    /// record is taken, the tree structure is not modified, and only
+    /// the path from bottom to top is visited, keeping the number of
+    /// comparisons close to the theoretical limit of `log(S)`.
+    ///
+    /// reference: <https://en.wikipedia.org/wiki/K-way_merge_algorithm#Tournament_Tree>
+    loser_tree: Vec<usize>,
+
+    /// If the most recently yielded overall winner has been replaced
+    /// within the loser tree. A value of `false` indicates that the
+    /// overall winner has been yielded but the loser tree has not
+    /// been updated
+    loser_tree_adjusted: bool,
 
     /// target batch size
     batch_size: usize,
@@ -338,7 +353,7 @@ impl SortPreservingMergeStream {
         streams: Vec<SortedStream>,
         schema: SchemaRef,
         expressions: &[PhysicalSortExpr],
-        tracking_metrics: MemTrackingMetrics,
+        mut tracking_metrics: MemTrackingMetrics,
         batch_size: usize,
     ) -> Result<Self> {
         let stream_count = streams.len();
@@ -361,14 +376,15 @@ impl SortPreservingMergeStream {
         Ok(Self {
             schema,
             batches,
-            cursor_finished: vec![true; stream_count],
             streams: MergingStreams::new(wrappers),
             column_expressions: expressions.iter().map(|x| x.expr.clone()).collect(),
             tracking_metrics,
             aborted: false,
             in_progress: vec![],
             next_batch_id: 0,
-            heap: BinaryHeap::with_capacity(stream_count),
+            cursors: (0..stream_count).into_iter().map(|_| None).collect(),
+            loser_tree: Vec::with_capacity(stream_count),
+            loser_tree_adjusted: false,
             batch_size,
             row_converter,
         })
@@ -382,7 +398,11 @@ impl SortPreservingMergeStream {
         cx: &mut Context<'_>,
         idx: usize,
     ) -> Poll<ArrowResult<()>> {
-        if !self.cursor_finished[idx] {
+        if self.cursors[idx]
+            .as_ref()
+            .map(|cursor| !cursor.is_finished())
+            .unwrap_or(false)
+        {
             // Cursor is not finished - don't need a new RecordBatch yet
             return Poll::Ready(Ok(()));
         }
@@ -418,14 +438,12 @@ impl SortPreservingMergeStream {
                             }
                         };
 
-                        let cursor = SortKeyCursor::new(
+                        self.cursors[idx] = Some(SortKeyCursor::new(
                             idx,
                             self.next_batch_id, // assign this batch an ID
                             rows,
-                        );
+                        ));
                         self.next_batch_id += 1;
-                        self.heap.push(Reverse(cursor));
-                        self.cursor_finished[idx] = false;
                         self.batches[idx].push_back(batch)
                     } else {
                         empty_batch = true;
@@ -551,17 +569,9 @@ impl SortPreservingMergeStream {
         if self.aborted {
             return Poll::Ready(None);
         }
-
-        // Ensure all non-exhausted streams have a cursor from which
-        // rows can be pulled
-        for i in 0..self.streams.num_streams() {
-            match futures::ready!(self.maybe_poll_stream(cx, i)) {
-                Ok(_) => {}
-                Err(e) => {
-                    self.aborted = true;
-                    return Poll::Ready(Some(Err(e)));
-                }
-            }
+        // try to initialize the loser tree
+        if let Err(e) = ready!(self.init_loser_tree(cx)) {
+            return Poll::Ready(Some(Err(e)));
         }
 
         // NB timer records time taken on drop, so there are no
@@ -570,47 +580,131 @@ impl SortPreservingMergeStream {
         let _timer = elapsed_compute.timer();
 
         loop {
-            match self.heap.pop() {
-                Some(Reverse(mut cursor)) => {
-                    let stream_idx = cursor.stream_idx();
-                    let batch_idx = self.batches[stream_idx].len() - 1;
-                    let row_idx = cursor.advance();
+            // Adjust the loser tree if necessary, returning control if needed
+            if let Err(e) = ready!(self.update_loser_tree(cx)) {
+                return Poll::Ready(Some(Err(e)));
+            }
 
-                    let mut cursor_finished = false;
-                    // insert the cursor back to heap if the record batch is not exhausted
-                    if !cursor.is_finished() {
-                        self.heap.push(Reverse(cursor));
-                    } else {
-                        cursor_finished = true;
-                        self.cursor_finished[stream_idx] = true;
-                    }
+            let min_cursor_idx = self.loser_tree[0];
+            let next = self.cursors[min_cursor_idx]
+                .as_mut()
+                .filter(|cursor| !cursor.is_finished())
+                .map(|cursor| (cursor.stream_idx(), cursor.advance()));
 
-                    self.in_progress.push(RowIndex {
-                        stream_idx,
-                        batch_idx,
-                        row_idx,
-                    });
-
-                    if self.in_progress.len() == self.batch_size {
-                        return Poll::Ready(Some(self.build_record_batch()));
-                    }
-
-                    // If removed the last row from the cursor, need to fetch a new record
-                    // batch if possible, before looping round again
-                    if cursor_finished {
-                        match futures::ready!(self.maybe_poll_stream(cx, stream_idx)) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                self.aborted = true;
-                                return Poll::Ready(Some(Err(e)));
-                            }
-                        }
-                    }
+            if let Some((stream_idx, row_idx)) = next {
+                self.loser_tree_adjusted = false;
+                let batch_idx = self.batches[stream_idx].len() - 1;
+                self.in_progress.push(RowIndex {
+                    stream_idx,
+                    batch_idx,
+                    row_idx,
+                });
+                if self.in_progress.len() == self.batch_size {
+                    return Poll::Ready(Some(self.build_record_batch()));
                 }
-                None if self.in_progress.is_empty() => return Poll::Ready(None),
-                None => return Poll::Ready(Some(self.build_record_batch())),
+            } else if !self.in_progress.is_empty() {
+                return Poll::Ready(Some(self.build_record_batch()));
+            } else {
+                return Poll::Ready(None);
             }
         }
+    }
+
+    /// Attempts to initialize the loser tree with one value from each
+    /// non exhausted input, if possible.
+    ///
+    /// Returns
+    /// * Poll::Pending when more data is needed
+    /// * Poll::Ready(Ok()) on success
+    /// * Poll::Ready(Err..) if any of the inputs  errored
+    #[inline]
+    fn init_loser_tree(
+        self: &mut Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<ArrowResult<()>> {
+        let num_streams = self.streams.num_streams();
+
+        if !self.loser_tree.is_empty() {
+            return Poll::Ready(Ok(()));
+        }
+
+        // Ensure all non-exhausted streams have a cursor from which
+        // rows can be pulled
+        for i in 0..num_streams {
+            if let Err(e) = ready!(self.maybe_poll_stream(cx, i)) {
+                self.aborted = true;
+                return Poll::Ready(Err(e));
+            }
+        }
+
+        // Init loser tree
+        self.loser_tree.resize(num_streams, usize::MAX);
+        for i in 0..num_streams {
+            let mut winner = i;
+            let mut cmp_node = (num_streams + i) / 2;
+            while cmp_node != 0 && self.loser_tree[cmp_node] != usize::MAX {
+                let challenger = self.loser_tree[cmp_node];
+                let challenger_win =
+                    match (&self.cursors[winner], &self.cursors[challenger]) {
+                        (None, _) => true,
+                        (_, None) => false,
+                        (Some(winner), Some(challenger)) => challenger < winner,
+                    };
+
+                if challenger_win {
+                    self.loser_tree[cmp_node] = winner;
+                    winner = challenger;
+                }
+
+                cmp_node /= 2;
+            }
+            self.loser_tree[cmp_node] = winner;
+        }
+        self.loser_tree_adjusted = true;
+        Poll::Ready(Ok(()))
+    }
+
+    /// Attempts to updated the loser tree, if possible
+    ///
+    /// Returns
+    /// * Poll::Pending when the winning unput was not ready
+    /// * Poll::Ready(Ok()) on success
+    /// * Poll::Ready(Err..) if any of the winning input erroed
+    #[inline]
+    fn update_loser_tree(
+        self: &mut Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<ArrowResult<()>> {
+        if self.loser_tree_adjusted {
+            return Poll::Ready(Ok(()));
+        }
+
+        let num_streams = self.streams.num_streams();
+        let mut winner = self.loser_tree[0];
+        if let Err(e) = ready!(self.maybe_poll_stream(cx, winner)) {
+            self.aborted = true;
+            return Poll::Ready(Err(e));
+        }
+
+        // Replace overall winner by walking tree of losers
+        let mut cmp_node = (num_streams + winner) / 2;
+        while cmp_node != 0 {
+            let challenger = self.loser_tree[cmp_node];
+            let challenger_win = match (&self.cursors[winner], &self.cursors[challenger])
+            {
+                (None, _) => true,
+                (_, None) => false,
+                (Some(winner), Some(challenger)) => challenger < winner,
+            };
+            if challenger_win {
+                self.loser_tree[cmp_node] = winner;
+                winner = challenger;
+            }
+            cmp_node /= 2;
+        }
+        self.loser_tree[0] = winner;
+        self.loser_tree_adjusted = true;
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -960,8 +1054,7 @@ mod tests {
 
         assert_eq!(
             basic, partition,
-            "basic:\n\n{}\n\npartition:\n\n{}\n\n",
-            basic, partition
+            "basic:\n\n{basic}\n\npartition:\n\n{partition}\n\n"
         );
     }
 
@@ -1210,7 +1303,8 @@ mod tests {
         }
 
         let metrics = ExecutionPlanMetricsSet::new();
-        let tracking_metrics = MemTrackingMetrics::new(&metrics, 0);
+        let tracking_metrics =
+            MemTrackingMetrics::new(&metrics, task_ctx.memory_pool(), 0);
 
         let merge_stream = SortPreservingMergeStream::new_from_streams(
             streams,
@@ -1236,8 +1330,7 @@ mod tests {
 
         assert_eq!(
             basic, partition,
-            "basic:\n\n{}\n\npartition:\n\n{}\n\n",
-            basic, partition
+            "basic:\n\n{basic}\n\npartition:\n\n{partition}\n\n"
         );
     }
 

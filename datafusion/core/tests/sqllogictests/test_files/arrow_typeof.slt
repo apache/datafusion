@@ -1,0 +1,82 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# arrow_typeof_null
+query T
+SELECT arrow_typeof(null)
+----
+Null
+
+# arrow_typeof_boolean
+query T
+SELECT arrow_typeof(true)
+----
+Boolean
+
+# arrow_typeof_i64
+query T
+SELECT arrow_typeof(1)
+----
+Int64
+
+# arrow_typeof_i32
+query T
+SELECT arrow_typeof(1::int)
+----
+Int32
+
+# arrow_typeof_f64
+query T
+SELECT arrow_typeof(1.0)
+----
+Float64
+
+# arrow_typeof_f32
+query T
+SELECT arrow_typeof(1.0::float)
+----
+Float32
+
+# arrow_typeof_decimal
+# query T
+# SELECT arrow_typeof(1::Decimal)
+# ----
+# Decimal128(38, 10)
+
+# # arrow_typeof_timestamp
+# query T
+# SELECT arrow_typeof(now()::timestamp)
+# ----
+# Timestamp(Nanosecond, None)
+
+# # arrow_typeof_timestamp_utc
+# query T
+# SELECT arrow_typeof(now())
+# ----
+# Timestamp(Nanosecond, Some(\"+00:00\"))
+
+# # arrow_typeof_timestamp_date32(
+# query T
+# SELECT arrow_typeof(now()::date)
+# ----
+# Date32
+
+# # arrow_typeof_utf8
+# query T
+# SELECT arrow_typeof('1')
+# ----
+# Utf8

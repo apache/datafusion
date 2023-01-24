@@ -20,7 +20,7 @@ use datafusion::common::Result;
 use datafusion::logical_expr::{lit, or, Expr};
 use datafusion::optimizer::utils::disjunction;
 use datafusion::physical_plan::collect;
-use datafusion::prelude::{col, SessionConfig, SessionContext};
+use datafusion::prelude::{col, SessionContext};
 use parquet::file::properties::WriterProperties;
 use parquet_test_utils::{ParquetScanOptions, TestParquetFile};
 use std::path::PathBuf;
@@ -67,10 +67,7 @@ struct Opt {
 #[tokio::main]
 async fn main() -> Result<()> {
     let opt: Opt = Opt::from_args();
-    println!("Running benchmarks with the following options: {:?}", opt);
-
-    let config = SessionConfig::new().with_target_partitions(opt.partitions);
-    let mut ctx = SessionContext::with_config(config);
+    println!("Running benchmarks with the following options: {opt:?}");
 
     let path = opt.path.join("logs.parquet");
 
@@ -88,17 +85,12 @@ async fn main() -> Result<()> {
 
     let test_file = gen_data(path, opt.scale_factor, props_builder.build())?;
 
-    run_benchmarks(&mut ctx, &test_file, opt.iterations, opt.debug).await?;
+    run_benchmarks(opt, &test_file).await?;
 
     Ok(())
 }
 
-async fn run_benchmarks(
-    ctx: &mut SessionContext,
-    test_file: &TestParquetFile,
-    iterations: usize,
-    debug: bool,
-) -> Result<()> {
+async fn run_benchmarks(opt: Opt, test_file: &TestParquetFile) -> Result<()> {
     let scan_options_matrix = vec![
         ParquetScanOptions {
             pushdown_filters: false,
@@ -145,14 +137,17 @@ async fn run_benchmarks(
     ];
 
     for filter_expr in &filter_matrix {
-        println!("Executing with filter '{}'", filter_expr);
+        println!("Executing with filter '{filter_expr}'");
         for scan_options in &scan_options_matrix {
-            println!("Using scan options {:?}", scan_options);
-            for i in 0..iterations {
+            println!("Using scan options {scan_options:?}");
+            for i in 0..opt.iterations {
                 let start = Instant::now();
+
+                let config = scan_options.config().with_target_partitions(opt.partitions);
+                let ctx = SessionContext::with_config(config);
+
                 let rows =
-                    exec_scan(ctx, test_file, filter_expr.clone(), *scan_options, debug)
-                        .await?;
+                    exec_scan(&ctx, test_file, filter_expr.clone(), opt.debug).await?;
                 println!(
                     "Iteration {} returned {} rows in {} ms",
                     i,
@@ -170,10 +165,9 @@ async fn exec_scan(
     ctx: &SessionContext,
     test_file: &TestParquetFile,
     filter: Expr,
-    scan_options: ParquetScanOptions,
     debug: bool,
 ) -> Result<usize> {
-    let exec = test_file.create_scan(filter, scan_options).await?;
+    let exec = test_file.create_scan(filter).await?;
 
     let task_ctx = ctx.task_ctx();
     let result = collect(exec, task_ctx).await?;

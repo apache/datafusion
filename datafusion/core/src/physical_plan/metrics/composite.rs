@@ -17,7 +17,7 @@
 
 //! Metrics common for complex operators with multiple steps.
 
-use crate::execution::runtime_env::RuntimeEnv;
+use crate::execution::memory_pool::MemoryPool;
 use crate::physical_plan::metrics::tracker::MemTrackingMetrics;
 use crate::physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricValue, MetricsSet, Time,
@@ -32,7 +32,7 @@ use std::time::Duration;
 /// Collects all metrics during a complex operation, which is composed of multiple steps and
 /// each stage reports its statistics separately.
 /// Give sort as an example, when the dataset is more significant than available memory, it will report
-/// multiple in-mem sort metrics and final merge-sort  metrics from `SortPreservingMergeStream`.
+/// multiple in-mem sort metrics and final merge-sort metrics from `SortPreservingMergeStream`.
 /// Therefore, We need a separation of metrics for which are final metrics (for output_rows accumulation),
 /// and which are intermediate metrics that we only account for elapsed_compute time.
 pub struct CompositeMetricsSet {
@@ -69,18 +69,18 @@ impl CompositeMetricsSet {
     pub fn new_intermediate_tracking(
         &self,
         partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        pool: &Arc<dyn MemoryPool>,
     ) -> MemTrackingMetrics {
-        MemTrackingMetrics::new_with_rt(&self.mid, partition, runtime)
+        MemTrackingMetrics::new(&self.mid, pool, partition)
     }
 
     /// create a new final memory tracking metrics
     pub fn new_final_tracking(
         &self,
         partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        pool: &Arc<dyn MemoryPool>,
     ) -> MemTrackingMetrics {
-        MemTrackingMetrics::new_with_rt(&self.final_, partition, runtime)
+        MemTrackingMetrics::new(&self.final_, pool, partition)
     }
 
     fn merge_compute_time(&self, dest: &Time) {

@@ -99,9 +99,7 @@ fn generate_string_dictionary(
     valid_percent: f64,
 ) -> ArrayRef {
     let mut rng = thread_rng();
-    let strings: Vec<_> = (0..cardinality)
-        .map(|x| format!("{}#{}", prefix, x))
-        .collect();
+    let strings: Vec<_> = (0..cardinality).map(|x| format!("{prefix}#{x}")).collect();
 
     Arc::new(DictionaryArray::<Int32Type>::from_iter((0..len).map(
         |_| {
@@ -192,7 +190,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     };
 
     assert!(Path::new(&file_path).exists(), "path not found");
-    println!("Using parquet file {}", file_path);
+    println!("Using parquet file {file_path}");
 
     let partitions = 4;
     let config = SessionConfig::new().with_target_partitions(partitions);
@@ -230,7 +228,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             continue;
         }
 
-        c.bench_function(&format!("tokio: {}", query), |b| {
+        c.bench_function(&format!("tokio: {query}"), |b| {
             b.iter(|| {
                 let query = query.clone();
                 let context = context.clone();
@@ -252,7 +250,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             });
         });
 
-        c.bench_function(&format!("scheduled: {}", query), |b| {
+        c.bench_function(&format!("scheduled: {query}"), |b| {
             b.iter(|| {
                 let query = query.clone();
                 let context = context.clone();

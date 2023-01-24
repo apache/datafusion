@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
     // register csv file with the execution context
     ctx.register_csv(
         "aggregate_test_100",
-        &format!("{}/csv/aggregate_test_100.csv", testdata),
+        &format!("{testdata}/csv/aggregate_test_100.csv"),
         CsvReadOptions::new(),
     )
     .await?;

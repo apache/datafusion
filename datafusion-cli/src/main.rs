@@ -16,20 +16,17 @@
 // under the License.
 
 use clap::Parser;
-use datafusion::datasource::datasource::TableProviderFactory;
-use datafusion::datasource::file_format::file_type::FileType;
-use datafusion::datasource::listing_table_factory::ListingTableFactory;
 use datafusion::datasource::object_store::ObjectStoreRegistry;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::prelude::SessionContext;
+use datafusion_cli::catalog::DynamicFileCatalog;
 use datafusion_cli::object_storage::DatafusionCliObjectStoreProvider;
 use datafusion_cli::{
     exec, print_format::PrintFormat, print_options::PrintOptions, DATAFUSION_CLI_VERSION,
 };
 use mimalloc::MiMalloc;
-use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::sync::Arc;
@@ -100,7 +97,7 @@ pub async fn main() -> Result<()> {
         env::set_current_dir(p).unwrap();
     };
 
-    let mut session_config = SessionConfig::from_env().with_information_schema(true);
+    let mut session_config = SessionConfig::from_env()?.with_information_schema(true);
 
     if let Some(batch_size) = args.batch_size {
         session_config = session_config.with_batch_size(batch_size);
@@ -110,6 +107,11 @@ pub async fn main() -> Result<()> {
     let mut ctx =
         SessionContext::with_config_rt(session_config.clone(), Arc::new(runtime_env));
     ctx.refresh_catalogs().await?;
+    // install dynamic catalog provider that knows how to open files
+    ctx.register_catalog_list(Arc::new(DynamicFileCatalog::new(
+        ctx.state().catalog_list(),
+        ctx.state_weak_ref(),
+    )));
 
     let mut print_options = PrintOptions {
         format: args.format,
@@ -147,35 +149,15 @@ pub async fn main() -> Result<()> {
 }
 
 fn create_runtime_env() -> Result<RuntimeEnv> {
-    let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
-        HashMap::new();
-    table_factories.insert(
-        "csv".to_string(),
-        Arc::new(ListingTableFactory::new(FileType::CSV)),
-    );
-    table_factories.insert(
-        "parquet".to_string(),
-        Arc::new(ListingTableFactory::new(FileType::PARQUET)),
-    );
-    table_factories.insert(
-        "avro".to_string(),
-        Arc::new(ListingTableFactory::new(FileType::AVRO)),
-    );
-    table_factories.insert(
-        "json".to_string(),
-        Arc::new(ListingTableFactory::new(FileType::JSON)),
-    );
-
     let object_store_provider = DatafusionCliObjectStoreProvider {};
     let object_store_registry =
         ObjectStoreRegistry::new_with_provider(Some(Arc::new(object_store_provider)));
-    let rn_config = RuntimeConfig::new()
-        .with_object_store_registry(Arc::new(object_store_registry))
-        .with_table_factories(table_factories);
+    let rn_config =
+        RuntimeConfig::new().with_object_store_registry(Arc::new(object_store_registry));
     RuntimeEnv::new(rn_config)
 }
 
-fn is_valid_file(dir: &str) -> std::result::Result<(), String> {
+fn is_valid_file(dir: &str) -> Result<(), String> {
     if Path::new(dir).is_file() {
         Ok(())
     } else {
@@ -183,7 +165,7 @@ fn is_valid_file(dir: &str) -> std::result::Result<(), String> {
     }
 }
 
-fn is_valid_data_dir(dir: &str) -> std::result::Result<(), String> {
+fn is_valid_data_dir(dir: &str) -> Result<(), String> {
     if Path::new(dir).is_dir() {
         Ok(())
     } else {
@@ -191,7 +173,7 @@ fn is_valid_data_dir(dir: &str) -> std::result::Result<(), String> {
     }
 }
 
-fn is_valid_batch_size(size: &str) -> std::result::Result<(), String> {
+fn is_valid_batch_size(size: &str) -> Result<(), String> {
     match size.parse::<usize>() {
         Ok(size) if size > 0 => Ok(()),
         _ => Err(format!("Invalid batch size '{}'", size)),

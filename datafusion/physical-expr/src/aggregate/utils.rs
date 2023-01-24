@@ -18,31 +18,16 @@
 //! Utilities used in aggregates
 
 use arrow::array::ArrayRef;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::Result;
 use datafusion_expr::Accumulator;
 
-/// Extract scalar values from an accumulator. This can return an error if the accumulator
-/// has any non-scalar values.
-pub fn get_accum_scalar_values(accum: &dyn Accumulator) -> Result<Vec<ScalarValue>> {
-    accum
-        .state()?
-        .iter()
-        .map(|agg| agg.as_scalar().map(|v| v.clone()))
-        .collect::<Result<Vec<_>>>()
-}
-
-/// Convert scalar values from an accumulator into arrays. This can return an error if the
-/// accumulator has any non-scalar values.
+/// Convert scalar values from an accumulator into arrays.
 pub fn get_accum_scalar_values_as_arrays(
     accum: &dyn Accumulator,
 ) -> Result<Vec<ArrayRef>> {
-    accum
+    Ok(accum
         .state()?
         .iter()
-        .map(|v| {
-            v.as_scalar()
-                .map(|s| vec![s.clone()])
-                .and_then(ScalarValue::iter_to_array)
-        })
-        .collect::<Result<Vec<_>>>()
+        .map(|s| s.to_array_of_size(1))
+        .collect::<Vec<_>>())
 }

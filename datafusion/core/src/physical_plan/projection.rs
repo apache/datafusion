@@ -21,7 +21,7 @@
 //! projection expressions. `SELECT` without `FROM` will only evaluate expressions.
 
 use std::any::Any;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -33,7 +33,7 @@ use crate::physical_plan::{
 };
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use log::debug;
 
 use super::expressions::{Column, PhysicalSortExpr};
@@ -79,7 +79,9 @@ impl ProjectionExec {
                     e.data_type(&input_schema)?,
                     e.nullable(&input_schema)?,
                 );
-                field.set_metadata(get_field_metadata(e, &input_schema));
+                field.set_metadata(
+                    get_field_metadata(e, &input_schema).unwrap_or_default(),
+                );
 
                 Ok(field)
             })
@@ -155,6 +157,13 @@ impl ExecutionPlan for ProjectionExec {
     /// Get the schema for this execution plan
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        Ok(children[0])
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -239,7 +248,7 @@ impl ExecutionPlan for ProjectionExec {
                     .map(|(e, alias)| {
                         let e = e.to_string();
                         if &e != alias {
-                            format!("{} as {}", e, alias)
+                            format!("{e} as {alias}")
                         } else {
                             e
                         }
@@ -268,7 +277,7 @@ impl ExecutionPlan for ProjectionExec {
 fn get_field_metadata(
     e: &Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
-) -> Option<BTreeMap<String, String>> {
+) -> Option<HashMap<String, String>> {
     let name = if let Some(column) = e.as_any().downcast_ref::<Column>() {
         column.name()
     } else {
@@ -278,7 +287,7 @@ fn get_field_metadata(
     input_schema
         .field_with_name(name)
         .ok()
-        .and_then(|f| f.metadata().cloned())
+        .map(|f| f.metadata().clone())
 }
 
 fn stats_projection(
@@ -319,7 +328,13 @@ impl ProjectionStream {
             .map(|r| r.map(|v| v.into_array(batch.num_rows())))
             .collect::<Result<Vec<_>>>()?;
 
-        RecordBatch::try_new(self.schema.clone(), arrays)
+        if arrays.is_empty() {
+            let options =
+                RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+            RecordBatch::try_new_with_options(self.schema.clone(), arrays, &options)
+        } else {
+            RecordBatch::try_new(self.schema.clone(), arrays)
+        }
     }
 }
 
@@ -363,6 +378,7 @@ impl RecordBatchStream for ProjectionStream {
 mod tests {
 
     use super::*;
+    use crate::physical_plan::common::collect;
     use crate::physical_plan::expressions::{self, col};
     use crate::prelude::SessionContext;
     use crate::scalar::ScalarValue;
@@ -384,7 +400,7 @@ mod tests {
             ProjectionExec::try_new(vec![(col("c1", &schema)?, "c1".to_string())], csv)?;
 
         let col_field = projection.schema.field(0);
-        let col_metadata = col_field.metadata().unwrap().clone();
+        let col_metadata = col_field.metadata();
         let data: &str = &col_metadata["testing"];
         assert_eq!(data, "test");
 
@@ -405,6 +421,22 @@ mod tests {
         }
         assert_eq!(partitions, partition_count);
         assert_eq!(100, row_count);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn project_no_column() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+
+        let csv = test::scan_partitioned_csv(1)?;
+        let expected = collect(csv.execute(0, task_ctx.clone())?).await.unwrap();
+
+        let projection = ProjectionExec::try_new(vec![], csv)?;
+        let stream = projection.execute(0, task_ctx.clone())?;
+        let output = collect(stream).await.unwrap();
+        assert_eq!(output.len(), expected.len());
 
         Ok(())
     }

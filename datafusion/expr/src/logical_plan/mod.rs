@@ -23,11 +23,11 @@ mod plan;
 pub use builder::{table_scan, LogicalPlanBuilder};
 pub use plan::{
     Aggregate, Analyze, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
-    CreateMemoryTable, CreateView, CrossJoin, Distinct, DropTable, DropView,
-    EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint, JoinType, Limit,
-    LogicalPlan, Partitioning, PlanType, PlanVisitor, Projection, Repartition,
-    SetVariable, Sort, StringifiedPlan, Subquery, SubqueryAlias, TableScan,
-    ToStringifiedPlan, Union, Values, Window,
+    CreateMemoryTable, CreateView, CrossJoin, DescribeTable, Distinct, DmlStatement,
+    DropTable, DropView, EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint,
+    JoinType, Limit, LogicalPlan, Partitioning, PlanType, PlanVisitor, Prepare,
+    Projection, Repartition, SetVariable, Sort, StringifiedPlan, Subquery, SubqueryAlias,
+    TableScan, ToStringifiedPlan, Union, Values, Window, WriteOp,
 };
 
 pub use display::display_schema;

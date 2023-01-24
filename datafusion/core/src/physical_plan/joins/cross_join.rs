@@ -35,12 +35,13 @@ use crate::physical_plan::{
 };
 use crate::{error::Result, scalar::ScalarValue};
 use async_trait::async_trait;
+use datafusion_common::DataFusionError;
 use log::debug;
 use std::time::Instant;
 
 use super::utils::{
-    adjust_right_output_partitioning, check_join_is_valid,
-    cross_join_equivalence_properties, OnceAsync, OnceFut,
+    adjust_right_output_partitioning, cross_join_equivalence_properties, OnceAsync,
+    OnceFut,
 };
 
 /// Data of the left side
@@ -61,34 +62,25 @@ pub struct CrossJoinExec {
 }
 
 impl CrossJoinExec {
-    /// Tries to create a new [CrossJoinExec].
-    /// # Error
-    /// This function errors when left and right schema's can't be combined
-    pub fn try_new(
-        left: Arc<dyn ExecutionPlan>,
-        right: Arc<dyn ExecutionPlan>,
-    ) -> Result<Self> {
-        let left_schema = left.schema();
-        let right_schema = right.schema();
-        check_join_is_valid(&left_schema, &right_schema, &[])?;
-
-        let left_schema = left.schema();
-        let left_fields = left_schema.fields().iter();
-        let right_schema = right.schema();
-
-        let right_fields = right_schema.fields().iter();
-
+    /// Create a new [CrossJoinExec].
+    pub fn new(left: Arc<dyn ExecutionPlan>, right: Arc<dyn ExecutionPlan>) -> Self {
         // left then right
-        let all_columns = left_fields.chain(right_fields).cloned().collect();
+        let all_columns = {
+            let left_schema = left.schema();
+            let right_schema = right.schema();
+            let left_fields = left_schema.fields().iter();
+            let right_fields = right_schema.fields().iter();
+            left_fields.chain(right_fields).cloned().collect()
+        };
 
         let schema = Arc::new(Schema::new(all_columns));
 
-        Ok(CrossJoinExec {
+        CrossJoinExec {
             left,
             right,
             schema,
             left_fut: Default::default(),
-        })
+        }
     }
 
     /// left (build) side which gets loaded in memory
@@ -152,14 +144,28 @@ impl ExecutionPlan for CrossJoinExec {
         vec![self.left.clone(), self.right.clone()]
     }
 
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.    
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        if children[0] || children[1] {
+            Err(DataFusionError::Plan(
+                "Cross Join Error: Cross join is not supported for the unbounded inputs."
+                    .to_string(),
+            ))
+        } else {
+            Ok(false)
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(CrossJoinExec::try_new(
+        Ok(Arc::new(CrossJoinExec::new(
             children[0].clone(),
             children[1].clone(),
-        )?))
+        )))
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {

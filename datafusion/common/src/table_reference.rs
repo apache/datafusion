@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// / Represents a resolved path to a table of the form "catalog.schema.table"
+/// A resolved path to a table of the form "catalog.schema.table"
 #[derive(Debug, Clone, Copy)]
 pub struct ResolvedTableReference<'a> {
     /// The catalog (aka database) containing the table
@@ -24,6 +24,12 @@ pub struct ResolvedTableReference<'a> {
     pub schema: &'a str,
     /// The table name
     pub table: &'a str,
+}
+
+impl<'a> std::fmt::Display for ResolvedTableReference<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.catalog, self.schema, self.table)
+    }
 }
 
 /// Represents a path to a table that may require further resolution
@@ -50,6 +56,76 @@ pub enum TableReference<'a> {
         /// The table name
         table: &'a str,
     },
+}
+
+/// Represents a path to a table that may require further resolution
+/// that owns the underlying names
+#[derive(Debug, Clone)]
+pub enum OwnedTableReference {
+    /// An unqualified table reference, e.g. "table"
+    Bare {
+        /// The table name
+        table: String,
+    },
+    /// A partially resolved table reference, e.g. "schema.table"
+    Partial {
+        /// The schema containing the table
+        schema: String,
+        /// The table name
+        table: String,
+    },
+    /// A fully resolved table reference, e.g. "catalog.schema.table"
+    Full {
+        /// The catalog (aka database) containing the table
+        catalog: String,
+        /// The schema containing the table
+        schema: String,
+        /// The table name
+        table: String,
+    },
+}
+
+impl OwnedTableReference {
+    /// Return a `TableReference` view of this `OwnedTableReference`
+    pub fn as_table_reference(&self) -> TableReference<'_> {
+        match self {
+            Self::Bare { table } => TableReference::Bare { table },
+            Self::Partial { schema, table } => TableReference::Partial { schema, table },
+            Self::Full {
+                catalog,
+                schema,
+                table,
+            } => TableReference::Full {
+                catalog,
+                schema,
+                table,
+            },
+        }
+    }
+}
+
+impl std::fmt::Display for OwnedTableReference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OwnedTableReference::Bare { table } => write!(f, "{table}"),
+            OwnedTableReference::Partial { schema, table } => {
+                write!(f, "{schema}.{table}")
+            }
+            OwnedTableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => write!(f, "{catalog}.{schema}.{table}"),
+        }
+    }
+}
+
+/// Convert `OwnedTableReference` into a `TableReference`. Somewhat
+/// akward to use but 'idiomatic': `(&table_ref).into()`
+impl<'a> From<&'a OwnedTableReference> for TableReference<'a> {
+    fn from(r: &'a OwnedTableReference) -> Self {
+        r.as_table_reference()
+    }
 }
 
 impl<'a> TableReference<'a> {
@@ -90,10 +166,18 @@ impl<'a> TableReference<'a> {
             },
         }
     }
-}
 
-impl<'a> From<&'a str> for TableReference<'a> {
-    fn from(s: &'a str) -> Self {
+    /// Forms a [`TableReference`] by splitting `s` on periods `.`.
+    ///
+    /// Note that this function does NOT handle periods or name
+    /// normalization correctly (e.g. `"foo.bar"` will be parsed as
+    /// `"foo`.`bar"`. and `Foo` will be parsed as `Foo` (not `foo`).
+    ///
+    /// If you need to handle such identifiers correctly, you should
+    /// use a SQL parser or form the [`OwnedTableReference`] directly.
+    ///
+    /// See more detail in <https://github.com/apache/arrow-datafusion/issues/4532>
+    pub fn parse_str(s: &'a str) -> Self {
         let parts: Vec<&str> = s.split('.').collect();
 
         match parts.len() {
@@ -109,6 +193,15 @@ impl<'a> From<&'a str> for TableReference<'a> {
             },
             _ => Self::Bare { table: s },
         }
+    }
+}
+
+/// Parse a string into a TableReference, by splittig on `.`
+///
+/// See caveats on [`TableReference::parse_str`]
+impl<'a> From<&'a str> for TableReference<'a> {
+    fn from(s: &'a str) -> Self {
+        Self::parse_str(s)
     }
 }
 

@@ -19,30 +19,51 @@
 
 # DataFusion Command-line SQL Utility
 
-The DataFusion CLI is a command-line interactive SQL utility that allows
-queries to be executed against any supported data files. It is a convenient way to
+The DataFusion CLI is a command-line interactive SQL utility for executing
+queries against any supported data files. It is a convenient way to
 try DataFusion out with your own data sources, and test out its SQL support.
 
 ## Example
 
 Create a CSV file to query.
 
-```bash
-$ echo "1,2" > data.csv
+```shell
+$ echo "a,b" > data.csv
+$ echo "1,2" >> data.csv
 ```
 
-```bash
+Query that single file (the CLI also supports parquet, compressed csv, avro, json and more)
+
+```shell
 $ datafusion-cli
-DataFusion CLI v12.0.0
-❯ CREATE EXTERNAL TABLE foo STORED AS CSV LOCATION 'data.csv';
-0 rows in set. Query took 0.017 seconds.
-❯ select * from foo;
-+----------+----------+
-| column_1 | column_2 |
-+----------+----------+
-| 1        | 2        |
-+----------+----------+
-1 row in set. Query took 0.012 seconds.
+DataFusion CLI v17.0.0
+❯ select * from 'data.csv';
++---+---+
+| a | b |
++---+---+
+| 1 | 2 |
++---+---+
+1 row in set. Query took 0.007 seconds.
+```
+
+You can also query directories of files with compatible schemas:
+
+```shell
+$ ls data_dir/
+data.csv   data2.csv
+```
+
+```shell
+$ datafusion-cli
+DataFusion CLI v16.0.0
+❯ select * from 'data_dir';
++---+---+
+| a | b |
++---+---+
+| 3 | 4 |
+| 1 | 2 |
++---+---+
+2 rows in set. Query took 0.007 seconds.
 ```
 
 ## Installation
@@ -87,6 +108,8 @@ docker run -it -v $(your_data_location):/data datafusion-cli
 
 ## Usage
 
+See the current usage using `datafusion-cli --help`:
+
 ```bash
 Apache Arrow <dev@arrow.apache.org>
 Command Line Client for DataFusion query engine.
@@ -104,9 +127,15 @@ OPTIONS:
     -q, --quiet                      Reduce printing other than the results and work quietly
     -r, --rc <RC>...                 Run the provided files on startup instead of ~/.datafusionrc
     -V, --version                    Print version information
-
-Type `exit` or `quit` to exit the CLI.
 ```
+
+## Selecting files directly
+
+Files can be queried directly by enclosing the file or
+directory name in single `'` quotes as shown in the example.
+
+It is also possible to create a table backed by files by explicitly
+via `CREATE EXTERNAL TABLE` as shown below.
 
 ## Registering Parquet Data Sources
 
@@ -155,13 +184,19 @@ LOCATION '/path/to/aggregate_test_100.csv';
 
 The CLI can query data in S3 if the following environment variables are defined:
 
-- `AWS_REGION`
+- `AWS_DEFAULT_REGION`
 - `AWS_ACCESS_KEY_ID`
 - `AWS_SECRET_ACCESS_KEY`
 
-Note that the region must be set to the region where the bucket exists until the following issue is resolved:
+Details of the environment variables that can be used are
 
-- https://github.com/apache/arrow-rs/issues/2795
+- AWS_ACCESS_KEY_ID -> access_key_id
+- AWS_SECRET_ACCESS_KEY -> secret_access_key
+- AWS_DEFAULT_REGION -> region
+- AWS_ENDPOINT -> endpoint
+- AWS_SESSION_TOKEN -> token
+- AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
+- AWS_ALLOW_HTTP -> set to "true" to permit HTTP connections without TLS
 
 Example:
 
@@ -169,12 +204,12 @@ Example:
 $ aws s3 cp test.csv s3://my-bucket/
 upload: ./test.csv to s3://my-bucket/test.csv
 
-$ export AWS_REGION=us-east-2
+$ export AWS_DEFAULT_REGION=us-east-2
 $ export AWS_SECRET_ACCESS_KEY=***************************
 $ export AWS_ACCESS_KEY_ID=**************
 
-$ ./target/release/datafusion-cli
-DataFusion CLI v12.0.0
+$ datafusion-cli
+DataFusion CLI v14.0.0
 ❯ create external table test stored as csv location 's3://my-bucket/test.csv';
 0 rows in set. Query took 0.374 seconds.
 ❯ select * from test;
@@ -229,7 +264,7 @@ Available commands inside DataFusion CLI are:
 - Search and describe function
 
 ```bash
-> \h function_table
+> \h function
 ```
 
 - Show configuration options
@@ -264,7 +299,7 @@ All available configuration options can be seen using `SHOW ALL` as described ab
 
 You can change the configuration options using environment
 variables. `datafusion-cli` looks in the corresponding environment
-variable with an upper case name and all `.` is converted to `_`.
+variable with an upper case name and all `.` converted to `_`.
 
 For example, to set `datafusion.execution.batch_size` to `1024` you
 would set the `DATAFUSION_EXECUTION_BATCH_SIZE` environment variable

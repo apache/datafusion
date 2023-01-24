@@ -74,7 +74,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
     ///
     /// ```text
     /// ProjectionExec: expr=[a]
-    ///   CoalesceBatchesExec: target_batch_size=4096
+    ///   CoalesceBatchesExec: target_batch_size=8192
     ///     FilterExec: a < 5
     ///       RepartitionExec: partitioning=RoundRobinBatch(16)
     ///         CsvExec: source=...",
@@ -156,10 +156,7 @@ struct IndentVisitor<'a, 'b> {
 
 impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
     type Error = fmt::Error;
-    fn pre_visit(
-        &mut self,
-        plan: &dyn ExecutionPlan,
-    ) -> std::result::Result<bool, Self::Error> {
+    fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         write!(self.f, "{:indent$}", "", indent = self.indent * 2)?;
         plan.fmt_as(self.t, self.f)?;
         match self.show_metrics {
@@ -167,18 +164,18 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
             ShowMetrics::Aggregated => {
                 if let Some(metrics) = plan.metrics() {
                     let metrics = metrics
-                        .aggregate_by_partition()
+                        .aggregate_by_name()
                         .sorted_for_display()
                         .timestamps_removed();
 
-                    write!(self.f, ", metrics=[{}]", metrics)?;
+                    write!(self.f, ", metrics=[{metrics}]")?;
                 } else {
                     write!(self.f, ", metrics=[]")?;
                 }
             }
             ShowMetrics::Full => {
                 if let Some(metrics) = plan.metrics() {
-                    write!(self.f, ", metrics=[{}]", metrics)?;
+                    write!(self.f, ", metrics=[{metrics}]")?;
                 } else {
                     write!(self.f, ", metrics=[]")?;
                 }

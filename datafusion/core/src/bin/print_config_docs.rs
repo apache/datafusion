@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::config::BuiltInConfigs;
+use datafusion::config::ConfigOptions;
 
 fn main() {
-    let docs = BuiltInConfigs::generate_config_markdown();
-    println!("{}", docs);
+    let docs = ConfigOptions::generate_config_markdown();
+    println!("{docs}");
 }

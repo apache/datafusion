@@ -534,11 +534,11 @@ async fn timestamp_minmax() -> Result<()> {
     let sql = "SELECT MIN(table_a.ts), MAX(table_b.ts) FROM table_a, table_b";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-------------------------+----------------------------------+",
-        "| MIN(table_a.ts)         | MAX(table_b.ts)                  |",
-        "+-------------------------+----------------------------------+",
-        "| 2020-09-08T11:42:29.190 | 2020-09-08T13:42:29.190855+00:00 |",
-        "+-------------------------+----------------------------------+",
+        "+-------------------------+-----------------------------+",
+        "| MIN(table_a.ts)         | MAX(table_b.ts)             |",
+        "+-------------------------+-----------------------------+",
+        "| 2020-09-08T11:42:29.190 | 2020-09-08T13:42:29.190855Z |",
+        "+-------------------------+-----------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -557,22 +557,22 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
-            "+---------------------------+-------------------------------+-------------------------+",
-            "| ts                        | ts                            | table_a.ts = table_b.ts |",
-            "+---------------------------+-------------------------------+-------------------------+",
-            "| 2020-09-08T13:42:29+00:00 | 2020-09-08T13:42:29.190+00:00 | true                    |",
-            "| 2020-09-08T13:42:29+00:00 | 2020-09-08T12:42:29.190+00:00 | false                   |",
-            "| 2020-09-08T13:42:29+00:00 | 2020-09-08T11:42:29.190+00:00 | false                   |",
-            "| 2020-09-08T12:42:29+00:00 | 2020-09-08T13:42:29.190+00:00 | false                   |",
-            "| 2020-09-08T12:42:29+00:00 | 2020-09-08T12:42:29.190+00:00 | true                    |",
-            "| 2020-09-08T12:42:29+00:00 | 2020-09-08T11:42:29.190+00:00 | false                   |",
-            "| 2020-09-08T11:42:29+00:00 | 2020-09-08T13:42:29.190+00:00 | false                   |",
-            "| 2020-09-08T11:42:29+00:00 | 2020-09-08T12:42:29.190+00:00 | false                   |",
-            "| 2020-09-08T11:42:29+00:00 | 2020-09-08T11:42:29.190+00:00 | true                    |",
-            "+---------------------------+-------------------------------+-------------------------+",
+            "+----------------------+--------------------------+-------------------------+",
+            "| ts                   | ts                       | table_a.ts = table_b.ts |",
+            "+----------------------+--------------------------+-------------------------+",
+            "| 2020-09-08T13:42:29Z | 2020-09-08T13:42:29.190Z | true                    |",
+            "| 2020-09-08T13:42:29Z | 2020-09-08T12:42:29.190Z | false                   |",
+            "| 2020-09-08T13:42:29Z | 2020-09-08T11:42:29.190Z | false                   |",
+            "| 2020-09-08T12:42:29Z | 2020-09-08T13:42:29.190Z | false                   |",
+            "| 2020-09-08T12:42:29Z | 2020-09-08T12:42:29.190Z | true                    |",
+            "| 2020-09-08T12:42:29Z | 2020-09-08T11:42:29.190Z | false                   |",
+            "| 2020-09-08T11:42:29Z | 2020-09-08T13:42:29.190Z | false                   |",
+            "| 2020-09-08T11:42:29Z | 2020-09-08T12:42:29.190Z | false                   |",
+            "| 2020-09-08T11:42:29Z | 2020-09-08T11:42:29.190Z | true                    |",
+            "+----------------------+--------------------------+-------------------------+",
         ];
         assert_batches_eq!(expected, &actual);
     }
@@ -584,7 +584,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+---------------------+----------------------------+-------------------------+",
@@ -612,7 +612,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+---------------------+----------------------------+-------------------------+",
@@ -639,7 +639,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+-------------------------+---------------------+-------------------------+",
@@ -666,7 +666,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+-------------------------+----------------------------+-------------------------+",
@@ -693,7 +693,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+-------------------------+----------------------------+-------------------------+",
@@ -720,7 +720,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+----------------------------+---------------------+-------------------------+",
@@ -747,7 +747,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+----------------------------+-------------------------+-------------------------+",
@@ -774,7 +774,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+----------------------------+----------------------------+-------------------------+",
@@ -801,7 +801,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+----------------------------+---------------------+-------------------------+",
@@ -828,7 +828,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+----------------------------+-------------------------+-------------------------+",
@@ -855,7 +855,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+----------------------------+----------------------------+-------------------------+",
@@ -1539,13 +1539,13 @@ async fn cast_timestamp_to_timestamptz() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+----------------------------------+---------------------------------------+",
-        "| table_a.ts                       | arrowtypeof(table_a.ts)               |",
-        "+----------------------------------+---------------------------------------+",
-        "| 2020-09-08T13:42:29.190855+00:00 | Timestamp(Nanosecond, Some(\"+00:00\")) |",
-        "| 2020-09-08T12:42:29.190855+00:00 | Timestamp(Nanosecond, Some(\"+00:00\")) |",
-        "| 2020-09-08T11:42:29.190855+00:00 | Timestamp(Nanosecond, Some(\"+00:00\")) |",
-        "+----------------------------------+---------------------------------------+",
+        "+-----------------------------+---------------------------------------+",
+        "| table_a.ts                  | arrowtypeof(table_a.ts)               |",
+        "+-----------------------------+---------------------------------------+",
+        "| 2020-09-08T13:42:29.190855Z | Timestamp(Nanosecond, Some(\"+00:00\")) |",
+        "| 2020-09-08T12:42:29.190855Z | Timestamp(Nanosecond, Some(\"+00:00\")) |",
+        "| 2020-09-08T11:42:29.190855Z | Timestamp(Nanosecond, Some(\"+00:00\")) |",
+        "+-----------------------------+---------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -1579,7 +1579,7 @@ async fn test_cast_to_time_with_time_zone_should_not_work() -> Result<()> {
 
     assert_eq!(
         results.to_string(),
-        "This feature is not implemented: Unsupported SQL type Time(WithTimeZone)"
+        "This feature is not implemented: Unsupported SQL type Time(None, WithTimeZone)"
     );
 
     Ok(())
@@ -1612,7 +1612,7 @@ async fn test_cast_to_timetz_should_not_work() -> Result<()> {
 
     assert_eq!(
         results.to_string(),
-        "This feature is not implemented: Unsupported SQL type Time(Tz)"
+        "This feature is not implemented: Unsupported SQL type Time(None, Tz)"
     );
     Ok(())
 }
@@ -1677,5 +1677,70 @@ async fn test_current_time() -> Result<()> {
     ];
 
     assert_batches_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_ts_dt_binary_ops() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // test cast in where clause
+    let sql =
+        "select count(1) result from (select now() as n) a where n = '2000-01-01'::date";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------+",
+        "| result |",
+        "+--------+",
+        "| 0      |",
+        "+--------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    // test cast in where ge clause
+    let sql =
+        "select count(1) result from (select now() as n) a where n >= '2000-01-01'::date";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------+",
+        "| result |",
+        "+--------+",
+        "| 1      |",
+        "+--------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    // test cast in equal select
+    let sql = "select now() = '2000-01-01'::date as result";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------+",
+        "| result |",
+        "+--------+",
+        "| false  |",
+        "+--------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    // test cast in gt select
+    let sql = "select now() >= '2000-01-01'::date as result";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------+",
+        "| result |",
+        "+--------+",
+        "| true   |",
+        "+--------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
     Ok(())
 }

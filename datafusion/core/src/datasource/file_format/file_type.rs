@@ -18,22 +18,31 @@
 //! File type abstraction
 
 use crate::error::{DataFusionError, Result};
-use std::io::Error;
-
-use async_compression::tokio::bufread::{
-    BzDecoder as AsyncBzDecoder, GzipDecoder as AsyncGzDecoder,
-};
-use bzip2::read::BzDecoder;
 
 use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
 use crate::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
 use crate::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
+#[cfg(feature = "compression")]
+use async_compression::tokio::bufread::{
+    BzDecoder as AsyncBzDecoder, GzipDecoder as AsyncGzDecoder,
+    XzDecoder as AsyncXzDecoder,
+};
 use bytes::Bytes;
+#[cfg(feature = "compression")]
+use bzip2::read::BzDecoder;
+use datafusion_common::parsers::CompressionTypeVariant;
+#[cfg(feature = "compression")]
 use flate2::read::GzDecoder;
-use futures::{Stream, TryStreamExt};
+use futures::Stream;
+#[cfg(feature = "compression")]
+use futures::TryStreamExt;
 use std::str::FromStr;
+#[cfg(feature = "compression")]
 use tokio_util::io::{ReaderStream, StreamReader};
+#[cfg(feature = "compression")]
+use xz2::read::XzDecoder;
+use CompressionTypeVariant::*;
 
 /// Define each `FileType`/`FileCompressionType`'s extension
 pub trait GetExt {
@@ -43,22 +52,24 @@ pub trait GetExt {
 
 /// Readable file compression type
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FileCompressionType {
-    /// Gzip-ed file
-    GZIP,
-    /// Bzip2-ed file
-    BZIP2,
-    /// Uncompressed file
-    UNCOMPRESSED,
+pub struct FileCompressionType {
+    variant: CompressionTypeVariant,
 }
 
 impl GetExt for FileCompressionType {
     fn get_ext(&self) -> String {
-        match self {
-            FileCompressionType::GZIP => ".gz".to_owned(),
-            FileCompressionType::BZIP2 => ".bz2".to_owned(),
-            FileCompressionType::UNCOMPRESSED => "".to_owned(),
+        match self.variant {
+            GZIP => ".gz".to_owned(),
+            BZIP2 => ".bz2".to_owned(),
+            XZ => ".xz".to_owned(),
+            UNCOMPRESSED => "".to_owned(),
         }
+    }
+}
+
+impl From<CompressionTypeVariant> for FileCompressionType {
+    fn from(t: CompressionTypeVariant) -> Self {
+        Self { variant: t }
     }
 }
 
@@ -66,27 +77,41 @@ impl FromStr for FileCompressionType {
     type Err = DataFusionError;
 
     fn from_str(s: &str) -> Result<Self> {
-        let s = s.to_uppercase();
-        match s.as_str() {
-            "GZIP" | "GZ" => Ok(FileCompressionType::GZIP),
-            "BZIP2" | "BZ2" => Ok(FileCompressionType::BZIP2),
-            "" => Ok(FileCompressionType::UNCOMPRESSED),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unknown FileCompressionType: {}",
-                s
-            ))),
-        }
+        let variant = CompressionTypeVariant::from_str(s).map_err(|_| {
+            DataFusionError::NotImplemented(format!("Unknown FileCompressionType: {s}"))
+        })?;
+        Ok(Self { variant })
     }
 }
 
 /// `FileCompressionType` implementation
 impl FileCompressionType {
+    /// Gzip-ed file
+    pub const GZIP: Self = Self { variant: GZIP };
+
+    /// Bzip2-ed file
+    pub const BZIP2: Self = Self { variant: BZIP2 };
+
+    /// Xz-ed file (liblzma)
+    pub const XZ: Self = Self { variant: XZ };
+
+    /// Uncompressed file
+    pub const UNCOMPRESSED: Self = Self {
+        variant: UNCOMPRESSED,
+    };
+
+    /// The file is compressed or not
+    pub const fn is_compressed(&self) -> bool {
+        self.variant.is_compressed()
+    }
+
     /// Given a `Stream`, create a `Stream` which data are decompressed with `FileCompressionType`.
     pub fn convert_stream<T: Stream<Item = Result<Bytes>> + Unpin + Send + 'static>(
         &self,
         s: T,
-    ) -> Box<dyn Stream<Item = Result<Bytes>> + Send + Unpin> {
-        let err_converter = |e: Error| match e
+    ) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Send + Unpin>> {
+        #[cfg(feature = "compression")]
+        let err_converter = |e: std::io::Error| match e
             .get_ref()
             .and_then(|e| e.downcast_ref::<DataFusionError>())
         {
@@ -99,29 +124,52 @@ impl FileCompressionType {
             None => Into::<DataFusionError>::into(e),
         };
 
-        match self {
-            FileCompressionType::GZIP => Box::new(
+        Ok(match self.variant {
+            #[cfg(feature = "compression")]
+            GZIP => Box::new(
                 ReaderStream::new(AsyncGzDecoder::new(StreamReader::new(s)))
                     .map_err(err_converter),
             ),
-            FileCompressionType::BZIP2 => Box::new(
+            #[cfg(feature = "compression")]
+            BZIP2 => Box::new(
                 ReaderStream::new(AsyncBzDecoder::new(StreamReader::new(s)))
                     .map_err(err_converter),
             ),
-            FileCompressionType::UNCOMPRESSED => Box::new(s),
-        }
+            #[cfg(feature = "compression")]
+            XZ => Box::new(
+                ReaderStream::new(AsyncXzDecoder::new(StreamReader::new(s)))
+                    .map_err(err_converter),
+            ),
+            #[cfg(not(feature = "compression"))]
+            GZIP | BZIP2 | XZ => {
+                return Err(DataFusionError::NotImplemented(
+                    "Compression feature is not enabled".to_owned(),
+                ))
+            }
+            UNCOMPRESSED => Box::new(s),
+        })
     }
 
     /// Given a `Read`, create a `Read` which data are decompressed with `FileCompressionType`.
     pub fn convert_read<T: std::io::Read + Send + 'static>(
         &self,
         r: T,
-    ) -> Box<dyn std::io::Read + Send> {
-        match self {
-            FileCompressionType::GZIP => Box::new(GzDecoder::new(r)),
-            FileCompressionType::BZIP2 => Box::new(BzDecoder::new(r)),
-            FileCompressionType::UNCOMPRESSED => Box::new(r),
-        }
+    ) -> Result<Box<dyn std::io::Read + Send>> {
+        Ok(match self.variant {
+            #[cfg(feature = "compression")]
+            GZIP => Box::new(GzDecoder::new(r)),
+            #[cfg(feature = "compression")]
+            BZIP2 => Box::new(BzDecoder::new(r)),
+            #[cfg(feature = "compression")]
+            XZ => Box::new(XzDecoder::new(r)),
+            #[cfg(not(feature = "compression"))]
+            GZIP | BZIP2 | XZ => {
+                return Err(DataFusionError::NotImplemented(
+                    "Compression feature is not enabled".to_owned(),
+                ))
+            }
+            UNCOMPRESSED => Box::new(r),
+        })
     }
 }
 
@@ -158,10 +206,9 @@ impl FromStr for FileType {
             "AVRO" => Ok(FileType::AVRO),
             "PARQUET" => Ok(FileType::PARQUET),
             "CSV" => Ok(FileType::CSV),
-            "JSON" => Ok(FileType::JSON),
+            "JSON" | "NDJSON" => Ok(FileType::JSON),
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Unknown FileType: {}",
-                s
+                "Unknown FileType: {s}"
             ))),
         }
     }
@@ -174,8 +221,8 @@ impl FileType {
 
         match self {
             FileType::JSON | FileType::CSV => Ok(format!("{}{}", ext, c.get_ext())),
-            FileType::PARQUET | FileType::AVRO => match c {
-                FileCompressionType::UNCOMPRESSED => Ok(ext),
+            FileType::PARQUET | FileType::AVRO => match c.variant {
+                UNCOMPRESSED => Ok(ext),
                 _ => Err(DataFusionError::Internal(
                     "FileCompressionType can be specified for CSV/JSON FileType.".into(),
                 )),
@@ -207,6 +254,12 @@ mod tests {
         );
         assert_eq!(
             file_type
+                .get_ext_with_compression(FileCompressionType::XZ)
+                .unwrap(),
+            ".csv.xz"
+        );
+        assert_eq!(
+            file_type
                 .get_ext_with_compression(FileCompressionType::BZIP2)
                 .unwrap(),
             ".csv.bz2"
@@ -224,6 +277,12 @@ mod tests {
                 .get_ext_with_compression(FileCompressionType::GZIP)
                 .unwrap(),
             ".json.gz"
+        );
+        assert_eq!(
+            file_type
+                .get_ext_with_compression(FileCompressionType::XZ)
+                .unwrap(),
+            ".json.xz"
         );
         assert_eq!(
             file_type
@@ -300,7 +359,14 @@ mod tests {
             FileCompressionType::from_str("GZIP").unwrap(),
             FileCompressionType::GZIP
         );
-
+        assert_eq!(
+            FileCompressionType::from_str("xz").unwrap(),
+            FileCompressionType::XZ
+        );
+        assert_eq!(
+            FileCompressionType::from_str("XZ").unwrap(),
+            FileCompressionType::XZ
+        );
         assert_eq!(
             FileCompressionType::from_str("bz2").unwrap(),
             FileCompressionType::BZIP2

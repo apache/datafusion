@@ -27,6 +27,7 @@ use datafusion::{
 use datafusion::from_slice::FromSlice;
 use datafusion::prelude::*;
 use datafusion::{error::Result, physical_plan::functions::make_scalar_function};
+use datafusion_common::cast::as_float64_array;
 use std::sync::Arc;
 
 // create local execution context with an in-memory table
@@ -58,7 +59,7 @@ fn create_context() -> Result<SessionContext> {
 /// In this example we will declare a single-type, single return type UDF that exponentiates f64, a^b
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut ctx = create_context()?;
+    let ctx = create_context()?;
 
     // First, declare the actual implementation of the calculation
     let pow = |args: &[ArrayRef]| {
@@ -70,14 +71,8 @@ async fn main() -> Result<()> {
         assert_eq!(args.len(), 2);
 
         // 1. cast both arguments to f64. These casts MUST be aligned with the signature or this function panics!
-        let base = &args[0]
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .expect("cast failed");
-        let exponent = &args[1]
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .expect("cast failed");
+        let base = as_float64_array(&args[0]).expect("cast failed");
+        let exponent = as_float64_array(&args[1]).expect("cast failed");
 
         // this is guaranteed by DataFusion. We place it just to make it obvious.
         assert_eq!(exponent.len(), base.len());
@@ -127,7 +122,7 @@ async fn main() -> Result<()> {
     let expr = pow.call(vec![col("a"), col("b")]);
 
     // get a DataFrame from the context
-    let df = ctx.table("t")?;
+    let df = ctx.table("t").await?;
 
     // if we do not have `pow` in the scope and we registered it, we can get it from the registry
     let pow = df.registry().udf("pow")?;

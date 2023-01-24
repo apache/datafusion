@@ -17,6 +17,7 @@
 
 //! Test queries on partitioned datasets
 
+use arrow::datatypes::DataType;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
@@ -56,7 +57,11 @@ async fn parquet_distinct_partition_col() -> Result<()> {
             "year=2021/month=10/day=09/file.parquet",
             "year=2021/month=10/day=28/file.parquet",
         ],
-        &["year", "month", "day"],
+        &[
+            ("year", DataType::Int32),
+            ("month", DataType::Utf8),
+            ("day", DataType::Utf8),
+        ],
         "mirror:///",
         "alltypes_plain.parquet",
     )
@@ -127,7 +132,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
 
     min_limit -= 1;
 
-    let sql_cross_partition_boundary = format!("SELECT month FROM t limit {}", max_limit);
+    let sql_cross_partition_boundary = format!("SELECT month FROM t limit {max_limit}");
     let resulting_limit: i64 = ctx
         .sql(sql_cross_partition_boundary.as_str())
         .await?
@@ -139,8 +144,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
 
     assert_eq!(max_limit, resulting_limit);
 
-    let sql_within_partition_boundary =
-        format!("SELECT month from t limit {}", min_limit);
+    let sql_within_partition_boundary = format!("SELECT month from t limit {min_limit}");
     let resulting_limit: i64 = ctx
         .sql(sql_within_partition_boundary.as_str())
         .await?
@@ -155,7 +159,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     let s = ScalarValue::try_from_array(results[0].column(1), 0)?;
     let month = match extract_as_utf(&s) {
         Some(month) => month,
-        s => panic!("Expected month as Dict(_, Utf8) found {:?}", s),
+        s => panic!("Expected month as Dict(_, Utf8) found {s:?}"),
     };
 
     let sql_on_partition_boundary = format!(
@@ -195,12 +199,12 @@ async fn csv_filter_with_file_col() -> Result<()> {
             "mytable/date=2021-10-27/file.csv",
             "mytable/date=2021-10-28/file.csv",
         ],
-        &["date"],
+        &[("date", DataType::Utf8)],
         "mirror:///mytable/",
     );
 
     let result = ctx
-        .sql("SELECT c1, c2 FROM t WHERE date='2021-10-27' and date!=c1 LIMIT 5")
+        .sql("SELECT c1, c2 FROM t WHERE date='2021-10-27' and c1!='2021-10-27' LIMIT 5")
         .await?
         .collect()
         .await?;
@@ -222,6 +226,42 @@ async fn csv_filter_with_file_col() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_filter_with_file_nonstring_col() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    register_partitioned_aggregate_csv(
+        &ctx,
+        &[
+            "mytable/date=2021-10-27/file.csv",
+            "mytable/date=2021-10-28/file.csv",
+        ],
+        &[("date", DataType::Date32)],
+        "mirror:///mytable/",
+    );
+
+    let result = ctx
+        .sql("SELECT c1, c2, date FROM t WHERE date > '2021-10-27' LIMIT 5")
+        .await?
+        .collect()
+        .await?;
+
+    let expected = vec![
+        "+----+----+------------+",
+        "| c1 | c2 | date       |",
+        "+----+----+------------+",
+        "| a  | 1  | 2021-10-28 |",
+        "| b  | 1  | 2021-10-28 |",
+        "| b  | 5  | 2021-10-28 |",
+        "| c  | 2  | 2021-10-28 |",
+        "| d  | 5  | 2021-10-28 |",
+        "+----+----+------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &result);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_projection_on_partition() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -231,7 +271,7 @@ async fn csv_projection_on_partition() -> Result<()> {
             "mytable/date=2021-10-27/file.csv",
             "mytable/date=2021-10-28/file.csv",
         ],
-        &["date"],
+        &[("date", DataType::Date32)],
         "mirror:///mytable/",
     );
 
@@ -268,7 +308,7 @@ async fn csv_grouping_by_partition() -> Result<()> {
             "mytable/date=2021-10-27/file.csv",
             "mytable/date=2021-10-28/file.csv",
         ],
-        &["date"],
+        &[("date", DataType::Date32)],
         "mirror:///mytable/",
     );
 
@@ -302,7 +342,11 @@ async fn parquet_multiple_partitions() -> Result<()> {
             "year=2021/month=10/day=09/file.parquet",
             "year=2021/month=10/day=28/file.parquet",
         ],
-        &["year", "month", "day"],
+        &[
+            ("year", DataType::Utf8),
+            ("month", DataType::Utf8),
+            ("day", DataType::Utf8),
+        ],
         "mirror:///",
         "alltypes_plain.parquet",
     )
@@ -334,6 +378,52 @@ async fn parquet_multiple_partitions() -> Result<()> {
 }
 
 #[tokio::test]
+async fn parquet_multiple_nonstring_partitions() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    register_partitioned_alltypes_parquet(
+        &ctx,
+        &[
+            "year=2021/month=09/day=09/file.parquet",
+            "year=2021/month=10/day=09/file.parquet",
+            "year=2021/month=10/day=28/file.parquet",
+        ],
+        &[
+            ("year", DataType::Int32),
+            ("month", DataType::Int32),
+            ("day", DataType::Int32),
+        ],
+        "mirror:///",
+        "alltypes_plain.parquet",
+    )
+    .await;
+
+    let result = ctx
+        .sql("SELECT id, day FROM t WHERE day=month ORDER BY id")
+        .await?
+        .collect()
+        .await?;
+
+    let expected = vec![
+        "+----+-----+",
+        "| id | day |",
+        "+----+-----+",
+        "| 0  | 9   |",
+        "| 1  | 9   |",
+        "| 2  | 9   |",
+        "| 3  | 9   |",
+        "| 4  | 9   |",
+        "| 5  | 9   |",
+        "| 6  | 9   |",
+        "| 7  | 9   |",
+        "+----+-----+",
+    ];
+    assert_batches_sorted_eq!(expected, &result);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn parquet_statistics() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -344,7 +434,11 @@ async fn parquet_statistics() -> Result<()> {
             "year=2021/month=10/day=09/file.parquet",
             "year=2021/month=10/day=28/file.parquet",
         ],
-        &["year", "month", "day"],
+        &[
+            ("year", DataType::Int32),
+            ("month", DataType::Utf8),
+            ("day", DataType::Utf8),
+        ],
         "mirror:///",
         // This is the only file we found in the test set with
         // actual stats. It has 1 column / 1 row.
@@ -353,9 +447,8 @@ async fn parquet_statistics() -> Result<()> {
     .await;
 
     //// NO PROJECTION ////
-    let logical_plan = ctx.sql("SELECT * FROM t").await?.to_logical_plan()?;
-
-    let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
+    let dataframe = ctx.sql("SELECT * FROM t").await?;
+    let physical_plan = dataframe.create_physical_plan().await?;
     assert_eq!(physical_plan.schema().fields().len(), 4);
 
     let stat_cols = physical_plan
@@ -371,12 +464,8 @@ async fn parquet_statistics() -> Result<()> {
     assert_eq!(stat_cols[3], ColumnStatistics::default());
 
     //// WITH PROJECTION ////
-    let logical_plan = ctx
-        .sql("SELECT mycol, day FROM t WHERE day='28'")
-        .await?
-        .to_logical_plan()?;
-
-    let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
+    let dataframe = ctx.sql("SELECT mycol, day FROM t WHERE day='28'").await?;
+    let physical_plan = dataframe.create_physical_plan().await?;
     assert_eq!(physical_plan.schema().fields().len(), 2);
 
     let stat_cols = physical_plan
@@ -404,7 +493,7 @@ async fn parquet_overlapping_columns() -> Result<()> {
             "id=2/file.parquet",
             "id=3/file.parquet",
         ],
-        &["id"],
+        &[("id", DataType::Int64)],
         "mirror:///",
         "alltypes_plain.parquet",
     )
@@ -422,11 +511,11 @@ async fn parquet_overlapping_columns() -> Result<()> {
 fn register_partitioned_aggregate_csv(
     ctx: &SessionContext,
     store_paths: &[&str],
-    partition_cols: &[&str],
+    partition_cols: &[(&str, DataType)],
     table_path: &str,
 ) {
     let testdata = arrow_test_data();
-    let csv_file_path = format!("{}/csv/aggregate_test_100.csv", testdata);
+    let csv_file_path = format!("{testdata}/csv/aggregate_test_100.csv");
     let file_schema = test_util::aggr_test_schema();
     ctx.runtime_env().register_object_store(
         "mirror",
@@ -436,7 +525,10 @@ fn register_partitioned_aggregate_csv(
 
     let options = ListingOptions::new(Arc::new(CsvFormat::default()))
         .with_table_partition_cols(
-            partition_cols.iter().map(|&s| s.to_owned()).collect(),
+            partition_cols
+                .iter()
+                .map(|x| (x.0.to_owned(), x.1.clone()))
+                .collect::<Vec<_>>(),
         );
 
     let table_path = ListingTableUrl::parse(table_path).unwrap();
@@ -452,12 +544,12 @@ fn register_partitioned_aggregate_csv(
 async fn register_partitioned_alltypes_parquet(
     ctx: &SessionContext,
     store_paths: &[&str],
-    partition_cols: &[&str],
+    partition_cols: &[(&str, DataType)],
     table_path: &str,
     source_file: &str,
 ) {
     let testdata = parquet_test_data();
-    let parquet_file_path = format!("{}/{}", testdata, source_file);
+    let parquet_file_path = format!("{testdata}/{source_file}");
     ctx.runtime_env().register_object_store(
         "mirror",
         "",
@@ -465,8 +557,12 @@ async fn register_partitioned_alltypes_parquet(
     );
 
     let options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-        .with_table_partition_cols(partition_cols.iter().map(|&s| s.to_owned()).collect())
-        .with_collect_stat(true);
+        .with_table_partition_cols(
+            partition_cols
+                .iter()
+                .map(|x| (x.0.to_owned(), x.1.clone()))
+                .collect::<Vec<_>>(),
+        );
 
     let table_path = ListingTableUrl::parse(table_path).unwrap();
     let store_path =
@@ -500,7 +596,7 @@ pub struct MirroringObjectStore {
 
 impl std::fmt::Display for MirroringObjectStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 

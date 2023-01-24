@@ -23,22 +23,18 @@
 
 use std::collections::VecDeque;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Instant;
 
 use arrow::datatypes::SchemaRef;
 use arrow::{error::Result as ArrowResult, record_batch::RecordBatch};
+use datafusion_common::ScalarValue;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{ready, FutureExt, Stream, StreamExt};
-use object_store::ObjectStore;
-
-use datafusion_common::ScalarValue;
 
 use crate::datasource::listing::PartitionedFile;
 use crate::error::Result;
-use crate::execution::context::TaskContext;
 use crate::physical_plan::file_format::{
     FileMeta, FileScanConfig, PartitionColumnProjector,
 };
@@ -56,11 +52,7 @@ pub type FileOpenFuture =
 pub trait FileOpener: Unpin {
     /// Asynchronously open the specified file and return a stream
     /// of [`RecordBatch`]
-    fn open(
-        &self,
-        store: Arc<dyn ObjectStore>,
-        file_meta: FileMeta,
-    ) -> Result<FileOpenFuture>;
+    fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture>;
 }
 
 /// A stream that iterates record batch by record batch, file over file.
@@ -79,8 +71,6 @@ pub struct FileStream<F: FileOpener> {
     file_reader: F,
     /// The partition column projector
     pc_projector: PartitionColumnProjector,
-    /// the store from which to source the files.
-    object_store: Arc<dyn ObjectStore>,
     /// The stream state
     state: FileStreamState,
     /// File stream specific metrics
@@ -175,21 +165,20 @@ impl<F: FileOpener> FileStream<F> {
     pub fn new(
         config: &FileScanConfig,
         partition: usize,
-        context: Arc<TaskContext>,
         file_reader: F,
-        metrics: ExecutionPlanMetricsSet,
+        metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
         let (projected_schema, _) = config.project();
         let pc_projector = PartitionColumnProjector::new(
             projected_schema.clone(),
-            &config.table_partition_cols,
+            &config
+                .table_partition_cols
+                .iter()
+                .map(|x| x.0.clone())
+                .collect::<Vec<_>>(),
         );
 
         let files = config.file_groups[partition].clone();
-
-        let object_store = context
-            .runtime_env()
-            .object_store(&config.object_store_url)?;
 
         Ok(Self {
             file_iter: files.into(),
@@ -197,10 +186,9 @@ impl<F: FileOpener> FileStream<F> {
             remain: config.limit,
             file_reader,
             pc_projector,
-            object_store,
             state: FileStreamState::Idle,
-            file_stream_metrics: FileStreamMetrics::new(&metrics, partition),
-            baseline_metrics: BaselineMetrics::new(&metrics, partition),
+            file_stream_metrics: FileStreamMetrics::new(metrics, partition),
+            baseline_metrics: BaselineMetrics::new(metrics, partition),
         })
     }
 
@@ -224,7 +212,7 @@ impl<F: FileOpener> FileStream<F> {
 
                     self.file_stream_metrics.time_opening.start();
 
-                    match self.file_reader.open(self.object_store.clone(), file_meta) {
+                    match self.file_reader.open(file_meta) {
                         Ok(future) => {
                             self.state = FileStreamState::Open {
                                 future,
@@ -321,7 +309,6 @@ mod tests {
     use futures::StreamExt;
 
     use super::*;
-    use crate::config::ConfigOptions;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
     use crate::prelude::SessionContext;
@@ -335,11 +322,7 @@ mod tests {
     }
 
     impl FileOpener for TestOpener {
-        fn open(
-            &self,
-            _store: Arc<dyn ObjectStore>,
-            _file_meta: FileMeta,
-        ) -> Result<FileOpenFuture> {
+        fn open(&self, _file_meta: FileMeta) -> Result<FileOpenFuture> {
             let iterator = self.records.clone().into_iter().map(Ok);
             let stream = futures::stream::iter(iterator).boxed();
             Ok(futures::future::ready(Ok(stream)).boxed())
@@ -367,18 +350,11 @@ mod tests {
             projection: None,
             limit,
             table_partition_cols: vec![],
-            config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
+            infinite_source: false,
         };
-
-        let file_stream = FileStream::new(
-            &config,
-            0,
-            ctx.task_ctx(),
-            reader,
-            ExecutionPlanMetricsSet::new(),
-        )
-        .unwrap();
+        let metrics_set = ExecutionPlanMetricsSet::new();
+        let file_stream = FileStream::new(&config, 0, reader, &metrics_set).unwrap();
 
         file_stream
             .map(|b| b.expect("No error expected in stream"))

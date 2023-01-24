@@ -34,7 +34,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::assert_batches_eq;
 use datafusion_expr::{approx_median, cast};
 
-fn create_test_table() -> Result<Arc<DataFrame>> {
+async fn create_test_table() -> Result<DataFrame> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Int32, false),
@@ -58,7 +58,7 @@ fn create_test_table() -> Result<Arc<DataFrame>> {
 
     ctx.register_batch("test", batch)?;
 
-    ctx.table("test")
+    ctx.table("test").await
 }
 
 /// Excutes an expression on the test dataframe as a select.
@@ -69,7 +69,7 @@ macro_rules! assert_fn_batches {
         assert_fn_batches!($EXPR, $EXPECTED, 10)
     };
     ($EXPR:expr, $EXPECTED: expr, $LIMIT: expr) => {
-        let df = create_test_table()?;
+        let df = create_test_table().await?;
         let df = df.select(vec![$EXPR])?.limit(0, Some($LIMIT))?;
         let batches = df.collect().await?;
 
@@ -162,7 +162,7 @@ async fn test_fn_approx_median() -> Result<()> {
         "+----------------------+",
     ];
 
-    let df = create_test_table()?;
+    let df = create_test_table().await?;
     let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
 
     assert_batches_eq!(expected, &batches);
@@ -182,7 +182,7 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
         "+-------------------------------------------+",
     ];
 
-    let df = create_test_table()?;
+    let df = create_test_table().await?;
     let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
 
     assert_batches_eq!(expected, &batches);

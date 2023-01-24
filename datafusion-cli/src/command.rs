@@ -39,7 +39,7 @@ pub enum Command {
     Quit,
     Help,
     ListTables,
-    DescribeTable(String),
+    DescribeTableStmt(String),
     ListFunctions,
     Include(Option<String>),
     SearchFunctions(String),
@@ -59,22 +59,16 @@ impl Command {
     ) -> Result<()> {
         let now = Instant::now();
         match self {
-            Self::Help => print_options
-                .print_batches(&[all_commands_info()], now)
-                .map_err(|e| DataFusionError::Execution(e.to_string())),
+            Self::Help => print_options.print_batches(&[all_commands_info()], now),
             Self::ListTables => {
                 let df = ctx.sql("SHOW TABLES").await?;
                 let batches = df.collect().await?;
-                print_options
-                    .print_batches(&batches, now)
-                    .map_err(|e| DataFusionError::Execution(e.to_string()))
+                print_options.print_batches(&batches, now)
             }
-            Self::DescribeTable(name) => {
+            Self::DescribeTableStmt(name) => {
                 let df = ctx.sql(&format!("SHOW COLUMNS FROM {}", name)).await?;
                 let batches = df.collect().await?;
-                print_options
-                    .print_batches(&batches, now)
-                    .map_err(|e| DataFusionError::Execution(e.to_string()))
+                print_options.print_batches(&batches, now)
             }
             Self::Include(filename) => {
                 if let Some(filename) = filename {
@@ -131,7 +125,7 @@ impl Command {
         match self {
             Self::Quit => ("\\q", "quit datafusion-cli"),
             Self::ListTables => ("\\d", "list tables"),
-            Self::DescribeTable(_) => ("\\d name", "describe table"),
+            Self::DescribeTableStmt(_) => ("\\d name", "describe table"),
             Self::Help => ("\\?", "help"),
             Self::Include(_) => {
                 ("\\i filename", "reads input from the specified filename")
@@ -148,7 +142,7 @@ impl Command {
 
 const ALL_COMMANDS: [Command; 9] = [
     Command::ListTables,
-    Command::DescribeTable(String::new()),
+    Command::DescribeTableStmt(String::new()),
     Command::Quit,
     Command::Help,
     Command::Include(Some(String::new())),
@@ -180,7 +174,7 @@ fn all_commands_info() -> RecordBatch {
 impl FromStr for Command {
     type Err = ();
 
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (c, arg) = if let Some((a, b)) = s.split_once(' ') {
             (a, Some(b))
         } else {
@@ -189,7 +183,7 @@ impl FromStr for Command {
         Ok(match (c, arg) {
             ("q", None) => Self::Quit,
             ("d", None) => Self::ListTables,
-            ("d", Some(name)) => Self::DescribeTable(name.into()),
+            ("d", Some(name)) => Self::DescribeTableStmt(name.into()),
             ("?", None) => Self::Help,
             ("h", None) => Self::ListFunctions,
             ("h", Some(function)) => Self::SearchFunctions(function.into()),
@@ -214,7 +208,7 @@ impl FromStr for Command {
 impl FromStr for OutputFormat {
     type Err = ();
 
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (c, arg) = if let Some((a, b)) = s.split_once(' ') {
             (a, Some(b))
         } else {

@@ -277,7 +277,7 @@ impl BuiltinScalarFunction {
 impl fmt::Display for BuiltinScalarFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // lowercase of the debug.
-        write!(f, "{}", format!("{:?}", self).to_lowercase())
+        write!(f, "{}", format!("{self:?}").to_lowercase())
     }
 }
 
@@ -369,8 +369,7 @@ impl FromStr for BuiltinScalarFunction {
             "arrow_typeof" => BuiltinScalarFunction::ArrowTypeof,
             _ => {
                 return Err(DataFusionError::Plan(format!(
-                    "There is no built-in function named {}",
-                    name
+                    "There is no built-in function named {name}"
                 )))
             }
         })

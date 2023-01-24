@@ -32,7 +32,12 @@ use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    cast::{
+        as_boolean_array, as_generic_binary_array, as_primitive_array, as_string_array,
+    },
+    DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::ColumnarValue;
 use hashbrown::hash_map::RawEntryMut;
 use hashbrown::HashMap;
@@ -171,19 +176,19 @@ fn make_set(array: &dyn Array) -> Result<Box<dyn Set>> {
     Ok(downcast_primitive_array! {
         array => Box::new(ArraySet::new(array, make_hash_set(array))),
         DataType::Boolean => {
-            let array = as_boolean_array(array);
+            let array = as_boolean_array(array)?;
             Box::new(ArraySet::new(array, make_hash_set(array)))
         },
         DataType::Decimal128(_, _) => {
-            let array = as_primitive_array::<Decimal128Type>(array);
+            let array = as_primitive_array::<Decimal128Type>(array)?;
             Box::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Decimal256(_, _) => {
-            let array = as_primitive_array::<Decimal256Type>(array);
+            let array = as_primitive_array::<Decimal256Type>(array)?;
             Box::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Utf8 => {
-            let array = as_string_array(array);
+            let array = as_string_array(array)?;
             Box::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::LargeUtf8 => {
@@ -191,15 +196,15 @@ fn make_set(array: &dyn Array) -> Result<Box<dyn Set>> {
             Box::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Binary => {
-            let array = as_generic_binary_array::<i32>(array);
+            let array = as_generic_binary_array::<i32>(array)?;
             Box::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::LargeBinary => {
-            let array = as_generic_binary_array::<i64>(array);
+            let array = as_generic_binary_array::<i64>(array)?;
             Box::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Dictionary(_, _) => unreachable!("dictionary should have been flattened"),
-        d => return Err(DataFusionError::NotImplemented(format!("DataType::{} not supported in InList", d)))
+        d => return Err(DataFusionError::NotImplemented(format!("DataType::{d} not supported in InList")))
     })
 }
 
@@ -355,8 +360,7 @@ pub fn in_list(
         let list_expr_data_type = list_expr.data_type(schema)?;
         if !expr_data_type.eq(&list_expr_data_type) {
             return Err(DataFusionError::Internal(format!(
-                "The data type inlist should be same, the value type is {}, one of list expr type is {}",
-                expr_data_type, list_expr_data_type
+                "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
             )));
         }
     }
@@ -390,8 +394,7 @@ mod tests {
         let result_type = get_coerce_type(expr_type, &list_types);
         match result_type {
             None => Err(DataFusionError::Plan(format!(
-                "Can not find compatible types to compare {:?} with {:?}",
-                expr_type, list_types
+                "Can not find compatible types to compare {expr_type:?} with {list_types:?}"
             ))),
             Some(data_type) => {
                 // find the coerced type
@@ -424,10 +427,8 @@ mod tests {
             let (cast_expr, cast_list_exprs) = in_list_cast($COL, $LIST, $SCHEMA)?;
             let expr = in_list(cast_expr, cast_list_exprs, $NEGATED, $SCHEMA).unwrap();
             let result = expr.evaluate(&$BATCH)?.into_array($BATCH.num_rows());
-            let result = result
-                .as_any()
-                .downcast_ref::<BooleanArray>()
-                .expect("failed to downcast to BooleanArray");
+            let result =
+                as_boolean_array(&result).expect("failed to downcast to BooleanArray");
             let expected = &BooleanArray::from($EXPECTED);
             assert_eq!(expected, result);
         }};

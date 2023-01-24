@@ -76,7 +76,7 @@ pub trait TreeNodeRewritable: Clone {
     /// The default tree traversal direction is transform_up(Postorder Traversal).
     fn transform<F>(self, op: &F) -> Result<Self>
     where
-        F: Fn(Self) -> Option<Self>,
+        F: Fn(Self) -> Result<Option<Self>>,
     {
         self.transform_up(op)
     }
@@ -86,10 +86,10 @@ pub trait TreeNodeRewritable: Clone {
     /// When the `op` does not apply to a given node, it is left unchanged.
     fn transform_down<F>(self, op: &F) -> Result<Self>
     where
-        F: Fn(Self) -> Option<Self>,
+        F: Fn(Self) -> Result<Option<Self>>,
     {
         let node_cloned = self.clone();
-        let after_op = match op(node_cloned) {
+        let after_op = match op(node_cloned)? {
             Some(value) => value,
             None => self,
         };
@@ -101,12 +101,12 @@ pub trait TreeNodeRewritable: Clone {
     /// When the `op` does not apply to a given node, it is left unchanged.
     fn transform_up<F>(self, op: &F) -> Result<Self>
     where
-        F: Fn(Self) -> Option<Self>,
+        F: Fn(Self) -> Result<Option<Self>>,
     {
         let after_op_children = self.map_children(|node| node.transform_up(op))?;
 
         let after_op_children_clone = after_op_children.clone();
-        let new_node = match op(after_op_children) {
+        let new_node = match op(after_op_children)? {
             Some(value) => value,
             None => after_op_children_clone,
         };

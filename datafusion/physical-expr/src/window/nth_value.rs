@@ -19,24 +19,16 @@
 //! that can evaluated at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::BuiltInWindowFunctionExpr;
+use crate::window::window_expr::{BuiltinWindowState, NthValueKind, NthValueState};
+use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
 use crate::PhysicalExpr;
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
-use arrow::record_batch::RecordBatch;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
-
-/// nth_value kind
-#[derive(Debug, Copy, Clone)]
-enum NthValueKind {
-    First,
-    Last,
-    Nth(u32),
-}
 
 /// nth_value expression
 #[derive(Debug)]
@@ -95,6 +87,11 @@ impl NthValue {
             }),
         }
     }
+
+    /// Get nth_value kind
+    pub fn get_kind(&self) -> NthValueKind {
+        self.kind
+    }
 }
 
 impl BuiltInWindowFunctionExpr for NthValue {
@@ -116,42 +113,89 @@ impl BuiltInWindowFunctionExpr for NthValue {
         &self.name
     }
 
-    fn create_evaluator(
-        &self,
-        batch: &RecordBatch,
-    ) -> Result<Box<dyn PartitionEvaluator>> {
-        let values = self
-            .expressions()
-            .iter()
-            .map(|e| e.evaluate(batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Box::new(NthValueEvaluator {
+    fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        let state = NthValueState {
+            range: Default::default(),
+            finalized_result: None,
             kind: self.kind,
-            values,
+        };
+        Ok(Box::new(NthValueEvaluator { state }))
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        true
+    }
+
+    fn uses_window_frame(&self) -> bool {
+        true
+    }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
+        let reversed_kind = match self.kind {
+            NthValueKind::First => NthValueKind::Last,
+            NthValueKind::Last => NthValueKind::First,
+            NthValueKind::Nth(_) => return None,
+        };
+        Some(Arc::new(Self {
+            name: self.name.clone(),
+            expr: self.expr.clone(),
+            data_type: self.data_type.clone(),
+            kind: reversed_kind,
         }))
     }
 }
 
 /// Value evaluator for nth_value functions
+#[derive(Debug)]
 pub(crate) struct NthValueEvaluator {
-    kind: NthValueKind,
-    values: Vec<ArrayRef>,
+    state: NthValueState,
 }
 
 impl PartitionEvaluator for NthValueEvaluator {
-    fn uses_window_frame(&self) -> bool {
-        true
+    fn state(&self) -> Result<BuiltinWindowState> {
+        // If we do not use state we just return Default
+        Ok(BuiltinWindowState::NthValue(self.state.clone()))
     }
 
-    fn evaluate_partition(&self, _partition: Range<usize>) -> Result<ArrayRef> {
-        unreachable!("first, last, and nth_value evaluation must be called with evaluate_partition_with_rank")
+    fn update_state(
+        &mut self,
+        state: &WindowAggState,
+        _range_columns: &[ArrayRef],
+        _sort_partition_points: &[Range<usize>],
+    ) -> Result<()> {
+        // If we do not use state, update_state does nothing
+        self.state.range.clone_from(&state.window_frame_range);
+        Ok(())
     }
 
-    fn evaluate_inside_range(&self, range: Range<usize>) -> Result<ScalarValue> {
-        let arr = &self.values[0];
+    fn set_state(&mut self, state: &BuiltinWindowState) -> Result<()> {
+        if let BuiltinWindowState::NthValue(nth_value_state) = state {
+            self.state = nth_value_state.clone()
+        }
+        Ok(())
+    }
+
+    fn evaluate_stateful(&mut self, values: &[ArrayRef]) -> Result<ScalarValue> {
+        if let Some(ref result) = self.state.finalized_result {
+            Ok(result.clone())
+        } else {
+            self.evaluate_inside_range(values, &self.state.range)
+        }
+    }
+
+    fn evaluate_inside_range(
+        &self,
+        values: &[ArrayRef],
+        range: &Range<usize>,
+    ) -> Result<ScalarValue> {
+        // FIRST_VALUE, LAST_VALUE, NTH_VALUE window functions take a single column, values will have size 1.
+        let arr = &values[0];
         let n_range = range.end - range.start;
-        match self.kind {
+        if n_range == 0 {
+            // We produce None if the window is empty.
+            return ScalarValue::try_from(arr.data_type());
+        }
+        match self.state.kind {
             NthValueKind::First => ScalarValue::try_from_array(arr, range.start),
             NthValueKind::Last => ScalarValue::try_from_array(arr, range.end - 1),
             NthValueKind::Nth(n) => {
@@ -188,10 +232,11 @@ mod tests {
                 end: i + 1,
             })
         }
-        let evaluator = expr.create_evaluator(&batch)?;
+        let evaluator = expr.create_evaluator()?;
+        let values = expr.evaluate_args(&batch)?;
         let result = ranges
-            .into_iter()
-            .map(|range| evaluator.evaluate_inside_range(range))
+            .iter()
+            .map(|range| evaluator.evaluate_inside_range(&values, range))
             .into_iter()
             .collect::<Result<Vec<ScalarValue>>>()?;
         let result = ScalarValue::iter_to_array(result.into_iter())?;

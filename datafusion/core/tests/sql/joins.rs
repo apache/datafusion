@@ -20,238 +20,217 @@ use datafusion::from_slice::FromSlice;
 
 #[tokio::test]
 async fn equijoin() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
-    let equivalent_sql = [
-        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
-        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
-    ];
-    let expected = vec![
-        "+-------+---------+---------+",
-        "| t1_id | t1_name | t2_name |",
-        "+-------+---------+---------+",
-        "| 11    | a       | z       |",
-        "| 22    | b       | y       |",
-        "| 44    | d       | x       |",
-        "+-------+---------+---------+",
-    ];
-    for sql in equivalent_sql.iter() {
-        let actual = execute_to_batches(&ctx, sql).await;
-        assert_batches_eq!(expected, &actual);
-    }
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+        let equivalent_sql = [
+            "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
+            "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
+        ];
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "| 11    | a       | z       |",
+            "| 22    | b       | y       |",
+            "| 44    | d       | x       |",
+            "+-------+---------+---------+",
+        ];
+        for sql in equivalent_sql.iter() {
+            let actual = execute_to_batches(&ctx, sql).await;
+            assert_batches_eq!(expected, &actual);
+        }
 
-    let ctx = create_join_context_qualified("t1", "t2")?;
-    let equivalent_sql = [
-        "SELECT t1.a, t2.b FROM t1 INNER JOIN t2 ON t1.a = t2.a ORDER BY t1.a",
-        "SELECT t1.a, t2.b FROM t1 INNER JOIN t2 ON t2.a = t1.a ORDER BY t1.a",
-    ];
-    let expected = vec![
-        "+---+-----+",
-        "| a | b   |",
-        "+---+-----+",
-        "| 1 | 100 |",
-        "| 2 | 200 |",
-        "| 4 | 400 |",
-        "+---+-----+",
-    ];
-    for sql in equivalent_sql.iter() {
-        let actual = execute_to_batches(&ctx, sql).await;
-        assert_batches_eq!(expected, &actual);
+        let ctx = create_join_context_qualified("t1", "t2")?;
+        let equivalent_sql = [
+            "SELECT t1.a, t2.b FROM t1 INNER JOIN t2 ON t1.a = t2.a ORDER BY t1.a",
+            "SELECT t1.a, t2.b FROM t1 INNER JOIN t2 ON t2.a = t1.a ORDER BY t1.a",
+        ];
+        let expected = vec![
+            "+---+-----+",
+            "| a | b   |",
+            "+---+-----+",
+            "| 1 | 100 |",
+            "| 2 | 200 |",
+            "| 4 | 400 |",
+            "+---+-----+",
+        ];
+        for sql in equivalent_sql.iter() {
+            let actual = execute_to_batches(&ctx, sql).await;
+            assert_batches_eq!(expected, &actual);
+        }
     }
     Ok(())
 }
 
 #[tokio::test]
 async fn equijoin_multiple_condition_ordering() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
-    let equivalent_sql = [
-        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t1_name <> t2_name ORDER BY t1_id",
-        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t2_name <> t1_name ORDER BY t1_id",
-        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id AND t1_name <> t2_name ORDER BY t1_id",
-        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id AND t2_name <> t1_name ORDER BY t1_id",
-    ];
-    let expected = vec![
-        "+-------+---------+---------+",
-        "| t1_id | t1_name | t2_name |",
-        "+-------+---------+---------+",
-        "| 11    | a       | z       |",
-        "| 22    | b       | y       |",
-        "| 44    | d       | x       |",
-        "+-------+---------+---------+",
-    ];
-    for sql in equivalent_sql.iter() {
-        let actual = execute_to_batches(&ctx, sql).await;
-        assert_batches_eq!(expected, &actual);
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+        let equivalent_sql = [
+            "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t1_name <> t2_name ORDER BY t1_id",
+            "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t2_name <> t1_name ORDER BY t1_id",
+            "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id AND t1_name <> t2_name ORDER BY t1_id",
+            "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id AND t2_name <> t1_name ORDER BY t1_id",
+        ];
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "| 11    | a       | z       |",
+            "| 22    | b       | y       |",
+            "| 44    | d       | x       |",
+            "+-------+---------+---------+",
+        ];
+        for sql in equivalent_sql.iter() {
+            let actual = execute_to_batches(&ctx, sql).await;
+            assert_batches_eq!(expected, &actual);
+        }
     }
     Ok(())
 }
 
 #[tokio::test]
 async fn equijoin_and_other_condition() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
-    let sql =
-        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------+---------+---------+",
-        "| t1_id | t1_name | t2_name |",
-        "+-------+---------+---------+",
-        "| 11    | a       | z       |",
-        "| 22    | b       | y       |",
-        "+-------+---------+---------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+        let sql =
+            "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "| 11    | a       | z       |",
+            "| 22    | b       | y       |",
+            "+-------+---------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
     Ok(())
 }
 
 #[tokio::test]
 async fn equijoin_left_and_condition_from_right() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
-    let sql =
-        "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
-    let res = ctx.create_logical_plan(sql);
-    assert!(res.is_ok());
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------+---------+---------+",
-        "| t1_id | t1_name | t2_name |",
-        "+-------+---------+---------+",
-        "| 11    | a       | z       |",
-        "| 22    | b       | y       |",
-        "| 33    | c       |         |",
-        "| 44    | d       |         |",
-        "+-------+---------+---------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+        let sql =
+            "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
+        let dataframe = ctx.sql(sql).await.unwrap();
+        let actual = dataframe.collect().await.unwrap();
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "| 11    | a       | z       |",
+            "| 22    | b       | y       |",
+            "| 33    | c       |         |",
+            "| 44    | d       |         |",
+            "+-------+---------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn equijoin_left_and_not_null_condition_from_right() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+        let sql =
+            "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t2_name is not null ORDER BY t1_id";
+        let dataframe = ctx.sql(sql).await.unwrap();
+        let actual = dataframe.collect().await.unwrap();
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "| 11    | a       | z       |",
+            "| 22    | b       | y       |",
+            "| 33    | c       |         |",
+            "| 44    | d       | x       |",
+            "+-------+---------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn full_join_sub_query() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+        let sql = "
+        SELECT t1_id, t1_name, t2_name FROM (SELECT * from (t1) AS t1) FULL JOIN (SELECT * from (t2) AS t2) ON t1_id = t2_id AND t2_name >= 'y'
+         ORDER BY t1_id, t2_name";
+        let dataframe = ctx.sql(sql).await.unwrap();
+        let actual = dataframe.collect().await.unwrap();
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "| 11    | a       | z       |",
+            "| 22    | b       | y       |",
+            "| 33    | c       |         |",
+            "| 44    | d       |         |",
+            "|       |         | w       |",
+            "|       |         | x       |",
+            "+-------+---------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
 
     Ok(())
 }
 
 #[tokio::test]
 async fn equijoin_right_and_condition_from_left() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
-    let sql =
-        "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t1_id >= 22 ORDER BY t2_name";
-    let res = ctx.create_logical_plan(sql);
-    assert!(res.is_ok());
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------+---------+---------+",
-        "| t1_id | t1_name | t2_name |",
-        "+-------+---------+---------+",
-        "|       |         | w       |",
-        "| 44    | d       | x       |",
-        "| 22    | b       | y       |",
-        "|       |         | z       |",
-        "+-------+---------+---------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+        let sql =
+            "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t1_id >= 22 ORDER BY t2_name";
+        let dataframe = ctx.sql(sql).await.unwrap();
+        let actual = dataframe.collect().await.unwrap();
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "|       |         | w       |",
+            "| 44    | d       | x       |",
+            "| 22    | b       | y       |",
+            "|       |         | z       |",
+            "+-------+---------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
     Ok(())
 }
 
 #[tokio::test]
 async fn equijoin_left_and_condition_from_left() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
-    let sql =
-        "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t1_id >= 44 ORDER BY t1_id";
-    let expected = vec![
-        "+-------+---------+---------+",
-        "| t1_id | t1_name | t2_name |",
-        "+-------+---------+---------+",
-        "| 11    | a       |         |",
-        "| 22    | b       |         |",
-        "| 33    | c       |         |",
-        "| 44    | d       | x       |",
-        "+-------+---------+---------+",
-    ];
-    let actual = execute_to_batches(&ctx, sql).await;
-    assert_batches_eq!(expected, &actual);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn equijoin_left_and_condition_from_both() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
-    let sql =
-        "SELECT t1_id, t1_int, t2_int FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t1_int >= t2_int ORDER BY t1_id";
-    let expected = vec![
-        "+-------+--------+--------+",
-        "| t1_id | t1_int | t2_int |",
-        "+-------+--------+--------+",
-        "| 11    | 1      |        |",
-        "| 22    | 2      | 1      |",
-        "| 33    | 3      |        |",
-        "| 44    | 4      | 3      |",
-        "+-------+--------+--------+",
-    ];
-    let actual = execute_to_batches(&ctx, sql).await;
-    assert_batches_eq!(expected, &actual);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn equijoin_right_and_condition_from_right() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
-    let sql =
-        "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t2_id >= 22 ORDER BY t2_name";
-    let res = ctx.create_logical_plan(sql);
-    assert!(res.is_ok());
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------+---------+---------+",
-        "| t1_id | t1_name | t2_name |",
-        "+-------+---------+---------+",
-        "|       |         | w       |",
-        "| 44    | d       | x       |",
-        "| 22    | b       | y       |",
-        "|       |         | z       |",
-        "+-------+---------+---------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn equijoin_right_and_condition_from_both() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
-    let sql =
-        "SELECT t1_int, t2_int, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t2_int <= t1_int ORDER BY t2_id";
-    let res = ctx.create_logical_plan(sql);
-    assert!(res.is_ok());
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+--------+--------+-------+",
-        "| t1_int | t2_int | t2_id |",
-        "+--------+--------+-------+",
-        "|        | 3      | 11    |",
-        "| 2      | 1      | 22    |",
-        "| 4      | 3      | 44    |",
-        "|        | 3      | 55    |",
-        "+--------+--------+-------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn left_join() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
-    let equivalent_sql = [
-        "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
-        "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
-    ];
-    let expected = vec![
-        "+-------+---------+---------+",
-        "| t1_id | t1_name | t2_name |",
-        "+-------+---------+---------+",
-        "| 11    | a       | z       |",
-        "| 22    | b       | y       |",
-        "| 33    | c       |         |",
-        "| 44    | d       | x       |",
-        "+-------+---------+---------+",
-    ];
-    for sql in equivalent_sql.iter() {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+        let sql =
+            "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t1_id >= 44 ORDER BY t1_id";
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "| 11    | a       |         |",
+            "| 22    | b       |         |",
+            "| 33    | c       |         |",
+            "| 44    | d       | x       |",
+            "+-------+---------+---------+",
+        ];
         let actual = execute_to_batches(&ctx, sql).await;
         assert_batches_eq!(expected, &actual);
     }
@@ -259,8 +238,107 @@ async fn left_join() -> Result<()> {
 }
 
 #[tokio::test]
+async fn equijoin_left_and_condition_from_both() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+        let sql =
+            "SELECT t1_id, t1_int, t2_int FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t1_int >= t2_int ORDER BY t1_id";
+        let expected = vec![
+            "+-------+--------+--------+",
+            "| t1_id | t1_int | t2_int |",
+            "+-------+--------+--------+",
+            "| 11    | 1      |        |",
+            "| 22    | 2      | 1      |",
+            "| 33    | 3      |        |",
+            "| 44    | 4      | 3      |",
+            "+-------+--------+--------+",
+        ];
+        let actual = execute_to_batches(&ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn equijoin_right_and_condition_from_right() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+        let sql =
+            "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t2_id >= 22 ORDER BY t2_name";
+        let dataframe = ctx.sql(sql).await.unwrap();
+        let actual = dataframe.collect().await.unwrap();
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "|       |         | w       |",
+            "| 44    | d       | x       |",
+            "| 22    | b       | y       |",
+            "|       |         | z       |",
+            "+-------+---------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn equijoin_right_and_condition_from_both() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+        let sql =
+            "SELECT t1_int, t2_int, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t2_int <= t1_int ORDER BY t2_id";
+        let dataframe = ctx.sql(sql).await.unwrap();
+        let actual = dataframe.collect().await.unwrap();
+        let expected = vec![
+            "+--------+--------+-------+",
+            "| t1_int | t2_int | t2_id |",
+            "+--------+--------+-------+",
+            "|        | 3      | 11    |",
+            "| 2      | 1      | 22    |",
+            "| 4      | 3      | 44    |",
+            "|        | 3      | 55    |",
+            "+--------+--------+-------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_join() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+        let equivalent_sql = [
+            "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
+            "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
+        ];
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "| 11    | a       | z       |",
+            "| 22    | b       | y       |",
+            "| 33    | c       |         |",
+            "| 44    | d       | x       |",
+            "+-------+---------+---------+",
+        ];
+        for sql in equivalent_sql.iter() {
+            let actual = execute_to_batches(&ctx, sql).await;
+            assert_batches_eq!(expected, &actual);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn left_join_unbalanced() -> Result<()> {
-    // the t1_id is larger than t2_id so the hash_build_probe_order optimizer should kick in
+    // the t1_id is larger than t2_id so the join_selection optimizer should kick in
     let ctx = create_join_context_unbalanced("t1_id", "t2_id")?;
     let equivalent_sql = [
         "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
@@ -500,58 +578,64 @@ async fn full_join_not_null_filter() -> Result<()> {
 
 #[tokio::test]
 async fn right_join() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
-    let equivalent_sql = [
-        "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
-        "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t2_id = t1_id ORDER BY t1_id"
-    ];
-    let expected = vec![
-        "+-------+---------+---------+",
-        "| t1_id | t1_name | t2_name |",
-        "+-------+---------+---------+",
-        "| 11    | a       | z       |",
-        "| 22    | b       | y       |",
-        "| 44    | d       | x       |",
-        "|       |         | w       |",
-        "+-------+---------+---------+",
-    ];
-    for sql in equivalent_sql.iter() {
-        let actual = execute_to_batches(&ctx, sql).await;
-        assert_batches_eq!(expected, &actual);
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+        let equivalent_sql = [
+            "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
+            "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t2_id = t1_id ORDER BY t1_id"
+        ];
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "| 11    | a       | z       |",
+            "| 22    | b       | y       |",
+            "| 44    | d       | x       |",
+            "|       |         | w       |",
+            "+-------+---------+---------+",
+        ];
+        for sql in equivalent_sql.iter() {
+            let actual = execute_to_batches(&ctx, sql).await;
+            assert_batches_eq!(expected, &actual);
+        }
     }
     Ok(())
 }
 
 #[tokio::test]
 async fn full_join() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
-    let equivalent_sql = [
-        "SELECT t1_id, t1_name, t2_name FROM t1 FULL JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
-        "SELECT t1_id, t1_name, t2_name FROM t1 FULL JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
-    ];
-    let expected = vec![
-        "+-------+---------+---------+",
-        "| t1_id | t1_name | t2_name |",
-        "+-------+---------+---------+",
-        "| 11    | a       | z       |",
-        "| 22    | b       | y       |",
-        "| 33    | c       |         |",
-        "| 44    | d       | x       |",
-        "|       |         | w       |",
-        "+-------+---------+---------+",
-    ];
-    for sql in equivalent_sql.iter() {
-        let actual = execute_to_batches(&ctx, sql).await;
-        assert_batches_eq!(expected, &actual);
-    }
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+        let equivalent_sql = [
+            "SELECT t1_id, t1_name, t2_name FROM t1 FULL JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
+            "SELECT t1_id, t1_name, t2_name FROM t1 FULL JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
+        ];
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "| 11    | a       | z       |",
+            "| 22    | b       | y       |",
+            "| 33    | c       |         |",
+            "| 44    | d       | x       |",
+            "|       |         | w       |",
+            "+-------+---------+---------+",
+        ];
+        for sql in equivalent_sql.iter() {
+            let actual = execute_to_batches(&ctx, sql).await;
+            assert_batches_eq!(expected, &actual);
+        }
 
-    let equivalent_sql = [
-        "SELECT t1_id, t1_name, t2_name FROM t1 FULL OUTER JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
-        "SELECT t1_id, t1_name, t2_name FROM t1 FULL OUTER JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
-    ];
-    for sql in equivalent_sql.iter() {
-        let actual = execute_to_batches(&ctx, sql).await;
-        assert_batches_eq!(expected, &actual);
+        let equivalent_sql = [
+            "SELECT t1_id, t1_name, t2_name FROM t1 FULL OUTER JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
+            "SELECT t1_id, t1_name, t2_name FROM t1 FULL OUTER JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
+        ];
+        for sql in equivalent_sql.iter() {
+            let actual = execute_to_batches(&ctx, sql).await;
+            assert_batches_eq!(expected, &actual);
+        }
     }
 
     Ok(())
@@ -559,149 +643,165 @@ async fn full_join() -> Result<()> {
 
 #[tokio::test]
 async fn left_join_using() -> Result<()> {
-    let ctx = create_join_context("id", "id")?;
-    let sql = "SELECT id, t1_name, t2_name FROM t1 LEFT JOIN t2 USING (id) ORDER BY id";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----+---------+---------+",
-        "| id | t1_name | t2_name |",
-        "+----+---------+---------+",
-        "| 11 | a       | z       |",
-        "| 22 | b       | y       |",
-        "| 33 | c       |         |",
-        "| 44 | d       | x       |",
-        "+----+---------+---------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn equijoin_implicit_syntax() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
-    let equivalent_sql = [
-        "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t1_id = t2_id ORDER BY t1_id",
-        "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t2_id = t1_id ORDER BY t1_id",
-    ];
-    let expected = vec![
-        "+-------+---------+---------+",
-        "| t1_id | t1_name | t2_name |",
-        "+-------+---------+---------+",
-        "| 11    | a       | z       |",
-        "| 22    | b       | y       |",
-        "| 44    | d       | x       |",
-        "+-------+---------+---------+",
-    ];
-    for sql in equivalent_sql.iter() {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("id", "id", repartition_joins)?;
+        let sql =
+            "SELECT id, t1_name, t2_name FROM t1 LEFT JOIN t2 USING (id) ORDER BY id";
         let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+----+---------+---------+",
+            "| id | t1_name | t2_name |",
+            "+----+---------+---------+",
+            "| 11 | a       | z       |",
+            "| 22 | b       | y       |",
+            "| 33 | c       |         |",
+            "| 44 | d       | x       |",
+            "+----+---------+---------+",
+        ];
         assert_batches_eq!(expected, &actual);
     }
     Ok(())
 }
 
 #[tokio::test]
+async fn equijoin_implicit_syntax() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+        let equivalent_sql = [
+            "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t1_id = t2_id ORDER BY t1_id",
+            "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t2_id = t1_id ORDER BY t1_id",
+        ];
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "| 11    | a       | z       |",
+            "| 22    | b       | y       |",
+            "| 44    | d       | x       |",
+            "+-------+---------+---------+",
+        ];
+        for sql in equivalent_sql.iter() {
+            let actual = execute_to_batches(&ctx, sql).await;
+            assert_batches_eq!(expected, &actual);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn equijoin_implicit_syntax_with_filter() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
-    let sql = "SELECT t1_id, t1_name, t2_name \
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+        let sql = "SELECT t1_id, t1_name, t2_name \
         FROM t1, t2 \
         WHERE t1_id > 0 \
         AND t1_id = t2_id \
         AND t2_id < 99 \
         ORDER BY t1_id";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------+---------+---------+",
-        "| t1_id | t1_name | t2_name |",
-        "+-------+---------+---------+",
-        "| 11    | a       | z       |",
-        "| 22    | b       | y       |",
-        "| 44    | d       | x       |",
-        "+-------+---------+---------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "| 11    | a       | z       |",
+            "| 22    | b       | y       |",
+            "| 44    | d       | x       |",
+            "+-------+---------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
     Ok(())
 }
 
 #[tokio::test]
 async fn equijoin_implicit_syntax_reversed() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
-    let sql =
-        "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t2_id = t1_id ORDER BY t1_id";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------+---------+---------+",
-        "| t1_id | t1_name | t2_name |",
-        "+-------+---------+---------+",
-        "| 11    | a       | z       |",
-        "| 22    | b       | y       |",
-        "| 44    | d       | x       |",
-        "+-------+---------+---------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+        let sql =
+            "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t2_id = t1_id ORDER BY t1_id";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "| 11    | a       | z       |",
+            "| 22    | b       | y       |",
+            "| 44    | d       | x       |",
+            "+-------+---------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
     Ok(())
 }
 
 #[tokio::test]
 async fn cross_join() {
-    let ctx = create_join_context("t1_id", "t2_id").unwrap();
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins).unwrap();
 
-    let sql = "SELECT t1_id, t1_name, t2_name FROM t1, t2 ORDER BY t1_id";
-    let actual = execute(&ctx, sql).await;
+        let sql = "SELECT t1_id, t1_name, t2_name FROM t1, t2 ORDER BY t1_id";
+        let actual = execute(&ctx, sql).await;
 
-    assert_eq!(4 * 4, actual.len());
+        assert_eq!(4 * 4, actual.len());
 
-    let sql = "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE 1=1 ORDER BY t1_id";
-    let actual = execute(&ctx, sql).await;
+        let sql = "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE 1=1 ORDER BY t1_id";
+        let actual = execute(&ctx, sql).await;
 
-    assert_eq!(4 * 4, actual.len());
+        assert_eq!(4 * 4, actual.len());
 
-    let sql = "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2";
+        let sql = "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2 ORDER BY t1_id";
 
-    let actual = execute(&ctx, sql).await;
-    assert_eq!(4 * 4, actual.len());
+        let actual = execute(&ctx, sql).await;
+        assert_eq!(4 * 4, actual.len());
 
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------+---------+---------+",
-        "| t1_id | t1_name | t2_name |",
-        "+-------+---------+---------+",
-        "| 11    | a       | z       |",
-        "| 11    | a       | y       |",
-        "| 11    | a       | x       |",
-        "| 11    | a       | w       |",
-        "| 22    | b       | z       |",
-        "| 22    | b       | y       |",
-        "| 22    | b       | x       |",
-        "| 22    | b       | w       |",
-        "| 33    | c       | z       |",
-        "| 33    | c       | y       |",
-        "| 33    | c       | x       |",
-        "| 33    | c       | w       |",
-        "| 44    | d       | z       |",
-        "| 44    | d       | y       |",
-        "| 44    | d       | x       |",
-        "| 44    | d       | w       |",
-        "+-------+---------+---------+",
-    ];
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "| 11    | a       | z       |",
+            "| 11    | a       | y       |",
+            "| 11    | a       | x       |",
+            "| 11    | a       | w       |",
+            "| 22    | b       | z       |",
+            "| 22    | b       | y       |",
+            "| 22    | b       | x       |",
+            "| 22    | b       | w       |",
+            "| 33    | c       | z       |",
+            "| 33    | c       | y       |",
+            "| 33    | c       | x       |",
+            "| 33    | c       | w       |",
+            "| 44    | d       | z       |",
+            "| 44    | d       | y       |",
+            "| 44    | d       | x       |",
+            "| 44    | d       | w       |",
+            "+-------+---------+---------+",
+        ];
 
-    assert_batches_eq!(expected, &actual);
+        assert_batches_eq!(expected, &actual);
 
-    // Two partitions (from UNION) on the left
-    let sql = "SELECT * FROM (SELECT t1_id, t1_name FROM t1 UNION ALL SELECT t1_id, t1_name FROM t1) AS t1 CROSS JOIN t2";
-    let actual = execute(&ctx, sql).await;
+        // Two partitions (from UNION) on the left
+        let sql = "SELECT * FROM (SELECT t1_id, t1_name FROM t1 UNION ALL SELECT t1_id, t1_name FROM t1) AS t1 CROSS JOIN t2";
+        let actual = execute(&ctx, sql).await;
 
-    assert_eq!(4 * 4 * 2, actual.len());
+        assert_eq!(4 * 4 * 2, actual.len());
 
-    // Two partitions (from UNION) on the right
-    let sql = "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN (SELECT t2_name FROM t2 UNION ALL SELECT t2_name FROM t2) AS t2";
-    let actual = execute(&ctx, sql).await;
+        // Two partitions (from UNION) on the right
+        let sql = "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN (SELECT t2_name FROM t2 UNION ALL SELECT t2_name FROM t2) AS t2";
+        let actual = execute(&ctx, sql).await;
 
-    assert_eq!(4 * 4 * 2, actual.len());
+        assert_eq!(4 * 4 * 2, actual.len());
+    }
 }
 
 #[tokio::test]
 async fn cross_join_unbalanced() {
-    // the t1_id is larger than t2_id so the hash_build_probe_order optimizer should kick in
+    // the t1_id is larger than t2_id so the join_selection optimizer should kick in
     let ctx = create_join_context_unbalanced("t1_id", "t2_id").unwrap();
 
     // the order of the values is not determinisitic, so we need to sort to check the values
@@ -892,6 +992,8 @@ async fn inner_join_qualified_names() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore]
+/// TODO: need to repair. Wrong Test: ambiguous column name: a
 async fn nestedjoin_with_alias() -> Result<()> {
     // repro case for https://github.com/apache/arrow-datafusion/issues/2867
     let sql = "select * from ((select 1 as a, 2 as b) c INNER JOIN (select 1 as a, 3 as d) e on c.a = e.a) f;";
@@ -1247,12 +1349,9 @@ async fn hash_join_with_date32() -> Result<()> {
 
     // inner join on hash supported data type (Date32)
     let sql = "select * from t1 join t2 on t1.c1 = t2.c1";
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Projection: t1.c1, t1.c2, t1.c3, t1.c4, t2.c1, t2.c2, t2.c3, t2.c4 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
@@ -1264,8 +1363,7 @@ async fn hash_join_with_date32() -> Result<()> {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let expected = vec![
@@ -1289,12 +1387,9 @@ async fn hash_join_with_date64() -> Result<()> {
 
     // left join on hash supported data type (Date64)
     let sql = "select * from t1 left join t2 on t1.c2 = t2.c2";
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Projection: t1.c1, t1.c2, t1.c3, t1.c4, t2.c1, t2.c2, t2.c3, t2.c4 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
@@ -1306,8 +1401,7 @@ async fn hash_join_with_date64() -> Result<()> {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let expected = vec![
@@ -1333,25 +1427,21 @@ async fn hash_join_with_decimal() -> Result<()> {
 
     // right join on hash supported data type (Decimal)
     let sql = "select * from t1 right join t2 on t1.c3 = t2.c3";
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
-    "Explain [plan_type:Utf8, plan:Utf8]",
-    "  Projection: t1.c1, t1.c2, t1.c3, t1.c4, t2.c1, t2.c2, t2.c3, t2.c4 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
-    "    Right Join: t1.c3 = t2.c3 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
-    "      TableScan: t1 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N]",
-    "      TableScan: t2 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: t1.c1, t1.c2, t1.c3, t1.c4, t2.c1, t2.c2, t2.c3, t2.c4 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "    Right Join: CAST(t1.c3 AS Decimal128(10, 2)) = t2.c3 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "      TableScan: t1 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "      TableScan: t2 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let expected = vec![
@@ -1377,12 +1467,9 @@ async fn hash_join_with_dictionary() -> Result<()> {
 
     // inner join on hash supported data type (Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)))
     let sql = "select * from t1 join t2 on t1.c4 = t2.c4";
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Projection: t1.c1, t1.c2, t1.c3, t1.c4, t2.c1, t2.c2, t2.c3, t2.c4 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
@@ -1394,8 +1481,7 @@ async fn hash_join_with_dictionary() -> Result<()> {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let expected = vec![
@@ -1414,350 +1500,1797 @@ async fn hash_join_with_dictionary() -> Result<()> {
 
 #[tokio::test]
 async fn reduce_left_join_1() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
 
-    // reduce to inner join
-    let sql = "select * from t1 left join t2 on t1.t1_id = t2.t2_id where t2.t2_id < 100";
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
-    let expected = vec![
-        "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "    Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "      Filter: t1.t1_id < UInt32(100) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "      Filter: t2.t2_id < UInt32(100) [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "        TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-    ];
-    let formatted = plan.display_indent_schema().to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    assert_eq!(
-        expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
-    );
-    let expected = vec![
-        "+-------+---------+--------+-------+---------+--------+",
-        "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int |",
-        "+-------+---------+--------+-------+---------+--------+",
-        "| 11    | a       | 1      | 11    | z       | 3      |",
-        "| 22    | b       | 2      | 22    | y       | 1      |",
-        "| 44    | d       | 4      | 44    | x       | 3      |",
-        "+-------+---------+--------+-------+---------+--------+",
-    ];
+        // reduce to inner join
+        let sql =
+            "select * from t1 left join t2 on t1.t1_id = t2.t2_id where t2.t2_id < 100";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
+        let expected = vec![
+            "Explain [plan_type:Utf8, plan:Utf8]",
+            "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "      Filter: t1.t1_id < UInt32(100) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "      Filter: t2.t2_id < UInt32(100) [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "        TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        ];
+        let formatted = plan.display_indent_schema().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        let expected = vec![
+            "+-------+---------+--------+-------+---------+--------+",
+            "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int |",
+            "+-------+---------+--------+-------+---------+--------+",
+            "| 11    | a       | 1      | 11    | z       | 3      |",
+            "| 22    | b       | 2      | 22    | y       | 1      |",
+            "| 44    | d       | 4      | 44    | x       | 3      |",
+            "+-------+---------+--------+-------+---------+--------+",
+        ];
 
-    let results = execute_to_batches(&ctx, sql).await;
-    assert_batches_sorted_eq!(expected, &results);
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
 
     Ok(())
 }
 
 #[tokio::test]
 async fn reduce_left_join_2() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
 
-    // reduce to inner join
-    let sql = "select * from t1 left join t2 on t1.t1_id = t2.t2_id where t2.t2_int < 10 or (t1.t1_int > 2 and t2.t2_name != 'w')";
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+        // reduce to inner join
+        let sql = "select * from t1 left join t2 on t1.t1_id = t2.t2_id where t2.t2_int < 10 or (t1.t1_int > 2 and t2.t2_name != 'w')";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
 
-    // filter expr:  `t2.t2_int < 10 or (t1.t1_int > 2 and t2.t2_name != 'w')`
-    // could be write to: `(t1.t1_int > 2 or t2.t2_int < 10) and (t2.t2_name != 'w' or t2.t2_int < 10)`
-    // the right part `(t2.t2_name != 'w' or t2.t2_int < 10)` could be push down left join side and remove in filter.
+        // filter expr:  `t2.t2_int < 10 or (t1.t1_int > 2 and t2.t2_name != 'w')`
+        // could be write to: `(t1.t1_int > 2 or t2.t2_int < 10) and (t2.t2_name != 'w' or t2.t2_int < 10)`
+        // the right part `(t2.t2_name != 'w' or t2.t2_int < 10)` could be push down left join side and remove in filter.
 
-    let expected = vec![
-        "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "    Filter: t2.t2_int < UInt32(10) OR t1.t1_int > UInt32(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "      Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "        Filter: t2.t2_int < UInt32(10) OR t2.t2_name != Utf8(\"w\") [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "          TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-    ];
-    let formatted = plan.display_indent_schema().to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    assert_eq!(
-        expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
-    );
-    let expected = vec![
-        "+-------+---------+--------+-------+---------+--------+",
-        "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int |",
-        "+-------+---------+--------+-------+---------+--------+",
-        "| 11    | a       | 1      | 11    | z       | 3      |",
-        "| 22    | b       | 2      | 22    | y       | 1      |",
-        "| 44    | d       | 4      | 44    | x       | 3      |",
-        "+-------+---------+--------+-------+---------+--------+",
-    ];
+        let expected = vec![
+            "Explain [plan_type:Utf8, plan:Utf8]",
+            "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    Filter: t2.t2_int < UInt32(10) OR t1.t1_int > UInt32(2) AND t2.t2_name != Utf8(\"w\") [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "      Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "        Filter: t2.t2_int < UInt32(10) OR t2.t2_name != Utf8(\"w\") [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "          TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        ];
+        let formatted = plan.display_indent_schema().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        let expected = vec![
+            "+-------+---------+--------+-------+---------+--------+",
+            "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int |",
+            "+-------+---------+--------+-------+---------+--------+",
+            "| 11    | a       | 1      | 11    | z       | 3      |",
+            "| 22    | b       | 2      | 22    | y       | 1      |",
+            "| 44    | d       | 4      | 44    | x       | 3      |",
+            "+-------+---------+--------+-------+---------+--------+",
+        ];
 
-    let results = execute_to_batches(&ctx, sql).await;
-    assert_batches_sorted_eq!(expected, &results);
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
 
     Ok(())
 }
 
 #[tokio::test]
 async fn reduce_left_join_3() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
 
-    // reduce subquery to inner join
-    let sql = "select * from (select t1.* from t1 left join t2 on t1.t1_id = t2.t2_id where t2.t2_int < 3) t3 left join t2 on t3.t1_int = t2.t2_int where t3.t1_id < 100";
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
-    let expected = vec![
-        "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: t3.t1_id, t3.t1_name, t3.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "    Left Join: t3.t1_int = t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "      Projection: t1.t1_id, t1.t1_name, t1.t1_int, alias=t3 [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "        Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "          Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "            Filter: t1.t1_id < UInt32(100) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "              TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "            Filter: t2.t2_int < UInt32(3) AND t2.t2_id < UInt32(100) [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "              TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-    ];
-    let formatted = plan.display_indent_schema().to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    assert_eq!(
-        expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
-    );
-    let expected = vec![
-        "+-------+---------+--------+-------+---------+--------+",
-        "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int |",
-        "+-------+---------+--------+-------+---------+--------+",
-        "| 22    | b       | 2      |       |         |        |",
-        "+-------+---------+--------+-------+---------+--------+",
-    ];
+        // reduce subquery to inner join
+        let sql = "select * from (select t1.* from t1 left join t2 on t1.t1_id = t2.t2_id where t2.t2_int < 3) t3 left join t2 on t3.t1_int = t2.t2_int where t3.t1_id < 100";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
+        let expected = vec![
+            "Explain [plan_type:Utf8, plan:Utf8]",
+            "  Projection: t3.t1_id, t3.t1_name, t3.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    Left Join: t3.t1_int = t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "      SubqueryAlias: t3 [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "        Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "          Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_int:UInt32;N]",
+            "            Filter: t1.t1_id < UInt32(100) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "              TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "            Filter: t2.t2_int < UInt32(3) AND t2.t2_id < UInt32(100) [t2_id:UInt32;N, t2_int:UInt32;N]",
+            "              TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
+            "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        ];
+        let formatted = plan.display_indent_schema().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        let expected = vec![
+            "+-------+---------+--------+-------+---------+--------+",
+            "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int |",
+            "+-------+---------+--------+-------+---------+--------+",
+            "| 22    | b       | 2      |       |         |        |",
+            "+-------+---------+--------+-------+---------+--------+",
+        ];
 
-    let results = execute_to_batches(&ctx, sql).await;
-    assert_batches_sorted_eq!(expected, &results);
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
 
     Ok(())
 }
 
 #[tokio::test]
 async fn reduce_right_join_1() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
 
-    // reduce to inner join
-    let sql = "select * from t1 right join t2 on t1.t1_id = t2.t2_id where t1.t1_int is not null";
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
-    let expected = vec![
-        "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "    Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "      Filter: t1.t1_int IS NOT NULL [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-    ];
-    let formatted = plan.display_indent_schema().to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    assert_eq!(
-        expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
-    );
-    let expected = vec![
-        "+-------+---------+--------+-------+---------+--------+",
-        "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int |",
-        "+-------+---------+--------+-------+---------+--------+",
-        "| 11    | a       | 1      | 11    | z       | 3      |",
-        "| 22    | b       | 2      | 22    | y       | 1      |",
-        "| 44    | d       | 4      | 44    | x       | 3      |",
-        "+-------+---------+--------+-------+---------+--------+",
-    ];
+        // reduce to inner join
+        let sql = "select * from t1 right join t2 on t1.t1_id = t2.t2_id where t1.t1_int is not null";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
+        let expected = vec![
+            "Explain [plan_type:Utf8, plan:Utf8]",
+            "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "      Filter: t1.t1_int IS NOT NULL [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        ];
+        let formatted = plan.display_indent_schema().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        let expected = vec![
+            "+-------+---------+--------+-------+---------+--------+",
+            "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int |",
+            "+-------+---------+--------+-------+---------+--------+",
+            "| 11    | a       | 1      | 11    | z       | 3      |",
+            "| 22    | b       | 2      | 22    | y       | 1      |",
+            "| 44    | d       | 4      | 44    | x       | 3      |",
+            "+-------+---------+--------+-------+---------+--------+",
+        ];
 
-    let results = execute_to_batches(&ctx, sql).await;
-    assert_batches_sorted_eq!(expected, &results);
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
 
     Ok(())
 }
 
 #[tokio::test]
 async fn reduce_right_join_2() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
 
-    // reduce to inner join
-    let sql = "select * from t1 right join t2 on t1.t1_id = t2.t2_id where not(t1.t1_int = t2.t2_int)";
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
-    let expected = vec![
-        "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "    Filter: t1.t1_int != t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "      Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "        TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-    ];
-    let formatted = plan.display_indent_schema().to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    assert_eq!(
-        expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
-    );
-    let expected = vec![
-        "+-------+---------+--------+-------+---------+--------+",
-        "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int |",
-        "+-------+---------+--------+-------+---------+--------+",
-        "| 11    | a       | 1      | 11    | z       | 3      |",
-        "| 22    | b       | 2      | 22    | y       | 1      |",
-        "| 44    | d       | 4      | 44    | x       | 3      |",
-        "+-------+---------+--------+-------+---------+--------+",
-    ];
+        // reduce to inner join
+        let sql = "select * from t1 right join t2 on t1.t1_id = t2.t2_id where not(t1.t1_int = t2.t2_int)";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
+        let expected = vec![
+            "Explain [plan_type:Utf8, plan:Utf8]",
+            "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    Filter: t1.t1_int != t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "      Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "        TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        ];
+        let formatted = plan.display_indent_schema().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        let expected = vec![
+            "+-------+---------+--------+-------+---------+--------+",
+            "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int |",
+            "+-------+---------+--------+-------+---------+--------+",
+            "| 11    | a       | 1      | 11    | z       | 3      |",
+            "| 22    | b       | 2      | 22    | y       | 1      |",
+            "| 44    | d       | 4      | 44    | x       | 3      |",
+            "+-------+---------+--------+-------+---------+--------+",
+        ];
 
-    let results = execute_to_batches(&ctx, sql).await;
-    assert_batches_sorted_eq!(expected, &results);
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
 
     Ok(())
 }
 
 #[tokio::test]
 async fn reduce_full_join_to_right_join() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
 
-    // reduce to right join
-    let sql = "select * from t1 full join t2 on t1.t1_id = t2.t2_id where t2.t2_name is not null";
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
-    let expected = vec![
-        "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "    Right Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "      Filter: t2.t2_name IS NOT NULL [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "        TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-    ];
-    let formatted = plan.display_indent_schema().to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    assert_eq!(
-        expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
-    );
-    let expected = vec![
-        "+-------+---------+--------+-------+---------+--------+",
-        "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int |",
-        "+-------+---------+--------+-------+---------+--------+",
-        "|       |         |        | 55    | w       | 3      |",
-        "| 11    | a       | 1      | 11    | z       | 3      |",
-        "| 22    | b       | 2      | 22    | y       | 1      |",
-        "| 44    | d       | 4      | 44    | x       | 3      |",
-        "+-------+---------+--------+-------+---------+--------+",
-    ];
+        // reduce to right join
+        let sql = "select * from t1 full join t2 on t1.t1_id = t2.t2_id where t2.t2_name is not null";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
+        let expected = vec![
+            "Explain [plan_type:Utf8, plan:Utf8]",
+            "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    Right Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "      Filter: t2.t2_name IS NOT NULL [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "        TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        ];
+        let formatted = plan.display_indent_schema().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        let expected = vec![
+            "+-------+---------+--------+-------+---------+--------+",
+            "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int |",
+            "+-------+---------+--------+-------+---------+--------+",
+            "|       |         |        | 55    | w       | 3      |",
+            "| 11    | a       | 1      | 11    | z       | 3      |",
+            "| 22    | b       | 2      | 22    | y       | 1      |",
+            "| 44    | d       | 4      | 44    | x       | 3      |",
+            "+-------+---------+--------+-------+---------+--------+",
+        ];
 
-    let results = execute_to_batches(&ctx, sql).await;
-    assert_batches_sorted_eq!(expected, &results);
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
 
     Ok(())
 }
 
 #[tokio::test]
 async fn reduce_full_join_to_left_join() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
 
-    // reduce to left join
-    let sql =
-        "select * from t1 full join t2 on t1.t1_id = t2.t2_id where t1.t1_name != 'b'";
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
-    let expected = vec![
-        "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "    Left Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "      Filter: t1.t1_name != Utf8(\"b\") [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-    ];
-    let formatted = plan.display_indent_schema().to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    assert_eq!(
-        expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
-    );
-    let expected = vec![
-        "+-------+---------+--------+-------+---------+--------+",
-        "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int |",
-        "+-------+---------+--------+-------+---------+--------+",
-        "| 11    | a       | 1      | 11    | z       | 3      |",
-        "| 33    | c       | 3      |       |         |        |",
-        "| 44    | d       | 4      | 44    | x       | 3      |",
-        "+-------+---------+--------+-------+---------+--------+",
-    ];
+        // reduce to left join
+        let sql =
+            "select * from t1 full join t2 on t1.t1_id = t2.t2_id where t1.t1_name != 'b'";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
+        let expected = vec![
+            "Explain [plan_type:Utf8, plan:Utf8]",
+            "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    Left Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "      Filter: t1.t1_name != Utf8(\"b\") [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        ];
+        let formatted = plan.display_indent_schema().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        let expected = vec![
+            "+-------+---------+--------+-------+---------+--------+",
+            "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int |",
+            "+-------+---------+--------+-------+---------+--------+",
+            "| 11    | a       | 1      | 11    | z       | 3      |",
+            "| 33    | c       | 3      |       |         |        |",
+            "| 44    | d       | 4      | 44    | x       | 3      |",
+            "+-------+---------+--------+-------+---------+--------+",
+        ];
 
-    let results = execute_to_batches(&ctx, sql).await;
-    assert_batches_sorted_eq!(expected, &results);
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
     Ok(())
 }
 
 #[tokio::test]
 async fn reduce_full_join_to_inner_join() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
 
-    // reduce to inner join
-    let sql = "select * from t1 full join t2 on t1.t1_id = t2.t2_id where t1.t1_name != 'b' and t2.t2_name = 'x'";
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+        // reduce to inner join
+        let sql = "select * from t1 full join t2 on t1.t1_id = t2.t2_id where t1.t1_name != 'b' and t2.t2_name = 'x'";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
+        let expected = vec![
+            "Explain [plan_type:Utf8, plan:Utf8]",
+            "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "      Filter: t1.t1_name != Utf8(\"b\") [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "      Filter: t2.t2_name = Utf8(\"x\") [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "        TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        ];
+        let formatted = plan.display_indent_schema().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        let expected = vec![
+            "+-------+---------+--------+-------+---------+--------+",
+            "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int |",
+            "+-------+---------+--------+-------+---------+--------+",
+            "| 44    | d       | 4      | 44    | x       | 3      |",
+            "+-------+---------+--------+-------+---------+--------+",
+        ];
+
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sort_merge_equijoin() -> Result<()> {
+    let ctx = create_sort_merge_join_context("t1_id", "t2_id")?;
+    let equivalent_sql = [
+        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
+        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
+    ];
+    let expected = vec![
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
+    ];
+    for sql in equivalent_sql.iter() {
+        let actual = execute_to_batches(&ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sort_merge_join_on_date32() -> Result<()> {
+    let ctx = create_sort_merge_join_datatype_context()?;
+
+    // inner sort merge join on data type (Date32)
+    let sql = "select * from t1 join t2 on t1.c1 = t2.c1";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+    let expected = vec![
+        "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@4 as c1, c2@5 as c2, c3@6 as c3, c4@7 as c4]",
+        "  SortMergeJoin: join_type=Inner, on=[(Column { name: \"c1\", index: 0 }, Column { name: \"c1\", index: 0 })]",
+        "    SortExec: [c1@0 ASC]",
+        "      CoalesceBatchesExec: target_batch_size=4096",
+        "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2), input_partitions=2",
+        "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+        "            MemoryExec: partitions=1, partition_sizes=[1]",
+        "    SortExec: [c1@0 ASC]",
+        "      CoalesceBatchesExec: target_batch_size=4096",
+        "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2), input_partitions=2",
+        "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+        "            MemoryExec: partitions=1, partition_sizes=[1]",
+    ];
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+------------+------------+---------+-----+------------+------------+---------+-----+",
+        "| c1         | c2         | c3      | c4  | c1         | c2         | c3      | c4  |",
+        "+------------+------------+---------+-----+------------+------------+---------+-----+",
+        "| 1970-01-02 | 1970-01-02 | 1.23    | abc | 1970-01-02 | 1970-01-02 | -123.12 | abc |",
+        "| 1970-01-04 |            | -123.12 | jkl | 1970-01-04 |            | 789.00  |     |",
+        "+------------+------------+---------+-----+------------+------------+---------+-----+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sort_merge_join_on_decimal() -> Result<()> {
+    let ctx = create_sort_merge_join_datatype_context()?;
+
+    // right join on data type (Decimal)
+    let sql = "select * from t1 right join t2 on t1.c3 = t2.c3";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+    let expected = vec![
+        "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@4 as c1, c2@5 as c2, c3@6 as c3, c4@7 as c4]",
+        "  ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@5 as c1, c2@6 as c2, c3@7 as c3, c4@8 as c4]",
+        "    SortMergeJoin: join_type=Right, on=[(Column { name: \"CAST(t1.c3 AS Decimal128(10, 2))\", index: 4 }, Column { name: \"c3\", index: 2 })]",
+        "      SortExec: [CAST(t1.c3 AS Decimal128(10, 2))@4 ASC]",
+        "        CoalesceBatchesExec: target_batch_size=4096",
+        "          RepartitionExec: partitioning=Hash([Column { name: \"CAST(t1.c3 AS Decimal128(10, 2))\", index: 4 }], 2), input_partitions=2",
+        "            ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, CAST(c3@2 AS Decimal128(10, 2)) as CAST(t1.c3 AS Decimal128(10, 2))]",
+        "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+        "                MemoryExec: partitions=1, partition_sizes=[1]",
+        "      SortExec: [c3@2 ASC]",
+        "        CoalesceBatchesExec: target_batch_size=4096",
+        "          RepartitionExec: partitioning=Hash([Column { name: \"c3\", index: 2 }], 2), input_partitions=2",
+        "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+        "              MemoryExec: partitions=1, partition_sizes=[1]",
+    ];
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+------------+------------+---------+-----+------------+------------+-----------+---------+",
+        "| c1         | c2         | c3      | c4  | c1         | c2         | c3        | c4      |",
+        "+------------+------------+---------+-----+------------+------------+-----------+---------+",
+        "|            |            |         |     |            |            | 100000.00 | abcdefg |",
+        "|            |            |         |     |            | 1970-01-04 | 0.00      | qwerty  |",
+        "|            | 1970-01-04 | 789.00  | ghi | 1970-01-04 |            | 789.00    |         |",
+        "| 1970-01-04 |            | -123.12 | jkl | 1970-01-02 | 1970-01-02 | -123.12   | abc     |",
+        "+------------+------------+---------+-----+------------+------------+-----------+---------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_semi_join() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_left_semi_anti_join_context_with_null_ids(
+            "t1_id",
+            "t2_id",
+            repartition_joins,
+        )
+        .unwrap();
+
+        let sql = "SELECT t1_id, t1_name FROM t1 WHERE t1_id IN (SELECT t2_id FROM t2) ORDER BY t1_id";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let expected = if repartition_joins {
+            vec![
+                "SortExec: [t1_id@0 ASC NULLS LAST]",
+                "  CoalescePartitionsExec",
+                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
+                "      CoalesceBatchesExec: target_batch_size=4096",
+                "        HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+                "          CoalesceBatchesExec: target_batch_size=4096",
+                "            RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "                MemoryExec: partitions=1, partition_sizes=[1]",
+                "          CoalesceBatchesExec: target_batch_size=4096",
+                "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
+                "              ProjectionExec: expr=[t2_id@0 as t2_id]",
+                "                RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "                  MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        } else {
+            vec![
+                "SortExec: [t1_id@0 ASC NULLS LAST]",
+                "  CoalescePartitionsExec",
+                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
+                "      CoalesceBatchesExec: target_batch_size=4096",
+                "        HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+                "          MemoryExec: partitions=1, partition_sizes=[1]",
+                "          ProjectionExec: expr=[t2_id@0 as t2_id]",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        };
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+",
+            "| t1_id | t1_name |",
+            "+-------+---------+",
+            "| 11    | a       |",
+            "| 11    | a       |",
+            "| 22    | b       |",
+            "| 44    | d       |",
+            "+-------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+
+        let sql = "SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE t1_id = t2_id) ORDER BY t1_id";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+",
+            "| t1_id | t1_name |",
+            "+-------+---------+",
+            "| 11    | a       |",
+            "| 11    | a       |",
+            "| 22    | b       |",
+            "| 44    | d       |",
+            "+-------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+
+        let sql = "SELECT t1_id FROM t1 INTERSECT SELECT t2_id FROM t2 ORDER BY t1_id";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+",
+            "| t1_id |",
+            "+-------+",
+            "| 11    |",
+            "| 22    |",
+            "| 44    |",
+            "|       |",
+            "+-------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+
+        let sql = "SELECT t1_id, t1_name FROM t1 LEFT SEMI JOIN t2 ON (t1_id = t2_id) ORDER BY t1_id";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let expected = if repartition_joins {
+            vec![
+                "SortExec: [t1_id@0 ASC NULLS LAST]",
+                "  CoalescePartitionsExec",
+                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
+                "      CoalesceBatchesExec: target_batch_size=4096",
+                "        HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+                "          CoalesceBatchesExec: target_batch_size=4096",
+                "            RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "                MemoryExec: partitions=1, partition_sizes=[1]",
+                "          CoalesceBatchesExec: target_batch_size=4096",
+                "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "                MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        } else {
+            vec![
+                "SortExec: [t1_id@0 ASC NULLS LAST]",
+                "  CoalescePartitionsExec",
+                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
+                "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+                "            MemoryExec: partitions=1, partition_sizes=[1]",
+                "            MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        };
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+",
+            "| t1_id | t1_name |",
+            "+-------+---------+",
+            "| 11    | a       |",
+            "| 11    | a       |",
+            "| 22    | b       |",
+            "| 44    | d       |",
+            "+-------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_semi_join_pushdown() -> Result<()> {
+    let ctx = create_left_semi_anti_join_context_with_null_ids("t1_id", "t2_id", false)
+        .unwrap();
+
+    // assert logical plan
+    let sql = "SELECT t1.t1_id, t1.t1_name FROM t1 LEFT SEMI JOIN t2 ON (t1.t1_id = t2.t2_id and t2.t2_int > 1)";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "    Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "      Filter: t1.t1_name != Utf8(\"b\") [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "      Filter: t2.t2_name = Utf8(\"x\") [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "        TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        "  Projection: t1.t1_id, t1.t1_name [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "    LeftSemi Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "      TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "      Filter: t2.t2_int > UInt32(1) [t2_id:UInt32;N, t2_int:UInt32;N]",
+        "        TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]", 
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_anti_join() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_left_semi_anti_join_context_with_null_ids(
+            "t1_id",
+            "t2_id",
+            repartition_joins,
+        )
+        .unwrap();
+
+        let sql = "SELECT t1_id, t1_name FROM t1 WHERE NOT EXISTS (SELECT 1 FROM t2 WHERE t1_id = t2_id) ORDER BY t1_id";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+",
+            "| t1_id | t1_name |",
+            "+-------+---------+",
+            "| 33    | c       |",
+            "|       | e       |",
+            "+-------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+
+        let sql = "SELECT t1_id FROM t1 EXCEPT SELECT t2_id FROM t2 ORDER BY t1_id";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+",
+            "| t1_id |",
+            "+-------+",
+            "| 33    |",
+            "+-------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+
+        let sql = "SELECT t1_id, t1_name FROM t1 LEFT ANTI JOIN t2 ON (t1_id = t2_id) ORDER BY t1_id";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+",
+            "| t1_id | t1_name |",
+            "+-------+---------+",
+            "| 33    | c       |",
+            "|       | e       |",
+            "+-------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "Test ignored, will be enabled after fixing the anti join plan bug"]
+// https://github.com/apache/arrow-datafusion/issues/4366
+async fn error_left_anti_join() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_left_semi_anti_join_context_with_null_ids(
+            "t1_id",
+            "t2_id",
+            repartition_joins,
+        )
+        .unwrap();
+
+        let sql = "SELECT t1_id, t1_name FROM t1 WHERE NOT EXISTS (SELECT 1 FROM t2 WHERE t1_id = t2_id and t1_id > 11) ORDER BY t1_id";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+",
+            "| t1_id | t1_name |",
+            "+-------+---------+",
+            "| 11    | a       |",
+            "| 11    | a       |",
+            "| 33    | c       |",
+            "|       | e       |",
+            "+-------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "Test ignored, will be enabled after fixing the NAAJ bug"]
+// https://github.com/apache/arrow-datafusion/issues/4211
+async fn null_aware_left_anti_join() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_left_semi_anti_join_context_with_null_ids(
+            "t1_id",
+            "t2_id",
+            repartition_joins,
+        )
+        .unwrap();
+
+        let sql = "SELECT t1_id, t1_name FROM t1 WHERE t1_id NOT IN (SELECT t2_id FROM t2) ORDER BY t1_id";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec!["++", "++"];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn right_semi_join() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_right_semi_anti_join_context_with_null_ids(
+            "t1_id",
+            "t2_id",
+            repartition_joins,
+        )
+        .unwrap();
+
+        let sql = "SELECT t1_id, t1_name, t1_int FROM t1 WHERE EXISTS (SELECT * FROM t2 where t2.t2_id = t1.t1_id and t2.t2_name <> t1.t1_name) ORDER BY t1_id";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let expected = if repartition_joins {
+            vec![ "SortExec: [t1_id@0 ASC NULLS LAST]",
+                  "  CoalescePartitionsExec",
+                  "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
+                  "      CoalesceBatchesExec: target_batch_size=4096",
+                  "        HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
+                  "          CoalesceBatchesExec: target_batch_size=4096",
+                  "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
+                  "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                  "                MemoryExec: partitions=1, partition_sizes=[1]",
+                  "          CoalesceBatchesExec: target_batch_size=4096",
+                  "            RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+                  "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                  "                MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        } else {
+            vec![
+                "SortExec: [t1_id@0 ASC NULLS LAST]",
+                "  CoalescePartitionsExec",
+                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
+                "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
+                "            MemoryExec: partitions=1, partition_sizes=[1]",
+                "            MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        };
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+--------+",
+            "| t1_id | t1_name | t1_int |",
+            "+-------+---------+--------+",
+            "| 11    | a       | 1      |",
+            "+-------+---------+--------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+
+        let sql = "SELECT t1_id, t1_name, t1_int FROM t2 RIGHT SEMI JOIN t1 on (t2.t2_id = t1.t1_id and t2.t2_name <> t1.t1_name) ORDER BY t1_id";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let expected = if repartition_joins {
+            vec![ "SortExec: [t1_id@0 ASC NULLS LAST]",
+                  "  CoalescePartitionsExec",
+                  "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
+                  "      CoalesceBatchesExec: target_batch_size=4096",
+                  "        HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 0 }, op: NotEq, right: Column { name: \"t1_name\", index: 1 } }",
+                  "          CoalesceBatchesExec: target_batch_size=4096",
+                  "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
+                  "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                  "                MemoryExec: partitions=1, partition_sizes=[1]",
+                  "          CoalesceBatchesExec: target_batch_size=4096",
+                  "            RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+                  "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                  "                MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        } else {
+            vec![
+                "SortExec: [t1_id@0 ASC NULLS LAST]",
+                "  CoalescePartitionsExec",
+                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
+                "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 0 }, op: NotEq, right: Column { name: \"t1_name\", index: 1 } }",
+                "            MemoryExec: partitions=1, partition_sizes=[1]",
+                "            MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        };
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+--------+",
+            "| t1_id | t1_name | t1_int |",
+            "+-------+---------+--------+",
+            "| 11    | a       | 1      |",
+            "+-------+---------+--------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_join_with_nonequal_condition() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins).unwrap();
+
+        let sql = "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON (t1_id != t2_id and t2_id >= 100) ORDER BY t1_id";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "| 11    | a       |         |",
+            "| 22    | b       |         |",
+            "| 33    | c       |         |",
+            "| 44    | d       |         |",
+            "+-------+---------+---------+",
+        ];
+
+        assert_batches_eq!(expected, &actual);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn reduce_cross_join_with_expr_join_key_all() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+
+        // reduce to inner join
+        let sql = "select * from t1 cross join t2 where t1.t1_id + 12 = t2.t2_id + 1";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
+        let expected = vec![
+            "Explain [plan_type:Utf8, plan:Utf8]",
+            "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    Inner Join: CAST(t1.t1_id AS Int64) + Int64(12) = CAST(t2.t2_id AS Int64) + Int64(1) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        ];
+
+        let formatted = plan.display_indent_schema().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        let expected = vec![
+            "+-------+---------+--------+-------+---------+--------+",
+            "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int |",
+            "+-------+---------+--------+-------+---------+--------+",
+            "| 11    | a       | 1      | 22    | y       | 1      |",
+            "| 33    | c       | 3      | 44    | x       | 3      |",
+            "| 44    | d       | 4      | 55    | w       | 3      |",
+            "+-------+---------+--------+-------+---------+--------+",
+        ];
+
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn reduce_cross_join_with_cast_expr_join_key() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+
+        let sql =
+            "select t1.t1_id, t2.t2_id, t1.t1_name from t1 cross join t2 where t1.t1_id + 11 = cast(t2.t2_id as BIGINT)";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
+        let expected = vec![
+           "Explain [plan_type:Utf8, plan:Utf8]",
+           "  Projection: t1.t1_id, t2.t2_id, t1.t1_name [t1_id:UInt32;N, t2_id:UInt32;N, t1_name:Utf8;N]",
+           "    Inner Join: CAST(t1.t1_id AS Int64) + Int64(11) = CAST(t2.t2_id AS Int64) [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
+           "      TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+           "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+        ];
+
+        let formatted = plan.display_indent_schema().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        let expected = vec![
+            "+-------+-------+---------+",
+            "| t1_id | t2_id | t1_name |",
+            "+-------+-------+---------+",
+            "| 11    | 22    | a       |",
+            "| 33    | 44    | c       |",
+            "| 44    | 55    | d       |",
+            "+-------+-------+---------+",
+        ];
+
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn reduce_cross_join_with_wildcard_and_expr() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+
+        let sql = "select *,t1.t1_id+11 from t1,t2 where t1.t1_id+11=t2.t2_id";
+
+        // assert logical plan
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
+
+        let expected = vec![
+            "Explain [plan_type:Utf8, plan:Utf8]",
+            "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int, CAST(t1.t1_id AS Int64) + Int64(11) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N, t1.t1_id + Int64(11):Int64;N]",
+            "    Inner Join: CAST(t1.t1_id AS Int64) + Int64(11) = CAST(t2.t2_id AS Int64) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]"
+        ];
+
+        let formatted = plan.display_indent_schema().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        // assert physical plan
+        let msg = format!("Creating physical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let expected = if repartition_joins {
+            vec![
+                "ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int, CAST(t1_id@0 AS Int64) + 11 as t1.t1_id + Int64(11)]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@4 as t2_id, t2_name@5 as t2_name, t2_int@6 as t2_int]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1.t1_id + Int64(11)\", index: 3 }, Column { name: \"CAST(t2.t2_id AS Int64)\", index: 3 })]",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + Int64(11)\", index: 3 }], 2), input_partitions=2",
+                "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, CAST(t1_id@0 AS Int64) + 11 as t1.t1_id + Int64(11)]",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "                MemoryExec: partitions=1, partition_sizes=[1]",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"CAST(t2.t2_id AS Int64)\", index: 3 }], 2), input_partitions=2",
+                "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, CAST(t2_id@0 AS Int64) as CAST(t2.t2_id AS Int64)]",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "                MemoryExec: partitions=1, partition_sizes=[1]",
+           ]
+        } else {
+            vec![
+                "ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int, CAST(t1_id@0 AS Int64) + 11 as t1.t1_id + Int64(11)]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@4 as t2_id, t2_name@5 as t2_name, t2_int@6 as t2_int]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + Int64(11)\", index: 3 }, Column { name: \"CAST(t2.t2_id AS Int64)\", index: 3 })]",
+                "        CoalescePartitionsExec",
+                "          ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, CAST(t1_id@0 AS Int64) + 11 as t1.t1_id + Int64(11)]",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
+                "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, CAST(t2_id@0 AS Int64) as CAST(t2.t2_id AS Int64)]",
+                "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "            MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        };
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        // assert execution result
+        let expected = vec![
+            "+-------+---------+--------+-------+---------+--------+----------------------+",
+            "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int | t1.t1_id + Int64(11) |",
+            "+-------+---------+--------+-------+---------+--------+----------------------+",
+            "| 11    | a       | 1      | 22    | y       | 1      | 22                   |",
+            "| 33    | c       | 3      | 44    | x       | 3      | 44                   |",
+            "| 44    | d       | 4      | 55    | w       | 3      | 55                   |",
+            "+-------+---------+--------+-------+---------+--------+----------------------+",
+        ];
+
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn both_side_expr_key_inner_join() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+
+        let sql = "SELECT t1.t1_id, t2.t2_id, t1.t1_name \
+                         FROM t1 \
+                         INNER JOIN t2 \
+                         ON t1.t1_id + cast(12 as INT UNSIGNED)  = t2.t2_id + cast(1 as INT UNSIGNED)";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+
+        let expected = if repartition_joins {
+            vec![
+                "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@3 as t2_id]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(12)\", index: 2 }, Column { name: \"t2.t2_id + UInt32(1)\", index: 1 })]",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + UInt32(12)\", index: 2 }], 2), input_partitions=2",
+                "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 12 as t1.t1_id + UInt32(12)]",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "                MemoryExec: partitions=1, partition_sizes=[1]",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id + UInt32(1)\", index: 1 }], 2), input_partitions=2",
+                "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 + 1 as t2.t2_id + UInt32(1)]",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "                MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        } else {
+            vec![
+                "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@3 as t2_id]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(12)\", index: 2 }, Column { name: \"t2.t2_id + UInt32(1)\", index: 1 })]",
+                "        CoalescePartitionsExec",
+                "          ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 12 as t1.t1_id + UInt32(12)]",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
+                "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 + 1 as t2.t2_id + UInt32(1)]",
+                "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "            MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        };
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let expected = vec![
+            "+-------+-------+---------+",
+            "| t1_id | t2_id | t1_name |",
+            "+-------+-------+---------+",
+            "| 11    | 22    | a       |",
+            "| 33    | 44    | c       |",
+            "| 44    | 55    | d       |",
+            "+-------+-------+---------+",
+        ];
+
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_side_expr_key_inner_join() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+
+        let sql = "SELECT t1.t1_id, t2.t2_id, t1.t1_name \
+                         FROM t1 \
+                         INNER JOIN t2 \
+                         ON t1.t1_id + cast(11 as INT UNSIGNED)  = t2.t2_id";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+
+        let expected = if repartition_joins {
+            vec![
+                "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@3 as t2_id]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }, Column { name: \"t2_id\", index: 0 })]",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }], 2), input_partitions=2",
+                "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as t1.t1_id + UInt32(11)]",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "                MemoryExec: partitions=1, partition_sizes=[1]",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
+           ]
+        } else {
+            vec![
+                "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@3 as t2_id]",
+                "    RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "      CoalesceBatchesExec: target_batch_size=4096",
+                "        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }, Column { name: \"t2_id\", index: 0 })]",
+                "          CoalescePartitionsExec",
+                "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as t1.t1_id + UInt32(11)]",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "                MemoryExec: partitions=1, partition_sizes=[1]",
+                "          MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        };
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let expected = vec![
+            "+-------+-------+---------+",
+            "| t1_id | t2_id | t1_name |",
+            "+-------+-------+---------+",
+            "| 11    | 22    | a       |",
+            "| 33    | 44    | c       |",
+            "| 44    | 55    | d       |",
+            "+-------+-------+---------+",
+        ];
+
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn right_side_expr_key_inner_join() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+
+        let sql = "SELECT t1.t1_id, t2.t2_id, t1.t1_name \
+                         FROM t1 \
+                         INNER JOIN t2 \
+                         ON t1.t1_id = t2.t2_id - cast(11 as INT UNSIGNED)";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+
+        let expected = if repartition_joins {
+            vec![
+                "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@2 as t2_id]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - UInt32(11)\", index: 1 })]",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id - UInt32(11)\", index: 1 }], 2), input_partitions=2",
+                "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 - 11 as t2.t2_id - UInt32(11)]",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "                MemoryExec: partitions=1, partition_sizes=[1]",
+           ]
+        } else {
+            vec![
+                "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@2 as t2_id]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - UInt32(11)\", index: 1 })]",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
+                "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 - 11 as t2.t2_id - UInt32(11)]",
+                "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "            MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        };
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let expected = vec![
+            "+-------+-------+---------+",
+            "| t1_id | t2_id | t1_name |",
+            "+-------+-------+---------+",
+            "| 11    | 22    | a       |",
+            "| 33    | 44    | c       |",
+            "| 44    | 55    | d       |",
+            "+-------+-------+---------+",
+        ];
+
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn select_wildcard_with_expr_key_inner_join() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+
+        let sql = "SELECT * \
+                         FROM t1 \
+                         INNER JOIN t2 \
+                         ON t1.t1_id = t2.t2_id - cast(11 as INT UNSIGNED)";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+
+        let expected = if repartition_joins {
+            vec![
+                "ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - UInt32(11)\", index: 3 })]",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id - UInt32(11)\", index: 3 }], 2), input_partitions=2",
+                "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, t2_id@0 - 11 as t2.t2_id - UInt32(11)]",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "                MemoryExec: partitions=1, partition_sizes=[1]",
+           ]
+        } else {
+            vec![
+                "ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - UInt32(11)\", index: 3 })]",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
+                "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, t2_id@0 - 11 as t2.t2_id - UInt32(11)]",
+                "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "            MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        };
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let expected = vec![
+            "+-------+---------+--------+-------+---------+--------+",
+            "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int |",
+            "+-------+---------+--------+-------+---------+--------+",
+            "| 11    | a       | 1      | 22    | y       | 1      |",
+            "| 33    | c       | 3      | 44    | x       | 3      |",
+            "| 44    | d       | 4      | 55    | w       | 3      |",
+            "+-------+---------+--------+-------+---------+--------+",
+        ];
+
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_with_type_coercion_for_equi_expr() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t2.t2_id from t1 inner join t2 on t1.t1_id + 11 = t2.t2_id";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+
     let expected = vec![
-        "+-------+---------+--------+-------+---------+--------+",
-        "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int |",
-        "+-------+---------+--------+-------+---------+--------+",
-        "| 44    | d       | 4      | 44    | x       | 3      |",
-        "+-------+---------+--------+-------+---------+--------+",
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: t1.t1_id, t1.t1_name, t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
+        "    Inner Join: CAST(t1.t1_id AS Int64) + Int64(11) = CAST(t2.t2_id AS Int64) [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
+        "      TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+---------+-------+",
+        "| t1_id | t1_name | t2_id |",
+        "+-------+---------+-------+",
+        "| 11    | a       | 22    |",
+        "| 33    | c       | 44    |",
+        "| 44    | d       | 55    |",
+        "+-------+---------+-------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_only_with_filter() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t2.t2_id from t1 inner join t2 on t1.t1_id * 4 < t2.t2_id";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: t1.t1_id, t1.t1_name, t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
+        "    Inner Join:  Filter: CAST(t1.t1_id AS Int64) * Int64(4) < CAST(t2.t2_id AS Int64) [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
+        "      TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+---------+-------+",
+        "| t1_id | t1_name | t2_id |",
+        "+-------+---------+-------+",
+        "| 11    | a       | 55    |",
+        "+-------+---------+-------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn type_coercion_join_with_filter_and_equi_expr() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t2.t2_id \
+                     from t1 \
+                     inner join t2 \
+                     on t1.t1_id * 5 = t2.t2_id and t1.t1_id * 4 < t2.t2_id";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: t1.t1_id, t1.t1_name, t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
+        "    Inner Join: CAST(t1.t1_id AS Int64) * Int64(5) = CAST(t2.t2_id AS Int64) Filter: CAST(t1.t1_id AS Int64) * Int64(4) < CAST(t2.t2_id AS Int64) [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
+        "      TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+---------+-------+",
+        "| t1_id | t1_name | t2_id |",
+        "+-------+---------+-------+",
+        "| 11    | a       | 55    |",
+        "+-------+---------+-------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cross_join_to_groupby_with_different_key_ordering() -> Result<()> {
+    // Regression test for GH #4873
+    let col1 = Arc::new(StringArray::from(vec![
+        "A", "A", "A", "A", "A", "A", "A", "A", "BB", "BB", "BB", "BB",
+    ])) as ArrayRef;
+
+    let col2 =
+        Arc::new(UInt64Array::from(vec![1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6])) as ArrayRef;
+
+    let col3 =
+        Arc::new(UInt64Array::from(vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1])) as ArrayRef;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("col1", DataType::Utf8, true),
+        Field::new("col2", DataType::UInt64, true),
+        Field::new("col3", DataType::UInt64, true),
+    ])) as SchemaRef;
+
+    let batch = RecordBatch::try_new(schema.clone(), vec![col1, col2, col3]).unwrap();
+    let mem_table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+
+    // Create context and register table
+    let ctx = SessionContext::new();
+    ctx.register_table("tbl", Arc::new(mem_table)).unwrap();
+
+    let sql = "select col1, col2, coalesce(sum_col3, 0) as sum_col3 \
+                     from (select distinct col2 from tbl) AS q1 \
+                     cross join (select distinct col1 from tbl) AS q2 \
+                     left outer join (SELECT col1, col2, sum(col3) as sum_col3 FROM tbl GROUP BY col1, col2) AS q3 \
+                     USING(col2, col1) \
+                     ORDER BY col1, col2";
+
+    let expected = vec![
+        "+------+------+----------+",
+        "| col1 | col2 | sum_col3 |",
+        "+------+------+----------+",
+        "| A    | 1    | 2        |",
+        "| A    | 2    | 2        |",
+        "| A    | 3    | 2        |",
+        "| A    | 4    | 2        |",
+        "| A    | 5    | 0        |",
+        "| A    | 6    | 0        |",
+        "| BB   | 1    | 0        |",
+        "| BB   | 2    | 0        |",
+        "| BB   | 3    | 0        |",
+        "| BB   | 4    | 0        |",
+        "| BB   | 5    | 2        |",
+        "| BB   | 6    | 2        |",
+        "+------+------+----------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn subquery_to_join_with_both_side_expr() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t1.t1_int from t1 where t1.t1_id + 12 in (select t2.t2_id + 1 from t2)";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
+        "        Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1) [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
+        "          TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+---------+--------+",
+        "| t1_id | t1_name | t1_int |",
+        "+-------+---------+--------+",
+        "| 11    | a       | 1      |",
+        "| 33    | c       | 3      |",
+        "| 44    | d       | 4      |",
+        "+-------+---------+--------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn subquery_to_join_with_muti_filter() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t1.t1_int from t1 where t1.t1_id + 12 in 
+                         (select t2.t2_id + 1 from t2 where t1.t1_int <= t2.t2_int and t2.t2_int > 0)";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) Filter: t1.t1_int <= __correlated_sq_1.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N, t2_int:UInt32;N]",
+        "        Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1), t2.t2_int [CAST(t2_id AS Int64) + Int64(1):Int64;N, t2_int:UInt32;N]",
+        "          Filter: t2.t2_int > UInt32(0) [t2_id:UInt32;N, t2_int:UInt32;N]",
+        "            TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+---------+--------+",
+        "| t1_id | t1_name | t1_int |",
+        "+-------+---------+--------+",
+        "| 11    | a       | 1      |",
+        "| 33    | c       | 3      |",
+        "+-------+---------+--------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn three_projection_exprs_subquery_to_join() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t1.t1_int from t1 where t1.t1_id + 12 in 
+                         (select t2.t2_id + 1 from t2 where t1.t1_int <= t2.t2_int and t1.t1_name != t2.t2_name and t2.t2_int > 0)";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) Filter: t1.t1_int <= __correlated_sq_1.t2_int AND t1.t1_name != __correlated_sq_1.t2_name [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N, t2_int:UInt32;N, t2_name:Utf8;N]",
+        "        Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1), t2.t2_int, t2.t2_name [CAST(t2_id AS Int64) + Int64(1):Int64;N, t2_int:UInt32;N, t2_name:Utf8;N]",
+        "          Filter: t2.t2_int > UInt32(0) [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        "            TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+---------+--------+",
+        "| t1_id | t1_name | t1_int |",
+        "+-------+---------+--------+",
+        "| 11    | a       | 1      |",
+        "| 33    | c       | 3      |",
+        "+-------+---------+--------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn in_subquery_to_join_with_correlated_outer_filter() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t1.t1_int from t1 where t1.t1_id + 12 in 
+                         (select t2.t2_id + 1 from t2 where t1.t1_int > 0)";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      Filter: t1.t1_int > UInt32(0) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
+        "        Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1) [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
+        "          TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn not_in_subquery_to_join_with_correlated_outer_filter() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t1.t1_int from t1 where t1.t1_id + 12 not in 
+                         (select t2.t2_id + 1 from t2 where t1.t1_int > 0)";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    LeftAnti Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) Filter: t1.t1_int > UInt32(0) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
+        "        Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1) [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
+        "          TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn in_subquery_to_join_with_outer_filter() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t1.t1_int from t1 where t1.t1_id + 12 in 
+                         (select t2.t2_id + 1 from t2 where t1.t1_int <= t2.t2_int and t1.t1_name != t2.t2_name) and t1.t1_id > 0";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) Filter: t1.t1_int <= __correlated_sq_1.t2_int AND t1.t1_name != __correlated_sq_1.t2_name [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      Filter: t1.t1_id > UInt32(0) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N, t2_int:UInt32;N, t2_name:Utf8;N]",
+        "        Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1), t2.t2_int, t2.t2_name [CAST(t2_id AS Int64) + Int64(1):Int64;N, t2_int:UInt32;N, t2_name:Utf8;N]",
+        "          TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+---------+--------+",
+        "| t1_id | t1_name | t1_int |",
+        "+-------+---------+--------+",
+        "| 11    | a       | 1      |",
+        "| 33    | c       | 3      |",
+        "+-------+---------+--------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn two_in_subquery_to_join_with_outer_filter() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t1.t1_int from t1 where t1.t1_id + 12 in 
+                         (select t2.t2_id + 1 from t2) 
+                         and t1.t1_int in(select t2.t2_int + 1 from t2)
+                         and t1.t1_id > 0";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    LeftSemi Join: CAST(t1.t1_int AS Int64) = __correlated_sq_2.CAST(t2_int AS Int64) + Int64(1) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "        Filter: t1.t1_id > UInt32(0) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "          TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "        SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
+        "          Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1) [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
+        "            TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+        "      SubqueryAlias: __correlated_sq_2 [CAST(t2_int AS Int64) + Int64(1):Int64;N]",
+        "        Projection: CAST(t2.t2_int AS Int64) + Int64(1) AS CAST(t2_int AS Int64) + Int64(1) [CAST(t2_int AS Int64) + Int64(1):Int64;N]",
+        "          TableScan: t2 projection=[t2_int] [t2_int:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+---------+--------+",
+        "| t1_id | t1_name | t1_int |",
+        "+-------+---------+--------+",
+        "| 44    | d       | 4      |",
+        "+-------+---------+--------+",
     ];
 
     let results = execute_to_batches(&ctx, sql).await;

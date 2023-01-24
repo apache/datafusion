@@ -28,6 +28,7 @@ use arrow::{
     array::{
         ArrayRef, Date32Array, Date64Array, Float32Array, Float64Array, Int16Array,
         Int32Array, Int64Array, Int8Array, LargeStringArray, StringArray,
+        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
         Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
         TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
         UInt64Array, UInt8Array,
@@ -36,13 +37,17 @@ use arrow::{
 };
 use datafusion_common::ScalarValue;
 use datafusion_common::{downcast_value, DataFusionError, Result};
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 
-use crate::aggregate::row_accumulator::RowAccumulator;
+use crate::aggregate::row_accumulator::{
+    is_row_accumulator_support_dtype, RowAccumulator,
+};
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::Decimal128Array;
 use datafusion_row::accessor::RowAccessor;
+
+use super::moving_min_max;
 
 // Min/max aggregation can take Dictionary encode input but always produces unpacked
 // (aka non Dictionary) output. We need to adjust the output data type to reflect this.
@@ -57,7 +62,7 @@ fn min_max_aggregate_data_type(input_type: DataType) -> DataType {
 }
 
 /// MAX aggregate expression
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Max {
     name: String,
     data_type: DataType,
@@ -97,7 +102,7 @@ impl AggregateExpr for Max {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            &format_state_name(&self.name, "max"),
+            format_state_name(&self.name, "max"),
             self.data_type.clone(),
             true,
         )])
@@ -116,19 +121,11 @@ impl AggregateExpr for Max {
     }
 
     fn row_accumulator_supported(&self) -> bool {
-        matches!(
-            self.data_type,
-            DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64
-                | DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::Float32
-                | DataType::Float64
-        )
+        is_row_accumulator_support_dtype(&self.data_type)
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        true
     }
 
     fn create_row_accumulator(
@@ -139,6 +136,14 @@ impl AggregateExpr for Max {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        Some(Arc::new(self.clone()))
+    }
+
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(SlidingMaxAccumulator::try_new(&self.data_type)?))
     }
 }
 
@@ -251,8 +256,32 @@ macro_rules! min_max_batch {
             ),
             DataType::Date32 => typed_min_max_batch!($VALUES, Date32Array, Date32, $OP),
             DataType::Date64 => typed_min_max_batch!($VALUES, Date64Array, Date64, $OP),
+            DataType::Time32(TimeUnit::Second) => {
+                typed_min_max_batch!($VALUES, Time32SecondArray, Time32Second, $OP)
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                typed_min_max_batch!(
+                    $VALUES,
+                    Time32MillisecondArray,
+                    Time32Millisecond,
+                    $OP
+                )
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                typed_min_max_batch!(
+                    $VALUES,
+                    Time64MicrosecondArray,
+                    Time64Microsecond,
+                    $OP
+                )
+            }
             DataType::Time64(TimeUnit::Nanosecond) => {
-                typed_min_max_batch!($VALUES, Time64NanosecondArray, Time64, $OP)
+                typed_min_max_batch!(
+                    $VALUES,
+                    Time64NanosecondArray,
+                    Time64Nanosecond,
+                    $OP
+                )
             }
             other => {
                 // This should have been handled before
@@ -417,10 +446,28 @@ macro_rules! min_max {
                 typed_min_max!(lhs, rhs, Date64, $OP)
             }
             (
-                ScalarValue::Time64(lhs),
-                ScalarValue::Time64(rhs),
+                ScalarValue::Time32Second(lhs),
+                ScalarValue::Time32Second(rhs),
             ) => {
-                typed_min_max!(lhs, rhs, Time64, $OP)
+                typed_min_max!(lhs, rhs, Time32Second, $OP)
+            }
+            (
+                ScalarValue::Time32Millisecond(lhs),
+                ScalarValue::Time32Millisecond(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, Time32Millisecond, $OP)
+            }
+            (
+                ScalarValue::Time64Microsecond(lhs),
+                ScalarValue::Time64Microsecond(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, Time64Microsecond, $OP)
+            }
+            (
+                ScalarValue::Time64Nanosecond(lhs),
+                ScalarValue::Time64Nanosecond(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, Time64Nanosecond, $OP)
             }
             e => {
                 return Err(DataFusionError::Internal(format!(
@@ -521,12 +568,72 @@ impl Accumulator for MaxAccumulator {
         self.update_batch(states)
     }
 
-    fn state(&self) -> Result<Vec<AggregateState>> {
-        Ok(vec![AggregateState::Scalar(self.max.clone())])
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.max.clone()])
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
         Ok(self.max.clone())
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self) - std::mem::size_of_val(&self.max) + self.max.size()
+    }
+}
+
+/// An accumulator to compute the maximum value
+#[derive(Debug)]
+pub struct SlidingMaxAccumulator {
+    max: ScalarValue,
+    moving_max: moving_min_max::MovingMax<ScalarValue>,
+}
+
+impl SlidingMaxAccumulator {
+    /// new max accumulator
+    pub fn try_new(datatype: &DataType) -> Result<Self> {
+        Ok(Self {
+            max: ScalarValue::try_from(datatype)?,
+            moving_max: moving_min_max::MovingMax::<ScalarValue>::new(),
+        })
+    }
+}
+
+impl Accumulator for SlidingMaxAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        for idx in 0..values[0].len() {
+            let val = ScalarValue::try_from_array(&values[0], idx)?;
+            self.moving_max.push(val);
+        }
+        if let Some(res) = self.moving_max.max() {
+            self.max = res.clone();
+        }
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        for _idx in 0..values[0].len() {
+            (self.moving_max).pop();
+        }
+        if let Some(res) = self.moving_max.max() {
+            self.max = res.clone();
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.update_batch(states)
+    }
+
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.max.clone()])
+    }
+
+    fn evaluate(&self) -> Result<ScalarValue> {
+        Ok(self.max.clone())
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self) - std::mem::size_of_val(&self.max) + self.max.size()
     }
 }
 
@@ -573,7 +680,7 @@ impl RowAccumulator for MaxRowAccumulator {
 }
 
 /// MIN aggregate expression
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Min {
     name: String,
     data_type: DataType,
@@ -617,7 +724,7 @@ impl AggregateExpr for Min {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            &format_state_name(&self.name, "min"),
+            format_state_name(&self.name, "min"),
             self.data_type.clone(),
             true,
         )])
@@ -632,19 +739,11 @@ impl AggregateExpr for Min {
     }
 
     fn row_accumulator_supported(&self) -> bool {
-        matches!(
-            self.data_type,
-            DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64
-                | DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::Float32
-                | DataType::Float64
-        )
+        is_row_accumulator_support_dtype(&self.data_type)
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        true
     }
 
     fn create_row_accumulator(
@@ -655,6 +754,14 @@ impl AggregateExpr for Min {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        Some(Arc::new(self.clone()))
+    }
+
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(SlidingMinAccumulator::try_new(&self.data_type)?))
     }
 }
 
@@ -674,8 +781,8 @@ impl MinAccumulator {
 }
 
 impl Accumulator for MinAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
-        Ok(vec![AggregateState::Scalar(self.min.clone())])
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.min.clone()])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -691,6 +798,71 @@ impl Accumulator for MinAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         Ok(self.min.clone())
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self) - std::mem::size_of_val(&self.min) + self.min.size()
+    }
+}
+
+/// An accumulator to compute the minimum value
+#[derive(Debug)]
+pub struct SlidingMinAccumulator {
+    min: ScalarValue,
+    moving_min: moving_min_max::MovingMin<ScalarValue>,
+}
+
+impl SlidingMinAccumulator {
+    /// new min accumulator
+    pub fn try_new(datatype: &DataType) -> Result<Self> {
+        Ok(Self {
+            min: ScalarValue::try_from(datatype)?,
+            moving_min: moving_min_max::MovingMin::<ScalarValue>::new(),
+        })
+    }
+}
+
+impl Accumulator for SlidingMinAccumulator {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.min.clone()])
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        for idx in 0..values[0].len() {
+            let val = ScalarValue::try_from_array(&values[0], idx)?;
+            if !val.is_null() {
+                self.moving_min.push(val);
+            }
+        }
+        if let Some(res) = self.moving_min.min() {
+            self.min = res.clone();
+        }
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        for idx in 0..values[0].len() {
+            let val = ScalarValue::try_from_array(&values[0], idx)?;
+            if !val.is_null() {
+                (self.moving_min).pop();
+            }
+        }
+        if let Some(res) = self.moving_min.min() {
+            self.min = res.clone();
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.update_batch(states)
+    }
+
+    fn evaluate(&self) -> Result<ScalarValue> {
+        Ok(self.min.clone())
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self) - std::mem::size_of_val(&self.min) + self.min.size()
     }
 }
 
@@ -1073,24 +1245,90 @@ mod tests {
     }
 
     #[test]
-    fn min_time64() -> Result<()> {
-        let a: ArrayRef = Arc::new(Time64NanosecondArray::from(vec![1, 2, 3, 4, 5]));
+    fn min_time32second() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time32SecondArray::from(vec![1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
-            DataType::Time64(TimeUnit::Nanosecond),
-            Max,
-            ScalarValue::Time64(Some(5))
+            DataType::Time32(TimeUnit::Second),
+            Min,
+            ScalarValue::Time32Second(Some(1))
         )
     }
 
     #[test]
-    fn max_time64() -> Result<()> {
+    fn max_time32second() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time32SecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time32(TimeUnit::Second),
+            Max,
+            ScalarValue::Time32Second(Some(5))
+        )
+    }
+
+    #[test]
+    fn min_time32millisecond() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time32MillisecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time32(TimeUnit::Millisecond),
+            Min,
+            ScalarValue::Time32Millisecond(Some(1))
+        )
+    }
+
+    #[test]
+    fn max_time32millisecond() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time32MillisecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time32(TimeUnit::Millisecond),
+            Max,
+            ScalarValue::Time32Millisecond(Some(5))
+        )
+    }
+
+    #[test]
+    fn min_time64microsecond() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time64MicrosecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time64(TimeUnit::Microsecond),
+            Min,
+            ScalarValue::Time64Microsecond(Some(1))
+        )
+    }
+
+    #[test]
+    fn max_time64microsecond() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time64MicrosecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time64(TimeUnit::Microsecond),
+            Max,
+            ScalarValue::Time64Microsecond(Some(5))
+        )
+    }
+
+    #[test]
+    fn min_time64nanosecond() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time64NanosecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time64(TimeUnit::Nanosecond),
+            Min,
+            ScalarValue::Time64Nanosecond(Some(1))
+        )
+    }
+
+    #[test]
+    fn max_time64nanosecond() -> Result<()> {
         let a: ArrayRef = Arc::new(Time64NanosecondArray::from(vec![1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Time64(TimeUnit::Nanosecond),
             Max,
-            ScalarValue::Time64(Some(5))
+            ScalarValue::Time64Nanosecond(Some(5))
         )
     }
 }

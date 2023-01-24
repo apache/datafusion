@@ -19,96 +19,33 @@
 //!
 //! Information Schema]<https://en.wikipedia.org/wiki/Information_schema>
 
-use std::{
-    any,
-    sync::{Arc, Weak},
-};
-
-use parking_lot::RwLock;
+use async_trait::async_trait;
+use std::{any::Any, sync::Arc};
 
 use arrow::{
     array::{StringBuilder, UInt64Builder},
-    datatypes::{DataType, Field, Schema},
+    datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use datafusion_common::Result;
 
-use crate::datasource::{MemTable, TableProvider};
+use crate::config::{ConfigEntry, ConfigOptions};
+use crate::datasource::streaming::{PartitionStream, StreamingTable};
+use crate::datasource::TableProvider;
+use crate::execution::context::TaskContext;
 use crate::logical_expr::TableType;
+use crate::physical_plan::stream::RecordBatchStreamAdapter;
+use crate::physical_plan::SendableRecordBatchStream;
 
-use super::{
-    catalog::{CatalogList, CatalogProvider},
-    schema::SchemaProvider,
-};
+use super::{catalog::CatalogList, schema::SchemaProvider};
 
-use crate::config::ConfigOptions;
+pub const INFORMATION_SCHEMA: &str = "information_schema";
+pub const TABLES: &str = "tables";
+pub const VIEWS: &str = "views";
+pub const COLUMNS: &str = "columns";
+pub const DF_SETTINGS: &str = "df_settings";
 
-const INFORMATION_SCHEMA: &str = "information_schema";
-const TABLES: &str = "tables";
-const VIEWS: &str = "views";
-const COLUMNS: &str = "columns";
-const DF_SETTINGS: &str = "df_settings";
-
-/// Wraps another [`CatalogProvider`] and adds a "information_schema"
-/// schema that can introspect on tables in the catalog_list
-pub(crate) struct CatalogWithInformationSchema {
-    catalog_list: Weak<dyn CatalogList>,
-    config_options: Weak<RwLock<ConfigOptions>>,
-    /// wrapped provider
-    inner: Arc<dyn CatalogProvider>,
-}
-
-impl CatalogWithInformationSchema {
-    pub(crate) fn new(
-        catalog_list: Weak<dyn CatalogList>,
-        config_options: Weak<RwLock<ConfigOptions>>,
-        inner: Arc<dyn CatalogProvider>,
-    ) -> Self {
-        Self {
-            catalog_list,
-            config_options,
-            inner,
-        }
-    }
-}
-
-impl CatalogProvider for CatalogWithInformationSchema {
-    fn as_any(&self) -> &dyn any::Any {
-        self
-    }
-
-    fn schema_names(&self) -> Vec<String> {
-        self.inner
-            .schema_names()
-            .into_iter()
-            .chain(std::iter::once(INFORMATION_SCHEMA.to_string()))
-            .collect::<Vec<String>>()
-    }
-
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        if name.eq_ignore_ascii_case(INFORMATION_SCHEMA) {
-            Weak::upgrade(&self.catalog_list).and_then(|catalog_list| {
-                Weak::upgrade(&self.config_options).map(|config_options| {
-                    Arc::new(InformationSchemaProvider {
-                        catalog_list,
-                        config_options,
-                    }) as Arc<dyn SchemaProvider>
-                })
-            })
-        } else {
-            self.inner.schema(name)
-        }
-    }
-
-    fn register_schema(
-        &self,
-        name: &str,
-        schema: Arc<dyn SchemaProvider>,
-    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
-        let catalog = &self.inner;
-        catalog.register_schema(name, schema)
-    }
-}
+/// All information schema tables
+pub const INFORMATION_SCHEMA_TABLES: &[&str] = &[TABLES, VIEWS, COLUMNS, DF_SETTINGS];
 
 /// Implements the `information_schema` virtual schema and tables
 ///
@@ -116,16 +53,28 @@ impl CatalogProvider for CatalogWithInformationSchema {
 /// demand. This means that if more tables are added to the underlying
 /// providers, they will appear the next time the `information_schema`
 /// table is queried.
-struct InformationSchemaProvider {
-    catalog_list: Arc<dyn CatalogList>,
-    config_options: Arc<RwLock<ConfigOptions>>,
+pub struct InformationSchemaProvider {
+    config: InformationSchemaConfig,
 }
 
 impl InformationSchemaProvider {
+    /// Creates a new [`InformationSchemaProvider`] for the provided `catalog_list`
+    pub fn new(catalog_list: Arc<dyn CatalogList>) -> Self {
+        Self {
+            config: InformationSchemaConfig { catalog_list },
+        }
+    }
+}
+
+#[derive(Clone)]
+struct InformationSchemaConfig {
+    catalog_list: Arc<dyn CatalogList>,
+}
+
+impl InformationSchemaConfig {
     /// Construct the `information_schema.tables` virtual table
-    fn make_tables(&self) -> Arc<dyn TableProvider> {
+    async fn make_tables(&self, builder: &mut InformationSchemaTablesBuilder) {
         // create a mem table with the names of tables
-        let mut builder = InformationSchemaTablesBuilder::new();
 
         for catalog_name in self.catalog_list.catalog_names() {
             let catalog = self.catalog_list.catalog(&catalog_name).unwrap();
@@ -134,7 +83,7 @@ impl InformationSchemaProvider {
                 if schema_name != INFORMATION_SCHEMA {
                     let schema = catalog.schema(&schema_name).unwrap();
                     for table_name in schema.table_names() {
-                        let table = schema.table(&table_name).unwrap();
+                        let table = schema.table(&table_name).await.unwrap();
                         builder.add_table(
                             &catalog_name,
                             &schema_name,
@@ -161,15 +110,9 @@ impl InformationSchemaProvider {
                 TableType::View,
             );
         }
-
-        let mem_table: MemTable = builder.into();
-
-        Arc::new(mem_table)
     }
 
-    fn make_views(&self) -> Arc<dyn TableProvider> {
-        let mut builder = InformationSchemaViewBuilder::new();
-
+    async fn make_views(&self, builder: &mut InformationSchemaViewBuilder) {
         for catalog_name in self.catalog_list.catalog_names() {
             let catalog = self.catalog_list.catalog(&catalog_name).unwrap();
 
@@ -177,7 +120,7 @@ impl InformationSchemaProvider {
                 if schema_name != INFORMATION_SCHEMA {
                     let schema = catalog.schema(&schema_name).unwrap();
                     for table_name in schema.table_names() {
-                        let table = schema.table(&table_name).unwrap();
+                        let table = schema.table(&table_name).await.unwrap();
                         builder.add_view(
                             &catalog_name,
                             &schema_name,
@@ -188,15 +131,10 @@ impl InformationSchemaProvider {
                 }
             }
         }
-
-        let mem_table: MemTable = builder.into();
-        Arc::new(mem_table)
     }
 
     /// Construct the `information_schema.columns` virtual table
-    fn make_columns(&self) -> Arc<dyn TableProvider> {
-        let mut builder = InformationSchemaColumnsBuilder::new();
-
+    async fn make_columns(&self, builder: &mut InformationSchemaColumnsBuilder) {
         for catalog_name in self.catalog_list.catalog_names() {
             let catalog = self.catalog_list.catalog(&catalog_name).unwrap();
 
@@ -204,7 +142,7 @@ impl InformationSchemaProvider {
                 if schema_name != INFORMATION_SCHEMA {
                     let schema = catalog.schema(&schema_name).unwrap();
                     for table_name in schema.table_names() {
-                        let table = schema.table(&table_name).unwrap();
+                        let table = schema.table(&table_name).await.unwrap();
                         for (i, field) in table.schema().fields().iter().enumerate() {
                             builder.add_column(
                                 &catalog_name,
@@ -220,47 +158,52 @@ impl InformationSchemaProvider {
                 }
             }
         }
-
-        let mem_table: MemTable = builder.into();
-
-        Arc::new(mem_table)
     }
 
     /// Construct the `information_schema.df_settings` virtual table
-    fn make_df_settings(&self) -> Arc<dyn TableProvider> {
-        let mut builder = InformationSchemaDfSettingsBuilder::new();
-
-        for (name, setting) in self.config_options.read().options() {
-            builder.add_setting(name, setting.to_string());
+    fn make_df_settings(
+        &self,
+        config_options: &ConfigOptions,
+        builder: &mut InformationSchemaDfSettingsBuilder,
+    ) {
+        for entry in config_options.entries() {
+            builder.add_setting(entry);
         }
-
-        let mem_table: MemTable = builder.into();
-
-        Arc::new(mem_table)
     }
 }
 
+#[async_trait]
 impl SchemaProvider for InformationSchemaProvider {
-    fn as_any(&self) -> &(dyn any::Any + 'static) {
+    fn as_any(&self) -> &(dyn Any + 'static) {
         self
     }
 
     fn table_names(&self) -> Vec<String> {
-        vec![TABLES.to_string(), VIEWS.to_string(), COLUMNS.to_string()]
+        vec![
+            TABLES.to_string(),
+            VIEWS.to_string(),
+            COLUMNS.to_string(),
+            DF_SETTINGS.to_string(),
+        ]
     }
 
-    fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
-        if name.eq_ignore_ascii_case("tables") {
-            Some(self.make_tables())
+    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
+        let config = self.config.clone();
+        let table: Arc<dyn PartitionStream> = if name.eq_ignore_ascii_case("tables") {
+            Arc::new(InformationSchemaTables::new(config))
         } else if name.eq_ignore_ascii_case("columns") {
-            Some(self.make_columns())
+            Arc::new(InformationSchemaColumns::new(config))
         } else if name.eq_ignore_ascii_case("views") {
-            Some(self.make_views())
+            Arc::new(InformationSchemaViews::new(config))
         } else if name.eq_ignore_ascii_case("df_settings") {
-            Some(self.make_df_settings())
+            Arc::new(InformationSchemaDfSettings::new(config))
         } else {
-            None
-        }
+            return None;
+        };
+
+        Some(Arc::new(
+            StreamingTable::try_new(table.schema().clone(), vec![table]).unwrap(),
+        ))
     }
 
     fn table_exist(&self, name: &str) -> bool {
@@ -268,10 +211,58 @@ impl SchemaProvider for InformationSchemaProvider {
     }
 }
 
+struct InformationSchemaTables {
+    schema: SchemaRef,
+    config: InformationSchemaConfig,
+}
+
+impl InformationSchemaTables {
+    fn new(config: InformationSchemaConfig) -> Self {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("table_catalog", DataType::Utf8, false),
+            Field::new("table_schema", DataType::Utf8, false),
+            Field::new("table_name", DataType::Utf8, false),
+            Field::new("table_type", DataType::Utf8, false),
+        ]));
+
+        Self { schema, config }
+    }
+
+    fn builder(&self) -> InformationSchemaTablesBuilder {
+        InformationSchemaTablesBuilder {
+            catalog_names: StringBuilder::new(),
+            schema_names: StringBuilder::new(),
+            table_names: StringBuilder::new(),
+            table_types: StringBuilder::new(),
+            schema: self.schema.clone(),
+        }
+    }
+}
+
+impl PartitionStream for InformationSchemaTables {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        let mut builder = self.builder();
+        let config = self.config.clone();
+        Box::pin(RecordBatchStreamAdapter::new(
+            self.schema.clone(),
+            // TODO: Stream this
+            futures::stream::once(async move {
+                config.make_tables(&mut builder).await;
+                Ok(builder.finish())
+            }),
+        ))
+    }
+}
+
 /// Builds the `information_schema.TABLE` table row by row
 ///
 /// Columns are based on <https://www.postgresql.org/docs/current/infoschema-columns.html>
 struct InformationSchemaTablesBuilder {
+    schema: SchemaRef,
     catalog_names: StringBuilder,
     schema_names: StringBuilder,
     table_names: StringBuilder,
@@ -279,15 +270,6 @@ struct InformationSchemaTablesBuilder {
 }
 
 impl InformationSchemaTablesBuilder {
-    fn new() -> Self {
-        Self {
-            catalog_names: StringBuilder::new(),
-            schema_names: StringBuilder::new(),
-            table_names: StringBuilder::new(),
-            table_types: StringBuilder::new(),
-        }
-    }
-
     fn add_table(
         &mut self,
         catalog_name: impl AsRef<str>,
@@ -305,37 +287,65 @@ impl InformationSchemaTablesBuilder {
             TableType::Temporary => "LOCAL TEMPORARY",
         });
     }
+
+    fn finish(&mut self) -> RecordBatch {
+        RecordBatch::try_new(
+            self.schema.clone(),
+            vec![
+                Arc::new(self.catalog_names.finish()),
+                Arc::new(self.schema_names.finish()),
+                Arc::new(self.table_names.finish()),
+                Arc::new(self.table_types.finish()),
+            ],
+        )
+        .unwrap()
+    }
 }
 
-impl From<InformationSchemaTablesBuilder> for MemTable {
-    fn from(value: InformationSchemaTablesBuilder) -> MemTable {
-        let schema = Schema::new(vec![
+struct InformationSchemaViews {
+    schema: SchemaRef,
+    config: InformationSchemaConfig,
+}
+
+impl InformationSchemaViews {
+    fn new(config: InformationSchemaConfig) -> Self {
+        let schema = Arc::new(Schema::new(vec![
             Field::new("table_catalog", DataType::Utf8, false),
             Field::new("table_schema", DataType::Utf8, false),
             Field::new("table_name", DataType::Utf8, false),
-            Field::new("table_type", DataType::Utf8, false),
-        ]);
+            Field::new("definition", DataType::Utf8, true),
+        ]));
 
-        let InformationSchemaTablesBuilder {
-            mut catalog_names,
-            mut schema_names,
-            mut table_names,
-            mut table_types,
-        } = value;
+        Self { schema, config }
+    }
 
-        let schema = Arc::new(schema);
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(catalog_names.finish()),
-                Arc::new(schema_names.finish()),
-                Arc::new(table_names.finish()),
-                Arc::new(table_types.finish()),
-            ],
-        )
-        .unwrap();
+    fn builder(&self) -> InformationSchemaViewBuilder {
+        InformationSchemaViewBuilder {
+            catalog_names: StringBuilder::new(),
+            schema_names: StringBuilder::new(),
+            table_names: StringBuilder::new(),
+            definitions: StringBuilder::new(),
+            schema: self.schema.clone(),
+        }
+    }
+}
 
-        MemTable::try_new(schema, vec![vec![batch]]).unwrap()
+impl PartitionStream for InformationSchemaViews {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        let mut builder = self.builder();
+        let config = self.config.clone();
+        Box::pin(RecordBatchStreamAdapter::new(
+            self.schema.clone(),
+            // TODO: Stream this
+            futures::stream::once(async move {
+                config.make_views(&mut builder).await;
+                Ok(builder.finish())
+            }),
+        ))
     }
 }
 
@@ -343,6 +353,7 @@ impl From<InformationSchemaTablesBuilder> for MemTable {
 ///
 /// Columns are based on <https://www.postgresql.org/docs/current/infoschema-columns.html>
 struct InformationSchemaViewBuilder {
+    schema: SchemaRef,
     catalog_names: StringBuilder,
     schema_names: StringBuilder,
     table_names: StringBuilder,
@@ -350,15 +361,6 @@ struct InformationSchemaViewBuilder {
 }
 
 impl InformationSchemaViewBuilder {
-    fn new() -> Self {
-        Self {
-            catalog_names: StringBuilder::new(),
-            schema_names: StringBuilder::new(),
-            table_names: StringBuilder::new(),
-            definitions: StringBuilder::new(),
-        }
-    }
-
     fn add_view(
         &mut self,
         catalog_name: impl AsRef<str>,
@@ -372,37 +374,92 @@ impl InformationSchemaViewBuilder {
         self.table_names.append_value(table_name.as_ref());
         self.definitions.append_option(definition.as_ref());
     }
+
+    fn finish(&mut self) -> RecordBatch {
+        RecordBatch::try_new(
+            self.schema.clone(),
+            vec![
+                Arc::new(self.catalog_names.finish()),
+                Arc::new(self.schema_names.finish()),
+                Arc::new(self.table_names.finish()),
+                Arc::new(self.definitions.finish()),
+            ],
+        )
+        .unwrap()
+    }
 }
 
-impl From<InformationSchemaViewBuilder> for MemTable {
-    fn from(value: InformationSchemaViewBuilder) -> Self {
-        let schema = Schema::new(vec![
+struct InformationSchemaColumns {
+    schema: SchemaRef,
+    config: InformationSchemaConfig,
+}
+
+impl InformationSchemaColumns {
+    fn new(config: InformationSchemaConfig) -> Self {
+        let schema = Arc::new(Schema::new(vec![
             Field::new("table_catalog", DataType::Utf8, false),
             Field::new("table_schema", DataType::Utf8, false),
             Field::new("table_name", DataType::Utf8, false),
-            Field::new("definition", DataType::Utf8, true),
-        ]);
+            Field::new("column_name", DataType::Utf8, false),
+            Field::new("ordinal_position", DataType::UInt64, false),
+            Field::new("column_default", DataType::Utf8, true),
+            Field::new("is_nullable", DataType::Utf8, false),
+            Field::new("data_type", DataType::Utf8, false),
+            Field::new("character_maximum_length", DataType::UInt64, true),
+            Field::new("character_octet_length", DataType::UInt64, true),
+            Field::new("numeric_precision", DataType::UInt64, true),
+            Field::new("numeric_precision_radix", DataType::UInt64, true),
+            Field::new("numeric_scale", DataType::UInt64, true),
+            Field::new("datetime_precision", DataType::UInt64, true),
+            Field::new("interval_type", DataType::Utf8, true),
+        ]));
 
-        let InformationSchemaViewBuilder {
-            mut catalog_names,
-            mut schema_names,
-            mut table_names,
-            mut definitions,
-        } = value;
+        Self { schema, config }
+    }
 
-        let schema = Arc::new(schema);
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(catalog_names.finish()),
-                Arc::new(schema_names.finish()),
-                Arc::new(table_names.finish()),
-                Arc::new(definitions.finish()),
-            ],
-        )
-        .unwrap();
+    fn builder(&self) -> InformationSchemaColumnsBuilder {
+        // StringBuilder requires providing an initial capacity, so
+        // pick 10 here arbitrarily as this is not performance
+        // critical code and the number of tables is unavailable here.
+        let default_capacity = 10;
 
-        MemTable::try_new(schema, vec![vec![batch]]).unwrap()
+        InformationSchemaColumnsBuilder {
+            catalog_names: StringBuilder::new(),
+            schema_names: StringBuilder::new(),
+            table_names: StringBuilder::new(),
+            column_names: StringBuilder::new(),
+            ordinal_positions: UInt64Builder::with_capacity(default_capacity),
+            column_defaults: StringBuilder::new(),
+            is_nullables: StringBuilder::new(),
+            data_types: StringBuilder::new(),
+            character_maximum_lengths: UInt64Builder::with_capacity(default_capacity),
+            character_octet_lengths: UInt64Builder::with_capacity(default_capacity),
+            numeric_precisions: UInt64Builder::with_capacity(default_capacity),
+            numeric_precision_radixes: UInt64Builder::with_capacity(default_capacity),
+            numeric_scales: UInt64Builder::with_capacity(default_capacity),
+            datetime_precisions: UInt64Builder::with_capacity(default_capacity),
+            interval_types: StringBuilder::new(),
+            schema: self.schema.clone(),
+        }
+    }
+}
+
+impl PartitionStream for InformationSchemaColumns {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        let mut builder = self.builder();
+        let config = self.config.clone();
+        Box::pin(RecordBatchStreamAdapter::new(
+            self.schema.clone(),
+            // TODO: Stream this
+            futures::stream::once(async move {
+                config.make_columns(&mut builder).await;
+                Ok(builder.finish())
+            }),
+        ))
     }
 }
 
@@ -410,6 +467,7 @@ impl From<InformationSchemaViewBuilder> for MemTable {
 ///
 /// Columns are based on <https://www.postgresql.org/docs/current/infoschema-columns.html>
 struct InformationSchemaColumnsBuilder {
+    schema: SchemaRef,
     catalog_names: StringBuilder,
     schema_names: StringBuilder,
     table_names: StringBuilder,
@@ -428,30 +486,6 @@ struct InformationSchemaColumnsBuilder {
 }
 
 impl InformationSchemaColumnsBuilder {
-    fn new() -> Self {
-        // StringBuilder requires providing an initial capacity, so
-        // pick 10 here arbitrarily as this is not performance
-        // critical code and the number of tables is unavailable here.
-        let default_capacity = 10;
-        Self {
-            catalog_names: StringBuilder::new(),
-            schema_names: StringBuilder::new(),
-            table_names: StringBuilder::new(),
-            column_names: StringBuilder::new(),
-            ordinal_positions: UInt64Builder::with_capacity(default_capacity),
-            column_defaults: StringBuilder::new(),
-            is_nullables: StringBuilder::new(),
-            data_types: StringBuilder::new(),
-            character_maximum_lengths: UInt64Builder::with_capacity(default_capacity),
-            character_octet_lengths: UInt64Builder::with_capacity(default_capacity),
-            numeric_precisions: UInt64Builder::with_capacity(default_capacity),
-            numeric_precision_radixes: UInt64Builder::with_capacity(default_capacity),
-            numeric_scales: UInt64Builder::with_capacity(default_capacity),
-            datetime_precisions: UInt64Builder::with_capacity(default_capacity),
-            interval_types: StringBuilder::new(),
-        }
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn add_column(
         &mut self,
@@ -482,7 +516,7 @@ impl InformationSchemaColumnsBuilder {
         self.is_nullables.append_value(nullable_str);
 
         // "System supplied type" --> Use debug format of the datatype
-        self.data_types.append_value(format!("{:?}", data_type));
+        self.data_types.append_value(format!("{data_type:?}"));
 
         // "If data_type identifies a character or bit string type, the
         // declared maximum length; null for all other data types or
@@ -547,111 +581,99 @@ impl InformationSchemaColumnsBuilder {
         self.datetime_precisions.append_option(None);
         self.interval_types.append_null();
     }
-}
 
-impl From<InformationSchemaColumnsBuilder> for MemTable {
-    fn from(value: InformationSchemaColumnsBuilder) -> MemTable {
-        let schema = Schema::new(vec![
-            Field::new("table_catalog", DataType::Utf8, false),
-            Field::new("table_schema", DataType::Utf8, false),
-            Field::new("table_name", DataType::Utf8, false),
-            Field::new("column_name", DataType::Utf8, false),
-            Field::new("ordinal_position", DataType::UInt64, false),
-            Field::new("column_default", DataType::Utf8, true),
-            Field::new("is_nullable", DataType::Utf8, false),
-            Field::new("data_type", DataType::Utf8, false),
-            Field::new("character_maximum_length", DataType::UInt64, true),
-            Field::new("character_octet_length", DataType::UInt64, true),
-            Field::new("numeric_precision", DataType::UInt64, true),
-            Field::new("numeric_precision_radix", DataType::UInt64, true),
-            Field::new("numeric_scale", DataType::UInt64, true),
-            Field::new("datetime_precision", DataType::UInt64, true),
-            Field::new("interval_type", DataType::Utf8, true),
-        ]);
-
-        let InformationSchemaColumnsBuilder {
-            mut catalog_names,
-            mut schema_names,
-            mut table_names,
-            mut column_names,
-            mut ordinal_positions,
-            mut column_defaults,
-            mut is_nullables,
-            mut data_types,
-            mut character_maximum_lengths,
-            mut character_octet_lengths,
-            mut numeric_precisions,
-            mut numeric_precision_radixes,
-            mut numeric_scales,
-            mut datetime_precisions,
-            mut interval_types,
-        } = value;
-
-        let schema = Arc::new(schema);
-        let batch = RecordBatch::try_new(
-            schema.clone(),
+    fn finish(&mut self) -> RecordBatch {
+        RecordBatch::try_new(
+            self.schema.clone(),
             vec![
-                Arc::new(catalog_names.finish()),
-                Arc::new(schema_names.finish()),
-                Arc::new(table_names.finish()),
-                Arc::new(column_names.finish()),
-                Arc::new(ordinal_positions.finish()),
-                Arc::new(column_defaults.finish()),
-                Arc::new(is_nullables.finish()),
-                Arc::new(data_types.finish()),
-                Arc::new(character_maximum_lengths.finish()),
-                Arc::new(character_octet_lengths.finish()),
-                Arc::new(numeric_precisions.finish()),
-                Arc::new(numeric_precision_radixes.finish()),
-                Arc::new(numeric_scales.finish()),
-                Arc::new(datetime_precisions.finish()),
-                Arc::new(interval_types.finish()),
+                Arc::new(self.catalog_names.finish()),
+                Arc::new(self.schema_names.finish()),
+                Arc::new(self.table_names.finish()),
+                Arc::new(self.column_names.finish()),
+                Arc::new(self.ordinal_positions.finish()),
+                Arc::new(self.column_defaults.finish()),
+                Arc::new(self.is_nullables.finish()),
+                Arc::new(self.data_types.finish()),
+                Arc::new(self.character_maximum_lengths.finish()),
+                Arc::new(self.character_octet_lengths.finish()),
+                Arc::new(self.numeric_precisions.finish()),
+                Arc::new(self.numeric_precision_radixes.finish()),
+                Arc::new(self.numeric_scales.finish()),
+                Arc::new(self.datetime_precisions.finish()),
+                Arc::new(self.interval_types.finish()),
             ],
         )
-        .unwrap();
+        .unwrap()
+    }
+}
 
-        MemTable::try_new(schema, vec![vec![batch]]).unwrap()
+struct InformationSchemaDfSettings {
+    schema: SchemaRef,
+    config: InformationSchemaConfig,
+}
+
+impl InformationSchemaDfSettings {
+    fn new(config: InformationSchemaConfig) -> Self {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("setting", DataType::Utf8, true),
+        ]));
+
+        Self { schema, config }
+    }
+
+    fn builder(&self) -> InformationSchemaDfSettingsBuilder {
+        InformationSchemaDfSettingsBuilder {
+            names: StringBuilder::new(),
+            settings: StringBuilder::new(),
+            schema: self.schema.clone(),
+        }
+    }
+}
+
+impl PartitionStream for InformationSchemaDfSettings {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn execute(&self, ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        let config = self.config.clone();
+        let mut builder = self.builder();
+        Box::pin(RecordBatchStreamAdapter::new(
+            self.schema.clone(),
+            // TODO: Stream this
+            futures::stream::once(async move {
+                // create a mem table with the names of tables
+                config.make_df_settings(
+                    ctx.session_config().config_options(),
+                    &mut builder,
+                );
+                Ok(builder.finish())
+            }),
+        ))
     }
 }
 
 struct InformationSchemaDfSettingsBuilder {
+    schema: SchemaRef,
     names: StringBuilder,
     settings: StringBuilder,
 }
 
 impl InformationSchemaDfSettingsBuilder {
-    fn new() -> Self {
-        Self {
-            names: StringBuilder::new(),
-            settings: StringBuilder::new(),
-        }
+    fn add_setting(&mut self, entry: ConfigEntry) {
+        self.names.append_value(entry.key);
+        self.settings.append_option(entry.value);
     }
 
-    fn add_setting(&mut self, name: impl AsRef<str>, setting: impl AsRef<str>) {
-        self.names.append_value(name.as_ref());
-        self.settings.append_value(setting.as_ref());
-    }
-}
-
-impl From<InformationSchemaDfSettingsBuilder> for MemTable {
-    fn from(value: InformationSchemaDfSettingsBuilder) -> MemTable {
-        let schema = Schema::new(vec![
-            Field::new("name", DataType::Utf8, false),
-            Field::new("setting", DataType::Utf8, false),
-        ]);
-
-        let InformationSchemaDfSettingsBuilder {
-            mut names,
-            mut settings,
-        } = value;
-
-        let schema = Arc::new(schema);
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(names.finish()), Arc::new(settings.finish())],
+    fn finish(&mut self) -> RecordBatch {
+        RecordBatch::try_new(
+            self.schema.clone(),
+            vec![
+                Arc::new(self.names.finish()),
+                Arc::new(self.settings.finish()),
+            ],
         )
-        .unwrap();
-
-        MemTable::try_new(schema, vec![vec![batch]]).unwrap()
+        .unwrap()
     }
 }

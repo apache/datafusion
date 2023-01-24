@@ -70,7 +70,7 @@ impl AggregateExpr for Grouping {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            &format_state_name(&self.name, "grouping"),
+            format_state_name(&self.name, "grouping"),
             self.data_type.clone(),
             true,
         )])

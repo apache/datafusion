@@ -18,10 +18,9 @@
 //! Utilizing exact statistics from sources to avoid scanning data
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
+use crate::config::ConfigOptions;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 
-use crate::execution::context::SessionConfig;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
 use crate::physical_plan::empty::EmptyExec;
 use crate::physical_plan::projection::ProjectionExec;
@@ -52,7 +51,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &SessionConfig,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(partial_agg_exec) = take_optimizable(&*plan) {
             let partial_agg_exec = partial_agg_exec
@@ -85,7 +84,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 // input can be entirely removed
                 Ok(Arc::new(ProjectionExec::try_new(
                     projections,
-                    Arc::new(EmptyExec::new(true, Arc::new(Schema::empty()))),
+                    Arc::new(EmptyExec::new(true, plan.schema())),
                 )?))
             } else {
                 optimize_children(self, plan, config)
@@ -97,6 +96,11 @@ impl PhysicalOptimizerRule for AggregateStatistics {
 
     fn name(&self) -> &str {
         "aggregate_statistics"
+    }
+
+    /// This rule will change the nullable properties of the schema, disable the schema check.
+    fn schema_check(&self) -> bool {
+        false
     }
 }
 
@@ -303,9 +307,10 @@ mod tests {
         agg: TestAggregate,
     ) -> Result<()> {
         let session_ctx = SessionContext::new();
-        let conf = session_ctx.copied_config();
+        let state = session_ctx.state();
         let plan = Arc::new(plan) as _;
-        let optimized = AggregateStatistics::new().optimize(Arc::clone(&plan), &conf)?;
+        let optimized = AggregateStatistics::new()
+            .optimize(Arc::clone(&plan), state.config_options())?;
 
         // A ProjectionExec is a sign that the count optimization was applied
         assert!(optimized.as_any().is::<ProjectionExec>());
@@ -544,7 +549,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        let conf = SessionConfig::new();
+        let conf = ConfigOptions::new();
         let optimized =
             AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
 
@@ -587,7 +592,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        let conf = SessionConfig::new();
+        let conf = ConfigOptions::new();
         let optimized =
             AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
 

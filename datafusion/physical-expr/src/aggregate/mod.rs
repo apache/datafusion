@@ -41,6 +41,7 @@ pub(crate) mod median;
 pub(crate) mod min_max;
 pub mod build_in;
 mod hyperloglog;
+pub mod moving_min_max;
 pub mod row_accumulator;
 pub(crate) mod stats;
 pub(crate) mod stddev;
@@ -87,6 +88,12 @@ pub trait AggregateExpr: Send + Sync + Debug {
         false
     }
 
+    /// Specifies whether this aggregate function can run using bounded memory.
+    /// Any accumulator returning "true" needs to implement `retract_batch`.
+    fn supports_bounded_execution(&self) -> bool {
+        false
+    }
+
     /// RowAccumulator to access/update row-based aggregation state in-place.
     /// Currently, row accumulator only supports states of fixed-sized type.
     ///
@@ -97,8 +104,22 @@ pub trait AggregateExpr: Send + Sync + Debug {
         _start_index: usize,
     ) -> Result<Box<dyn RowAccumulator>> {
         Err(DataFusionError::NotImplemented(format!(
-            "RowAccumulator hasn't been implemented for {:?} yet",
-            self
+            "RowAccumulator hasn't been implemented for {self:?} yet"
+        )))
+    }
+
+    /// Construct an expression that calculates the aggregate in reverse.
+    /// Typically the "reverse" expression is itself (e.g. SUM, COUNT).
+    /// For aggregates that do not support calculation in reverse,
+    /// returns None (which is the default value).
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        None
+    }
+
+    /// Creates accumulator implementation that supports retract
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Err(DataFusionError::NotImplemented(format!(
+            "Retractable Accumulator hasn't been implemented for {self:?} yet"
         )))
     }
 }

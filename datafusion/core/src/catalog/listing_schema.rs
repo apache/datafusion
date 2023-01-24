@@ -20,7 +20,9 @@ use crate::catalog::schema::SchemaProvider;
 use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
-use datafusion_common::{DFSchema, DataFusionError};
+use async_trait::async_trait;
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{DFSchema, DataFusionError, OwnedTableReference};
 use datafusion_expr::CreateExternalTable;
 use futures::TryStreamExt;
 use itertools::Itertools;
@@ -49,6 +51,8 @@ pub struct ListingSchemaProvider {
     factory: Arc<dyn TableProviderFactory>,
     store: Arc<dyn ObjectStore>,
     tables: Arc<Mutex<HashMap<String, Arc<dyn TableProvider>>>>,
+    format: String,
+    has_header: bool,
 }
 
 impl ListingSchemaProvider {
@@ -59,11 +63,15 @@ impl ListingSchemaProvider {
     /// `path`: The root path that contains subfolders which represent tables
     /// `factory`: The `TableProviderFactory` to use to instantiate tables for each subfolder
     /// `store`: The `ObjectStore` containing the table data
+    /// `format`: The `FileFormat` of the tables
+    /// `has_header`: Indicates whether the created external table has the has_header flag enabled
     pub fn new(
         authority: String,
         path: object_store::path::Path,
         factory: Arc<dyn TableProviderFactory>,
         store: Arc<dyn ObjectStore>,
+        format: String,
+        has_header: bool,
     ) -> Self {
         Self {
             authority,
@@ -71,6 +79,8 @@ impl ListingSchemaProvider {
             factory,
             store,
             tables: Arc::new(Mutex::new(HashMap::new())),
+            format,
+            has_header,
         }
     }
 
@@ -85,16 +95,23 @@ impl ListingSchemaProvider {
         let base = Path::new(self.path.as_ref());
         let mut tables = HashSet::new();
         for file in entries.iter() {
+            // The listing will initially be a file. However if we've recursed up to match our base, we know our path is a directory.
+            let mut is_dir = false;
             let mut parent = Path::new(file.location.as_ref());
             while let Some(p) = parent.parent() {
                 if p == base {
-                    tables.insert(parent);
+                    tables.insert(TablePath {
+                        is_dir,
+                        path: parent,
+                    });
                 }
                 parent = p;
+                is_dir = true;
             }
         }
         for table in tables.iter() {
             let file_name = table
+                .path
                 .file_name()
                 .ok_or_else(|| {
                     DataFusionError::Internal("Cannot parse file name!".to_string())
@@ -104,27 +121,31 @@ impl ListingSchemaProvider {
                     DataFusionError::Internal("Cannot parse file name!".to_string())
                 })?;
             let table_name = file_name.split('.').collect_vec()[0];
-            let table_path = table.to_str().ok_or_else(|| {
+            let table_path = table.to_string().ok_or_else(|| {
                 DataFusionError::Internal("Cannot parse file name!".to_string())
             })?;
+
             if !self.table_exist(table_name) {
                 let table_url = format!("{}/{}", self.authority, table_path);
 
+                let name = OwnedTableReference::Bare {
+                    table: table_name.to_string(),
+                };
                 let provider = self
                     .factory
                     .create(
                         state,
                         &CreateExternalTable {
                             schema: Arc::new(DFSchema::empty()),
-                            name: table_name.to_string(),
+                            name,
                             location: table_url,
-                            file_type: "".to_string(),
-                            has_header: false,
+                            file_type: self.format.clone(),
+                            has_header: self.has_header,
                             delimiter: ',',
                             table_partition_cols: vec![],
                             if_not_exists: false,
                             definition: None,
-                            file_compression_type: "".to_string(),
+                            file_compression_type: CompressionTypeVariant::UNCOMPRESSED,
                             options: Default::default(),
                         },
                     )
@@ -136,6 +157,7 @@ impl ListingSchemaProvider {
     }
 }
 
+#[async_trait]
 impl SchemaProvider for ListingSchemaProvider {
     fn as_any(&self) -> &dyn Any {
         self
@@ -150,7 +172,7 @@ impl SchemaProvider for ListingSchemaProvider {
             .collect()
     }
 
-    fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
+    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
         self.tables
             .lock()
             .expect("Can't lock tables")
@@ -182,5 +204,50 @@ impl SchemaProvider for ListingSchemaProvider {
             .lock()
             .expect("Can't lock tables")
             .contains_key(name)
+    }
+}
+
+/// Stores metadata along with a table's path.
+/// Primarily whether the path is a directory or not.
+#[derive(Eq, PartialEq, Hash, Debug)]
+struct TablePath<'a> {
+    path: &'a Path,
+    is_dir: bool,
+}
+
+impl TablePath<'_> {
+    /// Format the path with a '/' appended if its a directory.
+    /// Clients (eg. object_store listing) can and will use the presence of trailing slash as a heuristic
+    fn to_string(&self) -> Option<String> {
+        self.path.to_str().map(|path| {
+            if self.is_dir {
+                format!("{path}/")
+            } else {
+                path.to_string()
+            }
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_path_ends_with_slash_when_is_dir() {
+        let table_path = TablePath {
+            path: Path::new("/file"),
+            is_dir: true,
+        };
+        assert!(table_path.to_string().expect("table path").ends_with('/'));
+    }
+
+    #[test]
+    fn dir_table_path_str_does_not_end_with_slash_when_not_is_dir() {
+        let table_path = TablePath {
+            path: Path::new("/file"),
+            is_dir: false,
+        };
+        assert!(!table_path.to_string().expect("table_path").ends_with('/'));
     }
 }

@@ -98,3 +98,6 @@ dev/dist
 
 # CI
 arrow-ballista
+
+datafusion/CHANGELOG.md.bak
+.githubchangeloggenerator.cache*

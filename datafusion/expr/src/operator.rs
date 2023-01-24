@@ -51,10 +51,6 @@ pub enum Operator {
     And,
     /// Logical OR, like `||`
     Or,
-    /// Matches a wildcard pattern
-    Like,
-    /// Does not match a wildcard pattern
-    NotLike,
     /// IS DISTINCT FROM
     IsDistinctFrom,
     /// IS NOT DISTINCT FROM
@@ -92,8 +88,6 @@ impl Operator {
             Operator::LtEq => Some(Operator::Gt),
             Operator::Gt => Some(Operator::LtEq),
             Operator::GtEq => Some(Operator::Lt),
-            Operator::Like => Some(Operator::NotLike),
-            Operator::NotLike => Some(Operator::Like),
             Operator::IsDistinctFrom => Some(Operator::IsNotDistinctFrom),
             Operator::IsNotDistinctFrom => Some(Operator::IsDistinctFrom),
             Operator::Plus
@@ -127,9 +121,7 @@ impl Operator {
             Operator::LtEq => Some(Operator::GtEq),
             Operator::Gt => Some(Operator::Lt),
             Operator::GtEq => Some(Operator::LtEq),
-            Operator::Like
-            | Operator::NotLike
-            | Operator::IsDistinctFrom
+            Operator::IsDistinctFrom
             | Operator::IsNotDistinctFrom
             | Operator::Plus
             | Operator::Minus
@@ -168,8 +160,6 @@ impl fmt::Display for Operator {
             Operator::Modulo => "%",
             Operator::And => "AND",
             Operator::Or => "OR",
-            Operator::Like => "LIKE",
-            Operator::NotLike => "NOT LIKE",
             Operator::RegexMatch => "~",
             Operator::RegexIMatch => "~*",
             Operator::RegexNotMatch => "!~",
@@ -183,7 +173,7 @@ impl fmt::Display for Operator {
             Operator::BitwiseShiftLeft => "<<",
             Operator::StringConcat => "||",
         };
-        write!(f, "{}", display)
+        write!(f, "{display}")
     }
 }
 

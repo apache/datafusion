@@ -110,7 +110,7 @@ async fn set_variable_unknown_variable() {
         .unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Execution error: Can not SET variable: Unknown Variable aabbcc"
+        "External error: could not find config namespace for key \"aabbcc\""
     );
 }
 
@@ -161,7 +161,7 @@ async fn set_bool_variable_bad_value() {
 
     assert_eq!(
         err.to_string(),
-        "Execution error: Failed to parse 1 as bool"
+        "Error parsing 1 as bool\ncaused by\nExternal error: provided string was not `true` or `false`"
     );
 
     let err = plan_and_collect(&ctx, "SET datafusion.execution.coalesce_batches to abc")
@@ -170,7 +170,7 @@ async fn set_bool_variable_bad_value() {
 
     assert_eq!(
         err.to_string(),
-        "Execution error: Failed to parse abc as bool"
+        "Error parsing abc as bool\ncaused by\nExternal error: provided string was not `true` or `false`"
     );
 }
 
@@ -236,7 +236,7 @@ async fn set_u64_variable_bad_value() {
 
     assert_eq!(
         err.to_string(),
-        "Execution error: Failed to parse -1 as u64"
+        "Error parsing -1 as usize\ncaused by\nExternal error: invalid digit found in string"
     );
 
     let err = plan_and_collect(&ctx, "SET datafusion.execution.batch_size to abc")
@@ -245,7 +245,7 @@ async fn set_u64_variable_bad_value() {
 
     assert_eq!(
         err.to_string(),
-        "Execution error: Failed to parse abc as u64"
+        "Error parsing abc as usize\ncaused by\nExternal error: invalid digit found in string"
     );
 
     let err = plan_and_collect(&ctx, "SET datafusion.execution.batch_size to 0.1")
@@ -254,7 +254,7 @@ async fn set_u64_variable_bad_value() {
 
     assert_eq!(
         err.to_string(),
-        "Execution error: Failed to parse 0.1 as u64"
+        "Error parsing 0.1 as usize\ncaused by\nExternal error: invalid digit found in string"
     );
 }
 

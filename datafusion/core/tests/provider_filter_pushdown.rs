@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{as_primitive_array, Int32Builder, Int64Array};
+use arrow::array::{Int32Builder, Int64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -31,6 +31,7 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
+use datafusion_common::cast::as_primitive_array;
 use datafusion_common::DataFusionError;
 use datafusion_expr::expr::{BinaryExpr, Cast};
 use std::ops::Deref;
@@ -89,10 +90,11 @@ impl ExecutionPlan for CustomPlan {
     fn execute(
         &self,
         partition: usize,
-        _context: Arc<TaskContext>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let metrics = ExecutionPlanMetricsSet::new();
-        let tracking_metrics = MemTrackingMetrics::new(&metrics, partition);
+        let tracking_metrics =
+            MemTrackingMetrics::new(&metrics, context.memory_pool(), partition);
         Ok(Box::pin(SizedRecordBatchStream::new(
             self.schema(),
             self.batches.clone(),
@@ -142,7 +144,7 @@ impl TableProvider for CustomProvider {
     async fn scan(
         &self,
         _state: &SessionState,
-        _: &Option<Vec<usize>>,
+        _: Option<&Vec<usize>>,
         filters: &[Expr],
         _: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -161,22 +163,19 @@ impl TableProvider for CustomProvider {
                             ScalarValue::Int64(Some(v)) => *v,
                             other_value => {
                                 return Err(DataFusionError::NotImplemented(format!(
-                                    "Do not support value {:?}",
-                                    other_value
+                                    "Do not support value {other_value:?}"
                                 )));
                             }
                         },
                         other_expr => {
                             return Err(DataFusionError::NotImplemented(format!(
-                                "Do not support expr {:?}",
-                                other_expr
+                                "Do not support expr {other_expr:?}"
                             )));
                         }
                     },
                     other_expr => {
                         return Err(DataFusionError::NotImplemented(format!(
-                            "Do not support expr {:?}",
-                            other_expr
+                            "Do not support expr {other_expr:?}"
                         )));
                     }
                 };
@@ -215,17 +214,17 @@ async fn assert_provider_row_count(value: i64, expected_count: i64) -> Result<()
         .aggregate(vec![], vec![count(col("flag"))])?;
 
     let results = df.collect().await?;
-    let result_col: &Int64Array = as_primitive_array(results[0].column(0));
+    let result_col: &Int64Array = as_primitive_array(results[0].column(0))?;
     assert_eq!(result_col.value(0), expected_count);
 
     ctx.register_table("data", Arc::new(provider))?;
     let sql_results = ctx
-        .sql(&format!("select count(*) from data where flag = {}", value))
+        .sql(&format!("select count(*) from data where flag = {value}"))
         .await?
         .collect()
         .await?;
 
-    let sql_result_col: &Int64Array = as_primitive_array(sql_results[0].column(0));
+    let sql_result_col: &Int64Array = as_primitive_array(sql_results[0].column(0))?;
     assert_eq!(sql_result_col.value(0), expected_count);
 
     Ok(())

@@ -17,51 +17,36 @@
 
 //! Metrics with memory usage tracking capability
 
-use crate::execution::runtime_env::RuntimeEnv;
-use crate::execution::MemoryConsumerId;
 use crate::physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Time,
 };
 use std::sync::Arc;
 use std::task::Poll;
 
+use crate::execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use arrow::{error::ArrowError, record_batch::RecordBatch};
 
-/// Simplified version of tracking memory consumer,
-/// see also: [`Tracking`](crate::execution::memory_manager::ConsumerType::Tracking)
-///
-/// You could use this to replace [BaselineMetrics], report the memory,
-/// and get the memory usage bookkeeping in the memory manager easily.
+/// Wraps a [`BaselineMetrics`] and records memory usage on a [`MemoryReservation`]
 #[derive(Debug)]
 pub struct MemTrackingMetrics {
-    id: MemoryConsumerId,
-    runtime: Option<Arc<RuntimeEnv>>,
+    reservation: MemoryReservation,
     metrics: BaselineMetrics,
 }
 
 /// Delegates most of the metrics functionalities to the inner BaselineMetrics,
 /// intercept memory metrics functionalities and do memory manager bookkeeping.
 impl MemTrackingMetrics {
-    /// Create metrics similar to [BaselineMetrics]
-    pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
-        let id = MemoryConsumerId::new(partition);
-        Self {
-            id,
-            runtime: None,
-            metrics: BaselineMetrics::new(metrics, partition),
-        }
-    }
-
-    /// Create memory tracking metrics with reference to runtime
-    pub fn new_with_rt(
+    /// Create memory tracking metrics with reference to memory manager
+    pub fn new(
         metrics: &ExecutionPlanMetricsSet,
+        pool: &Arc<dyn MemoryPool>,
         partition: usize,
-        runtime: Arc<RuntimeEnv>,
     ) -> Self {
-        let id = MemoryConsumerId::new(partition);
+        let reservation = MemoryConsumer::new(format!("MemTrackingMetrics[{partition}]"))
+            .register(pool);
+
         Self {
-            id,
-            runtime: Some(runtime),
+            reservation,
             metrics: BaselineMetrics::new(metrics, partition),
         }
     }
@@ -77,11 +62,9 @@ impl MemTrackingMetrics {
     }
 
     /// setup initial memory usage and register it with memory manager
-    pub fn init_mem_used(&self, size: usize) {
+    pub fn init_mem_used(&mut self, size: usize) {
         self.metrics.mem_used().set(size);
-        if let Some(rt) = self.runtime.as_ref() {
-            rt.memory_manager.grow_tracker_usage(size);
-        }
+        self.reservation.resize(size)
     }
 
     /// return the metric for the total number of output rows produced
@@ -116,16 +99,5 @@ impl MemTrackingMetrics {
         poll: Poll<Option<Result<RecordBatch, ArrowError>>>,
     ) -> Poll<Option<Result<RecordBatch, ArrowError>>> {
         self.metrics.record_poll(poll)
-    }
-}
-
-impl Drop for MemTrackingMetrics {
-    fn drop(&mut self) {
-        self.metrics.try_done();
-        if self.mem_used() != 0 {
-            if let Some(rt) = self.runtime.as_ref() {
-                rt.drop_consumer(&self.id, self.mem_used());
-            }
-        }
     }
 }

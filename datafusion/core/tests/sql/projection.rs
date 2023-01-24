@@ -167,12 +167,13 @@ async fn projection_on_table_scan() -> Result<()> {
     let partition_count = 4;
     let ctx = partitioned_csv::create_ctx(&tmp_dir, partition_count).await?;
 
-    let table = ctx.table("test")?;
-    let logical_plan = LogicalPlanBuilder::from(table.to_logical_plan()?)
+    let table = ctx.table("test").await?;
+    let logical_plan = LogicalPlanBuilder::from(table.into_optimized_plan()?)
         .project(vec![col("c2")])?
         .build()?;
 
-    let optimized_plan = ctx.optimize(&logical_plan)?;
+    let state = ctx.state();
+    let optimized_plan = state.optimize(&logical_plan)?;
     match &optimized_plan {
         LogicalPlan::Projection(Projection { input, .. }) => match &**input {
             LogicalPlan::TableScan(TableScan {
@@ -190,14 +191,13 @@ async fn projection_on_table_scan() -> Result<()> {
 
     let expected = "Projection: test.c2\
                     \n  TableScan: test projection=[c2]";
-    assert_eq!(format!("{:?}", optimized_plan), expected);
+    assert_eq!(format!("{optimized_plan:?}"), expected);
 
-    let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
+    let physical_plan = state.create_physical_plan(&optimized_plan).await?;
 
     assert_eq!(1, physical_plan.schema().fields().len());
     assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
-    let task_ctx = ctx.task_ctx();
-    let batches = collect(physical_plan, task_ctx).await?;
+    let batches = collect(physical_plan, state.task_ctx()).await?;
     assert_eq!(40, batches.iter().map(|x| x.num_rows()).sum::<usize>());
 
     Ok(())
@@ -208,15 +208,15 @@ async fn preserve_nullability_on_projection() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let ctx = partitioned_csv::create_ctx(&tmp_dir, 1).await?;
 
-    let schema: Schema = ctx.table("test").unwrap().schema().clone().into();
+    let schema: Schema = ctx.table("test").await.unwrap().schema().clone().into();
     assert!(!schema.field_with_name("c1")?.is_nullable());
 
     let plan = scan_empty(None, &schema, None)?
         .project(vec![col("c1")])?
         .build()?;
 
-    let plan = ctx.optimize(&plan)?;
-    let physical_plan = ctx.create_physical_plan(&Arc::new(plan)).await?;
+    let dataframe = DataFrame::new(ctx.state(), plan);
+    let physical_plan = dataframe.create_physical_plan().await?;
     assert!(!physical_plan.schema().field_with_name("c1")?.is_nullable());
     Ok(())
 }
@@ -247,9 +247,8 @@ async fn project_cast_dictionary() {
     .unwrap();
 
     let logical_plan = builder.project(vec![expr]).unwrap().build().unwrap();
-
-    let physical_plan = ctx.create_physical_plan(&logical_plan).await.unwrap();
-    let actual = collect(physical_plan, ctx.task_ctx()).await.unwrap();
+    let df = DataFrame::new(ctx.state(), logical_plan);
+    let actual = df.collect().await.unwrap();
 
     let expected = vec![
         "+----------------------------------------------------------------------------------+",
@@ -289,7 +288,8 @@ async fn projection_on_memory_scan() -> Result<()> {
     assert_fields_eq(&plan, vec!["b"]);
 
     let ctx = SessionContext::new();
-    let optimized_plan = ctx.optimize(&plan)?;
+    let state = ctx.state();
+    let optimized_plan = state.optimize(&plan)?;
     match &optimized_plan {
         LogicalPlan::Projection(Projection { input, .. }) => match &**input {
             LogicalPlan::TableScan(TableScan {
@@ -306,19 +306,17 @@ async fn projection_on_memory_scan() -> Result<()> {
     }
 
     let expected = format!(
-        "Projection: {}.b\
-         \n  TableScan: {} projection=[b]",
-        UNNAMED_TABLE, UNNAMED_TABLE
+        "Projection: {UNNAMED_TABLE}.b\
+         \n  TableScan: {UNNAMED_TABLE} projection=[b]"
     );
-    assert_eq!(format!("{:?}", optimized_plan), expected);
+    assert_eq!(format!("{optimized_plan:?}"), expected);
 
-    let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
+    let physical_plan = state.create_physical_plan(&optimized_plan).await?;
 
     assert_eq!(1, physical_plan.schema().fields().len());
     assert_eq!("b", physical_plan.schema().field(0).name().as_str());
 
-    let task_ctx = ctx.task_ctx();
-    let batches = collect(physical_plan, task_ctx).await?;
+    let batches = collect(physical_plan, state.task_ctx()).await?;
     assert_eq!(1, batches.len());
     assert_eq!(1, batches[0].num_columns());
     assert_eq!(4, batches[0].num_rows());

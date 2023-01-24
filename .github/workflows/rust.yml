@@ -17,6 +17,10 @@
 
 name: Rust
 
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
 on:
   # always trigger on PR
   push:
@@ -32,10 +36,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
     steps:
       - uses: actions/checkout@v3
       - name: Cache Cargo
@@ -49,34 +49,30 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Check workspace in debug mode
-        run: |
-          cargo check
-      - name: Check workspace in release mode
-        run: |
-          cargo check --release
+
       - name: Check workspace without default features
-        run: |
-          cargo check --no-default-features -p datafusion
+        run: cargo check --no-default-features -p datafusion
+
+      - name: Check workspace in debug mode
+        run: cargo check
+
+      # Note: this does not include dictionary_expressions to reduce codegen
       - name: Check workspace with all features
-        run: |
-          cargo check --workspace --benches --features avro,jit,scheduler,json
+        run: cargo check --workspace --benches --features avro,jit,scheduler,json
+
       - name: Check Cargo.lock for datafusion-cli
         run: |
           # If this test fails, try running `cargo update` in the `datafusion-cli` directory
+          # and check in the updated Cargo.lock file.
           cargo check --manifest-path datafusion-cli/Cargo.toml --locked
 
   # test the crate
   linux-test:
     name: cargo test (amd64)
-    needs: [linux-build-lib]
+    needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
     steps:
       - uses: actions/checkout@v3
         with:
@@ -91,17 +87,27 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Build tests
-        run: |
-          export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --features avro,jit,scheduler,json --no-run
-      - name: Run tests
-        run: |
-          export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --features avro,jit,scheduler,json
+      - name: Run tests (excluding doctests)
+        run: cargo test --lib --tests --bins --features avro,jit,scheduler,json,dictionary_expressions
+      - name: Verify Working Directory Clean
+        run: git diff --exit-code
+
+  linux-test-example:
+    name: cargo examples (amd64)
+    needs: [ linux-build-lib ]
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
       - name: Run examples
         run: |
-          export PATH=$PATH:$HOME/d/protoc/bin
           # test datafusion-sql examples
           cargo run --example sql
           # test datafusion-examples
@@ -121,17 +127,34 @@ jobs:
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
-  # verify that the benchmark queries return the correct results
-  verify-benchmark-results:
-    name: verify benchmark results (amd64)
-    needs: [linux-build-lib]
+  # Run doc tests
+  linux-test-doc:
+    name: cargo doctest (amd64)
+    needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      # Note: this does not include dictionary_expressions to reduce codegen
+      - name: Run doctests
+        run: cargo test --doc --features avro,jit,scheduler,json
+      - name: Verify Working Directory Clean
+        run: git diff --exit-code
+
+  # verify that the benchmark queries return the correct results
+  verify-benchmark-results:
+    name: verify benchmark results (amd64)
+    needs: [ linux-build-lib ]
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
     steps:
       - uses: actions/checkout@v3
         with:
@@ -165,7 +188,7 @@ jobs:
 
   integration-test:
     name: "Compare to postgres"
-    needs: [linux-build-lib]
+    needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -194,7 +217,14 @@ jobs:
           python-version: "3.10"
       - name: Install Python dependencies
         run: |
-          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install --upgrade pip wheel
+          # setuptools is normally only intended to serve as a build-time dependency
+          # but since numpy uses it internally and currently accessing methods that
+          # are removed from newer versions of setuptools we have a pin on it as well.
+          #
+          # TODO: this should be removed as soon as https://github.com/numpy/numpy/issues/22623
+          # is resolved and numpy version in integration-tests/requirements.txt is updated.
+          python -m pip install --upgrade "setuptools<=65.5.1"
           python -m pip install -r integration-tests/requirements.txt
       - name: Allow access of psql
         run: |
@@ -219,6 +249,37 @@ jobs:
           POSTGRES_DB: db_test
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
+
+  sqllogictest-postgres:
+    name: "Run sqllogictest with Postgres runner"
+    needs: [ linux-build-lib ]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: db_test
+          POSTGRES_INITDB_ARGS: --encoding=UTF-8 --lc-collate=C --lc-ctype=C
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+      - name: Setup toolchain
+        run: |
+          rustup toolchain install stable
+          rustup default stable
+      - name: Run sqllogictest
+        run: PG_COMPAT=true PG_URI="postgresql://postgres:postgres@localhost:$POSTGRES_PORT/db_test" cargo test -p datafusion --test sqllogictests
+        env:
+          POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}
 
   windows:
     name: cargo test (win64)
@@ -288,14 +349,10 @@ jobs:
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
-    needs: [linux-build-lib]
-    runs-on: ubuntu-latest
+    needs: [ linux-build-lib ]
+    runs-on: ubuntu-20.04
     container:
       image: amd64/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
     steps:
       - uses: actions/checkout@v3
         with:
@@ -317,23 +374,21 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Run tests
-        run: |
-          cd datafusion
-          cargo test --features=pyarrow
+      - name: Run datafusion-common tests
+        run: cargo test -p datafusion-common --features=pyarrow
 
-  lint:
-    name: Lint
+
+  check-fmt:
+    name: Check cargo fmt
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
     steps:
       - uses: actions/checkout@v3
-      - name: Setup toolchain
-        run: |
-          rustup toolchain install stable
-          rustup default stable
-          rustup component add rustfmt
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
       - name: Run
         run: |
           echo '' > datafusion/proto/src/generated/datafusion.rs
@@ -383,14 +438,10 @@ jobs:
 
   clippy:
     name: clippy
-    needs: [linux-build-lib]
+    needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
     steps:
       - uses: actions/checkout@v3
         with:
@@ -406,22 +457,17 @@ jobs:
         with:
           rust-version: stable
       - name: Install Clippy
-        run: |
-          rustup component add clippy
+        run: rustup component add clippy
       - name: Run clippy
         run: ci/scripts/rust_clippy.sh
 
   # Check answers are correct when hash values collide
   hash-collisions:
     name: cargo test hash collisions (amd64)
-    needs: [linux-build-lib]
+    needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
     steps:
       - uses: actions/checkout@v3
         with:
@@ -439,19 +485,14 @@ jobs:
       - name: Run tests
         run: |
           cd datafusion
-          # Force all hash values to collide
-          cargo test --all --features=force_hash_collisions
+          cargo test --lib --tests --features=force_hash_collisions
 
   cargo-toml-formatting-checks:
     name: check Cargo.toml formatting
-    needs: [linux-build-lib]
+    needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
     steps:
       - uses: actions/checkout@v3
         with:
@@ -467,8 +508,8 @@ jobs:
         with:
           rust-version: stable
       - name: Install cargo-tomlfmt
-        run: |
-          which cargo-tomlfmt || cargo install cargo-tomlfmt
+        run: which cargo-tomlfmt || cargo install cargo-tomlfmt
+
       - name: Check Cargo.toml formatting
         run: |
           # if you encounter error, try rerun the command below, finally run 'git diff' to
@@ -480,14 +521,10 @@ jobs:
 
   config-docs-check:
     name: check configs.md is up-to-date
-    needs: [linux-build-lib]
+    needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
     steps:
       - uses: actions/checkout@v3
         with:

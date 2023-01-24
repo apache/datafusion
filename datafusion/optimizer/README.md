@@ -42,9 +42,9 @@ and applying it to a logical plan to produce an optimized logical plan.
 // The `datafusion` crate provides a DataFrame API that can create a LogicalPlan
 let logical_plan = ...
 
-let mut config = OptimizerConfig::default();
+let mut config = OptimizerContext::default();
 let optimizer = Optimizer::new(&config);
-let optimized_plan = optimizer.optimize(&logical_plan, &mut config, observe)?;
+let optimized_plan = optimizer.optimize(&logical_plan, &config, observe)?;
 
 fn observe(plan: &LogicalPlan, rule: &dyn OptimizerRule) {
     println!(
@@ -82,7 +82,7 @@ pub trait OptimizerRule {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<LogicalPlan>;
 
     /// A human readable name for this optimizer rule
@@ -321,7 +321,7 @@ In the following example, the `type_coercion` and `simplify_expressions` passes 
 |                                                            |   EmptyExec: produce_one_row=true                                         |
 |                                                            |                                                                           |
 | physical_plan after aggregate_statistics                   | SAME TEXT AS ABOVE                                                        |
-| physical_plan after hash_build_probe_order                 | SAME TEXT AS ABOVE                                                        |
+| physical_plan after join_selection                         | SAME TEXT AS ABOVE                                                        |
 | physical_plan after coalesce_batches                       | SAME TEXT AS ABOVE                                                        |
 | physical_plan after repartition                            | SAME TEXT AS ABOVE                                                        |
 | physical_plan after add_merge_exec                         | SAME TEXT AS ABOVE                                                        |

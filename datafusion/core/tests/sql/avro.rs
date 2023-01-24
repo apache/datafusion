@@ -121,11 +121,8 @@ async fn avro_single_nan_schema() {
     .await
     .unwrap();
     let sql = "SELECT mycol FROM single_nan";
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
-    let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let runtime = ctx.task_ctx();
-    let results = collect(plan, runtime).await.unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let results = dataframe.collect().await.unwrap();
     for batch in results {
         assert_eq!(1, batch.num_rows());
         assert_eq!(1, batch.num_columns());
@@ -153,8 +150,8 @@ async fn avro_explain() {
             \n  AggregateExec: mode=Final, gby=[], aggr=[COUNT(UInt8(1))]\
             \n    CoalescePartitionsExec\
             \n      AggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]\
-            \n        RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
-            \n          AvroExec: files=[ARROW_TEST_DATA/avro/alltypes_plain.avro], limit=None\
+            \n        RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1\
+            \n          AvroExec: files={1 group: [[ARROW_TEST_DATA/avro/alltypes_plain.avro]]}, limit=None\
             \n",
         ],
     ];

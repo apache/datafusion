@@ -39,7 +39,7 @@ Here is a minimal example showing the execution of a query using the DataFrame A
 
 ```rust
 let ctx = SessionContext::new();
-let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
 let df = df.filter(col("a").lt_eq(col("b")))?
            .aggregate(vec![col("a")], vec![min(col("b"))])?
            .limit(0, Some(100))?;
@@ -49,7 +49,7 @@ df.show();
 
 The DataFrame API is well documented in the [API reference on docs.rs](https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html).
 
-Refer to the [Expressions Refence](expressions) for available functions for building logical expressions for use with the
+Refer to the [Expressions Reference](expressions) for available functions for building logical expressions for use with the
 DataFrame API.
 
 ## DataFrame Transformations

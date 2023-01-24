@@ -34,11 +34,14 @@ fn optimize_explain() {
     if let LogicalPlan::Explain(e) = &plan {
         assert_eq!(e.stringified_plans.len(), 1);
     } else {
-        panic!("plan was not an explain: {:?}", plan);
+        panic!("plan was not an explain: {plan:?}");
     }
 
+    let ctx = SessionContext::new();
+    let state = ctx.state();
+
     // now optimize the plan and expect to see more plans
-    let optimized_plan = SessionContext::new().optimize(&plan).unwrap();
+    let optimized_plan = state.optimize(&plan).unwrap();
     if let LogicalPlan::Explain(e) = &optimized_plan {
         // should have more than one plan
         assert!(
@@ -54,6 +57,6 @@ fn optimize_explain() {
 
         assert!(opt, "plans: {:#?}", e.stringified_plans);
     } else {
-        panic!("plan was not an explain: {:?}", plan);
+        panic!("plan was not an explain: {plan:?}");
     }
 }

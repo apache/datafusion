@@ -48,7 +48,8 @@ use datafusion_benchmarks::tpch::*;
 use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::execution::context::SessionState;
+use datafusion::scheduler::Scheduler;
+use futures::TryStreamExt;
 use serde::Serialize;
 use structopt::StructOpt;
 
@@ -101,6 +102,10 @@ struct DataFusionBenchmarkOpt {
     /// Whether to disable collection of statistics (and cost based optimizations) or not.
     #[structopt(short = "S", long = "disable-statistics")]
     disable_statistics: bool,
+
+    /// Enable scheduler
+    #[structopt(short = "e", long = "enable-scheduler")]
+    enable_scheduler: bool,
 }
 
 #[derive(Debug, StructOpt)]
@@ -164,8 +169,7 @@ async fn main() -> Result<()> {
                 "zstd" => Compression::ZSTD,
                 other => {
                     return Err(DataFusionError::NotImplemented(format!(
-                        "Invalid compression format: {}",
-                        other
+                        "Invalid compression format: {other}"
                     )));
                 }
             };
@@ -188,7 +192,7 @@ const TPCH_QUERY_END_ID: usize = 22;
 async fn benchmark_datafusion(
     opt: DataFusionBenchmarkOpt,
 ) -> Result<Vec<Vec<RecordBatch>>> {
-    println!("Running benchmarks with the following options: {:?}", opt);
+    println!("Running benchmarks with the following options: {opt:?}");
     let query_range = match opt.query {
         Some(query_id) => query_id..=query_id,
         None => TPCH_QUERY_START_ID..=TPCH_QUERY_END_ID,
@@ -235,14 +239,16 @@ async fn benchmark_query(
         if query_id == 15 {
             for (n, query) in sql.iter().enumerate() {
                 if n == 1 {
-                    result = execute_query(&ctx, query, opt.debug).await?;
+                    result = execute_query(&ctx, query, opt.debug, opt.enable_scheduler)
+                        .await?;
                 } else {
-                    execute_query(&ctx, query, opt.debug).await?;
+                    execute_query(&ctx, query, opt.debug, opt.enable_scheduler).await?;
                 }
             }
         } else {
             for query in sql {
-                result = execute_query(&ctx, query, opt.debug).await?;
+                result =
+                    execute_query(&ctx, query, opt.debug, opt.enable_scheduler).await?;
             }
         }
 
@@ -250,28 +256,25 @@ async fn benchmark_query(
         millis.push(elapsed);
         let row_count = result.iter().map(|b| b.num_rows()).sum();
         println!(
-            "Query {} iteration {} took {:.1} ms and returned {} rows",
-            query_id, i, elapsed, row_count
+            "Query {query_id} iteration {i} took {elapsed:.1} ms and returned {row_count} rows"
         );
         benchmark_run.add_result(elapsed, row_count);
     }
 
     let avg = millis.iter().sum::<f64>() / millis.len() as f64;
-    println!("Query {} avg time: {:.2} ms", query_id, avg);
+    println!("Query {query_id} avg time: {avg:.2} ms");
 
     Ok((benchmark_run, result))
 }
 
-#[allow(clippy::await_holding_lock)]
 async fn register_tables(
     opt: &DataFusionBenchmarkOpt,
     ctx: &SessionContext,
 ) -> Result<()> {
     for table in TPCH_TABLES {
         let table_provider = {
-            let mut session_state = ctx.state.write();
             get_table(
-                &mut session_state,
+                ctx,
                 opt.path.to_str().unwrap(),
                 table,
                 opt.file_format.as_str(),
@@ -281,7 +284,7 @@ async fn register_tables(
         };
 
         if opt.mem_table {
-            println!("Loading table '{}' into memory", table);
+            println!("Loading table '{table}' into memory");
             let start = Instant::now();
             let memtable =
                 MemTable::load(table_provider, Some(opt.partitions), &ctx.state())
@@ -317,27 +320,35 @@ async fn execute_query(
     ctx: &SessionContext,
     sql: &str,
     debug: bool,
+    enable_scheduler: bool,
 ) -> Result<Vec<RecordBatch>> {
     let plan = ctx.sql(sql).await?;
-    let plan = plan.to_unoptimized_plan();
+    let (state, plan) = plan.into_parts();
 
     if debug {
-        println!("=== Logical plan ===\n{:?}\n", plan);
+        println!("=== Logical plan ===\n{plan:?}\n");
     }
 
-    let plan = ctx.optimize(&plan)?;
+    let plan = state.optimize(&plan)?;
     if debug {
-        println!("=== Optimized logical plan ===\n{:?}\n", plan);
+        println!("=== Optimized logical plan ===\n{plan:?}\n");
     }
-    let physical_plan = ctx.create_physical_plan(&plan).await?;
+    let physical_plan = state.create_physical_plan(&plan).await?;
     if debug {
         println!(
             "=== Physical plan ===\n{}\n",
             displayable(physical_plan.as_ref()).indent()
         );
     }
-    let task_ctx = ctx.task_ctx();
-    let result = collect(physical_plan.clone(), task_ctx).await?;
+    let result = if enable_scheduler {
+        let scheduler = Scheduler::new(num_cpus::get());
+        let results = scheduler
+            .schedule(physical_plan.clone(), state.task_ctx())
+            .unwrap();
+        results.stream().try_collect().await?
+    } else {
+        collect(physical_plan.clone(), state.task_ctx()).await?
+    };
     if debug {
         println!(
             "=== Physical plan with metrics ===\n{}\n",
@@ -353,17 +364,19 @@ async fn execute_query(
 }
 
 async fn get_table(
-    ctx: &mut SessionState,
+    ctx: &SessionContext,
     path: &str,
     table: &str,
     table_format: &str,
     target_partitions: usize,
 ) -> Result<Arc<dyn TableProvider>> {
+    // Obtain a snapshot of the SessionState
+    let state = ctx.state();
     let (format, path, extension): (Arc<dyn FileFormat>, String, &'static str) =
         match table_format {
             // dbgen creates .tbl ('|' delimited) files without header
             "tbl" => {
-                let path = format!("{}/{}.tbl", path, table);
+                let path = format!("{path}/{table}.tbl");
 
                 let format = CsvFormat::default()
                     .with_delimiter(b'|')
@@ -372,7 +385,7 @@ async fn get_table(
                 (Arc::new(format), path, ".tbl")
             }
             "csv" => {
-                let path = format!("{}/{}", path, table);
+                let path = format!("{path}/{table}");
                 let format = CsvFormat::default()
                     .with_delimiter(b',')
                     .with_has_header(true);
@@ -380,8 +393,8 @@ async fn get_table(
                 (Arc::new(format), path, DEFAULT_CSV_EXTENSION)
             }
             "parquet" => {
-                let path = format!("{}/{}", path, table);
-                let format = ParquetFormat::default().with_enable_pruning(true);
+                let path = format!("{path}/{table}");
+                let format = ParquetFormat::default().with_enable_pruning(Some(true));
 
                 (Arc::new(format), path, DEFAULT_PARQUET_EXTENSION)
             }
@@ -389,21 +402,20 @@ async fn get_table(
                 unimplemented!("Invalid file format '{}'", other);
             }
         };
-    let schema = Arc::new(get_tpch_table_schema(table));
 
     let options = ListingOptions::new(format)
         .with_file_extension(extension)
         .with_target_partitions(target_partitions)
-        .with_collect_stat(ctx.config.collect_statistics)
-        .with_table_partition_cols(vec![]);
+        .with_collect_stat(state.config().collect_statistics());
 
     let table_path = ListingTableUrl::parse(path)?;
     let config = ListingTableConfig::new(table_path).with_listing_options(options);
 
-    let config = if table_format == "parquet" {
-        config.infer_schema(ctx).await?
-    } else {
-        config.with_schema(schema)
+    let config = match table_format {
+        "parquet" => config.infer_schema(&state).await?,
+        "tbl" => config.with_schema(Arc::new(get_tbl_tpch_table_schema(table))),
+        "csv" => config.with_schema(Arc::new(get_tpch_table_schema(table))),
+        _ => unreachable!(),
     };
 
     Ok(Arc::new(ListingTable::try_new(config)?))
@@ -582,17 +594,7 @@ mod tests {
         expected_plan(16).await
     }
 
-    /// This query produces different plans depending on operating system. The difference is
-    /// due to re-writing the following expression:
-    ///
-    /// `sum(l_extendedprice) / 7.0 as avg_yearly`
-    ///
-    /// Linux:   Decimal128(Some(7000000000000000195487369212723200),38,33)
-    /// Windows: Decimal128(Some(6999999999999999042565864605876224),38,33)
-    ///
-    /// See https://github.com/apache/arrow-datafusion/issues/3791
     #[tokio::test]
-    #[ignore]
     async fn q17_expected_plan() -> Result<()> {
         expected_plan(17).await
     }
@@ -628,7 +630,7 @@ mod tests {
         let sql = get_query_sql(query)?;
         for sql in &sql {
             let df = ctx.sql(sql.as_str()).await?;
-            let plan = df.to_logical_plan()?;
+            let plan = df.into_optimized_plan()?;
             if !actual.is_empty() {
                 actual += "\n";
             }
@@ -637,8 +639,8 @@ mod tests {
         }
 
         let possibilities = vec![
-            format!("expected-plans/q{}.txt", query),
-            format!("benchmarks/expected-plans/q{}.txt", query),
+            format!("expected-plans/q{query}.txt"),
+            format!("benchmarks/expected-plans/q{query}.txt"),
         ];
 
         let mut found = false;
@@ -647,8 +649,7 @@ mod tests {
             if let Ok(expected) = read_text_file(path) {
                 assert_eq!(expected, actual,
                            // generate output that is easier to copy/paste/update
-                           "\n\nMismatch of expected content in: {:?}\nExpected:\n\n{}\n\nActual:\n\n{}\n\n",
-                           path, expected, actual);
+                           "\n\nMismatch of expected content in: {path:?}\nExpected:\n\n{expected}\n\nActual:\n\n{actual}\n\n");
                 found = true;
                 break;
             }
@@ -814,7 +815,7 @@ mod tests {
 
         let sql = &get_query_sql(n)?;
         for query in sql {
-            execute_query(&ctx, query, false).await?;
+            execute_query(&ctx, query, false, false).await?;
         }
 
         Ok(())
@@ -826,6 +827,7 @@ mod tests {
 #[cfg(feature = "ci")]
 mod ci {
     use super::*;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
 
     async fn serde_round_trip(query: usize) -> Result<()> {
@@ -842,6 +844,7 @@ mod ci {
             mem_table: false,
             output_path: None,
             disable_statistics: false,
+            enable_scheduler: false,
         };
         register_tables(&opt, &ctx).await?;
         let queries = get_query_sql(query)?;
@@ -1083,7 +1086,6 @@ mod ci {
     ///  * the correct number of rows are returned
     ///  * the content of the rows is correct
     async fn verify_query(n: usize) -> Result<()> {
-        use datafusion::arrow::datatypes::{DataType, Field};
         use datafusion::common::ScalarValue;
         use datafusion::logical_expr::expr::Cast;
 
@@ -1120,21 +1122,17 @@ mod ci {
                                 Box::new(trim(col(Field::name(field)))),
                                 DataType::Float64,
                             )));
-                            Expr::Alias(
-                                Box::new(Expr::Cast(Cast::new(
-                                    inner_cast,
-                                    Field::data_type(field).to_owned(),
-                                ))),
-                                Field::name(field).to_string(),
-                            )
-                        }
-                        _ => Expr::Alias(
-                            Box::new(Expr::Cast(Cast::new(
-                                Box::new(trim(col(Field::name(field)))),
+                            Expr::Cast(Cast::new(
+                                inner_cast,
                                 Field::data_type(field).to_owned(),
-                            ))),
-                            Field::name(field).to_string(),
-                        ),
+                            ))
+                            .alias(Field::name(field))
+                        }
+                        _ => Expr::Cast(Cast::new(
+                            Box::new(trim(col(Field::name(field)))),
+                            Field::data_type(field).to_owned(),
+                        ))
+                        .alias(Field::name(field)),
                     }
                 })
                 .collect::<Vec<Expr>>(),
@@ -1153,6 +1151,7 @@ mod ci {
             mem_table: false,
             output_path: None,
             disable_statistics: false,
+            enable_scheduler: false,
         };
         let mut results = benchmark_datafusion(opt).await?;
         assert_eq!(results.len(), 1);
@@ -1214,7 +1213,8 @@ mod ci {
     }
 
     fn get_tpch_data_path() -> Result<String> {
-        let path = std::env::var("TPCH_DATA").unwrap_or("benchmarks/data".to_string());
+        let path =
+            std::env::var("TPCH_DATA").unwrap_or_else(|_| "benchmarks/data".to_string());
         if !Path::new(&path).exists() {
             return Err(DataFusionError::Execution(format!(
                 "Benchmark data not found (set TPCH_DATA env var to override): {}",

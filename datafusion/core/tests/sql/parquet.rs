@@ -19,6 +19,7 @@ use std::{fs, path::Path};
 
 use ::parquet::arrow::ArrowWriter;
 use datafusion::datasource::listing::ListingOptions;
+use datafusion_common::cast::{as_list_array, as_primitive_array, as_string_array};
 use tempfile::TempDir;
 
 use super::*;
@@ -54,13 +55,12 @@ async fn parquet_query() {
 /// expressions make it all the way down to the ParquetExec
 async fn parquet_with_sort_order_specified() {
     let parquet_read_options = ParquetReadOptions::default();
-    let target_partitions = 2;
+    let session_config = SessionConfig::new().with_target_partitions(2);
 
     // The sort order is not specified
-    let options_no_sort = ListingOptions {
-        file_sort_order: None,
-        ..parquet_read_options.to_listing_options(target_partitions)
-    };
+    let options_no_sort = parquet_read_options
+        .to_listing_options(&session_config)
+        .with_file_sort_order(None);
 
     // The sort order is specified (not actually correct in this case)
     let file_sort_order = [col("string_col"), col("int_col")]
@@ -72,10 +72,9 @@ async fn parquet_with_sort_order_specified() {
         })
         .collect::<Vec<_>>();
 
-    let options_sort = ListingOptions {
-        file_sort_order: Some(file_sort_order),
-        ..parquet_read_options.to_listing_options(target_partitions)
-    };
+    let options_sort = parquet_read_options
+        .to_listing_options(&session_config)
+        .with_file_sort_order(Some(file_sort_order));
 
     // This string appears in ParquetExec if the output ordering is
     // specified
@@ -111,7 +110,7 @@ async fn run_query_with_options(options: ListingOptions, num_files: usize) -> St
     let ctx = SessionContext::new();
 
     let testdata = datafusion::test_util::parquet_test_data();
-    let file_path = format!("{}/alltypes_plain.parquet", testdata);
+    let file_path = format!("{testdata}/alltypes_plain.parquet");
 
     // Create a directory of parquet files with names
     // 0.parquet
@@ -158,11 +157,8 @@ async fn fixed_size_binary_columns() {
     .await
     .unwrap();
     let sql = "SELECT ids FROM t0 ORDER BY ids";
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
-    let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let task_ctx = ctx.task_ctx();
-    let results = collect(plan, task_ctx).await.unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let results = dataframe.collect().await.unwrap();
     for batch in results {
         assert_eq!(466, batch.num_rows());
         assert_eq!(1, batch.num_columns());
@@ -175,17 +171,14 @@ async fn parquet_single_nan_schema() {
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet(
         "single_nan",
-        &format!("{}/single_nan.parquet", testdata),
+        &format!("{testdata}/single_nan.parquet"),
         ParquetReadOptions::default(),
     )
     .await
     .unwrap();
     let sql = "SELECT mycol FROM single_nan";
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
-    let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let task_ctx = ctx.task_ctx();
-    let results = collect(plan, task_ctx).await.unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let results = dataframe.collect().await.unwrap();
     for batch in results {
         assert_eq!(1, batch.num_rows());
         assert_eq!(1, batch.num_columns());
@@ -199,7 +192,7 @@ async fn parquet_list_columns() {
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet(
         "list_columns",
-        &format!("{}/list_columns.parquet", testdata),
+        &format!("{testdata}/list_columns.parquet"),
         ParquetReadOptions::default(),
     )
     .await
@@ -219,11 +212,8 @@ async fn parquet_list_columns() {
     ]));
 
     let sql = "SELECT int64_list, utf8_list FROM list_columns";
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
-    let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let task_ctx = ctx.task_ctx();
-    let results = collect(plan, task_ctx).await.unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let results = dataframe.collect().await.unwrap();
 
     //   int64_list              utf8_list
     // 0  [1, 2, 3]        [abc, efg, hij]
@@ -236,57 +226,33 @@ async fn parquet_list_columns() {
     assert_eq!(2, batch.num_columns());
     assert_eq!(schema, batch.schema());
 
-    let int_list_array = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<ListArray>()
-        .unwrap();
-    let utf8_list_array = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<ListArray>()
-        .unwrap();
+    let int_list_array = as_list_array(batch.column(0)).unwrap();
+    let utf8_list_array = as_list_array(batch.column(1)).unwrap();
 
     assert_eq!(
-        int_list_array
-            .value(0)
-            .as_any()
-            .downcast_ref::<PrimitiveArray<Int64Type>>()
-            .unwrap(),
+        as_primitive_array::<Int64Type>(&int_list_array.value(0)).unwrap(),
         &PrimitiveArray::<Int64Type>::from(vec![Some(1), Some(2), Some(3),])
     );
 
     assert_eq!(
-        utf8_list_array
-            .value(0)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap(),
+        as_string_array(&utf8_list_array.value(0)).unwrap(),
         &StringArray::try_from(vec![Some("abc"), Some("efg"), Some("hij"),]).unwrap()
     );
 
     assert_eq!(
-        int_list_array
-            .value(1)
-            .as_any()
-            .downcast_ref::<PrimitiveArray<Int64Type>>()
-            .unwrap(),
+        as_primitive_array::<Int64Type>(&int_list_array.value(1)).unwrap(),
         &PrimitiveArray::<Int64Type>::from(vec![None, Some(1),])
     );
 
     assert!(utf8_list_array.is_null(1));
 
     assert_eq!(
-        int_list_array
-            .value(2)
-            .as_any()
-            .downcast_ref::<PrimitiveArray<Int64Type>>()
-            .unwrap(),
+        as_primitive_array::<Int64Type>(&int_list_array.value(2)).unwrap(),
         &PrimitiveArray::<Int64Type>::from(vec![Some(4),])
     );
 
     let result = utf8_list_array.value(2);
-    let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+    let result = as_string_array(&result).unwrap();
 
     assert_eq!(result.value(0), "efg");
     assert!(result.is_null(1));

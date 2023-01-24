@@ -109,8 +109,15 @@ impl PartialOrd for SortKeyCursor {
 
 impl Ord for SortKeyCursor {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.current()
-            .cmp(&other.current())
-            .then_with(|| self.stream_idx.cmp(&other.stream_idx))
+        // Order finished cursors greater (last)
+        match (self.is_finished(), other.is_finished()) {
+            (true, true) => Ordering::Equal,
+            (_, true) => Ordering::Less,
+            (true, _) => Ordering::Greater,
+            _ => self
+                .current()
+                .cmp(&other.current())
+                .then_with(|| self.stream_idx.cmp(&other.stream_idx)),
+        }
     }
 }

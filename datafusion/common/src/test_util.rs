@@ -25,7 +25,7 @@
 /// Is a macro so test error
 /// messages are on the same line as the failure;
 ///
-/// Both arguments must be convertable into Strings (Into<String>)
+/// Both arguments must be convertable into Strings ([`Into`]<[`String`]>)
 #[macro_export]
 macro_rules! assert_contains {
     ($ACTUAL: expr, $EXPECTED: expr) => {
@@ -48,7 +48,7 @@ macro_rules! assert_contains {
 /// Is a macro so test error
 /// messages are on the same line as the failure;
 ///
-/// Both arguments must be convertable into Strings (Into<String>)
+/// Both arguments must be convertable into Strings ([`Into`]<[`String`]>)
 #[macro_export]
 macro_rules! assert_not_contains {
     ($ACTUAL: expr, $UNEXPECTED: expr) => {
