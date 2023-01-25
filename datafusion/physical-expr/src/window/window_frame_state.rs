@@ -21,7 +21,7 @@
 use arrow::array::ArrayRef;
 use arrow::compute::kernels::sort::SortOptions;
 use datafusion_common::utils::{
-    compare_rows, find_bisect_point, get_row_at_idx, search_in_slice, search_till_change,
+    compare_rows, get_row_at_idx, search_in_slice, search_till_change,
 };
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
@@ -352,6 +352,7 @@ impl WindowFrameStateRange {
 #[derive(Debug, Default)]
 pub struct WindowFrameStateGroups {
     group_start_indices: VecDeque<(Vec<ScalarValue>, usize)>,
+    // Keeps the groups index that row index belongs
     cur_group_idx: usize,
 }
 
@@ -459,7 +460,7 @@ impl WindowFrameStateGroups {
     fn calculate_index_of_row<const SIDE: bool, const PRECEDING: bool>(
         &mut self,
         range_columns: &[ArrayRef],
-        sort_options: &[SortOptions],
+        _sort_options: &[SortOptions],
         idx: usize,
         delta: Option<&ScalarValue>,
         last_range: &Range<usize>,
@@ -481,15 +482,18 @@ impl WindowFrameStateGroups {
         let mut change_idx = search_start;
         let last_group = self.group_start_indices.back();
         if let Some((_last_group, bound_idx)) = last_group {
+            // Start searching from change point from last boundary
             change_idx = *bound_idx;
         }
 
+        // Progress groups until idx is inside a group
         while idx > change_idx {
             let group_row = get_row_at_idx(range_columns, change_idx)?;
             change_idx = search_till_change(range_columns, change_idx, length)?;
             self.group_start_indices.push_back((group_row, change_idx));
         }
 
+        // Update the group index `idx` belongs.
         while self.cur_group_idx < self.group_start_indices.len() {
             if idx >= self.group_start_indices[self.cur_group_idx].1 {
                 self.cur_group_idx += 1;
@@ -507,37 +511,38 @@ impl WindowFrameStateGroups {
             self.cur_group_idx + delta
         };
 
+        // Expand group_start_indices until it includes at least group_idx
         while self.group_start_indices.len() <= group_idx && change_idx < length {
             // println!("change idx: {:?}, idx: {:?}, self.cur_group_idx: {:?}", change_idx, idx, self.cur_group_idx);
             let group_row = get_row_at_idx(range_columns, change_idx)?;
             change_idx = search_till_change(range_columns, change_idx, length)?;
             self.group_start_indices.push_back((group_row, change_idx));
         }
-
-        let res = if SIDE {
-            let group_idx = min(group_idx, self.group_start_indices.len());
-            if group_idx > 0 {
-                self.group_start_indices[group_idx - 1].1
-            } else {
-                0
+        Ok(match (SIDE, PRECEDING) {
+            (true, _) => {
+                let group_idx = min(group_idx, self.group_start_indices.len());
+                if group_idx > 0 {
+                    self.group_start_indices[group_idx - 1].1
+                } else {
+                    0
+                }
             }
-        } else {
-            if PRECEDING {
+            (false, true) => {
                 if self.cur_group_idx >= delta {
                     let group_idx = self.cur_group_idx - delta;
                     self.group_start_indices[group_idx].1
                 } else {
                     0
                 }
-            } else {
+            }
+            (false, false) => {
                 let group_idx = min(
                     self.cur_group_idx + delta,
                     self.group_start_indices.len() - 1,
                 );
                 self.group_start_indices[group_idx].1
             }
-        };
-        Ok(res)
+        })
     }
 }
 
