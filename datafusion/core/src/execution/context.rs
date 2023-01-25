@@ -560,10 +560,10 @@ impl SessionContext {
         options: impl ReadOptions<'a>,
     ) -> Result<DataFrame> {
         let table_path = ListingTableUrl::parse(table_path)?;
-        let target_partitions = self.copied_config().target_partitions();
-        let listing_options = options.to_listing_options(target_partitions);
+        let session_config = self.copied_config();
+        let listing_options = options.to_listing_options(&session_config);
         let resolved_schema = match options
-            .get_resolved_schema(target_partitions, self.state(), table_path.clone())
+            .get_resolved_schema(&session_config, self.state(), table_path.clone())
             .await
         {
             Ok(resolved_schema) => resolved_schema,
@@ -698,8 +698,7 @@ impl SessionContext {
         table_path: &str,
         options: CsvReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options =
-            options.to_listing_options(self.copied_config().target_partitions());
+        let listing_options = options.to_listing_options(&self.copied_config());
 
         self.register_listing_table(
             name,
@@ -721,8 +720,7 @@ impl SessionContext {
         table_path: &str,
         options: NdJsonReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options =
-            options.to_listing_options(self.copied_config().target_partitions());
+        let listing_options = options.to_listing_options(&self.copied_config());
 
         self.register_listing_table(
             name,
@@ -743,8 +741,7 @@ impl SessionContext {
         table_path: &str,
         options: ParquetReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options =
-            options.to_listing_options(self.state.read().config.target_partitions());
+        let listing_options = options.to_listing_options(&self.state.read().config);
 
         self.register_listing_table(name, table_path, listing_options, None, None)
             .await?;
@@ -759,8 +756,7 @@ impl SessionContext {
         table_path: &str,
         options: AvroReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options =
-            options.to_listing_options(self.copied_config().target_partitions());
+        let listing_options = options.to_listing_options(&self.copied_config());
 
         self.register_listing_table(
             name,

@@ -346,12 +346,12 @@ impl<'a> NdJsonReadOptions<'a> {
 /// ['ReadOptions'] is implemented by Options like ['CsvReadOptions'] that control the reading of respective files/sources.
 pub trait ReadOptions<'a> {
     /// Helper to convert these user facing options to `ListingTable` options
-    fn to_listing_options(&self, target_partitions: usize) -> ListingOptions;
+    fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions;
 
     /// Infer and resolve the schema from the files/sources provided.
     async fn get_resolved_schema(
         &self,
-        target_partitions: usize,
+        config: &SessionConfig,
         state: SessionState,
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef>;
@@ -359,7 +359,7 @@ pub trait ReadOptions<'a> {
     /// helper function to reduce repetitive code. Infers the schema from sources if not provided. Infinite data sources not supported through this function.
     async fn _get_resolved_schema(
         &'a self,
-        target_partitions: usize,
+        config: &SessionConfig,
         state: SessionState,
         table_path: ListingTableUrl,
         schema: Option<&'a Schema>,
@@ -371,7 +371,7 @@ pub trait ReadOptions<'a> {
         match (schema, infinite) {
             (Some(s), _) => Ok(Arc::new(s.to_owned())),
             (None, false) => Ok(self
-                .to_listing_options(target_partitions)
+                .to_listing_options(config)
                 .infer_schema(&state, &table_path)
                 .await?),
             (None, true) => Err(DataFusionError::Plan(
@@ -384,7 +384,7 @@ pub trait ReadOptions<'a> {
 
 #[async_trait]
 impl ReadOptions<'_> for CsvReadOptions<'_> {
-    fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
+    fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
         let file_format = CsvFormat::default()
             .with_has_header(self.has_header)
             .with_delimiter(self.delimiter)
@@ -393,7 +393,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(target_partitions)
+            .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
             // TODO: Add file sort order into CsvReadOptions and introduce here.
             .with_file_sort_order(None)
@@ -402,43 +402,37 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
 
     async fn get_resolved_schema(
         &self,
-        target_partitions: usize,
+        config: &SessionConfig,
         state: SessionState,
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef> {
-        self._get_resolved_schema(
-            target_partitions,
-            state,
-            table_path,
-            self.schema,
-            self.infinite,
-        )
-        .await
+        self._get_resolved_schema(config, state, table_path, self.schema, self.infinite)
+            .await
     }
 }
 
 #[async_trait]
 impl ReadOptions<'_> for ParquetReadOptions<'_> {
-    fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
+    fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
         let file_format = ParquetFormat::new()
             .with_enable_pruning(self.parquet_pruning)
             .with_skip_metadata(self.skip_metadata);
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(target_partitions)
+            .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 
     async fn get_resolved_schema(
         &self,
-        target_partitions: usize,
+        config: &SessionConfig,
         state: SessionState,
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef> {
         // with parquet we resolve the schema in all cases
         Ok(self
-            .to_listing_options(target_partitions)
+            .to_listing_options(&config)
             .infer_schema(&state, &table_path)
             .await?)
     }
@@ -446,59 +440,47 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
 
 #[async_trait]
 impl ReadOptions<'_> for NdJsonReadOptions<'_> {
-    fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
+    fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
         let file_format = JsonFormat::default()
             .with_file_compression_type(self.file_compression_type.to_owned());
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(target_partitions)
+            .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_infinite_source(self.infinite)
     }
 
     async fn get_resolved_schema(
         &self,
-        target_partitions: usize,
+        config: &SessionConfig,
         state: SessionState,
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef> {
-        self._get_resolved_schema(
-            target_partitions,
-            state,
-            table_path,
-            self.schema,
-            self.infinite,
-        )
-        .await
+        self._get_resolved_schema(config, state, table_path, self.schema, self.infinite)
+            .await
     }
 }
 
 #[async_trait]
 impl ReadOptions<'_> for AvroReadOptions<'_> {
-    fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
+    fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
         let file_format = AvroFormat::default();
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(target_partitions)
+            .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_infinite_source(self.infinite)
     }
 
     async fn get_resolved_schema(
         &self,
-        target_partitions: usize,
+        config: &SessionConfig,
         state: SessionState,
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef> {
-        self._get_resolved_schema(
-            target_partitions,
-            state,
-            table_path,
-            self.schema,
-            self.infinite,
-        )
-        .await
+        self._get_resolved_schema(config, state, table_path, self.schema, self.infinite)
+            .await
     }
 }
