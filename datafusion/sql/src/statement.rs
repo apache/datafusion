@@ -35,8 +35,8 @@ use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DescribeTable, DmlStatement, DropTable, DropView, Explain, Filter, LogicalPlan,
-    LogicalPlanBuilder, PlanType, SetVariable, ToStringifiedPlan, WriteOp,
+    DescribeTable, DmlStatement, DropTable, DropView, Explain, ExprSchemable, Filter,
+    LogicalPlan, LogicalPlanBuilder, PlanType, SetVariable, ToStringifiedPlan, WriteOp,
 };
 use sqlparser::ast;
 use sqlparser::ast::{
@@ -45,7 +45,7 @@ use sqlparser::ast::{
     UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -661,27 +661,35 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .get_table_provider((&table_name).into())?;
         let arrow_schema = (*provider.schema()).clone();
         let table_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
-        let mut values: BTreeMap<_, _> = table_schema
-            .fields()
-            .iter()
-            .map(|f| {
-                (
-                    f.name().clone(),
-                    ast::Expr::Identifier(ast::Ident::from(f.name().as_str())),
-                )
-            })
-            .collect();
+        let values = table_schema.fields().iter().map(|f| {
+            (
+                f.name().clone(),
+                ast::Expr::Identifier(ast::Ident::from(f.name().as_str())),
+            )
+        });
 
         // Overwrite with assignment expressions
         let mut planner_context = PlannerContext::new();
-        for assign in assignments.iter() {
-            let col_name: &Ident = assign
-                .id
-                .iter()
-                .last()
-                .ok_or(DataFusionError::Plan("Empty column id".to_string()))?;
-            let _ = values.insert(col_name.value.clone(), assign.value.clone());
-        }
+        let assign_map = assignments
+            .iter()
+            .map(|assign| {
+                let col_name: &Ident = assign
+                    .id
+                    .iter()
+                    .last()
+                    .ok_or(DataFusionError::Plan("Empty column id".to_string()))?;
+                Ok((col_name.value.clone(), assign.value.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut assign_map: HashMap<String, ast::Expr> =
+            HashMap::from_iter(assign_map.into_iter());
+        let values = values
+            .into_iter()
+            .map(|(k, v)| {
+                let val = assign_map.remove(&k).unwrap_or(v);
+                (k, val)
+            })
+            .collect::<Vec<_>>();
 
         // Build scan
         let from = from.unwrap_or(table);
@@ -753,7 +761,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .schema_provider
             .get_table_provider((&table_name).into())?;
         let arrow_schema = (*provider.schema()).clone();
-        let table_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
+        let table_schema = DFSchema::try_from(arrow_schema)?;
 
         // infer types for Values clause... other types should be resolvable the regular way
         let mut prepare_param_data_types = BTreeMap::new();
@@ -792,19 +800,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 "Column count doesn't match insert query!".to_owned(),
             ))?;
         }
-        let exprs: Vec<_> = columns
+        let values_schema = source.schema();
+        let exprs = columns
             .iter()
             .zip(source.schema().fields().iter())
             .map(|(c, f)| {
-                datafusion_expr::Expr::Column(Column::from(f.name().clone()))
-                    .alias(c.value.clone())
+                let col_name = c.value.clone();
+                let col = table_schema.field_with_name(None, col_name.as_str())?;
+                let expr = datafusion_expr::Expr::Column(Column::from(f.name().clone()))
+                    .alias(col_name)
+                    .cast_to(col.data_type(), values_schema)?;
+                Ok(expr)
             })
-            .collect();
+            .collect::<Result<Vec<datafusion_expr::Expr>>>()?;
         let source = project(source, exprs)?;
 
         let plan = LogicalPlan::Dml(DmlStatement {
             table_name,
-            table_schema,
+            table_schema: Arc::new(table_schema),
             op: WriteOp::Insert,
             input: Arc::new(source),
         });
