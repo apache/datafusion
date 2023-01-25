@@ -579,11 +579,13 @@ pub fn to_substrait_rex(
                 ScalarValue::Boolean(Some(b)) => Some(LiteralType::Boolean(*b)),
                 ScalarValue::Float32(Some(f)) => Some(LiteralType::Fp32(*f)),
                 ScalarValue::Float64(Some(f)) => Some(LiteralType::Fp64(*f)),
-                ScalarValue::Decimal128(v, p, s) => Some(LiteralType::Decimal(Decimal {
-                    value: v.unwrap().to_le_bytes().to_vec(),
-                    precision: *p as i32,
-                    scale: *s as i32,
-                })),
+                ScalarValue::Decimal128(v, p, s) if v.is_some() => {
+                    Some(LiteralType::Decimal(Decimal {
+                        value: v.unwrap().to_le_bytes().to_vec(),
+                        precision: *p as i32,
+                        scale: *s as i32,
+                    }))
+                }
                 ScalarValue::Utf8(Some(s)) => Some(LiteralType::String(s.clone())),
                 ScalarValue::LargeUtf8(Some(s)) => Some(LiteralType::String(s.clone())),
                 ScalarValue::Binary(Some(b)) => Some(LiteralType::Binary(b.clone())),
