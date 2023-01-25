@@ -42,6 +42,7 @@ use crate::physical_plan::file_format::{
     newline_delimited_stream, CsvExec, FileScanConfig,
 };
 use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::Statistics;
 
 /// The default file extension of csv files
 pub const DEFAULT_CSV_EXTENSION: &str = ".csv";
@@ -139,6 +140,16 @@ impl FileFormat for CsvFormat {
 
         let merged_schema = Schema::try_merge(schemas)?;
         Ok(Arc::new(merged_schema))
+    }
+
+    async fn infer_stats(
+        &self,
+        _state: &SessionState,
+        _store: &Arc<dyn ObjectStore>,
+        _table_schema: SchemaRef,
+        _object: &ObjectMeta,
+    ) -> Result<Statistics> {
+        Ok(Statistics::default())
     }
 
     async fn create_physical_plan(

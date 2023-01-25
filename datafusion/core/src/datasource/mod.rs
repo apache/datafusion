@@ -35,7 +35,7 @@ pub use self::datasource::TableProvider;
 pub use self::default_table_source::{
     provider_as_source, source_as_provider, DefaultTableSource,
 };
-use self::listing::{FileRanges, PartitionedFile};
+use self::listing::PartitionedFile;
 pub use self::memory::MemTable;
 pub use self::view::ViewTable;
 use crate::arrow::datatypes::{Schema, SchemaRef};
@@ -49,11 +49,11 @@ use futures::StreamExt;
 /// If the optional `limit` is provided, includes only sufficient files.
 /// Needed to read up to `limit` number of rows.
 pub async fn get_statistics_with_limit(
-    all_files: impl Stream<Item = Result<(PartitionedFile, FileRanges, Statistics)>>,
+    all_files: impl Stream<Item = Result<(PartitionedFile, Statistics)>>,
     file_schema: SchemaRef,
     limit: Option<usize>,
-) -> Result<(Vec<(PartitionedFile, FileRanges)>, Statistics)> {
-    let mut result_files_with_ranges = vec![];
+) -> Result<(Vec<PartitionedFile>, Statistics)> {
+    let mut result_files = vec![];
 
     let mut null_counts = vec![0; file_schema.fields().len()];
     let mut has_statistics = false;
@@ -71,8 +71,8 @@ pub async fn get_statistics_with_limit(
     // fusing the stream allows us to call next safely even once it is finished
     let mut all_files = Box::pin(all_files.fuse());
     while let Some(res) = all_files.next().await {
-        let (file, file_ranges, file_stats) = res?;
-        result_files_with_ranges.push((file, file_ranges));
+        let (file, file_stats) = res?;
+        result_files.push(file);
         is_exact &= file_stats.is_exact;
         num_rows = if let Some(num_rows) = num_rows {
             Some(num_rows + file_stats.num_rows.unwrap_or(0))
@@ -150,7 +150,7 @@ pub async fn get_statistics_with_limit(
         is_exact,
     };
 
-    Ok((result_files_with_ranges, statistics))
+    Ok((result_files, statistics))
 }
 
 fn create_max_min_accs(

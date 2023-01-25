@@ -31,7 +31,6 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::arrow::datatypes::SchemaRef;
-use crate::datasource::listing::FileRanges;
 use crate::error::Result;
 use crate::logical_expr::Expr;
 use crate::physical_plan::file_format::FileScanConfig;
@@ -40,36 +39,6 @@ use crate::physical_plan::{ExecutionPlan, Statistics};
 use crate::execution::context::SessionState;
 use async_trait::async_trait;
 use object_store::{ObjectMeta, ObjectStore};
-
-/// Format-specific file metadata used for Scan operation planning
-#[derive(Clone)]
-pub struct FormatScanMetadata {
-    /// Statistics
-    pub statistics: Statistics,
-    /// File ranges if available
-    pub file_ranges: FileRanges,
-}
-
-impl FormatScanMetadata {
-    fn with_statistics(mut self, statistics: Statistics) -> Self {
-        self.statistics = statistics;
-        self
-    }
-
-    fn with_file_ranges(mut self, file_ranges: FileRanges) -> Self {
-        self.file_ranges = file_ranges;
-        self
-    }
-}
-
-impl Default for FormatScanMetadata {
-    fn default() -> FormatScanMetadata {
-        FormatScanMetadata {
-            statistics: Statistics::default(),
-            file_ranges: vec![None],
-        }
-    }
-}
 
 /// This trait abstracts all the file format specific implementations
 /// from the `TableProvider`. This helps code re-utilization across
@@ -91,24 +60,20 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef>;
 
-    /// Fetch format-specific metadata used for Scan operation planning
+    /// Infer the statistics for the provided object. The cost and accuracy of the
+    /// estimated statistics might vary greatly between file formats.
     ///
     /// `table_schema` is the (combined) schema of the overall table
     /// and may be a superset of the schema contained in this file.
     ///
     /// TODO: should the file source return statistics for only columns referred to in the table schema?
-    #[allow(unused_variables)]
-    async fn fetch_format_scan_metadata(
+    async fn infer_stats(
         &self,
         state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         object: &ObjectMeta,
-        collect_statistics: bool,
-        collect_ranges: bool,
-    ) -> Result<FormatScanMetadata> {
-        Ok(FormatScanMetadata::default())
-    }
+    ) -> Result<Statistics>;
 
     /// Take a list of files and convert it to the appropriate executor
     /// according to this file format.
@@ -150,17 +115,9 @@ pub(crate) mod test_util {
 
         let file_schema = format.infer_schema(state, &store, &[meta.clone()]).await?;
 
-        let format_scan_metadata = format
-            .fetch_format_scan_metadata(
-                state,
-                &store,
-                file_schema.clone(),
-                &meta,
-                true,
-                true,
-            )
+        let statistics = format
+            .infer_stats(state, &store, file_schema.clone(), &meta)
             .await?;
-        let statistics = format_scan_metadata.statistics;
 
         let file_groups = vec![vec![PartitionedFile {
             object_meta: meta,

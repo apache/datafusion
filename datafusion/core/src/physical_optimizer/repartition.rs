@@ -23,7 +23,8 @@ use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_plan::Partitioning::*;
 use crate::physical_plan::{
-    repartition::RepartitionExec, with_new_children_if_necessary, ExecutionPlan,
+    file_format::ParquetExec, repartition::RepartitionExec,
+    with_new_children_if_necessary, ExecutionPlan,
 };
 
 /// Optimizer that introduces repartition to introduce more
@@ -167,6 +168,7 @@ fn optimize_partitions(
     is_root: bool,
     can_reorder: bool,
     would_benefit: bool,
+    parallel_file_scan: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     // Recurse into children bottom-up (attempt to repartition as
     // early as possible)
@@ -207,6 +209,7 @@ fn optimize_partitions(
                     false, // child is not root
                     can_reorder_child,
                     plan.benefits_from_input_partitioning(),
+                    parallel_file_scan,
                 )
             })
             .collect::<Result<_>>()?;
@@ -235,14 +238,25 @@ fn optimize_partitions(
         could_repartition = false;
     }
 
-    if would_benefit && could_repartition && can_reorder {
-        Ok(Arc::new(RepartitionExec::try_new(
-            new_plan,
-            RoundRobinBatch(target_partitions),
-        )?))
-    } else {
-        Ok(new_plan)
+    let repartition_allowed = would_benefit && could_repartition && can_reorder;
+
+    // If repartition is not allowed - return plan as it is
+    if !repartition_allowed {
+        return Ok(new_plan);
     }
+
+    // For ParquetExec return internally repartitioned version of the plan in case parallel_file_scan is set
+    if let Some(parquet_exec) = new_plan.as_any().downcast_ref::<ParquetExec>() {
+        if parallel_file_scan {
+            return Ok(Arc::new(parquet_exec.get_repartitioned(target_partitions)));
+        }
+    }
+
+    // Otherwise - return plan wrapped up in RepartitionExec
+    Ok(Arc::new(RepartitionExec::try_new(
+        new_plan,
+        RoundRobinBatch(target_partitions),
+    )?))
 }
 
 /// Returns true if `plan` requires any of inputs to be sorted in some
@@ -261,6 +275,7 @@ impl PhysicalOptimizerRule for Repartition {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let target_partitions = config.execution.target_partitions;
         let enabled = config.optimizer.enable_round_robin_repartition;
+        let parallel_file_scan = config.execution.parallel_file_scan;
         // Don't run optimizer if target_partitions == 1
         if !enabled || target_partitions == 1 {
             Ok(plan)
@@ -274,6 +289,7 @@ impl PhysicalOptimizerRule for Repartition {
                 is_root,
                 can_reorder,
                 would_benefit,
+                parallel_file_scan,
             )
         }
     }
@@ -327,6 +343,28 @@ mod tests {
                 object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
                 file_schema: schema(),
                 file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering: None,
+                infinite_source: false,
+            },
+            None,
+            None,
+        ))
+    }
+
+    /// Create a non sorted parquet exec over two files / partitions
+    fn parquet_exec_two_partitions() -> Arc<ParquetExec> {
+        Arc::new(ParquetExec::new(
+            FileScanConfig {
+                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+                file_schema: schema(),
+                file_groups: vec![
+                    vec![PartitionedFile::new("x".to_string(), 100)],
+                    vec![PartitionedFile::new("y".to_string(), 200)],
+                ],
                 statistics: Statistics::default(),
                 projection: None,
                 limit: None,
@@ -456,10 +494,15 @@ mod tests {
     /// Runs the repartition optimizer and asserts the plan against the expected
     macro_rules! assert_optimized {
         ($EXPECTED_LINES: expr, $PLAN: expr) => {
+            assert_optimized!($EXPECTED_LINES, $PLAN, 10, false);
+        };
+
+        ($EXPECTED_LINES: expr, $PLAN: expr, $TAGRET_PARTITIONS: expr, $PARALLEL_SCAN: expr) => {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
             let mut config = ConfigOptions::new();
-            config.execution.target_partitions = 10;
+            config.execution.target_partitions = $TAGRET_PARTITIONS;
+            config.execution.parallel_file_scan = $PARALLEL_SCAN;
 
             // run optimizer
             let optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
@@ -695,24 +738,6 @@ mod tests {
     }
 
     #[test]
-    fn repartition_ignores_sort_preserving_merge_with_union() -> Result<()> {
-        // 2 sorted parquet files unioned (partitions are concatenated, sort is preserved)
-        let input = union_exec(vec![parquet_exec_sorted(); 2]);
-        let plan = sort_preserving_merge_exec(input);
-
-        // should not repartition / sort (as the data was already sorted)
-        let expected = &[
-            "SortPreservingMergeExec: [c1@0 ASC]",
-            "UnionExec",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
-        ];
-
-        assert_optimized!(expected, plan);
-        Ok(())
-    }
-
-    #[test]
     fn repartition_does_not_destroy_sort() -> Result<()> {
         //  SortRequired
         //    Parquet(sorted)
@@ -851,6 +876,182 @@ mod tests {
         ];
 
         assert_optimized!(expected, plan);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_single_partition() -> Result<()> {
+        let plan = aggregate(parquet_exec());
+
+        let expected = [
+            "AggregateExec: mode=Final, gby=[], aggr=[]",
+            "CoalescePartitionsExec",
+            "AggregateExec: mode=Partial, gby=[], aggr=[]",
+            "ParquetExec: limit=None, partitions={2 groups: [[x:0..50], [x:50..100]]}, projection=[c1]",
+        ];
+
+        assert_optimized!(expected, plan, 2, true);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_two_partitions() -> Result<()> {
+        let plan = aggregate(parquet_exec_two_partitions());
+
+        let expected = [
+            "AggregateExec: mode=Final, gby=[], aggr=[]",
+            "CoalescePartitionsExec",
+            "AggregateExec: mode=Partial, gby=[], aggr=[]",
+            // Plan already has two partitions
+            "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, projection=[c1]",
+        ];
+
+        assert_optimized!(expected, plan, 2, true);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_sorted_limit() -> Result<()> {
+        let plan = limit_exec(sort_exec(parquet_exec(), false));
+
+        let expected = &[
+            "GlobalLimitExec: skip=0, fetch=100",
+            "LocalLimitExec: fetch=100",
+            // data is sorted so can't repartition here
+            "SortExec: [c1@0 ASC]",
+            // Doesn't parallelize for SortExec without preserve_partitioning
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+        ];
+
+        assert_optimized!(expected, plan, 2, true);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_limit_with_filter() -> Result<()> {
+        let plan = limit_exec(filter_exec(sort_exec(parquet_exec(), false)));
+
+        let expected = &[
+            "GlobalLimitExec: skip=0, fetch=100",
+            "LocalLimitExec: fetch=100",
+            "FilterExec: c1@0",
+            // data is sorted so can't repartition here even though
+            // filter would benefit from parallelism, the answers might be wrong
+            "SortExec: [c1@0 ASC]",
+            // SortExec doesn't benefit from input partitioning
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+        ];
+
+        assert_optimized!(expected, plan, 2, true);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_ignores_limit() -> Result<()> {
+        let plan = aggregate(limit_exec(filter_exec(limit_exec(parquet_exec()))));
+
+        let expected = &[
+            "AggregateExec: mode=Final, gby=[], aggr=[]",
+            "CoalescePartitionsExec",
+            "AggregateExec: mode=Partial, gby=[], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "GlobalLimitExec: skip=0, fetch=100",
+            "CoalescePartitionsExec",
+            "LocalLimitExec: fetch=100",
+            "FilterExec: c1@0",
+            // repartition should happen prior to the filter to maximize parallelism
+            "RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "GlobalLimitExec: skip=0, fetch=100",
+            // Limit doesn't benefit from input partitionins - no parallelism
+            "LocalLimitExec: fetch=100",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+        ];
+
+        assert_optimized!(expected, plan, 2, true);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_union_inputs() -> Result<()> {
+        let plan = union_exec(vec![parquet_exec(); 5]);
+
+        let expected = &[
+            "UnionExec",
+            // Union doesn benefit from input partitioning - no parallelism
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+        ];
+
+        assert_optimized!(expected, plan, 2, true);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_prior_to_sort_preserving_merge() -> Result<()> {
+        // sort preserving merge already sorted input,
+        let plan = sort_preserving_merge_exec(parquet_exec_sorted());
+
+        // parallelization potentially could break sort order
+        let expected = &[
+            "SortPreservingMergeExec: [c1@0 ASC]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
+        ];
+
+        assert_optimized!(expected, plan, 2, true);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_sort_preserving_merge_with_union() -> Result<()> {
+        // 2 sorted parquet files unioned (partitions are concatenated, sort is preserved)
+        let input = union_exec(vec![parquet_exec_sorted(); 2]);
+        let plan = sort_preserving_merge_exec(input);
+
+        // should not repartition / sort (as the data was already sorted)
+        let expected = &[
+            "SortPreservingMergeExec: [c1@0 ASC]",
+            "UnionExec",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
+        ];
+
+        assert_optimized!(expected, plan);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_does_not_destroy_sort() -> Result<()> {
+        //  SortRequired
+        //    Parquet(sorted)
+
+        let plan = sort_required_exec(parquet_exec_sorted());
+
+        // no parallelization to preserve sort order
+        let expected = &[
+            "SortRequiredExec",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
+        ];
+
+        assert_optimized!(expected, plan, 2, true);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_ignores_transitively_with_projection() -> Result<()> {
+        // sorted input
+        let plan = sort_preserving_merge_exec(projection_exec(parquet_exec_sorted()));
+
+        // data should not be repartitioned / resorted
+        let expected = &[
+            "SortPreservingMergeExec: [c1@0 ASC]",
+            "ProjectionExec: expr=[c1@0 as c1]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
+        ];
+
+        assert_optimized!(expected, plan, 2, true);
         Ok(())
     }
 

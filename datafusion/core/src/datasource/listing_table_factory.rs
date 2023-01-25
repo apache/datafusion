@@ -121,8 +121,7 @@ impl TableProviderFactory for ListingTableFactory {
             .with_file_extension(file_extension)
             .with_target_partitions(state.config().target_partitions())
             .with_table_partition_cols(table_partition_cols)
-            .with_file_sort_order(None)
-            .with_parallel_file_scan(state.config().parallel_file_scan());
+            .with_file_sort_order(None);
 
         let table_path = ListingTableUrl::parse(&cmd.location)?;
         let resolved_schema = match provided_schema {

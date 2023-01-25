@@ -96,18 +96,10 @@ async fn get_exec(
         .infer_schema(state, &object_store, &[meta.clone()])
         .await
         .expect("Schema inference");
-    let format_scan_metadata = format
-        .fetch_format_scan_metadata(
-            state,
-            &object_store,
-            file_schema.clone(),
-            &meta,
-            true,
-            true,
-        )
+    let statistics = format
+        .infer_stats(state, &object_store, file_schema.clone(), &meta)
         .await
-        .expect("Fetching format scan metadata");
-    let statistics = format_scan_metadata.statistics;
+        .expect("Stats inference");
     let file_groups = vec![vec![meta.into()]];
     let exec = format
         .create_physical_plan(

@@ -17,7 +17,6 @@
 
 //! Helper functions for the table implementation
 
-use std::cmp::{max, min};
 use std::sync::Arc;
 
 use arrow::array::new_empty_array;
@@ -28,7 +27,6 @@ use arrow::{
 };
 use chrono::{TimeZone, Utc};
 use futures::{stream::BoxStream, TryStreamExt};
-use itertools::Itertools;
 use log::debug;
 
 use crate::{
@@ -36,7 +34,7 @@ use crate::{
     scalar::ScalarValue,
 };
 
-use super::{FileRange, FileRanges, PartitionedFile};
+use super::PartitionedFile;
 use crate::datasource::listing::ListingTableUrl;
 use datafusion_common::{
     cast::{as_date64_array, as_string_array, as_uint64_array},
@@ -150,73 +148,18 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
 
 /// Partition the list of files into `n` groups
 pub fn split_files(
-    files_with_ranges: Vec<(PartitionedFile, FileRanges)>,
-    target_partitions: usize,
-    parallel_file_scan: bool,
+    partitioned_files: Vec<PartitionedFile>,
+    n: usize,
 ) -> Vec<Vec<PartitionedFile>> {
-    if files_with_ranges.is_empty() {
+    if partitioned_files.is_empty() {
         return vec![];
     }
-
-    let (files, ranges): (Vec<_>, Vec<_>) = files_with_ranges.into_iter().unzip();
-
-    if !parallel_file_scan {
-        let chunk_size = (files.len() + target_partitions - 1) / target_partitions;
-        return files.chunks(chunk_size).map(|c| c.to_vec()).collect();
-    }
-
-    // Flatten `files_with_ranges` into vector of (file_idx, range) pair
-    let flattened_ranges = ranges
-        .into_iter()
-        .enumerate()
-        .flat_map(|(idx, ranges)| {
-            ranges.into_iter().map(|rg| (idx, rg)).collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-
-    let chunk_size = (flattened_ranges.len() + target_partitions - 1) / target_partitions;
-
-    // Split flattened ranges into N chunks (partitions)
-    flattened_ranges
+    // effectively this is div with rounding up instead of truncating
+    let chunk_size = (partitioned_files.len() + n - 1) / n;
+    partitioned_files
         .chunks(chunk_size)
-        // Group by each chunk by file index to merge ranges from same file
-        .map(|chunk| {
-            chunk
-                .iter()
-                .group_by(|(idx, _)| idx)
-                .into_iter()
-                // Merging grouped by file idx ranges
-                .map(|(idx, items)| {
-                    (
-                        idx,
-                        items.fold::<Option<FileRange>, _>(
-                            None,
-                            |range_acc, (_, range)| {
-                                if let Some(range) = range {
-                                    if let Some(range_acc) = range_acc {
-                                        Some(FileRange {
-                                            start: min(range_acc.start, range.start),
-                                            end: max(range_acc.end, range.end),
-                                        })
-                                    } else {
-                                        Some(range.clone())
-                                    }
-                                } else {
-                                    None
-                                }
-                            },
-                        ),
-                    )
-                })
-                // Convert (idx, range) pairs into partitioned files
-                .map(|(idx, range)| {
-                    let mut file = files[*idx].clone();
-                    file.range = range;
-                    file
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>()
+        .map(|c| c.to_vec())
+        .collect()
 }
 
 /// Discover the partitions on the given path and prune out files
@@ -459,51 +402,27 @@ mod tests {
 
     use super::*;
 
-    /// Returns vector of tuples with structure
-    /// `(partition_index, file_location, range_start, range_end)`
-    fn partitioned_files_to_vec(
-        partitioned_files: Vec<Vec<PartitionedFile>>,
-    ) -> Vec<(usize, String, i64, i64)> {
-        partitioned_files
-            .iter()
-            .enumerate()
-            .flat_map(|(idx, partition)| {
-                partition
-                    .iter()
-                    .map(|file| {
-                        (
-                            idx,
-                            file.object_meta.location.to_string(),
-                            file.range.as_ref().unwrap().start,
-                            file.range.as_ref().unwrap().end,
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>()
-    }
-
     #[test]
     fn test_split_files() {
         let new_partitioned_file = |path: &str| PartitionedFile::new(path.to_owned(), 10);
         let files = vec![
-            (new_partitioned_file("a"), vec![None]),
-            (new_partitioned_file("b"), vec![None]),
-            (new_partitioned_file("c"), vec![None]),
-            (new_partitioned_file("d"), vec![None]),
-            (new_partitioned_file("e"), vec![None]),
+            new_partitioned_file("a"),
+            new_partitioned_file("b"),
+            new_partitioned_file("c"),
+            new_partitioned_file("d"),
+            new_partitioned_file("e"),
         ];
 
-        let chunks = split_files(files.clone(), 1, false);
+        let chunks = split_files(files.clone(), 1);
         assert_eq!(1, chunks.len());
         assert_eq!(5, chunks[0].len());
 
-        let chunks = split_files(files.clone(), 2, false);
+        let chunks = split_files(files.clone(), 2);
         assert_eq!(2, chunks.len());
         assert_eq!(3, chunks[0].len());
         assert_eq!(2, chunks[1].len());
 
-        let chunks = split_files(files.clone(), 5, false);
+        let chunks = split_files(files.clone(), 5);
         assert_eq!(5, chunks.len());
         assert_eq!(1, chunks[0].len());
         assert_eq!(1, chunks[1].len());
@@ -511,7 +430,7 @@ mod tests {
         assert_eq!(1, chunks[3].len());
         assert_eq!(1, chunks[4].len());
 
-        let chunks = split_files(files, 123, false);
+        let chunks = split_files(files, 123);
         assert_eq!(5, chunks.len());
         assert_eq!(1, chunks[0].len());
         assert_eq!(1, chunks[1].len());
@@ -519,72 +438,8 @@ mod tests {
         assert_eq!(1, chunks[3].len());
         assert_eq!(1, chunks[4].len());
 
-        let chunks = split_files(vec![], 2, false);
+        let chunks = split_files(vec![], 2);
         assert_eq!(0, chunks.len());
-    }
-
-    #[test]
-    fn test_split_files_parallel_scan() {
-        let new_partitioned_file = |path: &str| PartitionedFile::new(path.to_owned(), 10);
-        let files = vec![
-            (
-                new_partitioned_file("a"),
-                vec![
-                    Some(FileRange { start: 1, end: 2 }),
-                    Some(FileRange { start: 2, end: 4 }),
-                    Some(FileRange { start: 4, end: 8 }),
-                    Some(FileRange { start: 8, end: 15 }),
-                ],
-            ),
-            (
-                new_partitioned_file("b"),
-                vec![
-                    Some(FileRange { start: 4, end: 10 }),
-                    Some(FileRange { start: 10, end: 19 }),
-                    Some(FileRange { start: 19, end: 31 }),
-                    Some(FileRange { start: 32, end: 35 }),
-                    Some(FileRange { start: 35, end: 44 }),
-                    Some(FileRange { start: 44, end: 78 }),
-                ],
-            ),
-        ];
-
-        let chunks = split_files(files.clone(), 1, true);
-        let expected = vec![(0, "a".to_string(), 1, 15), (0, "b".to_string(), 4, 78)];
-        assert_eq!(expected, partitioned_files_to_vec(chunks));
-
-        let chunks = split_files(files.clone(), 2, true);
-        let expected = vec![
-            (0, "a".to_string(), 1, 15),
-            (0, "b".to_string(), 4, 10),
-            (1, "b".to_string(), 10, 78),
-        ];
-        assert_eq!(expected, partitioned_files_to_vec(chunks));
-
-        let chunks = split_files(files.clone(), 5, true);
-        let expected = vec![
-            (0, "a".to_string(), 1, 4),
-            (1, "a".to_string(), 4, 15),
-            (2, "b".to_string(), 4, 19),
-            (3, "b".to_string(), 19, 35),
-            (4, "b".to_string(), 35, 78),
-        ];
-        assert_eq!(expected, partitioned_files_to_vec(chunks));
-
-        let chunks = split_files(files, 123, true);
-        let expected = vec![
-            (0, "a".to_string(), 1, 2),
-            (1, "a".to_string(), 2, 4),
-            (2, "a".to_string(), 4, 8),
-            (3, "a".to_string(), 8, 15),
-            (4, "b".to_string(), 4, 10),
-            (5, "b".to_string(), 10, 19),
-            (6, "b".to_string(), 19, 31),
-            (7, "b".to_string(), 32, 35),
-            (8, "b".to_string(), 35, 44),
-            (9, "b".to_string(), 44, 78),
-        ];
-        assert_eq!(expected, partitioned_files_to_vec(chunks));
     }
 
     #[tokio::test]

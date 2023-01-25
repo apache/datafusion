@@ -40,6 +40,7 @@ use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
 use crate::physical_plan::file_format::NdJsonExec;
 use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::Statistics;
 
 /// The default file extension of json files
 pub const DEFAULT_JSON_EXTENSION: &str = ".json";
@@ -126,6 +127,16 @@ impl FileFormat for JsonFormat {
 
         let schema = Schema::try_merge(schemas)?;
         Ok(Arc::new(schema))
+    }
+
+    async fn infer_stats(
+        &self,
+        _state: &SessionState,
+        _store: &Arc<dyn ObjectStore>,
+        _table_schema: SchemaRef,
+        _object: &ObjectMeta,
+    ) -> Result<Statistics> {
+        Ok(Statistics::default())
     }
 
     async fn create_physical_plan(

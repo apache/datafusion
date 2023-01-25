@@ -389,8 +389,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )
                     .with_collect_stat(scan.collect_stat)
                     .with_target_partitions(scan.target_partitions as usize)
-                    .with_file_sort_order(file_sort_order)
-                    .with_parallel_file_scan(scan.parallel_file_scan);
+                    .with_file_sort_order(file_sort_order);
 
                 let config =
                     ListingTableConfig::new_with_multi_paths(table_paths.clone())
@@ -863,7 +862,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 filters,
                                 target_partitions: options.target_partitions as u32,
                                 file_sort_order,
-                                parallel_file_scan: options.parallel_file_scan,
                             },
                         )),
                     })
