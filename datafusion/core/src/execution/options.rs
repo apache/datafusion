@@ -343,11 +343,12 @@ impl<'a> NdJsonReadOptions<'a> {
 }
 
 #[async_trait]
-///
+/// ['ReadOptions'] is implemented by Options like ['CsvReadOptions'] that control the reading of respective files/sources.
 pub trait ReadOptions<'a> {
     /// Helper to convert these user facing options to `ListingTable` options
     fn to_listing_options(&self, target_partitions: usize) -> ListingOptions;
-    ///
+
+    /// Infer and resolve the schema from the files/sources provided.
     async fn get_resolved_schema(
         &self,
         target_partitions: usize,
@@ -355,7 +356,7 @@ pub trait ReadOptions<'a> {
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef>;
 
-    ///
+    /// helper function to reduce repetitive code. Infers the schema from sources if not provided. Infinite data sources not supported through this function.
     async fn _get_resolved_schema(
         &'a self,
         target_partitions: usize,
