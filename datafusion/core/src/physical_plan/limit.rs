@@ -417,7 +417,7 @@ impl LimitStream {
         loop {
             let poll = input.poll_next_unpin(cx);
             let poll = poll.map_ok(|batch| {
-                if batch.num_rows() < self.skip {
+                if batch.num_rows() <= self.skip {
                     self.skip -= batch.num_rows();
                     RecordBatch::new_empty(input.schema())
                 } else {
