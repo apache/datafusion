@@ -159,16 +159,6 @@ impl FileScanConfig {
         (table_schema, table_stats)
     }
 
-    fn projected_file_column_names(&self) -> Option<Vec<String>> {
-        self.projection.as_ref().map(|p| {
-            p.iter()
-                .filter(|col_idx| **col_idx < self.file_schema.fields().len())
-                .map(|col_idx| self.file_schema.field(*col_idx).name())
-                .cloned()
-                .collect()
-        })
-    }
-
     fn file_column_projection_indices(&self) -> Option<Vec<usize>> {
         self.projection.as_ref().map(|p| {
             p.iter()
@@ -572,9 +562,6 @@ mod tests {
         );
         // TODO implement tests for partition column statistics once implemented
 
-        let col_names = conf.projected_file_column_names();
-        assert_eq!(col_names, None);
-
         let col_indices = conf.file_column_projection_indices();
         assert_eq!(col_indices, None);
     }
@@ -614,9 +601,6 @@ mod tests {
         // TODO implement tests for proj_stat_cols[0] once partition column
         // statistics are implemented
         assert_eq!(proj_stat_cols[1].distinct_count, Some(0));
-
-        let col_names = conf.projected_file_column_names();
-        assert_eq!(col_names, Some(vec!["c1".to_owned()]));
 
         let col_indices = conf.file_column_projection_indices();
         assert_eq!(col_indices, Some(vec![0]));
