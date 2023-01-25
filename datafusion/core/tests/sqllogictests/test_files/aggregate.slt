@@ -44,17 +44,6 @@ LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 statement error Aggregations require unique expression names
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
 
-# csv_query_approx_percentile_cont_with_weight()
-statement error Error during planning: The function ApproxPercentileContWithWeight does not support inputs of type Utf8.
-SELECT approx_percentile_cont_with_weight(c1, c2, 0.95) FROM aggregate_test_100
-
-statement error  Error during planning: The weight argument for ApproxPercentileContWithWeight does not support inputs of type Utf8
-SELECT approx_percentile_cont_with_weight(c3, c1, 0.95) FROM aggregate_test_100
-
-statement error Error during planning: The percentile argument for ApproxPercentileContWithWeight must be Float64, not Utf8
-SELECT approx_percentile_cont_with_weight(c3, c2, c1) FROM aggregate_test_100
-
-
 # csv_query_approx_percentile_cont_with_weight
 statement error Error during planning: The function ApproxPercentileContWithWeight does not support inputs of type Utf8.
 SELECT approx_percentile_cont_with_weight(c1, c2, 0.95) FROM aggregate_test_100
@@ -64,7 +53,6 @@ SELECT approx_percentile_cont_with_weight(c3, c1, 0.95) FROM aggregate_test_100
 
 statement error Error during planning: The percentile argument for ApproxPercentileContWithWeight must be Float64, not Utf8.
 SELECT approx_percentile_cont_with_weight(c3, c2, c1) FROM aggregate_test_100
-
 
 # csv_query_approx_percentile_cont_with_histogram_bins
 statement error This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\).
