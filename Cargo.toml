@@ -56,5 +56,6 @@ rpath = false
 [patch.crates-io]
 arrow = { git = "https://github.com/tustvold/arrow-rs.git", rev = "3c7b919b9ff690a067d4c72e39e322d98ed51995" }
 arrow-buffer = { git = "https://github.com/tustvold/arrow-rs.git", rev = "3c7b919b9ff690a067d4c72e39e322d98ed51995" }
+arrow-flight = { git = "https://github.com/tustvold/arrow-rs.git", rev = "3c7b919b9ff690a067d4c72e39e322d98ed51995" }
 arrow-schema = { git = "https://github.com/tustvold/arrow-rs.git", rev = "3c7b919b9ff690a067d4c72e39e322d98ed51995" }
 parquet = { git = "https://github.com/tustvold/arrow-rs.git", rev = "3c7b919b9ff690a067d4c72e39e322d98ed51995" }
