@@ -105,8 +105,8 @@ impl ExecutionPlan for GlobalLimitExec {
         Partitioning::UnknownPartitioning(1)
     }
 
-    fn maintains_input_order(&self) -> bool {
-        true
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
     }
 
     fn benefits_from_input_partitioning(&self) -> bool {
@@ -293,8 +293,8 @@ impl ExecutionPlan for LocalLimitExec {
         self.input.output_ordering()
     }
 
-    fn maintains_input_order(&self) -> bool {
-        true
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
