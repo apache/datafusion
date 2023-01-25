@@ -18,11 +18,11 @@
 //! Rewrite for order by expressions
 
 use crate::expr::Sort;
-use crate::expr_rewriter::{normalize_col, ExprRewritable, ExprRewriter};
+use crate::expr_rewriter::{normalize_col, rewrite_expr};
 use crate::logical_plan::Aggregate;
 use crate::utils::grouping_set_to_exprlist;
-use crate::{Expr, ExprSchemable, LogicalPlan};
-use datafusion_common::Result;
+use crate::{Expr, ExprSchemable, LogicalPlan, Projection};
+use datafusion_common::{Column, Result};
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
 /// For example, `max(x)` is written to `col("MAX(x)")`
@@ -55,55 +55,122 @@ pub fn rewrite_sort_cols_by_aggs(
 
 fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
     match plan {
-        LogicalPlan::Aggregate(Aggregate {
-            input,
-            aggr_expr,
-            group_expr,
-            ..
-        }) => {
-            struct Rewriter<'a> {
-                plan: &'a LogicalPlan,
-                input: &'a LogicalPlan,
-                aggr_expr: &'a Vec<Expr>,
-                distinct_group_exprs: &'a Vec<Expr>,
-            }
-
-            impl<'a> ExprRewriter for Rewriter<'a> {
-                fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-                    let normalized_expr = normalize_col(expr.clone(), self.plan);
-                    if normalized_expr.is_err() {
-                        // The expr is not based on Aggregate plan output. Skip it.
-                        return Ok(expr);
-                    }
-                    let normalized_expr = normalized_expr?;
-                    if let Some(found_agg) = self
-                        .aggr_expr
-                        .iter()
-                        .chain(self.distinct_group_exprs)
-                        .find(|a| (**a) == normalized_expr)
-                    {
-                        let agg = normalize_col(found_agg.clone(), self.plan)?;
-                        let col = Expr::Column(
-                            agg.to_field(self.input.schema())
-                                .map(|f| f.qualified_column())?,
-                        );
-                        Ok(col)
-                    } else {
-                        Ok(expr)
-                    }
-                }
-            }
-
-            let distinct_group_exprs = grouping_set_to_exprlist(group_expr.as_slice())?;
-            expr.rewrite(&mut Rewriter {
-                plan,
-                input,
-                aggr_expr,
-                distinct_group_exprs: &distinct_group_exprs,
-            })
+        LogicalPlan::Aggregate(aggregate) => {
+            rewrite_in_terms_of_aggregate(expr, plan, aggregate)
         }
-        LogicalPlan::Projection(_) => rewrite_sort_col_by_aggs(expr, plan.inputs()[0]),
+        LogicalPlan::Projection(projection) => {
+            rewrite_in_terms_of_projection(expr, projection)
+        }
         _ => Ok(expr),
+    }
+}
+
+/// rewrites a sort expression in terms of the output of an [`Aggregate`].
+///
+/// Note The SQL planner always puts a `Projection` at the output of
+/// an aggregate, the other paths such as LogicalPlanBuilder can
+/// create a Sort directly above an Aggregate
+fn rewrite_in_terms_of_aggregate(
+    expr: Expr,
+    // the LogicalPlan::Aggregate
+    plan: &LogicalPlan,
+    aggregate: &Aggregate,
+) -> Result<Expr> {
+    let Aggregate {
+        input,
+        aggr_expr,
+        group_expr,
+        ..
+    } = aggregate;
+    let distinct_group_exprs = grouping_set_to_exprlist(group_expr.as_slice())?;
+
+    rewrite_expr(expr, |expr| {
+        // normalize in terms of the input plan
+        let normalized_expr = normalize_col(expr.clone(), plan);
+        if normalized_expr.is_err() {
+            // The expr is not based on Aggregate plan output. Skip it.
+            return Ok(expr);
+        }
+        let normalized_expr = normalized_expr?;
+        if let Some(found_agg) = aggr_expr
+            .iter()
+            .chain(distinct_group_exprs.iter())
+            .find(|a| (**a) == normalized_expr)
+        {
+            let agg = normalize_col(found_agg.clone(), plan)?;
+            let col =
+                Expr::Column(agg.to_field(input.schema()).map(|f| f.qualified_column())?);
+            Ok(col)
+        } else {
+            Ok(expr)
+        }
+    })
+}
+
+/// Rewrites a sort expression in terms of the output of a [`Projection`].
+/// For exmaple, will rewrite an input expression such as
+/// `a + b + c` into `col(a) + col("b + c")`
+///
+/// Remember that:
+/// 1. given a projection with exprs: [a, b + c]
+/// 2. t produces an output schema with two columns "a", "b + c"
+fn rewrite_in_terms_of_projection(expr: Expr, projection: &Projection) -> Result<Expr> {
+    let Projection {
+        expr: proj_exprs,
+        input,
+        ..
+    } = projection;
+
+    // assumption is that each item in exprs, such as "b + c" is
+    // available as an output column named "b + c"
+    rewrite_expr(expr, |expr| {
+        // search for unnormalized names first such as "c1" (such as aliases)
+        if let Some(found) = proj_exprs.iter().find(|a| (**a) == expr) {
+            let col = Expr::Column(
+                found
+                    .to_field(input.schema())
+                    .map(|f| f.qualified_column())?,
+            );
+            return Ok(col);
+        }
+
+        // if that doesn't work, try to match the expression as an
+        // output column -- however first it must be "normalized"
+        // (e.g. "c1" --> "t.c1") because that normalization is done
+        // at the input of the aggregate.
+
+        let normalized_expr = if let Ok(e) = normalize_col(expr.clone(), input) {
+            e
+        } else {
+            // The expr is not based on Aggregate plan output. Skip it.
+            return Ok(expr);
+        };
+
+        // expr is an actual expr like min(t.c2), but we are looking
+        // for a column with the same "MIN(C2)", so translate there
+        let name = normalized_expr.display_name()?;
+
+        let search_col = Expr::Column(Column {
+            relation: None,
+            name,
+        });
+
+        // look for the column named the same as this expr
+        if let Some(found) = proj_exprs.iter().find(|a| expr_match(&search_col, a)) {
+            return Ok((*found).clone());
+        }
+        Ok(expr)
+    })
+}
+
+/// Does the underlying expr match e?
+/// so avg(c) as average will match avgc
+fn expr_match(needle: &Expr, haystack: &Expr) -> bool {
+    // check inside aliases
+    if let Expr::Alias(haystack, _) = &haystack {
+        haystack.as_ref() == needle
+    } else {
+        haystack == needle
     }
 }
 
@@ -115,7 +182,7 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema};
 
     use crate::{
-        col, lit, logical_plan::builder::LogicalTableSource, min, LogicalPlanBuilder,
+        avg, col, lit, logical_plan::builder::LogicalTableSource, min, LogicalPlanBuilder,
     };
 
     use super::*;
@@ -168,8 +235,8 @@ mod test {
             .aggregate(
                 // gby c1
                 vec![col("c1")],
-                // agg: min(2)
-                vec![min(col("c2"))],
+                // agg: min(c2), avg(c3)
+                vec![min(col("c2")), avg(col("c3"))],
             )
             .unwrap()
             //  projects out an expression "c1" that is different than the column "c1"
@@ -178,6 +245,8 @@ mod test {
                 col("c1").add(lit(1)).alias("c1"),
                 // min(c2)
                 min(col("c2")),
+                // avg("c3") as average
+                avg(col("c3")).alias("average"),
             ])
             .unwrap()
             .build()
@@ -187,9 +256,8 @@ mod test {
             TestCase {
                 desc: "c1 --> c1  -- column *named* c1 that came out of the projection, (not t.c1)",
                 input: sort(col("c1")),
-                // Incorrect due to https://github.com/apache/arrow-datafusion/issues/4854
                 // should be "c1" not t.c1
-                expected: sort(col("t.c1")),
+                expected: sort(col("c1")),
             },
             TestCase {
                 desc: r#"min(c2) --> "MIN(c2)" -- (column *named* "min(t.c2)"!)"#,
@@ -199,10 +267,14 @@ mod test {
             TestCase {
                 desc: r#"c1 + min(c2) --> "c1 + MIN(c2)" -- (column *named* "min(t.c2)"!)"#,
                 input: sort(col("c1") + min(col("c2"))),
-                // Incorrect due to https://github.com/apache/arrow-datafusion/issues/4854
                 // should be "c1" not t.c1
-                expected: sort(col("t.c1") + col("MIN(t.c2)")),
-            }
+                expected: sort(col("c1") + col("MIN(t.c2)")),
+            },
+            TestCase {
+                desc: r#"avg(c3) --> "AVG(t.c3)" as average (column *named* "AVG(t.c3)", aliased)"#,
+                input: sort(avg(col("c3"))),
+                expected: sort(col("AVG(t.c3)").alias("average")),
+            },
         ];
 
         for case in cases {

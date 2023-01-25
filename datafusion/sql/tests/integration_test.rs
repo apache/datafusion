@@ -36,6 +36,12 @@ use datafusion_sql::planner::{ContextProvider, ParserOptions, SqlToRel};
 
 use rstest::rstest;
 
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    let _ = env_logger::try_init();
+}
+
 #[test]
 fn parse_decimals() {
     let test_data = [
@@ -2305,6 +2311,22 @@ fn select_multibyte_column() {
     let sql = r#"SELECT "😀" FROM person"#;
     let expected = "Projection: person.😀\
             \n  TableScan: person";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn select_groupby_orderby() {
+    let sql = r#"SELECT
+  avg(age) AS "value",
+  date_trunc('month', birth_date) AS "birth_date"
+  FROM person GROUP BY birth_date ORDER BY birth_date;
+"#;
+    // expect that this is not an ambiguous reference
+    let expected =
+        "Sort: birth_date ASC NULLS LAST\
+         \n  Projection: AVG(person.age) AS value, datetrunc(Utf8(\"month\"), person.birth_date) AS birth_date\
+         \n    Aggregate: groupBy=[[person.birth_date]], aggr=[[AVG(person.age)]]\
+         \n      TableScan: person";
     quick_test(sql, expected);
 }
 
