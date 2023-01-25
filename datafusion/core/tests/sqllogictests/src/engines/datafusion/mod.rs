@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use sqllogictest::DBOutput;
@@ -36,12 +37,12 @@ mod util;
 
 pub struct DataFusion {
     ctx: SessionContext,
-    file_name: String,
+    relative_path: PathBuf,
 }
 
 impl DataFusion {
-    pub fn new(ctx: SessionContext, file_name: String) -> Self {
-        Self { ctx, file_name }
+    pub fn new(ctx: SessionContext, relative_path: PathBuf) -> Self {
+        Self { ctx, relative_path }
     }
 }
 
@@ -50,7 +51,11 @@ impl sqllogictest::AsyncDB for DataFusion {
     type Error = DFSqlLogicTestError;
 
     async fn run(&mut self, sql: &str) -> Result<DBOutput> {
-        println!("[{}] Running query: \"{}\"", self.file_name, sql);
+        println!(
+            "[{}] Running query: \"{}\"",
+            self.relative_path.display(),
+            sql
+        );
         let result = run_query(&self.ctx, sql).await?;
         Ok(result)
     }
