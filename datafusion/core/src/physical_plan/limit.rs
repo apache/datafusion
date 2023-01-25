@@ -544,7 +544,6 @@ mod tests {
     async fn limit_early_shutdown() -> Result<()> {
         let batches = vec![
             test::make_partition(5),
-            test::make_partition(6),
             test::make_partition(10),
             test::make_partition(15),
             test::make_partition(20),
