@@ -670,7 +670,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Overwrite with assignment expressions
         let mut planner_context = PlannerContext::new();
-        let assign_map = assignments
+        let mut assign_map = assignments
             .iter()
             .map(|assign| {
                 let col_name: &Ident = assign
@@ -678,11 +678,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .iter()
                     .last()
                     .ok_or(DataFusionError::Plan("Empty column id".to_string()))?;
+                // Validate that the assignment target column exists
+                table_schema.field_with_unqualified_name(&col_name.value)?;
                 Ok((col_name.value.clone(), assign.value.clone()))
             })
-            .collect::<Result<Vec<_>>>()?;
-        let mut assign_map: HashMap<String, ast::Expr> =
-            HashMap::from_iter(assign_map.into_iter());
+            .collect::<Result<HashMap<String, Expr>>>()?;
+
         let values = values
             .into_iter()
             .map(|(k, v)| {
