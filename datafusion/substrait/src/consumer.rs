@@ -631,6 +631,15 @@ pub async fn from_substrait_rex(
             Some(LiteralType::Fp64(f)) => {
                 Ok(Arc::new(Expr::Literal(ScalarValue::Float64(Some(*f)))))
             }
+            Some(LiteralType::Decimal(d)) => {
+                Ok(Arc::new(Expr::Literal(ScalarValue::Decimal128(
+                    Some(std::primitive::i128::from_le_bytes(
+                        d.value.clone().try_into().unwrap(),
+                    )),
+                    d.precision.try_into().unwrap(),
+                    d.scale.try_into().unwrap(),
+                ))))
+            }
             Some(LiteralType::String(s)) => {
                 Ok(Arc::new(Expr::Literal(ScalarValue::Utf8(Some(s.clone())))))
             }
