@@ -196,9 +196,9 @@ impl ExecutionPlan for ProjectionExec {
         self.output_ordering.as_deref()
     }
 
-    fn maintains_input_order(&self) -> bool {
+    fn maintains_input_order(&self) -> Vec<bool> {
         // tell optimizer this operator doesn't reorder its input
-        true
+        vec![true]
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
