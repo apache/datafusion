@@ -63,9 +63,9 @@ use datafusion_expr::expr::{
     Like, TryCast, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
+use datafusion_expr::logical_plan;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::utils::expand_wildcard;
-use datafusion_expr::{logical_plan, StringifiedPlan};
 use datafusion_expr::{WindowFrame, WindowFrameBound};
 use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
@@ -1743,46 +1743,25 @@ impl DefaultPhysicalPlanner {
                 stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
             }
 
-            // TODO: refactor to something cleaner
             if !config.logical_plan_only {
-                let initial_plan = self
+                let input = self
                     .create_initial_plan(e.plan.as_ref(), session_state)
-                    .await;
+                    .await?;
 
-                match initial_plan {
-                    Ok(ip) => {
-                        stringified_plans.push(
-                            displayable(ip.as_ref()).to_stringified(InitialPhysicalPlan),
-                        );
+                stringified_plans.push(
+                    displayable(input.as_ref()).to_stringified(InitialPhysicalPlan),
+                );
 
-                        let new_plan = self.optimize_internal(
-                            ip,
-                            session_state,
-                            |plan, optimizer| {
-                                let optimizer_name = optimizer.name().to_string();
-                                let plan_type = OptimizedPhysicalPlan { optimizer_name };
-                                let str_plan = match plan {
-                                    Ok(p) => {
-                                        displayable(p.as_ref()).to_stringified(plan_type)
-                                    }
-                                    Err(e) => {
-                                        StringifiedPlan::new(plan_type, e.to_string())
-                                    }
-                                };
-                                stringified_plans.push(str_plan);
-                            },
-                        );
+                let input =
+                    self.optimize_internal(input, session_state, |plan, optimizer| {
+                        let optimizer_name = optimizer.name().to_string();
+                        let plan_type = OptimizedPhysicalPlan { optimizer_name };
+                        stringified_plans
+                            .push(displayable(plan).to_stringified(plan_type));
+                    })?;
 
-                        if let Ok(np) = new_plan {
-                            stringified_plans.push(
-                                displayable(np.as_ref())
-                                    .to_stringified(FinalPhysicalPlan),
-                            );
-                        }
-                    }
-                    Err(e) => stringified_plans
-                        .push(StringifiedPlan::new(InitialPhysicalPlan, e.to_string())),
-                }
+                stringified_plans
+                    .push(displayable(input.as_ref()).to_stringified(FinalPhysicalPlan));
             }
 
             Ok(Some(Arc::new(ExplainExec::new(
@@ -1804,7 +1783,7 @@ impl DefaultPhysicalPlanner {
         mut observer: F,
     ) -> Result<Arc<dyn ExecutionPlan>>
     where
-        F: FnMut(&Result<Arc<dyn ExecutionPlan>>, &dyn PhysicalOptimizerRule),
+        F: FnMut(&dyn ExecutionPlan, &dyn PhysicalOptimizerRule),
     {
         let optimizers = session_state.physical_optimizers();
         debug!(
@@ -1816,27 +1795,21 @@ impl DefaultPhysicalPlanner {
         let mut new_plan = plan;
         for optimizer in optimizers {
             let before_schema = new_plan.schema();
-            let new_plan_result = optimizer
-                .optimize(new_plan, session_state.config_options())
-                .and_then(|p| {
-                    if optimizer.schema_check() && p.schema() != before_schema {
-                        Err(DataFusionError::Internal(format!(
-                            "PhysicalOptimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
-                            optimizer.name(),
-                            before_schema,
-                            p.schema()
-                        )))
-                    } else {
-                        Ok(p)
-                    }
-                });
-            observer(&new_plan_result, optimizer.as_ref());
-            new_plan = new_plan_result?;
+            new_plan = optimizer.optimize(new_plan, session_state.config_options())?;
+            if optimizer.schema_check() && new_plan.schema() != before_schema {
+                return Err(DataFusionError::Internal(format!(
+                        "PhysicalOptimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
+                        optimizer.name(),
+                        before_schema,
+                        new_plan.schema()
+                    )));
+            }
             trace!(
                 "Optimized physical plan by {}:\n{}\n",
                 optimizer.name(),
                 displayable(new_plan.as_ref()).indent()
             );
+            observer(new_plan.as_ref(), optimizer.as_ref())
         }
         debug!(
             "Optimized physical plan:\n{}\n",
