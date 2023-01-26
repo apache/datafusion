@@ -38,12 +38,11 @@ use substrait::proto::{
     },
     extensions::simple_extension_declaration::MappingType,
     function_argument::ArgType,
-    join_rel, plan_rel,
-    r#type,
+    join_rel, plan_rel, r#type,
     read_rel::ReadType,
     rel::RelType,
     sort_field::{SortDirection, SortKind::*},
-    AggregateFunction, Expression, Plan, Rel, Type
+    AggregateFunction, Expression, Plan, Rel, Type,
 };
 
 use datafusion::logical_expr::expr::Sort;

@@ -45,8 +45,7 @@ use substrait::proto::{
         simple_extension_declaration::{ExtensionFunction, MappingType},
     },
     function_argument::ArgType,
-    join_rel, plan_rel,
-    r#type,
+    join_rel, plan_rel, r#type,
     read_rel::{NamedTable, ReadType},
     rel::RelType,
     sort_field::{SortDirection, SortKind},
@@ -593,7 +592,7 @@ pub fn to_substrait_rex(
                         precision: *p as i32,
                         scale: *s as i32,
                     }))
-                },
+                }
                 ScalarValue::Utf8(Some(s)) => Some(LiteralType::String(s.clone())),
                 ScalarValue::LargeUtf8(Some(s)) => Some(LiteralType::String(s.clone())),
                 ScalarValue::Binary(Some(b)) => Some(LiteralType::Binary(b.clone())),
@@ -644,14 +643,16 @@ fn try_to_substrait_null(v: &ScalarValue) -> Result<LiteralType> {
                 nullability: default_nullability,
             })),
         })),
-        ScalarValue::Decimal128(None, p, s) => Ok(LiteralType::Null(substrait::proto::Type {
-            kind: Some(r#type::Kind::Decimal(r#type::Decimal {
-                scale: *s as i32,
-                precision: *p as i32,
-                type_variation_reference: default_type_ref,
-                nullability: default_nullability,
-            })),
-        })),
+        ScalarValue::Decimal128(None, p, s) => {
+            Ok(LiteralType::Null(substrait::proto::Type {
+                kind: Some(r#type::Kind::Decimal(r#type::Decimal {
+                    scale: *s as i32,
+                    precision: *p as i32,
+                    type_variation_reference: default_type_ref,
+                    nullability: default_nullability,
+                })),
+            }))
+        }
         // TODO: Extend support for remaining data types
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported literal: {:?}",
