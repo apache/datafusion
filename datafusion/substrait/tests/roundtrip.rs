@@ -67,7 +67,6 @@ mod tests {
         roundtrip("SELECT * FROM data WHERE d AND a > 1").await
     }
 
-    #[ignore] // tracked in https://github.com/apache/arrow-datafusion/issues/4897
     #[tokio::test]
     async fn select_with_limit() -> Result<()> {
         roundtrip_fill_na("SELECT * FROM data LIMIT 100").await
@@ -221,6 +220,7 @@ mod tests {
         let plan1 = df.into_optimized_plan()?;
         let proto = to_substrait_plan(&plan1)?;
         let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+        let plan2 = ctx.state().optimize(&plan2)?;
 
         // Format plan string and replace all None's with 0
         let plan1str = format!("{plan1:?}").replace("None", "0");
@@ -260,7 +260,7 @@ mod tests {
         let plan = df.into_optimized_plan()?;
         let proto = to_substrait_plan(&plan)?;
         let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
-        let plan2 = ctx.optimize(&plan2)?;
+        let plan2 = ctx.state().optimize(&plan2)?;
 
         println!("{plan:#?}");
         println!("{plan2:#?}");
