@@ -78,7 +78,7 @@ pub fn name_to_op(name: &str) -> Result<Operator> {
         "bitwise_shift_right" => Ok(Operator::BitwiseShiftRight),
         "bitwise_shift_left" => Ok(Operator::BitwiseShiftLeft),
         _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported function name: {name:?}",
+            "Unsupported function name: {name:?}"
         ))),
     }
 }
@@ -98,7 +98,7 @@ pub async fn from_substrait_plan(
                     Ok((ext_f.function_anchor, &ext_f.name))
                 }
                 _ => Err(DataFusionError::NotImplemented(format!(
-                    "Extension type not supported: {ext:?}",
+                    "Extension type not supported: {ext:?}"
                 ))),
             },
             None => Err(DataFusionError::NotImplemented(
@@ -429,13 +429,13 @@ fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
             join_rel::JoinType::Semi => Ok(JoinType::LeftSemi),
             _ => {
                 return Err(DataFusionError::Internal(format!(
-                    "unsupported join type {substrait_join_type:?}",
+                    "unsupported join type {substrait_join_type:?}"
                 )))
             }
         }
     } else {
         return Err(DataFusionError::Internal(format!(
-            "invalid join type variant {join_type:?}",
+            "invalid join type variant {join_type:?}"
         )));
     }
 }
@@ -597,7 +597,7 @@ pub async fn from_substrait_rex(
                     })))
                 }
                 (l, r) => Err(DataFusionError::NotImplemented(format!(
-                    "Invalid arguments for binary expression: {l:?} and {r:?}",
+                    "Invalid arguments for binary expression: {l:?} and {r:?}"
                 ))),
             }
         }
@@ -635,12 +635,12 @@ pub async fn from_substrait_rex(
                     ))?;
                     let p = d.precision.try_into().map_err(|e| {
                         DataFusionError::Substrait(format!(
-                            "Failed to parse decimal precision: {e}",
+                            "Failed to parse decimal precision: {e}"
                         ))
                     })?;
                     let s = d.scale.try_into().map_err(|e| {
                         DataFusionError::Substrait(format!(
-                            "Failed to parse decimal scale: {e}",
+                            "Failed to parse decimal scale: {e}"
                         ))
                     })?;
                     Ok(Arc::new(Expr::Literal(ScalarValue::Decimal128(
@@ -685,13 +685,12 @@ fn from_substrait_null(null_type: &Type) -> Result<ScalarValue> {
                 d.scale as i8,
             )),
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported null kind: {:?}",
-                kind
+                "Unsupported null kind: {kind:?}"
             ))),
         }
     } else {
-        return Err(DataFusionError::NotImplemented(
+        Err(DataFusionError::NotImplemented(
             "Null type without kind is not supported".to_string(),
-        ));
+        ))
     }
 }

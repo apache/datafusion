@@ -320,9 +320,9 @@ mod tests {
             Field::new("d", DataType::Boolean, true),
         ]);
         explicit_options.schema = Some(&schema);
-        ctx.register_csv("data", "tests/testdata/data.csv", explicit_options.clone())
+        ctx.register_csv("data", "tests/testdata/data.csv", explicit_options)
             .await?;
-        ctx.register_csv("data2", "tests/testdata/data.csv", explicit_options.clone())
+        ctx.register_csv("data2", "tests/testdata/data.csv", CsvReadOptions::new())
             .await?;
         Ok(ctx)
     }

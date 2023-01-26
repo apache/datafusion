@@ -297,7 +297,7 @@ pub fn to_substrait_rel(
             to_substrait_rel(alias.input.as_ref(), extension_info)
         }
         _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported operator: {plan:?}",
+            "Unsupported operator: {plan:?}"
         ))),
     }
 }
@@ -385,13 +385,9 @@ pub fn to_substrait_agg_measure(
             to_substrait_agg_measure(expr, schema, extension_info)
         }
         _ => Err(DataFusionError::Internal(format!(
-<<<<<<< HEAD
-            "Expression must be compatible with aggregation. Unsupported expression: {expr:?}",
-=======
             "Expression must be compatible with aggregation. Unsupported expression: {:?}. ExpressionType: {:?}",
             expr,
             expr.variant_name()
->>>>>>> Add NULL literal support for decimal and integers
         ))),
     }
 }
@@ -655,8 +651,7 @@ fn try_to_substrait_null(v: &ScalarValue) -> Result<LiteralType> {
         }
         // TODO: Extend support for remaining data types
         _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported literal: {:?}",
-            v
+            "Unsupported literal: {v:?}"
         ))),
     }
 }
