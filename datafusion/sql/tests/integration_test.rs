@@ -34,6 +34,8 @@ use datafusion_expr::{AggregateUDF, ScalarUDF};
 use datafusion_sql::parser::DFParser;
 use datafusion_sql::planner::{ContextProvider, ParserOptions, SqlToRel};
 
+use rstest::rstest;
+
 #[test]
 fn parse_decimals() {
     let test_data = [
@@ -181,6 +183,18 @@ Dml: op=[Update] table=[person]
       "#
     .trim();
     quick_test(sql, plan);
+}
+
+#[rstest]
+#[case::missing_assignement_target("UPDATE person SET doesnotexist = true")]
+#[case::missing_assignement_expression("UPDATE person SET age = doesnotexist + 42")]
+#[case::missing_selection_expression(
+    "UPDATE person SET age = 42 WHERE doesnotexist = true"
+)]
+#[test]
+fn update_column_does_not_exist(#[case] sql: &str) {
+    let err = logical_plan(sql).expect_err("query should have failed");
+    assert_field_not_found(err, "doesnotexist");
 }
 
 #[test]
