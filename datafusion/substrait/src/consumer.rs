@@ -606,44 +606,70 @@ pub async fn from_substrait_rex(
                 ))),
             }
         }
-        Some(RexType::Literal(lit)) => match &lit.literal_type {
-            Some(LiteralType::I8(n)) => {
-                Ok(Arc::new(Expr::Literal(ScalarValue::Int8(Some(*n as i8)))))
+        Some(RexType::Literal(lit)) => {
+            match &lit.literal_type {
+                Some(LiteralType::I8(n)) => {
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Int8(Some(*n as i8)))))
+                }
+                Some(LiteralType::I16(n)) => {
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Int16(Some(*n as i16)))))
+                }
+                Some(LiteralType::I32(n)) => {
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Int32(Some(*n)))))
+                }
+                Some(LiteralType::I64(n)) => {
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Int64(Some(*n)))))
+                }
+                Some(LiteralType::Boolean(b)) => {
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Boolean(Some(*b)))))
+                }
+                Some(LiteralType::Date(d)) => {
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Date32(Some(*d)))))
+                }
+                Some(LiteralType::Fp32(f)) => {
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Float32(Some(*f)))))
+                }
+                Some(LiteralType::Fp64(f)) => {
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Float64(Some(*f)))))
+                }
+                Some(LiteralType::Decimal(d)) => {
+                    let value: [u8; 16] = d.value.clone().try_into().or(Err(
+                        DataFusionError::Substrait(
+                            "Failed to parse decimal value".to_string(),
+                        ),
+                    ))?;
+                    let p = d.precision.try_into().map_err(|e| {
+                        DataFusionError::Substrait(format!(
+                            "Failed to parse decimal precision: {}",
+                            e
+                        ))
+                    })?;
+                    let s = d.scale.try_into().map_err(|e| {
+                        DataFusionError::Substrait(format!(
+                            "Failed to parse decimal scale: {}",
+                            e
+                        ))
+                    })?;
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Decimal128(
+                        Some(std::primitive::i128::from_le_bytes(value)),
+                        p,
+                        s,
+                    ))))
+                }
+                Some(LiteralType::String(s)) => {
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Utf8(Some(s.clone())))))
+                }
+                Some(LiteralType::Binary(b)) => Ok(Arc::new(Expr::Literal(
+                    ScalarValue::Binary(Some(b.clone())),
+                ))),
+                _ => {
+                    return Err(DataFusionError::NotImplemented(format!(
+                        "Unsupported literal_type: {:?}",
+                        lit.literal_type
+                    )))
+                }
             }
-            Some(LiteralType::I16(n)) => {
-                Ok(Arc::new(Expr::Literal(ScalarValue::Int16(Some(*n as i16)))))
-            }
-            Some(LiteralType::I32(n)) => {
-                Ok(Arc::new(Expr::Literal(ScalarValue::Int32(Some(*n)))))
-            }
-            Some(LiteralType::I64(n)) => {
-                Ok(Arc::new(Expr::Literal(ScalarValue::Int64(Some(*n)))))
-            }
-            Some(LiteralType::Boolean(b)) => {
-                Ok(Arc::new(Expr::Literal(ScalarValue::Boolean(Some(*b)))))
-            }
-            Some(LiteralType::Date(d)) => {
-                Ok(Arc::new(Expr::Literal(ScalarValue::Date32(Some(*d)))))
-            }
-            Some(LiteralType::Fp32(f)) => {
-                Ok(Arc::new(Expr::Literal(ScalarValue::Float32(Some(*f)))))
-            }
-            Some(LiteralType::Fp64(f)) => {
-                Ok(Arc::new(Expr::Literal(ScalarValue::Float64(Some(*f)))))
-            }
-            Some(LiteralType::String(s)) => {
-                Ok(Arc::new(Expr::Literal(ScalarValue::Utf8(Some(s.clone())))))
-            }
-            Some(LiteralType::Binary(b)) => Ok(Arc::new(Expr::Literal(
-                ScalarValue::Binary(Some(b.clone())),
-            ))),
-            _ => {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Unsupported literal_type: {:?}",
-                    lit.literal_type
-                )))
-            }
-        },
+        }
         _ => Err(DataFusionError::NotImplemented(
             "unsupported rex_type".to_string(),
         )),
