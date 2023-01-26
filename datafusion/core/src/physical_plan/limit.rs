@@ -449,7 +449,8 @@ impl LimitStream {
         if self.fetch == 0 {
             self.input = None; // clear input so it can be dropped early
             None
-        } else if batch.num_rows() <= self.fetch {
+        } else if batch.num_rows() < self.fetch {
+            //
             self.fetch -= batch.num_rows();
             Some(batch)
         } else {
@@ -567,6 +568,36 @@ mod tests {
 
         // Only the first two batches should be consumed
         assert_eq!(index.value(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn limit_equals_batch_size() -> Result<()> {
+        let batches = vec![
+            test::make_partition(6),
+            test::make_partition(6),
+            test::make_partition(6),
+        ];
+        let input = test::exec::TestStream::new(batches);
+
+        let index = input.index();
+        assert_eq!(index.value(), 0);
+
+        // limit of six needs to consume the entire first record batch
+        // (6 rows) and stop immediately
+        let baseline_metrics = BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let limit_stream =
+            LimitStream::new(Box::pin(input), 0, Some(6), baseline_metrics);
+        assert_eq!(index.value(), 0);
+
+        let results = collect(Box::pin(limit_stream)).await.unwrap();
+        let num_rows: usize = results.into_iter().map(|b| b.num_rows()).sum();
+        // Only 6 rows should have been produced
+        assert_eq!(num_rows, 6);
+
+        // Only the first batch should be consumed
+        assert_eq!(index.value(), 1);
 
         Ok(())
     }
