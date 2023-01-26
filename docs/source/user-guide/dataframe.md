@@ -86,6 +86,7 @@ These methods execute the logical plan represented by the DataFrame and either c
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | collect                    | Executes this DataFrame and collects all results into a vector of RecordBatch.                                              |
 | collect_partitioned        | Executes this DataFrame and collects all results into a vector of vector of RecordBatch maintaining the input partitioning. |
+| count                      | Executes this DataFrame to get the total number of rows.                                                                    |
 | execute_stream             | Executes this DataFrame and returns a stream over a single partition.                                                       |
 | execute_stream_partitioned | Executes this DataFrame and returns one stream per partition.                                                               |
 | show                       | Execute this DataFrame and print the results to stdout.                                                                     |
