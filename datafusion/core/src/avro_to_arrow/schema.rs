@@ -424,9 +424,9 @@ mod test {
               } ]
             }"#,
         );
-        assert!(schema.is_ok(), "{:?}", schema);
+        assert!(schema.is_ok(), "{schema:?}");
         let arrow_schema = to_arrow_schema(&schema.unwrap());
-        assert!(arrow_schema.is_ok(), "{:?}", arrow_schema);
+        assert!(arrow_schema.is_ok(), "{arrow_schema:?}");
         let expected = Schema::new(vec![
             Field::new("id", Int32, true),
             Field::new("bool_col", Boolean, true),
@@ -446,7 +446,7 @@ mod test {
     #[test]
     fn test_non_record_schema() {
         let arrow_schema = to_arrow_schema(&AvroSchema::String);
-        assert!(arrow_schema.is_ok(), "{:?}", arrow_schema);
+        assert!(arrow_schema.is_ok(), "{arrow_schema:?}");
         assert_eq!(
             arrow_schema.unwrap(),
             Schema::new(vec![Field::new("", Utf8, false)])

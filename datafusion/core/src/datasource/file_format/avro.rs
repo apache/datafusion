@@ -215,7 +215,7 @@ mod tests {
 
         assert_eq!(
             "[true, false, true, false, true, false, true, false]",
-            format!("{:?}", values)
+            format!("{values:?}")
         );
 
         Ok(())
@@ -240,7 +240,7 @@ mod tests {
             values.push(array.value(i));
         }
 
-        assert_eq!("[4, 5, 6, 7, 2, 3, 0, 1]", format!("{:?}", values));
+        assert_eq!("[4, 5, 6, 7, 2, 3, 0, 1]", format!("{values:?}"));
 
         Ok(())
     }
@@ -264,7 +264,7 @@ mod tests {
             values.push(array.value(i));
         }
 
-        assert_eq!("[1235865600000000, 1235865660000000, 1238544000000000, 1238544060000000, 1233446400000000, 1233446460000000, 1230768000000000, 1230768060000000]", format!("{:?}", values));
+        assert_eq!("[1235865600000000, 1235865660000000, 1238544000000000, 1238544060000000, 1233446400000000, 1233446460000000, 1230768000000000, 1230768060000000]", format!("{values:?}"));
 
         Ok(())
     }
@@ -290,7 +290,7 @@ mod tests {
 
         assert_eq!(
             "[0.0, 1.1, 0.0, 1.1, 0.0, 1.1, 0.0, 1.1]",
-            format!("{:?}", values)
+            format!("{values:?}")
         );
 
         Ok(())
@@ -317,7 +317,7 @@ mod tests {
 
         assert_eq!(
             "[0.0, 10.1, 0.0, 10.1, 0.0, 10.1, 0.0, 10.1]",
-            format!("{:?}", values)
+            format!("{values:?}")
         );
 
         Ok(())
@@ -344,7 +344,7 @@ mod tests {
 
         assert_eq!(
             "[\"0\", \"1\", \"0\", \"1\", \"0\", \"1\", \"0\", \"1\"]",
-            format!("{:?}", values)
+            format!("{values:?}")
         );
 
         Ok(())
@@ -357,7 +357,7 @@ mod tests {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let testdata = crate::test_util::arrow_test_data();
-        let store_root = format!("{}/avro", testdata);
+        let store_root = format!("{testdata}/avro");
         let format = AvroFormat {};
         scan_format(state, &format, &store_root, file_name, projection, limit).await
     }
