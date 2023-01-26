@@ -1481,6 +1481,27 @@ fn create_external_table_csv() {
 }
 
 #[test]
+fn create_schema_with_quoted_name() {
+    let sql = "CREATE SCHEMA \"quoted_schema_name\"";
+    let expected = "CreateCatalogSchema: \"quoted_schema_name\"";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn create_schema_with_quoted_unnormalized_name() {
+    let sql = "CREATE SCHEMA \"Foo\"";
+    let expected = "CreateCatalogSchema: \"Foo\"";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn create_schema_with_unquoted_normalized_name() {
+    let sql = "CREATE SCHEMA Foo";
+    let expected = "CreateCatalogSchema: \"foo\"";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn create_external_table_custom() {
     let sql = "CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';";
     let expected = r#"CreateExternalTable: Bare { table: "dt" }"#;
