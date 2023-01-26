@@ -20,7 +20,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use arrow::array::Int64Array;
 use async_trait::async_trait;
+use datafusion_common::DataFusionError;
+use datafusion_expr::count;
 use parquet::file::properties::WriterProperties;
 
 use datafusion_common::{Column, DFSchema, ScalarValue};
@@ -359,6 +362,35 @@ impl DataFrame {
             .repartition(partitioning_scheme)?
             .build()?;
         Ok(DataFrame::new(self.session_state, plan))
+    }
+
+    /// Run a count aggregate on the DataFrame and execute the DataFrame to collect this
+    /// count and return it as a usize.
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let length = df.len().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn len(self) -> Result<usize> {
+        let rows = self
+            .aggregate(vec![], vec![count(Expr::Literal(ScalarValue::Null))])?
+            .collect()
+            .await?;
+        let len = *rows
+            .first()
+            .and_then(|r| r.columns().first())
+            .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
+            .and_then(|a| a.values().first())
+            .ok_or(DataFusionError::Internal(
+                "Unexpected output when collecting for len".to_string(),
+            ))? as usize;
+        Ok(len)
     }
 
     /// Convert the logical plan represented by this DataFrame into a physical plan and
@@ -998,6 +1030,13 @@ mod tests {
         // the two plans should be identical
         assert_same_plan(&plan, &sql_plan);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn len() -> Result<()> {
+        let len = test_table().await?.len().await?;
+        assert_eq!(100, len);
         Ok(())
     }
 
