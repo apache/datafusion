@@ -1134,7 +1134,7 @@ mod tests {
             //       `EnforceSorting` and `EnfoceDistribution`.
             // TODO: Orthogonalize the tests here just to verify `EnforceDistribution` and create
             //       new tests for the cascade.
-            let optimizer = EnforceSorting {};
+            let optimizer = EnforceSorting::new(true);
             let optimized = optimizer.optimize(optimized, &config)?;
 
             // Now format correctly
