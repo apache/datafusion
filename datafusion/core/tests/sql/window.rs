@@ -18,6 +18,7 @@
 use super::*;
 use ::parquet::arrow::arrow_writer::ArrowWriter;
 use ::parquet::file::properties::WriterProperties;
+use datafusion::execution::options::ReadOptions;
 
 /// for window functions without order by the first, last, and nth function call does not make sense
 #[tokio::test]
