@@ -182,9 +182,9 @@ fn gen_write_row(schema: &Schema, assembler: &Assembler) -> Result<GeneratedFunc
     Ok(b.build())
 }
 
-fn write_typed_field_stmt<'a>(
+fn write_typed_field_stmt(
     dt: &DataType,
-    b: &mut CodeBlock<'a>,
+    b: &mut CodeBlock,
     params: Vec<Expr>,
 ) -> Result<()> {
     use DataType::*;
