@@ -121,6 +121,8 @@ pub enum LogicalPlan {
     Prepare(Prepare),
     /// Insert / Update / Delete
     Dml(DmlStatement),
+    /// Describe the schema of table
+    DescribeTable(DescribeTable),
 }
 
 impl LogicalPlan {
@@ -161,6 +163,9 @@ impl LogicalPlan {
             LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
             LogicalPlan::DropView(DropView { schema, .. }) => schema,
             LogicalPlan::SetVariable(SetVariable { schema, .. }) => schema,
+            LogicalPlan::DescribeTable(DescribeTable { dummy_schema, .. }) => {
+                dummy_schema
+            }
             LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
         }
     }
@@ -221,6 +226,7 @@ impl LogicalPlan {
             | LogicalPlan::Prepare(Prepare { input, .. }) => input.all_schemas(),
             LogicalPlan::DropTable(_)
             | LogicalPlan::DropView(_)
+            | LogicalPlan::DescribeTable(_)
             | LogicalPlan::SetVariable(_) => vec![],
             LogicalPlan::Dml(DmlStatement { table_schema, .. }) => vec![table_schema],
         }
@@ -322,6 +328,7 @@ impl LogicalPlan {
             | LogicalPlan::Union(_)
             | LogicalPlan::Distinct(_)
             | LogicalPlan::Dml(_)
+            | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Prepare(_) => Ok(()),
         }
     }
@@ -363,7 +370,8 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
             | LogicalPlan::SetVariable(_)
-            | LogicalPlan::DropView(_) => vec![],
+            | LogicalPlan::DropView(_)
+            | LogicalPlan::DescribeTable(_) => vec![],
         }
     }
 
@@ -561,7 +569,8 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
             | LogicalPlan::SetVariable(_)
-            | LogicalPlan::DropView(_) => true,
+            | LogicalPlan::DropView(_)
+            | LogicalPlan::DescribeTable(_) => true,
         };
         if !recurse {
             return Ok(false);
@@ -1170,6 +1179,9 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "Prepare: {name:?} {data_types:?} ")
                     }
+                    LogicalPlan::DescribeTable(DescribeTable { .. }) => {
+                        write!(f, "DescribeTable")
+                    }
                 }
             }
         }
@@ -1625,6 +1637,15 @@ pub struct Prepare {
     pub input: Arc<LogicalPlan>,
 }
 
+/// Describe the schema of table
+#[derive(Clone)]
+pub struct DescribeTable {
+    /// Table schema
+    pub schema: Arc<Schema>,
+    /// Dummy schema
+    pub dummy_schema: DFSchemaRef,
+}
+
 /// Produces a relation with string representations of
 /// various parts of the plan
 #[derive(Clone)]
@@ -2075,10 +2096,7 @@ mod tests {
     impl PlanVisitor for OkVisitor {
         type Error = String;
 
-        fn pre_visit(
-            &mut self,
-            plan: &LogicalPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "pre_visit Projection",
                 LogicalPlan::Filter { .. } => "pre_visit Filter",
@@ -2090,10 +2108,7 @@ mod tests {
             Ok(true)
         }
 
-        fn post_visit(
-            &mut self,
-            plan: &LogicalPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "post_visit Projection",
                 LogicalPlan::Filter { .. } => "post_visit Filter",
@@ -2160,20 +2175,14 @@ mod tests {
     impl PlanVisitor for StoppingVisitor {
         type Error = String;
 
-        fn pre_visit(
-            &mut self,
-            plan: &LogicalPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
             if self.return_false_from_pre_in.dec() {
                 return Ok(false);
             }
             self.inner.pre_visit(plan)
         }
 
-        fn post_visit(
-            &mut self,
-            plan: &LogicalPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
             if self.return_false_from_post_in.dec() {
                 return Ok(false);
             }
@@ -2233,10 +2242,7 @@ mod tests {
     impl PlanVisitor for ErrorVisitor {
         type Error = String;
 
-        fn pre_visit(
-            &mut self,
-            plan: &LogicalPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
             if self.return_error_from_pre_in.dec() {
                 return Err("Error in pre_visit".into());
             }
@@ -2244,10 +2250,7 @@ mod tests {
             self.inner.pre_visit(plan)
         }
 
-        fn post_visit(
-            &mut self,
-            plan: &LogicalPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
             if self.return_error_from_post_in.dec() {
                 return Err("Error in post_visit".into());
             }

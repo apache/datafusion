@@ -125,10 +125,7 @@ async fn explain_analyze_baseline_metrics() {
     impl ExecutionPlanVisitor for TimeValidator {
         type Error = std::convert::Infallible;
 
-        fn pre_visit(
-            &mut self,
-            plan: &dyn ExecutionPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
             if !expected_to_have_metrics(plan) {
                 return Ok(true);
             }

@@ -230,12 +230,12 @@ impl ExprVisitable for Expr {
 struct VisitorAdapter<F, E> {
     f: F,
     // Store returned error as it my not be a DataFusionError
-    err: std::result::Result<(), E>,
+    err: Result<(), E>,
 }
 
 impl<F, E> ExpressionVisitor for VisitorAdapter<F, E>
 where
-    F: FnMut(&Expr) -> std::result::Result<(), E>,
+    F: FnMut(&Expr) -> Result<(), E>,
 {
     fn pre_visit(mut self, expr: &Expr) -> Result<Recursion<Self>> {
         if let Err(e) = (self.f)(expr) {
@@ -254,9 +254,9 @@ where
 /// Performs a pre-visit traversal by recursively calling `f(expr)` on
 /// `expr`, and then on all its children. See [`ExpressionVisitor`]
 /// for more details and more options to control the walk.
-pub fn inspect_expr_pre<F, E>(expr: &Expr, f: F) -> std::result::Result<(), E>
+pub fn inspect_expr_pre<F, E>(expr: &Expr, f: F) -> Result<(), E>
 where
-    F: FnMut(&Expr) -> std::result::Result<(), E>,
+    F: FnMut(&Expr) -> Result<(), E>,
 {
     // the visit is fallable, so unwrap here
     let adapter = expr.accept(VisitorAdapter { f, err: Ok(()) }).unwrap();
