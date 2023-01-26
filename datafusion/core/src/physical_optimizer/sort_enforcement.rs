@@ -247,16 +247,15 @@ fn parallelize_sorts(
         plan.required_input_distribution()[0],
         Distribution::SinglePartition
     );
-    let mut coalesce_onwards = requirements.coalesce_onwards.clone();
+    let mut coalesce_onwards = requirements.coalesce_onwards;
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         let sort_expr = sort_exec.expr();
         // If there is link between CoalescePartitionsExec and SortExec that satisfy requirements
         // (e.g all Executors in between doesn't require to work on SinglePartition).
         // We can replace CoalescePartitionsExec with SortExec and SortExec with SortPreservingMergeExec
         // respectively to parallelize sorting.
-        if !coalesce_onwards.is_empty() {
-            let coalesce_partitions_any = coalesce_onwards[0].clone();
-            let mut prev_layer = coalesce_partitions_any.children()[0].clone();
+        if let [first, ..] = coalesce_onwards.as_slice() {
+            let mut prev_layer = first.children()[0].clone();
             if !ordering_satisfy(prev_layer.output_ordering(), Some(sort_expr), || {
                 sort_exec.equivalence_properties()
             }) {
@@ -277,9 +276,8 @@ fn parallelize_sorts(
         }
     } else if plan.as_any().is::<CoalescePartitionsExec>() {
         // There is a CoalescePartitions that is unnecesary, remove it.
-        if !coalesce_onwards.is_empty() {
-            let coalesce_partitions_any = coalesce_onwards[0].clone();
-            let mut prev_layer = coalesce_partitions_any.children()[0].clone();
+        if let [first, ..] = coalesce_onwards.as_slice() {
+            let mut prev_layer = first.children()[0].clone();
             for layer in coalesce_onwards.iter().skip(1) {
                 let mut children = layer.children();
                 children[0] = prev_layer;
@@ -455,16 +453,16 @@ fn analyze_immediate_sort_removal(
     requirements: &PlanWithCorrespondingSort,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
     if let Some(sort_exec) = requirements.plan.as_any().downcast_ref::<SortExec>() {
+        let sort_input = sort_exec.input().clone();
         // If this sort is unnecessary, we should remove it:
         if ordering_satisfy(
-            sort_exec.input().output_ordering(),
+            sort_input.output_ordering(),
             sort_exec.output_ordering(),
-            || sort_exec.input().equivalence_properties(),
+            || sort_input.equivalence_properties(),
         ) {
-            let sort_input = sort_exec.input();
             // Since we know that a `SortExec` has exactly one child,
             // we can use the zero index safely:
-            let mut new_onwards = requirements.sort_onwards[0].to_vec();
+            let mut new_onwards = requirements.sort_onwards[0].clone();
             if !new_onwards.is_empty() {
                 new_onwards.pop();
             }
@@ -472,16 +470,14 @@ fn analyze_immediate_sort_removal(
                 && sort_input.output_partitioning().partition_count() > 1
             {
                 // Replace the sort with a sort-preserving merge:
-                let new_plan: Arc<dyn ExecutionPlan> =
-                    Arc::new(SortPreservingMergeExec::new(
-                        sort_exec.expr().to_vec(),
-                        sort_input.clone(),
-                    ));
+                let new_plan: Arc<dyn ExecutionPlan> = Arc::new(
+                    SortPreservingMergeExec::new(sort_exec.expr().to_vec(), sort_input),
+                );
                 new_onwards.push((0, new_plan.clone()));
                 new_plan
             } else {
                 // Remove the sort:
-                sort_input.clone()
+                sort_input
             };
             return Ok(Some(PlanWithCorrespondingSort {
                 plan: updated_plan,
@@ -598,7 +594,7 @@ fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExp
 fn remove_corresponding_sort_from_sub_plan(
     sort_onwards: &mut Vec<(usize, Arc<dyn ExecutionPlan>)>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let (_, sort_any) = sort_onwards[0].clone();
+    let (_, sort_any) = &sort_onwards[0];
     let mut prev_layer = sort_any.children()[0].clone();
     // In the loop below, we start from one as the first entry is a
     // `SortExec` and we are removing it from the plan.
@@ -617,8 +613,8 @@ fn change_finer_sort_in_sub_plan(
     sort_onwards: &mut [(usize, Arc<dyn ExecutionPlan>)],
     n_sort_expr: usize,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let (sort_child_idx, sort_any) = sort_onwards[0].clone();
-    let new_sort_expr = get_sort_exprs(&sort_any)?[0..n_sort_expr].to_vec();
+    let (sort_child_idx, ref sort_any) = sort_onwards[0];
+    let new_sort_expr = get_sort_exprs(sort_any)?[0..n_sort_expr].to_vec();
     let mut prev_layer = sort_any.children()[0].clone();
     let updated_sort = add_sort_above_child(&prev_layer, new_sort_expr)?;
     sort_onwards[0] = (sort_child_idx, updated_sort);
