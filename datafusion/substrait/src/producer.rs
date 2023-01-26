@@ -46,6 +46,7 @@ use substrait::proto::{
     },
     function_argument::ArgType,
     join_rel, plan_rel,
+    r#type,
     read_rel::{NamedTable, ReadType},
     rel::RelType,
     sort_field::{SortDirection, SortKind},
@@ -380,9 +381,18 @@ pub fn to_substrait_agg_measure(
                     None => None
                 }
             })
-        },
+        }
+        Expr::Alias(expr, _name) => {
+            to_substrait_agg_measure(expr, schema, extension_info)
+        }
         _ => Err(DataFusionError::Internal(format!(
+<<<<<<< HEAD
             "Expression must be compatible with aggregation. Unsupported expression: {expr:?}",
+=======
+            "Expression must be compatible with aggregation. Unsupported expression: {:?}. ExpressionType: {:?}",
+            expr,
+            expr.variant_name()
+>>>>>>> Add NULL literal support for decimal and integers
         ))),
     }
 }
@@ -583,17 +593,13 @@ pub fn to_substrait_rex(
                         precision: *p as i32,
                         scale: *s as i32,
                     }))
-                }
+                },
                 ScalarValue::Utf8(Some(s)) => Some(LiteralType::String(s.clone())),
                 ScalarValue::LargeUtf8(Some(s)) => Some(LiteralType::String(s.clone())),
                 ScalarValue::Binary(Some(b)) => Some(LiteralType::Binary(b.clone())),
                 ScalarValue::LargeBinary(Some(b)) => Some(LiteralType::Binary(b.clone())),
                 ScalarValue::Date32(Some(d)) => Some(LiteralType::Date(*d)),
-                _ => {
-                    return Err(DataFusionError::NotImplemented(format!(
-                        "Unsupported literal: {value:?}",
-                    )))
-                }
+                _ => Some(try_to_substrait_null(value)?),
             };
             Ok(Expression {
                 rex_type: Some(RexType::Literal(Literal {
@@ -606,6 +612,50 @@ pub fn to_substrait_rex(
         Expr::Alias(expr, _alias) => to_substrait_rex(expr, schema, extension_info),
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported expression: {expr:?}"
+        ))),
+    }
+}
+
+fn try_to_substrait_null(v: &ScalarValue) -> Result<LiteralType> {
+    let default_type_ref = 0;
+    let default_nullability = r#type::Nullability::Nullable as i32;
+    match v {
+        ScalarValue::Int8(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::I8(r#type::I8 {
+                type_variation_reference: default_type_ref,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::Int16(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::I16(r#type::I16 {
+                type_variation_reference: default_type_ref,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::Int32(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::I32(r#type::I32 {
+                type_variation_reference: default_type_ref,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::Int64(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::I64(r#type::I64 {
+                type_variation_reference: default_type_ref,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::Decimal128(None, p, s) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::Decimal(r#type::Decimal {
+                scale: *s as i32,
+                precision: *p as i32,
+                type_variation_reference: default_type_ref,
+                nullability: default_nullability,
+            })),
+        })),
+        // TODO: Extend support for remaining data types
+        _ => Err(DataFusionError::NotImplemented(format!(
+            "Unsupported literal: {:?}",
+            v
         ))),
     }
 }

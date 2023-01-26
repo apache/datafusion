@@ -39,10 +39,11 @@ use substrait::proto::{
     extensions::simple_extension_declaration::MappingType,
     function_argument::ArgType,
     join_rel, plan_rel,
+    r#type,
     read_rel::ReadType,
     rel::RelType,
     sort_field::{SortDirection, SortKind::*},
-    AggregateFunction, Expression, Plan, Rel,
+    AggregateFunction, Expression, Plan, Rel, Type
 };
 
 use datafusion::logical_expr::expr::Sort;
@@ -655,6 +656,9 @@ pub async fn from_substrait_rex(
                 Some(LiteralType::Binary(b)) => Ok(Arc::new(Expr::Literal(
                     ScalarValue::Binary(Some(b.clone())),
                 ))),
+                Some(LiteralType::Null(ntype)) => {
+                    Ok(Arc::new(Expr::Literal(from_substrait_null(ntype)?)))
+                }
                 _ => {
                     return Err(DataFusionError::NotImplemented(format!(
                         "Unsupported literal_type: {:?}",
@@ -666,5 +670,29 @@ pub async fn from_substrait_rex(
         _ => Err(DataFusionError::NotImplemented(
             "unsupported rex_type".to_string(),
         )),
+    }
+}
+
+fn from_substrait_null(null_type: &Type) -> Result<ScalarValue> {
+    if let Some(kind) = &null_type.kind {
+        match kind {
+            r#type::Kind::I8(_) => Ok(ScalarValue::Int8(None)),
+            r#type::Kind::I16(_) => Ok(ScalarValue::Int16(None)),
+            r#type::Kind::I32(_) => Ok(ScalarValue::Int32(None)),
+            r#type::Kind::I64(_) => Ok(ScalarValue::Int64(None)),
+            r#type::Kind::Decimal(d) => Ok(ScalarValue::Decimal128(
+                None,
+                d.precision as u8,
+                d.scale as i8,
+            )),
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "Unsupported null kind: {:?}",
+                kind
+            ))),
+        }
+    } else {
+        return Err(DataFusionError::NotImplemented(
+            "Null type without kind is not supported".to_string(),
+        ));
     }
 }
