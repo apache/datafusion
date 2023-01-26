@@ -297,8 +297,7 @@ pub fn to_substrait_rel(
             to_substrait_rel(alias.input.as_ref(), extension_info)
         }
         _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported operator: {:?}",
-            plan
+            "Unsupported operator: {plan:?}",
         ))),
     }
 }
@@ -383,8 +382,7 @@ pub fn to_substrait_agg_measure(
             })
         },
         _ => Err(DataFusionError::Internal(format!(
-            "Expression must be compatible with aggregation. Unsupported expression: {:?}",
-            expr
+            "Expression must be compatible with aggregation. Unsupported expression: {expr:?}",
         ))),
     }
 }
@@ -593,8 +591,7 @@ pub fn to_substrait_rex(
                 ScalarValue::Date32(Some(d)) => Some(LiteralType::Date(*d)),
                 _ => {
                     return Err(DataFusionError::NotImplemented(format!(
-                        "Unsupported literal: {:?}",
-                        value
+                        "Unsupported literal: {value:?}",
                     )))
                 }
             };
@@ -608,8 +605,7 @@ pub fn to_substrait_rex(
         }
         Expr::Alias(expr, _alias) => to_substrait_rex(expr, schema, extension_info),
         _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported expression: {:?}",
-            expr
+            "Unsupported expression: {expr:?}"
         ))),
     }
 }
@@ -641,8 +637,7 @@ fn substrait_sort_field(
             })
         }
         _ => Err(DataFusionError::NotImplemented(format!(
-            "Expecting sort expression but got {:?}",
-            expr
+            "Expecting sort expression but got {expr:?}"
         ))),
     }
 }

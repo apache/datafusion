@@ -697,8 +697,7 @@ fn get_aggregate_result_out_column(
     }
     if running_length != len_to_show {
         return Err(DataFusionError::Execution(format!(
-            "Generated row number should be {}, it is {}",
-            len_to_show, running_length
+            "Generated row number should be {len_to_show}, it is {running_length}"
         )));
     }
     result

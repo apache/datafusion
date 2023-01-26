@@ -210,7 +210,7 @@ mod tests {
         let plan = df.into_optimized_plan()?;
         let proto = to_substrait_plan(&plan)?;
         let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
-        let plan2str = format!("{:?}", plan2);
+        let plan2str = format!("{plan2:?}");
         assert_eq!(expected_plan_str, &plan2str);
         Ok(())
     }
@@ -223,8 +223,8 @@ mod tests {
         let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
 
         // Format plan string and replace all None's with 0
-        let plan1str = format!("{:?}", plan1).replace("None", "0");
-        let plan2str = format!("{:?}", plan2).replace("None", "0");
+        let plan1str = format!("{plan1:?}").replace("None", "0");
+        let plan2str = format!("{plan2:?}").replace("None", "0");
 
         assert_eq!(plan1str, plan2str);
         Ok(())
@@ -244,11 +244,11 @@ mod tests {
         let proto = to_substrait_plan(&df.into_optimized_plan()?)?;
         let plan = from_substrait_plan(&mut ctx, &proto).await?;
 
-        println!("{:#?}", plan_with_alias);
-        println!("{:#?}", plan);
+        println!("{plan_with_alias:#?}");
+        println!("{plan:#?}");
 
-        let plan1str = format!("{:?}", plan_with_alias);
-        let plan2str = format!("{:?}", plan);
+        let plan1str = format!("{plan_with_alias:?}");
+        let plan2str = format!("{plan:?}");
         assert_eq!(plan1str, plan2str);
         Ok(())
     }
@@ -262,11 +262,11 @@ mod tests {
         let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
         let plan2 = ctx.optimize(&plan2)?;
 
-        println!("{:#?}", plan);
-        println!("{:#?}", plan2);
+        println!("{plan:#?}");
+        println!("{plan2:#?}");
 
-        let plan1str = format!("{:?}", plan);
-        let plan2str = format!("{:?}", plan2);
+        let plan1str = format!("{plan:?}");
+        let plan2str = format!("{plan2:?}");
         assert_eq!(plan1str, plan2str);
         Ok(())
     }
