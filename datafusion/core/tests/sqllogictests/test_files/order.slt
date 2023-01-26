@@ -87,7 +87,7 @@ SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter)
 NULL three
 
 # test_specific_nulls_first_asc
-query RC
+query RT
 SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num ASC NULLS FIRST
 ----
 NULL three
