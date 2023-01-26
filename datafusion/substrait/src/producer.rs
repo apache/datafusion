@@ -641,8 +641,7 @@ fn substrait_sort_field(
             })
         }
         _ => Err(DataFusionError::NotImplemented(format!(
-            "Expecting sort expression but got {:?}",
-            expr
+            "Expecting sort expression but got {expr:?}"
         ))),
     }
 }
