@@ -1991,21 +1991,19 @@ async fn left_semi_join() -> Result<()> {
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
                 "          CoalesceBatchesExec: target_batch_size=4096",
                 "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
-                "              ProjectionExec: expr=[t2_id@0 as t2_id]",
-                "                RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "                ProjectionExec: expr=[t2_id@0 as t2_id]",
                 "                  MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         } else {
             vec![
-                "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
-                "  SortExec: [t1_id@0 ASC NULLS LAST]",
-                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
-                "      CoalesceBatchesExec: target_batch_size=4096",
-                "        HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+                "SortExec: [t1_id@0 ASC NULLS LAST]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
+                "        ProjectionExec: expr=[t2_id@0 as t2_id]",
                 "          MemoryExec: partitions=1, partition_sizes=[1]",
-                "          ProjectionExec: expr=[t2_id@0 as t2_id]",
-                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "              MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2078,14 +2076,12 @@ async fn left_semi_join() -> Result<()> {
             ]
         } else {
             vec![
-                "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
-                "  SortExec: [t1_id@0 ASC NULLS LAST]",
-                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
-                "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "        CoalesceBatchesExec: target_batch_size=4096",
-                "          HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
-                "            MemoryExec: partitions=1, partition_sizes=[1]",
-                "            MemoryExec: partitions=1, partition_sizes=[1]",
+                "SortExec: [t1_id@0 ASC NULLS LAST]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2275,14 +2271,12 @@ async fn right_semi_join() -> Result<()> {
             ]
         } else {
             vec![
-                "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
-                "  SortExec: [t1_id@0 ASC NULLS LAST]",
-                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
-                "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "        CoalesceBatchesExec: target_batch_size=4096",
-                "          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
-                "            MemoryExec: partitions=1, partition_sizes=[1]",
-                "            MemoryExec: partitions=1, partition_sizes=[1]",
+                "SortExec: [t1_id@0 ASC NULLS LAST]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2323,14 +2317,12 @@ async fn right_semi_join() -> Result<()> {
             ]
         } else {
             vec![
-                "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
-                "  SortExec: [t1_id@0 ASC NULLS LAST]",
-                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
-                "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "        CoalesceBatchesExec: target_batch_size=4096",
-                "          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 0 }, op: NotEq, right: Column { name: \"t1_name\", index: 1 } }",
-                "            MemoryExec: partitions=1, partition_sizes=[1]",
-                "            MemoryExec: partitions=1, partition_sizes=[1]",
+                "SortExec: [t1_id@0 ASC NULLS LAST]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 0 }, op: NotEq, right: Column { name: \"t1_name\", index: 1 } }",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2658,14 +2650,13 @@ async fn left_side_expr_key_inner_join() -> Result<()> {
             vec![
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@3 as t2_id]",
-                "    RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "      CoalesceBatchesExec: target_batch_size=4096",
-                "        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }, Column { name: \"t2_id\", index: 0 })]",
-                "          CoalescePartitionsExec",
-                "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as t1.t1_id + UInt32(11)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "                MemoryExec: partitions=1, partition_sizes=[1]",
-                "          MemoryExec: partitions=1, partition_sizes=[1]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }, Column { name: \"t2_id\", index: 0 })]",
+                "        CoalescePartitionsExec",
+                "          ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as t1.t1_id + UInt32(11)]",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();

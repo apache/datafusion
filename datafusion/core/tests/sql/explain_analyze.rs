@@ -649,13 +649,13 @@ async fn test_physical_plan_display_indent_multi_children() {
         "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"c1\", index: 0 }, Column { name: \"c2\", index: 0 })]",
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 9000), input_partitions=9000",
-        "          ProjectionExec: expr=[c1@0 as c1]",
-        "            RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
+        "          RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
+        "            ProjectionExec: expr=[c1@0 as c1]",
         "              CsvExec: files={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1]",
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        RepartitionExec: partitioning=Hash([Column { name: \"c2\", index: 0 }], 9000), input_partitions=9000",
-        "          ProjectionExec: expr=[c1@0 as c2]",
-        "            RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
+        "          RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
+        "            ProjectionExec: expr=[c1@0 as c2]",
         "              CsvExec: files={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1]",
     ];
 
