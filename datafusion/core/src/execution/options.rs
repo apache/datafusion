@@ -432,7 +432,7 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
     ) -> Result<SchemaRef> {
         // with parquet we resolve the schema in all cases
         Ok(self
-            .to_listing_options(&config)
+            .to_listing_options(config)
             .infer_schema(&state, &table_path)
             .await?)
     }
