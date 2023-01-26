@@ -43,6 +43,15 @@ pub const TPCH_TABLES: &[&str] = &[
     "part", "supplier", "partsupp", "customer", "orders", "lineitem", "nation", "region",
 ];
 
+/// The `.tbl` file contains a trailing column
+pub fn get_tbl_tpch_table_schema(table: &str) -> Schema {
+    let mut schema = get_tpch_table_schema(table);
+    schema
+        .fields
+        .push(Field::new("__placeholder", DataType::Utf8, false));
+    schema
+}
+
 /// Get the schema for the benchmarks derived from TPC-H
 pub fn get_tpch_table_schema(table: &str) -> Schema {
     // note that the schema intentionally uses signed integers so that any generated Parquet
@@ -331,7 +340,7 @@ pub async fn convert_tbl(
     let output_root_path = Path::new(output_path);
     for table in TPCH_TABLES {
         let start = Instant::now();
-        let schema = get_tpch_table_schema(table);
+        let schema = get_tbl_tpch_table_schema(table);
 
         let input_path = format!("{input_path}/{table}.tbl");
         let options = CsvReadOptions::new()
@@ -346,6 +355,16 @@ pub async fn convert_tbl(
         // build plan to read the TBL file
         let mut csv = ctx.read_csv(&input_path, options).await?;
 
+        // Select all apart from the padding column
+        let selection = csv
+            .schema()
+            .fields()
+            .iter()
+            .take(schema.fields.len() - 1)
+            .map(|d| Expr::Column(d.qualified_column()))
+            .collect();
+
+        csv = csv.select(selection)?;
         // optionally, repartition the file
         if partitions > 1 {
             csv = csv.repartition(Partitioning::RoundRobinBatch(partitions))?

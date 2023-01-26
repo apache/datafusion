@@ -73,6 +73,10 @@ impl AggregateExpr for Stddev {
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Sample)?))
     }
 
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(StddevAccumulator::try_new(StatsType::Sample)?))
+    }
+
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(
@@ -125,6 +129,10 @@ impl AggregateExpr for StddevPop {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(StddevAccumulator::try_new(StatsType::Population)?))
+    }
+
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Population)?))
     }
 
@@ -182,6 +190,10 @@ impl Accumulator for StddevAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         self.variance.update_batch(values)
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.variance.retract_batch(values)
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -307,8 +319,8 @@ mod tests {
             "bla".to_string(),
             DataType::Float64,
         ));
-        let actual = aggregate(&batch, agg);
-        assert!(actual.is_err());
+        let actual = aggregate(&batch, agg).unwrap();
+        assert_eq!(actual, ScalarValue::Float64(None));
 
         Ok(())
     }
@@ -341,9 +353,8 @@ mod tests {
             "bla".to_string(),
             DataType::Float64,
         ));
-        let actual = aggregate(&batch, agg);
-        assert!(actual.is_err());
-
+        let actual = aggregate(&batch, agg).unwrap();
+        assert_eq!(actual, ScalarValue::Float64(None));
         Ok(())
     }
 

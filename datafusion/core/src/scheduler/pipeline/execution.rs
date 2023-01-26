@@ -239,11 +239,7 @@ impl ExecutionPlan for ProxyExecutionPlan {
         self.inner.required_input_distribution()
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        self.inner.relies_on_input_order()
-    }
-
-    fn maintains_input_order(&self) -> bool {
+    fn maintains_input_order(&self) -> Vec<bool> {
         self.inner.maintains_input_order()
     }
 

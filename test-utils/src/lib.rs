@@ -50,7 +50,10 @@ pub fn partitions_to_sorted_vec(partitions: &[Vec<RecordBatch>]) -> Vec<Option<i
 }
 
 /// Adds a random number of empty record batches into the stream
-fn add_empty_batches(batches: Vec<RecordBatch>, rng: &mut StdRng) -> Vec<RecordBatch> {
+pub fn add_empty_batches(
+    batches: Vec<RecordBatch>,
+    rng: &mut StdRng,
+) -> Vec<RecordBatch> {
     let schema = batches[0].schema();
 
     batches

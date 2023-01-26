@@ -21,6 +21,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::prelude::SessionContext;
+use datafusion_cli::catalog::DynamicFileCatalog;
 use datafusion_cli::object_storage::DatafusionCliObjectStoreProvider;
 use datafusion_cli::{
     exec, print_format::PrintFormat, print_options::PrintOptions, DATAFUSION_CLI_VERSION,
@@ -106,6 +107,11 @@ pub async fn main() -> Result<()> {
     let mut ctx =
         SessionContext::with_config_rt(session_config.clone(), Arc::new(runtime_env));
     ctx.refresh_catalogs().await?;
+    // install dynamic catalog provider that knows how to open files
+    ctx.register_catalog_list(Arc::new(DynamicFileCatalog::new(
+        ctx.state().catalog_list(),
+        ctx.state_weak_ref(),
+    )));
 
     let mut print_options = PrintOptions {
         format: args.format,
@@ -151,7 +157,7 @@ fn create_runtime_env() -> Result<RuntimeEnv> {
     RuntimeEnv::new(rn_config)
 }
 
-fn is_valid_file(dir: &str) -> std::result::Result<(), String> {
+fn is_valid_file(dir: &str) -> Result<(), String> {
     if Path::new(dir).is_file() {
         Ok(())
     } else {
@@ -159,7 +165,7 @@ fn is_valid_file(dir: &str) -> std::result::Result<(), String> {
     }
 }
 
-fn is_valid_data_dir(dir: &str) -> std::result::Result<(), String> {
+fn is_valid_data_dir(dir: &str) -> Result<(), String> {
     if Path::new(dir).is_dir() {
         Ok(())
     } else {
@@ -167,7 +173,7 @@ fn is_valid_data_dir(dir: &str) -> std::result::Result<(), String> {
     }
 }
 
-fn is_valid_batch_size(size: &str) -> std::result::Result<(), String> {
+fn is_valid_batch_size(size: &str) -> Result<(), String> {
     match size.parse::<usize>() {
         Ok(size) if size > 0 => Ok(()),
         _ => Err(format!("Invalid batch size '{}'", size)),

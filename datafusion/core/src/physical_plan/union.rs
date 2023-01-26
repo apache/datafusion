@@ -43,14 +43,51 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution::context::TaskContext;
+use crate::physical_plan::common::get_meet_of_orderings;
 use crate::{
     error::Result,
     physical_plan::{expressions, metrics::BaselineMetrics},
 };
-use datafusion_physical_expr::sort_expr_list_eq_strict_order;
+use datafusion_physical_expr::utils::ordering_satisfy;
 use tokio::macros::support::thread_rng_n;
 
-/// UNION ALL execution plan
+/// `UnionExec`: `UNION ALL` execution plan.
+///
+/// `UnionExec` combines multiple inputs with the same schema by
+/// concatenating the partitions.  It does not mix or copy data within
+/// or across partitions. Thus if the input partitions are sorted, the
+/// output partitions of the union are also sorted.
+///
+/// For example, given a `UnionExec` of two inputs, with `N`
+/// partitions, and `M` partitions, there will be `N+M` output
+/// partitions. The first `N` output partitions are from Input 1
+/// partitions, and then next `M` output partitions are from Input 2.
+///
+/// ```text
+///                       ▲       ▲           ▲         ▲
+///                       │       │           │         │
+///     Output            │  ...  │           │         │
+///   Partitions          │0      │N-1        │ N       │N+M-1
+///(passes through   ┌────┴───────┴───────────┴─────────┴───┐
+/// the N+M input    │              UnionExec               │
+///  partitions)     │                                      │
+///                  └──────────────────────────────────────┘
+///                                      ▲
+///                                      │
+///                                      │
+///       Input           ┌────────┬─────┴────┬──────────┐
+///     Partitions        │ ...    │          │     ...  │
+///                    0  │        │ N-1      │ 0        │  M-1
+///                  ┌────┴────────┴───┐  ┌───┴──────────┴───┐
+///                  │                 │  │                  │
+///                  │                 │  │                  │
+///                  │                 │  │                  │
+///                  │                 │  │                  │
+///                  │                 │  │                  │
+///                  │                 │  │                  │
+///                  │Input 1          │  │Input 2           │
+///                  └─────────────────┘  └──────────────────┘
+/// ```
 #[derive(Debug)]
 pub struct UnionExec {
     /// Input execution plan
@@ -158,7 +195,7 @@ impl ExecutionPlan for UnionExec {
 
     /// Specifies whether this plan generates an infinite stream of records.
     /// If the plan does not support pipelining, but it its input(s) are
-    /// infinite, returns an error to indicate this.    
+    /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children.iter().any(|x| *x))
     }
@@ -184,31 +221,33 @@ impl ExecutionPlan for UnionExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        let first_input_ordering = self.inputs[0].output_ordering();
-        // If the Union is not partition aware and all the input ordering spec strictly equal with the first_input_ordering
-        // Return the first_input_ordering as the output_ordering
-        //
-        // It might be too strict here in the case that the input ordering are compatible but not exactly the same.
-        // For example one input ordering has the ordering spec SortExpr('a','b','c') and the other has the ordering
-        // spec SortExpr('a'), It is safe to derive the out ordering with the spec SortExpr('a').
-        if !self.partition_aware
-            && first_input_ordering.is_some()
-            && self
-                .inputs
-                .iter()
-                .map(|plan| plan.output_ordering())
-                .all(|ordering| {
-                    ordering.is_some()
-                        && sort_expr_list_eq_strict_order(
-                            ordering.unwrap(),
-                            first_input_ordering.unwrap(),
-                        )
-                })
-        {
-            first_input_ordering
-        } else {
-            None
+        // If the Union is partition aware, there is no output ordering.
+        // Otherwise, the output ordering is the "meet" of its input orderings.
+        // The meet is the finest ordering that satisfied by all the input
+        // orderings, see https://en.wikipedia.org/wiki/Join_and_meet.
+        if self.partition_aware {
+            return None;
         }
+        get_meet_of_orderings(&self.inputs)
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        // If the Union has an output ordering, it maintains at least one
+        // child's ordering (i.e. the meet).
+        // For instance, assume that the first child is SortExpr('a','b','c'),
+        // the second child is SortExpr('a','b') and the third child is
+        // SortExpr('a','b'). The output ordering would be SortExpr('a','b'),
+        // which is the "meet" of all input orderings. In this example, this
+        // function will return vec![false, true, true], indicating that we
+        // preserve the orderings for the 2nd and the 3rd children.
+        self.inputs()
+            .iter()
+            .map(|child| {
+                ordering_satisfy(self.output_ordering(), child.output_ordering(), || {
+                    child.equivalence_properties()
+                })
+            })
+            .collect()
     }
 
     fn with_new_children(

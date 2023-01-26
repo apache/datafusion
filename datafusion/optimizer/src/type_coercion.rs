@@ -27,7 +27,9 @@ use datafusion_common::{
 use datafusion_expr::expr::{self, Between, BinaryExpr, Case, Like, WindowFunction};
 use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
-use datafusion_expr::type_coercion::binary::{coerce_types, comparison_coercion};
+use datafusion_expr::type_coercion::binary::{
+    coerce_types, comparison_coercion, like_coercion,
+};
 use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_when, get_coerce_type_for_list,
@@ -175,8 +177,11 @@ impl ExprRewriter for TypeCoercionRewriter {
             }) => {
                 let left_type = expr.get_type(&self.schema)?;
                 let right_type = pattern.get_type(&self.schema)?;
-                let coerced_type =
-                    coerce_types(&left_type, &Operator::Like, &right_type)?;
+                let coerced_type = like_coercion(&left_type,  &right_type).ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "There isn't a common type to coerce {left_type} and {right_type} in LIKE expression"
+                    ))
+                })?;
                 let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
                 let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
                 let expr = Expr::Like(Like::new(negated, expr, pattern, escape_char));
@@ -190,8 +195,11 @@ impl ExprRewriter for TypeCoercionRewriter {
             }) => {
                 let left_type = expr.get_type(&self.schema)?;
                 let right_type = pattern.get_type(&self.schema)?;
-                let coerced_type =
-                    coerce_types(&left_type, &Operator::ILike, &right_type)?;
+                let coerced_type = like_coercion(&left_type,  &right_type).ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "There isn't a common type to coerce {left_type} and {right_type} in ILIKE expression"
+                    ))
+                })?;
                 let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
                 let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
                 let expr = Expr::ILike(Like::new(negated, expr, pattern, escape_char));
@@ -932,7 +940,9 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty)?);
         let err = assert_optimized_plan_eq(&plan, expected);
         assert!(err.is_err());
-        assert!(err.unwrap_err().to_string().contains("'Int64 LIKE Utf8' can't be evaluated because there isn't a common type to coerce the types to"));
+        assert!(err.unwrap_err().to_string().contains(
+            "There isn't a common type to coerce Int64 and Utf8 in LIKE expression"
+        ));
         Ok(())
     }
 

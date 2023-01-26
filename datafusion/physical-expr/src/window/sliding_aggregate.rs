@@ -18,27 +18,28 @@
 //! Physical exec for aggregate window function expressions.
 
 use std::any::Any;
-use std::iter::IntoIterator;
 use std::ops::Range;
 use std::sync::Arc;
 
-use arrow::array::Array;
-use arrow::compute::SortOptions;
+use arrow::array::{Array, ArrayRef};
+use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
-use arrow::{array::ArrayRef, datatypes::Field};
 
-use datafusion_common::Result;
-use datafusion_common::ScalarValue;
-use datafusion_expr::WindowFrame;
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::{Accumulator, WindowFrame, WindowFrameUnits};
 
-use crate::window::window_expr::reverse_order_bys;
-use crate::window::AggregateWindowExpr;
-use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
-use crate::{window::WindowExpr, AggregateExpr};
-
-use super::window_frame_state::WindowFrameContext;
+use crate::window::window_expr::{reverse_order_bys, AggregateWindowExpr};
+use crate::window::{
+    PartitionBatches, PartitionWindowAggStates, PlainAggregateWindowExpr, WindowExpr,
+};
+use crate::{expressions::PhysicalSortExpr, AggregateExpr, PhysicalExpr};
 
 /// A window expr that takes the form of an aggregate function
+/// Aggregate Window Expressions that have the form
+/// `OVER({ROWS | RANGE| GROUPS} BETWEEN UNBOUNDED PRECEDING AND ...)`
+/// e.g cumulative window frames uses `PlainAggregateWindowExpr`. Where as Aggregate Window Expressions
+/// that have the form `OVER({ROWS | RANGE| GROUPS} BETWEEN M {PRECEDING| FOLLOWING} AND ...)`
+/// e.g sliding window frames uses `SlidingAggregateWindowExpr`.
 #[derive(Debug)]
 pub struct SlidingAggregateWindowExpr {
     aggregate: Arc<dyn AggregateExpr>,
@@ -48,7 +49,7 @@ pub struct SlidingAggregateWindowExpr {
 }
 
 impl SlidingAggregateWindowExpr {
-    /// create a new aggregate window function expression
+    /// Create a new (sliding) aggregate window function expression.
     pub fn new(
         aggregate: Arc<dyn AggregateExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
@@ -63,7 +64,7 @@ impl SlidingAggregateWindowExpr {
         }
     }
 
-    /// Get aggregate expr of AggregateWindowExpr
+    /// Get the [AggregateExpr] of this object.
     pub fn get_aggregate_expr(&self) -> &Arc<dyn AggregateExpr> {
         &self.aggregate
     }
@@ -92,50 +93,15 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        let sort_options: Vec<SortOptions> =
-            self.order_by.iter().map(|o| o.options).collect();
-        let mut row_wise_results: Vec<ScalarValue> = vec![];
+        self.aggregate_evaluate(batch)
+    }
 
-        let mut accumulator = self.aggregate.create_sliding_accumulator()?;
-        let length = batch.num_rows();
-        let (values, order_bys) = self.get_values_orderbys(batch)?;
-
-        let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
-        let mut last_range = Range { start: 0, end: 0 };
-
-        // We iterate on each row to perform a running calculation.
-        // First, cur_range is calculated, then it is compared with last_range.
-        for i in 0..length {
-            let cur_range =
-                window_frame_ctx.calculate_range(&order_bys, &sort_options, length, i)?;
-            let value = if cur_range.start == cur_range.end {
-                // We produce None if the window is empty.
-                ScalarValue::try_from(self.aggregate.field()?.data_type())?
-            } else {
-                // Accumulate any new rows that have entered the window:
-                let update_bound = cur_range.end - last_range.end;
-                if update_bound > 0 {
-                    let update: Vec<ArrayRef> = values
-                        .iter()
-                        .map(|v| v.slice(last_range.end, update_bound))
-                        .collect();
-                    accumulator.update_batch(&update)?
-                }
-                // Remove rows that have now left the window:
-                let retract_bound = cur_range.start - last_range.start;
-                if retract_bound > 0 {
-                    let retract: Vec<ArrayRef> = values
-                        .iter()
-                        .map(|v| v.slice(last_range.start, retract_bound))
-                        .collect();
-                    accumulator.retract_batch(&retract)?
-                }
-                accumulator.evaluate()?
-            };
-            row_wise_results.push(value);
-            last_range = cur_range;
-        }
-        ScalarValue::iter_to_array(row_wise_results.into_iter())
+    fn evaluate_stateful(
+        &self,
+        partition_batches: &PartitionBatches,
+        window_agg_state: &mut PartitionWindowAggStates,
+    ) -> Result<()> {
+        self.aggregate_evaluate_stateful(partition_batches, window_agg_state)
     }
 
     fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>] {
@@ -154,7 +120,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         self.aggregate.reverse_expr().map(|reverse_expr| {
             let reverse_window_frame = self.window_frame.reverse();
             if reverse_window_frame.start_bound.is_unbounded() {
-                Arc::new(AggregateWindowExpr::new(
+                Arc::new(PlainAggregateWindowExpr::new(
                     reverse_expr,
                     &self.partition_by.clone(),
                     &reverse_order_bys(&self.order_by),
@@ -169,5 +135,53 @@ impl WindowExpr for SlidingAggregateWindowExpr {
                 )) as _
             }
         })
+    }
+
+    fn uses_bounded_memory(&self) -> bool {
+        // NOTE: Currently, groups queries do not support the bounded memory variant.
+        self.aggregate.supports_bounded_execution()
+            && !self.window_frame.end_bound.is_unbounded()
+            && !matches!(self.window_frame.units, WindowFrameUnits::Groups)
+    }
+}
+
+impl AggregateWindowExpr for SlidingAggregateWindowExpr {
+    fn get_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        self.aggregate.create_sliding_accumulator()
+    }
+
+    /// Given current range and the last range, calculates the accumulator
+    /// result for the range of interest.
+    fn get_aggregate_result_inside_range(
+        &self,
+        last_range: &Range<usize>,
+        cur_range: &Range<usize>,
+        value_slice: &[ArrayRef],
+        accumulator: &mut Box<dyn Accumulator>,
+    ) -> Result<ScalarValue> {
+        if cur_range.start == cur_range.end {
+            // We produce None if the window is empty.
+            ScalarValue::try_from(self.aggregate.field()?.data_type())
+        } else {
+            // Accumulate any new rows that have entered the window:
+            let update_bound = cur_range.end - last_range.end;
+            if update_bound > 0 {
+                let update: Vec<ArrayRef> = value_slice
+                    .iter()
+                    .map(|v| v.slice(last_range.end, update_bound))
+                    .collect();
+                accumulator.update_batch(&update)?
+            }
+            // Remove rows that have now left the window:
+            let retract_bound = cur_range.start - last_range.start;
+            if retract_bound > 0 {
+                let retract: Vec<ArrayRef> = value_slice
+                    .iter()
+                    .map(|v| v.slice(last_range.start, retract_bound))
+                    .collect();
+                accumulator.retract_batch(&retract)?
+            }
+            accumulator.evaluate()
+        }
     }
 }

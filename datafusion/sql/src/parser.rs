@@ -80,7 +80,7 @@ impl fmt::Display for CreateExternalTable {
 
 /// DataFusion extension DDL for `DESCRIBE TABLE`
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DescribeTable {
+pub struct DescribeTableStmt {
     /// Table name
     pub table_name: ObjectName,
 }
@@ -95,7 +95,7 @@ pub enum Statement {
     /// Extension: `CREATE EXTERNAL TABLE`
     CreateExternalTable(CreateExternalTable),
     /// Extension: `DESCRIBE TABLE`
-    DescribeTable(DescribeTable),
+    DescribeTableStmt(DescribeTableStmt),
 }
 
 /// DataFusion SQL Parser based on [`sqlparser`]
@@ -210,7 +210,9 @@ impl<'a> DFParser<'a> {
     /// Parse a SQL `DESCRIBE` statement
     pub fn parse_describe(&mut self) -> Result<Statement, ParserError> {
         let table_name = self.parser.parse_object_name()?;
-        Ok(Statement::DescribeTable(DescribeTable { table_name }))
+        Ok(Statement::DescribeTableStmt(DescribeTableStmt {
+            table_name,
+        }))
     }
 
     /// Parse a SQL `CREATE` statementm handling `CREATE EXTERNAL TABLE`

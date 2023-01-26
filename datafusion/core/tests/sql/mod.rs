@@ -104,7 +104,6 @@ pub mod union;
 pub mod wildcard;
 pub mod window;
 
-pub mod arrow_typeof;
 pub mod decimal;
 pub mod explain;
 pub mod idenfifers;
@@ -693,6 +692,25 @@ fn create_sort_merge_join_datatype_context() -> Result<SessionContext> {
     Ok(ctx)
 }
 
+fn create_union_context() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
+    let t1_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, true),
+        Field::new("name", DataType::UInt8, true),
+    ]));
+    let t1_data = RecordBatch::new_empty(t1_schema);
+    ctx.register_batch("t1", t1_data)?;
+
+    let t2_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::UInt8, true),
+        Field::new("name", DataType::UInt8, true),
+    ]));
+    let t2_data = RecordBatch::new_empty(t2_schema);
+    ctx.register_batch("t2", t2_data)?;
+
+    Ok(ctx)
+}
+
 fn get_tpch_table_schema(table: &str) -> Schema {
     match table {
         "customer" => Schema::new(vec![
@@ -978,7 +996,7 @@ async fn register_aggregate_simple_csv(ctx: &SessionContext) -> Result<()> {
 
     ctx.register_csv(
         "aggregate_simple",
-        "tests/aggregate_simple.csv",
+        "tests/data/aggregate_simple.csv",
         CsvReadOptions::new().schema(&schema),
     )
     .await?;
@@ -995,7 +1013,7 @@ async fn register_aggregate_null_cases_csv(ctx: &SessionContext) -> Result<()> {
 
     ctx.register_csv(
         "null_cases",
-        "tests/null_cases.csv",
+        "tests/data/null_cases.csv",
         CsvReadOptions::new().schema(&schema),
     )
     .await?;
@@ -1189,7 +1207,7 @@ async fn register_decimal_csv_table_by_sql(ctx: &SessionContext) {
             )
             STORED AS CSV
             WITH HEADER ROW
-            LOCATION 'tests/decimal_data.csv'",
+            LOCATION 'tests/data/decimal_data.csv'",
         )
         .await
         .expect("Creating dataframe for CREATE EXTERNAL TABLE with decimal data type");

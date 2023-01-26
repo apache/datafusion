@@ -22,11 +22,14 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::physical_plan::metrics::MemTrackingMetrics;
 use crate::physical_plan::{displayable, ColumnStatistics, ExecutionPlan, Statistics};
+use arrow::compute::concat;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
+use datafusion_physical_expr::utils::ordering_satisfy;
+use datafusion_physical_expr::PhysicalSortExpr;
 use futures::{Future, Stream, StreamExt, TryStreamExt};
 use log::debug;
 use pin_project_lite::pin_project;
@@ -93,6 +96,47 @@ pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatc
         .try_collect::<Vec<_>>()
         .await
         .map_err(DataFusionError::from)
+}
+
+/// Merge two record batch references into a single record batch.
+/// All the record batches inside the slice must have the same schema.
+pub fn merge_batches(
+    first: &RecordBatch,
+    second: &RecordBatch,
+    schema: SchemaRef,
+) -> ArrowResult<RecordBatch> {
+    let columns = (0..schema.fields.len())
+        .map(|index| {
+            let first_column = first.column(index).as_ref();
+            let second_column = second.column(index).as_ref();
+            concat(&[first_column, second_column])
+        })
+        .collect::<ArrowResult<Vec<_>>>()?;
+    RecordBatch::try_new(schema, columns)
+}
+
+/// Merge a slice of record batch references into a single record batch, or
+/// return None if the slice itself is empty. All the record batches inside the
+/// slice must have the same schema.
+pub fn merge_multiple_batches(
+    batches: &[&RecordBatch],
+    schema: SchemaRef,
+) -> ArrowResult<Option<RecordBatch>> {
+    Ok(if batches.is_empty() {
+        None
+    } else {
+        let columns = (0..schema.fields.len())
+            .map(|index| {
+                concat(
+                    &batches
+                        .iter()
+                        .map(|batch| batch.column(index).as_ref())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<ArrowResult<Vec<_>>>()?;
+        Some(RecordBatch::try_new(schema, columns)?)
+    })
 }
 
 /// Recursively builds a list of files in a directory with a given extension
@@ -242,7 +286,7 @@ impl<T> AbortOnDropSingle<T> {
 }
 
 impl<T> Future for AbortOnDropSingle<T> {
-    type Output = std::result::Result<T, tokio::task::JoinError>;
+    type Output = Result<T, tokio::task::JoinError>;
 
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -280,15 +324,76 @@ pub fn transpose<T>(original: Vec<Vec<T>>) -> Vec<Vec<T>> {
     }
 }
 
+/// Calculates the "meet" of children orderings
+/// The meet is the finest ordering that satisfied by all the input
+/// orderings, see https://en.wikipedia.org/wiki/Join_and_meet.
+pub fn get_meet_of_orderings(
+    children: &[Arc<dyn ExecutionPlan>],
+) -> Option<&[PhysicalSortExpr]> {
+    // To find the meet, we first find the smallest input ordering.
+    let mut smallest: Option<&[PhysicalSortExpr]> = None;
+    for item in children.iter() {
+        if let Some(ordering) = item.output_ordering() {
+            smallest = match smallest {
+                None => Some(ordering),
+                Some(expr) if ordering.len() < expr.len() => Some(ordering),
+                _ => continue,
+            }
+        } else {
+            return None;
+        }
+    }
+    // Check if the smallest ordering is a meet or not:
+    if children.iter().all(|child| {
+        ordering_satisfy(child.output_ordering(), smallest, || {
+            child.equivalence_properties()
+        })
+    }) {
+        smallest
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::from_slice::FromSlice;
+    use crate::physical_plan::memory::MemoryExec;
+    use crate::physical_plan::sorts::sort::SortExec;
+    use crate::physical_plan::union::UnionExec;
+    use arrow::compute::SortOptions;
     use arrow::{
         array::{Float32Array, Float64Array},
         datatypes::{DataType, Field, Schema},
         record_batch::RecordBatch,
     };
+    use datafusion_physical_expr::expressions::col;
+
+    #[test]
+    fn test_meet_of_orderings() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("f32", DataType::Float32, false),
+            Field::new("f64", DataType::Float64, false),
+        ]));
+        let sort_expr = vec![PhysicalSortExpr {
+            expr: col("f32", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let memory_exec = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?) as _;
+        let sort_exec = Arc::new(SortExec::try_new(sort_expr.clone(), memory_exec, None)?)
+            as Arc<dyn ExecutionPlan>;
+        let memory_exec2 = Arc::new(MemoryExec::try_new(&[], schema, None)?) as _;
+        // memory_exec2 doesn't have output ordering
+        let union_exec = UnionExec::new(vec![sort_exec.clone(), memory_exec2]);
+        let res = get_meet_of_orderings(union_exec.inputs());
+        assert!(res.is_none());
+
+        let union_exec = UnionExec::new(vec![sort_exec.clone(), sort_exec]);
+        let res = get_meet_of_orderings(union_exec.inputs());
+        assert_eq!(res, Some(&sort_expr[..]));
+        Ok(())
+    }
 
     #[test]
     fn test_compute_record_batch_statistics_empty() -> Result<()> {

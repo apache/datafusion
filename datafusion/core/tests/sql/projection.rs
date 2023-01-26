@@ -167,7 +167,7 @@ async fn projection_on_table_scan() -> Result<()> {
     let partition_count = 4;
     let ctx = partitioned_csv::create_ctx(&tmp_dir, partition_count).await?;
 
-    let table = ctx.table("test")?;
+    let table = ctx.table("test").await?;
     let logical_plan = LogicalPlanBuilder::from(table.into_optimized_plan()?)
         .project(vec![col("c2")])?
         .build()?;
@@ -208,7 +208,7 @@ async fn preserve_nullability_on_projection() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let ctx = partitioned_csv::create_ctx(&tmp_dir, 1).await?;
 
-    let schema: Schema = ctx.table("test").unwrap().schema().clone().into();
+    let schema: Schema = ctx.table("test").await.unwrap().schema().clone().into();
     assert!(!schema.field_with_name("c1")?.is_nullable());
 
     let plan = scan_empty(None, &schema, None)?

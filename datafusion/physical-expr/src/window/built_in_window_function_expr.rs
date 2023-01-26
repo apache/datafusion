@@ -64,4 +64,12 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
         None
     }
+
+    fn supports_bounded_execution(&self) -> bool {
+        false
+    }
+
+    fn uses_window_frame(&self) -> bool {
+        false
+    }
 }

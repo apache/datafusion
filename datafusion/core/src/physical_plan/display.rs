@@ -156,10 +156,7 @@ struct IndentVisitor<'a, 'b> {
 
 impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
     type Error = fmt::Error;
-    fn pre_visit(
-        &mut self,
-        plan: &dyn ExecutionPlan,
-    ) -> std::result::Result<bool, Self::Error> {
+    fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         write!(self.f, "{:indent$}", "", indent = self.indent * 2)?;
         plan.fmt_as(self.t, self.f)?;
         match self.show_metrics {

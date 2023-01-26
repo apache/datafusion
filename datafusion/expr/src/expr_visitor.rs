@@ -33,10 +33,46 @@ pub enum Recursion<V: ExpressionVisitor> {
     Stop(V),
 }
 
-/// Encode the traversal of an expression tree. When passed to
-/// `Expr::accept`, `ExpressionVisitor::visit` is invoked
-/// recursively on all nodes of an expression tree. See the comments
-/// on `Expr::accept` for details on its use
+/// Implements the [visitor
+/// pattern](https://en.wikipedia.org/wiki/Visitor_pattern) for recursively walking [`Expr`]s.
+///
+/// [`ExpressionVisitor`] allows keeping the algorithms
+/// separate from the code to traverse the structure of the `Expr`
+/// tree and makes it easier to add new types of expressions and
+/// algorithms by.
+///
+/// When passed to[`Expr::accept`], [`ExpressionVisitor::pre_visit`]
+/// and [`ExpressionVisitor::post_visit`] are invoked recursively
+/// on all nodes of an expression tree.
+///
+///
+/// For an expression tree such as
+/// ```text
+/// BinaryExpr (GT)
+///    left: Column("foo")
+///    right: Column("bar")
+/// ```
+///
+/// The nodes are visited using the following order
+/// ```text
+/// pre_visit(BinaryExpr(GT))
+/// pre_visit(Column("foo"))
+/// post_visit(Column("foo"))
+/// pre_visit(Column("bar"))
+/// post_visit(Column("bar"))
+/// post_visit(BinaryExpr(GT))
+/// ```
+///
+/// If an [`Err`] result is returned, recursion is stopped
+/// immediately.
+///
+/// If [`Recursion::Stop`] is returned on a call to pre_visit, no
+/// children of that expression are visited, nor is post_visit
+/// called on that expression
+///
+/// # See Also:
+/// * [`Expr::accept`] to drive a visitor through an [`Expr`]
+/// * [inspect_expr_pre]: For visiting [`Expr`]s using functions
 pub trait ExpressionVisitor<E: ExprVisitable = Expr>: Sized {
     /// Invoked before any children of `expr` are visited.
     fn pre_visit(self, expr: &E) -> Result<Recursion<Self>>
@@ -58,37 +94,7 @@ pub trait ExprVisitable: Sized {
 
 impl ExprVisitable for Expr {
     /// Performs a depth first walk of an expression and
-    /// its children, calling [`ExpressionVisitor::pre_visit`] and
-    /// `visitor.post_visit`.
-    ///
-    /// Implements the [visitor pattern](https://en.wikipedia.org/wiki/Visitor_pattern) to
-    /// separate expression algorithms from the structure of the
-    /// `Expr` tree and make it easier to add new types of expressions
-    /// and algorithms that walk the tree.
-    ///
-    /// For an expression tree such as
-    /// ```text
-    /// BinaryExpr (GT)
-    ///    left: Column("foo")
-    ///    right: Column("bar")
-    /// ```
-    ///
-    /// The nodes are visited using the following order
-    /// ```text
-    /// pre_visit(BinaryExpr(GT))
-    /// pre_visit(Column("foo"))
-    /// post_visit(Column("foo"))
-    /// pre_visit(Column("bar"))
-    /// post_visit(Column("bar"))
-    /// post_visit(BinaryExpr(GT))
-    /// ```
-    ///
-    /// If an Err result is returned, recursion is stopped immediately
-    ///
-    /// If `Recursion::Stop` is returned on a call to pre_visit, no
-    /// children of that expression are visited, nor is post_visit
-    /// called on that expression
-    ///
+    /// its children, see [`ExpressionVisitor`] for more details
     fn accept<V: ExpressionVisitor>(&self, visitor: V) -> Result<V> {
         let visitor = match visitor.pre_visit(self)? {
             Recursion::Continue(visitor) => visitor,
@@ -219,4 +225,40 @@ impl ExprVisitable for Expr {
 
         visitor.post_visit(self)
     }
+}
+
+struct VisitorAdapter<F, E> {
+    f: F,
+    // Store returned error as it my not be a DataFusionError
+    err: Result<(), E>,
+}
+
+impl<F, E> ExpressionVisitor for VisitorAdapter<F, E>
+where
+    F: FnMut(&Expr) -> Result<(), E>,
+{
+    fn pre_visit(mut self, expr: &Expr) -> Result<Recursion<Self>> {
+        if let Err(e) = (self.f)(expr) {
+            // save the error for later (it may not be a DataFusionError
+            self.err = Err(e);
+            Ok(Recursion::Stop(self))
+        } else {
+            // keep going
+            Ok(Recursion::Continue(self))
+        }
+    }
+}
+
+/// Recursively inspect an [`Expr`] and all its childen.
+///
+/// Performs a pre-visit traversal by recursively calling `f(expr)` on
+/// `expr`, and then on all its children. See [`ExpressionVisitor`]
+/// for more details and more options to control the walk.
+pub fn inspect_expr_pre<F, E>(expr: &Expr, f: F) -> Result<(), E>
+where
+    F: FnMut(&Expr) -> Result<(), E>,
+{
+    // the visit is fallable, so unwrap here
+    let adapter = expr.accept(VisitorAdapter { f, err: Ok(()) }).unwrap();
+    adapter.err
 }

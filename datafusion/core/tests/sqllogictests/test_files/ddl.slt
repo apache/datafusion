@@ -83,7 +83,7 @@ select * from "foo.bar";
 2 3
 
 # Can not select from non existent foo.bar table
-statement error failed to resolve schema: foo
+statement error DataFusion error: Error during planning: table 'datafusion.foo.bar' not found
 select * from foo.bar;
 
 # Error if wrong capitalization to select
@@ -125,7 +125,7 @@ select * from "foo.bar";
 2 3
 
 # Can not select from non existent foo.bar view
-statement error failed to resolve schema: foo
+statement error DataFusion error: Error during planning: table 'datafusion.foo.bar' not found
 select * from foo.bar;
 
 # Error if wrong capitalization to select
@@ -203,7 +203,7 @@ DROP VIEW non_existent_view
 ##########
 
 statement ok
-CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION 'tests/aggregate_simple.csv';
+CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv';
 
 # create_table_as
 statement ok
@@ -329,7 +329,7 @@ LOCATION '../../testing/data/csv/aggregate_test_100.csv';
 query IIIIIIIIIIIII
 SELECT c1, c2, c3, c4, c5, c6, c7, c8, c9, 10, c11, c12, c13 FROM aggregate_test_100 LIMIT 1;
 ----
-c 2 1 18109 2033001162 -6513304855495910254 25 43062 1491205016 10 0.110830784 0.9294097332465232 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW
+c 2 1 18109 2033001162 -6513304855495910254 25 43062 1491205016 10 0.110830784 0.929409733247 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW
 
 
 
@@ -403,7 +403,7 @@ DROP VIEW y;
 # create_pipe_delimited_csv_table()
 
 statement ok
-CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW DELIMITER '|' LOCATION 'tests/aggregate_simple_pipe.csv';
+CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW DELIMITER '|' LOCATION 'tests/data/aggregate_simple_pipe.csv';
 
 
 query CCC
@@ -419,3 +419,49 @@ SELECT * FROM aggregate_simple order by c1 DESC LIMIT 1;
 
 statement ok
 DROP TABLE aggregate_simple
+
+
+# Should create an empty table
+statement ok
+CREATE TABLE table_without_values(field1 BIGINT, field2 BIGINT);
+
+
+# Should skip existing table
+statement ok
+CREATE TABLE IF NOT EXISTS table_without_values(field1 BIGINT, field2 BIGINT);
+
+
+# Should not recreate the same table
+statement error Table 'table_without_values' already exists
+CREATE TABLE table_without_values(field1 BIGINT, field2 BIGINT);
+
+
+# 'IF NOT EXISTS' cannot coexist with 'REPLACE'
+statement error Execution error: 'IF NOT EXISTS' cannot coexist with 'REPLACE'
+CREATE OR REPLACE TABLE IF NOT EXISTS table_without_values(field1 BIGINT, field2 BIGINT);
+
+# Should insert into an empty table
+statement ok
+insert into table_without_values values (1, 2), (2, 3), (2, 4);
+
+query II rowsort
+select * from table_without_values;
+----
+1 2
+2 3
+2 4
+
+
+# Should recreate existing table
+statement ok
+CREATE OR REPLACE TABLE table_without_values(field1 BIGINT, field2 BIGINT);
+
+
+# Should insert into a recreated table
+statement ok
+insert into table_without_values values (10, 20);
+
+query II rowsort
+select * from table_without_values;
+----
+10 20

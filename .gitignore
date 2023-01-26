@@ -100,3 +100,4 @@ dev/dist
 arrow-ballista
 
 datafusion/CHANGELOG.md.bak
+.githubchangeloggenerator.cache*

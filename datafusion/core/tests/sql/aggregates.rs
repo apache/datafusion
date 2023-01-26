@@ -21,24 +21,6 @@ use datafusion::test_util::scan_empty;
 use datafusion_common::cast::as_float64_array;
 
 #[tokio::test]
-async fn csv_query_avg_multi_batch() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT avg(c12) FROM aggregate_test_100";
-    let dataframe = ctx.sql(sql).await.unwrap();
-    let results = dataframe.collect().await.unwrap();
-    let batch = &results[0];
-    let column = batch.column(0);
-    let array = as_float64_array(column)?;
-    let actual = array.value(0);
-    let expected = 0.5089725;
-    // Due to float number's accuracy, different batch size will lead to different
-    // answers.
-    assert!((expected - actual).abs() < 0.01);
-    Ok(())
-}
-
-#[tokio::test]
 #[ignore] // https://github.com/apache/arrow-datafusion/issues/3353
 async fn csv_query_approx_count() -> Result<()> {
     let ctx = SessionContext::new();
@@ -117,60 +99,6 @@ async fn csv_query_approx_percentile_cont_with_histogram_bins() -> Result<()> {
     .unwrap_err();
     assert_eq!(results.to_string(), "Error during planning: The percentile sample points count for ApproxPercentileCont must be integer, not Float64.");
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn csv_query_array_agg() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql =
-        "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 2) test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+------------------------------------------------------------------+",
-        "| ARRAYAGG(test.c13)                                               |",
-        "+------------------------------------------------------------------+",
-        "| [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB] |",
-        "+------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn csv_query_array_agg_empty() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql =
-        "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+--------------------+",
-        "| ARRAYAGG(test.c13) |",
-        "+--------------------+",
-        "| []                 |",
-        "+--------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn csv_query_array_agg_one() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql =
-        "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1) test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------------+",
-        "| ARRAYAGG(test.c13)               |",
-        "+----------------------------------+",
-        "| [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm] |",
-        "+----------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -1128,5 +1056,34 @@ async fn aggregate_with_alias() -> Result<()> {
         "total_salary",
         physical_plan.schema().field(1).name().as_str()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_accumulator_row_accumulator() -> Result<()> {
+    let config = SessionConfig::new();
+    let ctx = SessionContext::with_config(config);
+    register_aggregate_csv(&ctx).await?;
+
+    let sql = "SELECT c1, c2, MIN(c13) as min1, MIN(c9) as min2, MAX(c13) as max1, MAX(c9) as max2, AVG(c9) as avg1, MIN(c13) as min3, COUNT(C9) as cnt1, 0.5*SUM(c9-c8) as sum1
+    FROM aggregate_test_100
+    GROUP BY c1, c2
+    ORDER BY c1, c2
+    LIMIT 5";
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----+----+--------------------------------+-----------+--------------------------------+------------+--------------------+--------------------------------+------+--------------+",
+        "| c1 | c2 | min1                           | min2      | max1                           | max2       | avg1               | min3                           | cnt1 | sum1         |",
+        "+----+----+--------------------------------+-----------+--------------------------------+------------+--------------------+--------------------------------+------+--------------+",
+        "| a  | 1  | 0keZ5G8BffGwgF2RwQD59TFzMStxCB | 774637006 | waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs | 4015442341 | 2437927011         | 0keZ5G8BffGwgF2RwQD59TFzMStxCB | 5    | 6094771121.5 |",
+        "| a  | 2  | b3b9esRhTzFEawbs6XhpKnD9ojutHB | 145294611 | ukyD7b0Efj7tNlFSRmzZ0IqkEzg2a8 | 3717551163 | 2267588664         | b3b9esRhTzFEawbs6XhpKnD9ojutHB | 3    | 3401364777   |",
+        "| a  | 3  | Amn2K87Db5Es3dFQO9cw9cvpAM6h35 | 431948861 | oLZ21P2JEDooxV1pU31cIxQHEeeoLu | 3998790955 | 2225685115.1666665 | Amn2K87Db5Es3dFQO9cw9cvpAM6h35 | 6    | 6676994872.5 |",
+        "| a  | 4  | KJFcmTVjdkCMv94wYCtfHMFhzyRsmH | 466439833 | ydkwycaISlYSlEq3TlkS2m15I2pcp8 | 2502326480 | 1655431654         | KJFcmTVjdkCMv94wYCtfHMFhzyRsmH | 4    | 3310812222.5 |",
+        "| a  | 5  | MeSTAXq8gVxVjbEjgkvU9YLte0X9uE | 141047417 | QJYm7YRA3YetcBHI5wkMZeLXVmfuNy | 2496054700 | 1216992989.6666667 | MeSTAXq8gVxVjbEjgkvU9YLte0X9uE | 3    | 1825431770   |",
+        "+----+----+--------------------------------+-----------+--------------------------------+------------+--------------------+--------------------------------+------+--------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
     Ok(())
 }

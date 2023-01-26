@@ -1,0 +1,122 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+query T
+select null::VARCHAR
+----
+NULL
+
+query TT
+select 'a'::VARCHAR, ''::VARCHAR
+----
+a  (empty)
+
+skipif postgres
+query TT
+select 'a'::CHAR, ''::CHAR
+----
+a  (empty)
+
+query TT
+select 'a'::TEXT, ''::TEXT
+----
+a  (empty)
+
+skipif postgres
+query I
+select -1::TINYINT
+----
+-1
+
+query I
+select -1::SMALLINT
+----
+-1
+
+query II
+select -1::INT as one, -2::INTEGER as two
+----
+-1 -2
+
+query I
+select -1::BIGINT
+----
+-1
+
+skipif postgres
+query I
+select 1::TINYINT UNSIGNED
+----
+1
+
+query I
+select 1::SMALLINT UNSIGNED
+----
+1
+
+skipif postgres
+query II
+select 1::INT UNSIGNED as one, 2::INTEGER UNSIGNED as two
+----
+1 2
+
+query I
+select 1::BIGINT UNSIGNED
+----
+1
+
+query RRRRR
+select 1.0::FLOAT, 1.023::FLOAT, 'NaN'::FLOAT,'+Inf'::FLOAT,'-Inf'::FLOAT
+----
+1 1.023 NaN Infinity -Infinity
+
+query RRRRR
+select 1.0::REAL, 1.023::REAL, 'NaN'::REAL,'+Inf'::REAL,'-Inf'::REAL
+----
+1 1.023 NaN Infinity -Infinity
+
+skipif postgres
+query RRRRR
+select 1.0::DOUBLE, 1.023::DOUBLE, 'NaN'::DOUBLE,'+Inf'::DOUBLE,'-Inf'::DOUBLE
+----
+1 1.023 NaN Infinity -Infinity
+
+query RRR
+select 1.0::DECIMAL(5,3) as one, 2.023::DECIMAL(5,3) as two, 3.023::DECIMAL(5,2) as three
+----
+1 2.023 3.02
+
+query ?
+select '2018-01-01'::DATE
+----
+2018-01-01
+
+query ?
+select '12:00:01'::TIME
+----
+12:00:01
+
+query ?
+select '2018-01-01 12:00:00'::TIMESTAMP
+----
+2018-01-01T12:00:00
+
+query I
+select true::BOOLEAN, 'false'::BOOLEAN
+----
+true false

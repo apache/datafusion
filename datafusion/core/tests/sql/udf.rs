@@ -75,7 +75,7 @@ async fn scalar_udf() -> Result<()> {
     // from here on, we may be in a different scope. We would still like to be able
     // to call UDFs.
 
-    let t = ctx.table("t")?;
+    let t = ctx.table("t").await?;
 
     let plan = LogicalPlanBuilder::from(t.into_optimized_plan()?)
         .project(vec![

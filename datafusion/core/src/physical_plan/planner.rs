@@ -47,7 +47,7 @@ use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::windows::WindowAggExec;
+use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{joins::utils as join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
 use crate::{
@@ -614,13 +614,28 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    Ok(Arc::new(WindowAggExec::try_new(
-                        window_expr,
-                        input_exec,
-                        physical_input_schema,
-                        physical_partition_keys,
-                        physical_sort_keys,
-                    )?))
+                    let uses_bounded_memory = window_expr
+                        .iter()
+                        .all(|e| e.uses_bounded_memory());
+                    // If all window expressions can run with bounded memory,
+                    // choose the bounded window variant:
+                    Ok(if uses_bounded_memory {
+                        Arc::new(BoundedWindowAggExec::try_new(
+                            window_expr,
+                            input_exec,
+                            physical_input_schema,
+                            physical_partition_keys,
+                            physical_sort_keys,
+                        )?)
+                    } else {
+                        Arc::new(WindowAggExec::try_new(
+                            window_expr,
+                            input_exec,
+                            physical_input_schema,
+                            physical_partition_keys,
+                            physical_sort_keys,
+                        )?)
+                    })
                 }
                 LogicalPlan::Aggregate(Aggregate {
                     input,
@@ -1165,9 +1180,20 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: CreateView".to_string(),
                     ))
                 }
+                LogicalPlan::Dml(_) => {
+                    // DataFusion is a read-only query engine, but also a library, so consumers may implement this
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: Dml".to_string(),
+                    ))
+                }
                 LogicalPlan::SetVariable(_) => {
                     Err(DataFusionError::Internal(
                         "Unsupported logical plan: SetVariable must be root of the plan".to_string(),
+                    ))
+                }
+                LogicalPlan::DescribeTable(_) => {
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: DescribeTable must be root of the plan".to_string(),
                     ))
                 }
                 LogicalPlan::Explain(_) => Err(DataFusionError::Internal(
@@ -1191,18 +1217,13 @@ impl DefaultPhysicalPlanner {
                         }
 
                         let logical_input = e.node.inputs();
-                        let plan = planner.plan_extension(
+                        maybe_plan = planner.plan_extension(
                             self,
                             e.node.as_ref(),
                             &logical_input,
                             &physical_inputs,
                             session_state,
-                        );
-                        let plan = plan.await;
-                        if plan.is_err() {
-                            continue;
-                        }
-                        maybe_plan = plan.unwrap();
+                        ).await?;
                     }
 
                     let plan = maybe_plan.ok_or_else(|| DataFusionError::Plan(format!(
@@ -1994,6 +2015,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn error_during_extension_planning() {
+        let session_state = make_session_state();
+        let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
+            ErrorExtensionPlanner {},
+        )]);
+
+        let logical_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoOpExtensionNode::default()),
+        });
+        match planner
+            .create_physical_plan(&logical_plan, &session_state)
+            .await
+        {
+            Ok(_) => panic!("Expected planning failure"),
+            Err(e) => assert!(e.to_string().contains("BOOM"),),
+        }
+    }
+
+    #[tokio::test]
     async fn test_with_zero_offset_plan() -> Result<()> {
         let logical_plan = test_csv_scan().await?.limit(0, None)?.build()?;
         let plan = plan(&logical_plan).await?;
@@ -2031,14 +2071,6 @@ mod tests {
             col("c1").eq(bool_expr.clone()),
             // u32 AND bool
             col("c2").and(bool_expr),
-            // utf8 LIKE u32
-            col("c1").like(col("c2")),
-            // utf8 NOT LIKE u32
-            col("c1").not_like(col("c2")),
-            // utf8 ILIKE u32
-            col("c1").ilike(col("c2")),
-            // utf8 NOT ILIKE u32
-            col("c1").not_ilike(col("c2")),
         ];
         for case in cases {
             let logical_plan = test_csv_scan().await?.project(vec![case.clone()]);
@@ -2319,7 +2351,22 @@ mod tests {
             );
         }
     }
+    struct ErrorExtensionPlanner {}
 
+    #[async_trait]
+    impl ExtensionPlanner for ErrorExtensionPlanner {
+        /// Create a physical plan for an extension node
+        async fn plan_extension(
+            &self,
+            _planner: &dyn PhysicalPlanner,
+            _node: &dyn UserDefinedLogicalNode,
+            _logical_inputs: &[&LogicalPlan],
+            _physical_inputs: &[Arc<dyn ExecutionPlan>],
+            _session_state: &SessionState,
+        ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+            Err(DataFusionError::Internal("BOOM".to_string()))
+        }
+    }
     /// An example extension node that doesn't do anything
     struct NoOpExtensionNode {
         schema: DFSchemaRef,

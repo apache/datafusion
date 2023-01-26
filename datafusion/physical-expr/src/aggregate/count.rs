@@ -98,6 +98,10 @@ impl AggregateExpr for Count {
         true
     }
 
+    fn supports_bounded_execution(&self) -> bool {
+        true
+    }
+
     fn create_row_accumulator(
         &self,
         start_index: usize,
@@ -198,7 +202,9 @@ impl RowAccumulator for CountRowAccumulator {
     }
 
     fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
-        Ok(accessor.get_as_scalar(&DataType::Int64, self.state_index))
+        Ok(ScalarValue::Int64(Some(
+            accessor.get_u64_opt(self.state_index()).unwrap_or(0) as i64,
+        )))
     }
 
     #[inline(always)]

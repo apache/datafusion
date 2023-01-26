@@ -155,7 +155,7 @@ DROP TABLE [ IF EXISTS ] name [, ...]
 impl FromStr for Function {
     type Err = ();
 
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s.trim().to_uppercase().as_str() {
             "SELECT" => Self::Select,
             "EXPLAIN" => Self::Explain,
