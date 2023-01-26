@@ -23,7 +23,6 @@ use std::sync::Arc;
 use arrow::array::Int64Array;
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
-use datafusion_expr::count;
 use parquet::file::properties::WriterProperties;
 
 use datafusion_common::{Column, DFSchema, ScalarValue};
@@ -380,7 +379,10 @@ impl DataFrame {
     /// ```
     pub async fn count(self) -> Result<usize> {
         let rows = self
-            .aggregate(vec![], vec![count(Expr::Literal(ScalarValue::Null))])?
+            .aggregate(
+                vec![],
+                vec![datafusion_expr::count(Expr::Literal(ScalarValue::Null))],
+            )?
             .collect()
             .await?;
         let len = *rows
@@ -1035,7 +1037,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn count() -> Result<()> {
+    async fn df_count() -> Result<()> {
         let count = test_table().await?.count().await?;
         assert_eq!(100, count);
         Ok(())
