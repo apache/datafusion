@@ -365,7 +365,8 @@ impl DataFrame {
     }
 
     /// Run a count aggregate on the DataFrame and execute the DataFrame to collect this
-    /// count and return it as a usize.
+    /// count and return it as a usize, to find the total number of rows after executing
+    /// the DataFrame.
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -373,11 +374,11 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let length = df.len().await?;
+    /// let count = df.count().await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn len(self) -> Result<usize> {
+    pub async fn count(self) -> Result<usize> {
         let rows = self
             .aggregate(vec![], vec![count(Expr::Literal(ScalarValue::Null))])?
             .collect()
@@ -388,7 +389,7 @@ impl DataFrame {
             .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
             .and_then(|a| a.values().first())
             .ok_or(DataFusionError::Internal(
-                "Unexpected output when collecting for len".to_string(),
+                "Unexpected output when collecting for count()".to_string(),
             ))? as usize;
         Ok(len)
     }
@@ -1034,9 +1035,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn len() -> Result<()> {
-        let len = test_table().await?.len().await?;
-        assert_eq!(100, len);
+    async fn count() -> Result<()> {
+        let count = test_table().await?.count().await?;
+        assert_eq!(100, count);
         Ok(())
     }
 
