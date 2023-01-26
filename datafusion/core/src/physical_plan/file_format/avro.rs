@@ -251,7 +251,7 @@ mod tests {
             .register_object_store("file", "", store.clone());
 
         let testdata = crate::test_util::arrow_test_data();
-        let filename = format!("{}/avro/alltypes_plain.avro", testdata);
+        let filename = format!("{testdata}/avro/alltypes_plain.avro");
         let meta = local_unpartitioned_file(filename);
 
         let file_schema = AvroFormat {}
@@ -315,7 +315,7 @@ mod tests {
         let state = session_ctx.state();
 
         let testdata = crate::test_util::arrow_test_data();
-        let filename = format!("{}/avro/alltypes_plain.avro", testdata);
+        let filename = format!("{testdata}/avro/alltypes_plain.avro");
         let object_store = Arc::new(LocalFileSystem::new()) as _;
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
@@ -388,7 +388,7 @@ mod tests {
         let state = session_ctx.state();
 
         let testdata = crate::test_util::arrow_test_data();
-        let filename = format!("{}/avro/alltypes_plain.avro", testdata);
+        let filename = format!("{testdata}/avro/alltypes_plain.avro");
         let object_store = Arc::new(LocalFileSystem::new()) as _;
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
