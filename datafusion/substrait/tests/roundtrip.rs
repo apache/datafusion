@@ -22,6 +22,7 @@ use datafusion_substrait::producer;
 mod tests {
 
     use crate::{consumer::from_substrait_plan, producer::to_substrait_plan};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::error::Result;
     use datafusion::prelude::*;
     use substrait::proto::extensions::simple_extension_declaration::MappingType;
@@ -93,6 +94,11 @@ mod tests {
     #[tokio::test]
     async fn aggregate_multiple_keys() -> Result<()> {
         roundtrip("SELECT a, c, avg(b) FROM data GROUP BY a, c").await
+    }
+
+    #[tokio::test]
+    async fn decimal_literal() -> Result<()> {
+        roundtrip("SELECT * FROM data WHERE b > 2.5").await
     }
 
     #[tokio::test]
@@ -204,7 +210,7 @@ mod tests {
         let plan = df.into_optimized_plan()?;
         let proto = to_substrait_plan(&plan)?;
         let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
-        let plan2str = format!("{:?}", plan2);
+        let plan2str = format!("{plan2:?}");
         assert_eq!(expected_plan_str, &plan2str);
         Ok(())
     }
@@ -217,8 +223,8 @@ mod tests {
         let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
 
         // Format plan string and replace all None's with 0
-        let plan1str = format!("{:?}", plan1).replace("None", "0");
-        let plan2str = format!("{:?}", plan2).replace("None", "0");
+        let plan1str = format!("{plan1:?}").replace("None", "0");
+        let plan2str = format!("{plan2:?}").replace("None", "0");
 
         assert_eq!(plan1str, plan2str);
         Ok(())
@@ -238,11 +244,11 @@ mod tests {
         let proto = to_substrait_plan(&df.into_optimized_plan()?)?;
         let plan = from_substrait_plan(&mut ctx, &proto).await?;
 
-        println!("{:#?}", plan_with_alias);
-        println!("{:#?}", plan);
+        println!("{plan_with_alias:#?}");
+        println!("{plan:#?}");
 
-        let plan1str = format!("{:?}", plan_with_alias);
-        let plan2str = format!("{:?}", plan);
+        let plan1str = format!("{plan_with_alias:?}");
+        let plan2str = format!("{plan:?}");
         assert_eq!(plan1str, plan2str);
         Ok(())
     }
@@ -256,11 +262,11 @@ mod tests {
         let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
         let plan2 = ctx.optimize(&plan2)?;
 
-        println!("{:#?}", plan);
-        println!("{:#?}", plan2);
+        println!("{plan:#?}");
+        println!("{plan2:#?}");
 
-        let plan1str = format!("{:?}", plan);
-        let plan2str = format!("{:?}", plan2);
+        let plan1str = format!("{plan:?}");
+        let plan2str = format!("{plan2:?}");
         assert_eq!(plan1str, plan2str);
         Ok(())
     }
@@ -290,9 +296,17 @@ mod tests {
 
     async fn create_context() -> Result<SessionContext> {
         let ctx = SessionContext::new();
-        ctx.register_csv("data", "tests/testdata/data.csv", CsvReadOptions::new())
+        let mut explicit_options = CsvReadOptions::new();
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Decimal128(5, 2), true),
+            Field::new("c", DataType::Date32, true),
+            Field::new("d", DataType::Boolean, true),
+        ]);
+        explicit_options.schema = Some(&schema);
+        ctx.register_csv("data", "tests/testdata/data.csv", explicit_options.clone())
             .await?;
-        ctx.register_csv("data2", "tests/testdata/data.csv", CsvReadOptions::new())
+        ctx.register_csv("data2", "tests/testdata/data.csv", explicit_options)
             .await?;
         Ok(ctx)
     }

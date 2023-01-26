@@ -35,7 +35,7 @@ use substrait::proto::{
     expression::{
         field_reference::ReferenceType,
         if_then::IfClause,
-        literal::LiteralType,
+        literal::{Decimal, LiteralType},
         mask_expression::{StructItem, StructSelect},
         reference_segment, FieldReference, IfThen, Literal, MaskExpression,
         ReferenceSegment, RexType, ScalarFunction,
@@ -297,8 +297,7 @@ pub fn to_substrait_rel(
             to_substrait_rel(alias.input.as_ref(), extension_info)
         }
         _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported operator: {:?}",
-            plan
+            "Unsupported operator: {plan:?}",
         ))),
     }
 }
@@ -383,8 +382,7 @@ pub fn to_substrait_agg_measure(
             })
         },
         _ => Err(DataFusionError::Internal(format!(
-            "Expression must be compatible with aggregation. Unsupported expression: {:?}",
-            expr
+            "Expression must be compatible with aggregation. Unsupported expression: {expr:?}",
         ))),
     }
 }
@@ -579,6 +577,13 @@ pub fn to_substrait_rex(
                 ScalarValue::Boolean(Some(b)) => Some(LiteralType::Boolean(*b)),
                 ScalarValue::Float32(Some(f)) => Some(LiteralType::Fp32(*f)),
                 ScalarValue::Float64(Some(f)) => Some(LiteralType::Fp64(*f)),
+                ScalarValue::Decimal128(v, p, s) if v.is_some() => {
+                    Some(LiteralType::Decimal(Decimal {
+                        value: v.unwrap().to_le_bytes().to_vec(),
+                        precision: *p as i32,
+                        scale: *s as i32,
+                    }))
+                }
                 ScalarValue::Utf8(Some(s)) => Some(LiteralType::String(s.clone())),
                 ScalarValue::LargeUtf8(Some(s)) => Some(LiteralType::String(s.clone())),
                 ScalarValue::Binary(Some(b)) => Some(LiteralType::Binary(b.clone())),
@@ -586,8 +591,7 @@ pub fn to_substrait_rex(
                 ScalarValue::Date32(Some(d)) => Some(LiteralType::Date(*d)),
                 _ => {
                     return Err(DataFusionError::NotImplemented(format!(
-                        "Unsupported literal: {:?}",
-                        value
+                        "Unsupported literal: {value:?}",
                     )))
                 }
             };
@@ -601,8 +605,7 @@ pub fn to_substrait_rex(
         }
         Expr::Alias(expr, _alias) => to_substrait_rex(expr, schema, extension_info),
         _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported expression: {:?}",
-            expr
+            "Unsupported expression: {expr:?}"
         ))),
     }
 }
@@ -634,8 +637,7 @@ fn substrait_sort_field(
             })
         }
         _ => Err(DataFusionError::NotImplemented(format!(
-            "Expecting sort expression but got {:?}",
-            expr
+            "Expecting sort expression but got {expr:?}"
         ))),
     }
 }
