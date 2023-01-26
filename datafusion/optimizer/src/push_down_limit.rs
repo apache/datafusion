@@ -240,35 +240,36 @@ fn push_down_join(join: &Join, limit: usize) -> Option<Join> {
         }
     };
 
-    if let (None, None) = (left_limit, right_limit) {
-        None
-    } else {
-        let left = match left_limit {
-            Some(limit) => LogicalPlan::Limit(Limit {
-                skip: 0,
-                fetch: Some(limit),
-                input: Arc::new((*join.left).clone()),
-            }),
-            None => (*join.left).clone(),
-        };
-        let right = match right_limit {
-            Some(limit) => LogicalPlan::Limit(Limit {
-                skip: 0,
-                fetch: Some(limit),
-                input: Arc::new((*join.right).clone()),
-            }),
-            None => (*join.right).clone(),
-        };
-        Some(Join {
-            left: Arc::new(left),
-            right: Arc::new(right),
-            on: join.on.clone(),
-            filter: join.filter.clone(),
-            join_type: join.join_type,
-            join_constraint: join.join_constraint,
-            schema: join.schema.clone(),
-            null_equals_null: join.null_equals_null,
-        })
+    match (left_limit, right_limit) {
+        (None, None) => None,
+        _ => {
+            let left = match left_limit {
+                Some(limit) => LogicalPlan::Limit(Limit {
+                    skip: 0,
+                    fetch: Some(limit),
+                    input: Arc::new((*join.left).clone()),
+                }),
+                None => (*join.left).clone(),
+            };
+            let right = match right_limit {
+                Some(limit) => LogicalPlan::Limit(Limit {
+                    skip: 0,
+                    fetch: Some(limit),
+                    input: Arc::new((*join.right).clone()),
+                }),
+                None => (*join.right).clone(),
+            };
+            Some(Join {
+                left: Arc::new(left),
+                right: Arc::new(right),
+                on: join.on.clone(),
+                filter: join.filter.clone(),
+                join_type: join.join_type,
+                join_constraint: join.join_constraint,
+                schema: join.schema.clone(),
+                null_equals_null: join.null_equals_null,
+            })
+        }
     }
 }
 
