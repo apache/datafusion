@@ -115,7 +115,6 @@ datafusion.catalog.location NULL
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
 datafusion.execution.collect_statistics false
-datafusion.execution.parallel_file_scan false
 datafusion.execution.parquet.enable_page_index false
 datafusion.execution.parquet.metadata_size_hint NULL
 datafusion.execution.parquet.pruning true
@@ -132,6 +131,8 @@ datafusion.optimizer.hash_join_single_partition_threshold 1048576
 datafusion.optimizer.max_passes 3
 datafusion.optimizer.prefer_hash_join true
 datafusion.optimizer.repartition_aggregations true
+datafusion.optimizer.repartition_file_min_size 10485760
+datafusion.optimizer.repartition_file_scans false
 datafusion.optimizer.repartition_joins true
 datafusion.optimizer.repartition_windows true
 datafusion.optimizer.skip_failed_rules true

@@ -168,7 +168,8 @@ fn optimize_partitions(
     is_root: bool,
     can_reorder: bool,
     would_benefit: bool,
-    parallel_file_scan: bool,
+    repartition_file_scans: bool,
+    repartition_file_min_size: usize,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     // Recurse into children bottom-up (attempt to repartition as
     // early as possible)
@@ -201,7 +202,8 @@ fn optimize_partitions(
                     false, // child is not root
                     can_reorder_child,
                     plan.benefits_from_input_partitioning(),
-                    parallel_file_scan,
+                    repartition_file_scans,
+                    repartition_file_min_size,
                 )
             })
             .collect::<Result<_>>()?;
@@ -237,10 +239,13 @@ fn optimize_partitions(
         return Ok(new_plan);
     }
 
-    // For ParquetExec return internally repartitioned version of the plan in case parallel_file_scan is set
+    // For ParquetExec return internally repartitioned version of the plan in case `repartition_file_scans` is set
     if let Some(parquet_exec) = new_plan.as_any().downcast_ref::<ParquetExec>() {
-        if parallel_file_scan {
-            return Ok(Arc::new(parquet_exec.get_repartitioned(target_partitions)));
+        if repartition_file_scans {
+            return Ok(Arc::new(
+                parquet_exec
+                    .get_repartitioned(target_partitions, repartition_file_min_size),
+            ));
         }
     }
 
@@ -267,7 +272,8 @@ impl PhysicalOptimizerRule for Repartition {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let target_partitions = config.execution.target_partitions;
         let enabled = config.optimizer.enable_round_robin_repartition;
-        let parallel_file_scan = config.execution.parallel_file_scan;
+        let repartition_file_scans = config.optimizer.repartition_file_scans;
+        let repartition_file_min_size = config.optimizer.repartition_file_min_size;
         // Don't run optimizer if target_partitions == 1
         if !enabled || target_partitions == 1 {
             Ok(plan)
@@ -281,7 +287,8 @@ impl PhysicalOptimizerRule for Repartition {
                 is_root,
                 can_reorder,
                 would_benefit,
-                parallel_file_scan,
+                repartition_file_scans,
+                repartition_file_min_size,
             )
         }
     }
@@ -486,15 +493,16 @@ mod tests {
     /// Runs the repartition optimizer and asserts the plan against the expected
     macro_rules! assert_optimized {
         ($EXPECTED_LINES: expr, $PLAN: expr) => {
-            assert_optimized!($EXPECTED_LINES, $PLAN, 10, false);
+            assert_optimized!($EXPECTED_LINES, $PLAN, 10, false, 1024);
         };
 
-        ($EXPECTED_LINES: expr, $PLAN: expr, $TAGRET_PARTITIONS: expr, $PARALLEL_SCAN: expr) => {
+        ($EXPECTED_LINES: expr, $PLAN: expr, $TAGRET_PARTITIONS: expr, $REPARTITION_FILE_SCANS: expr, $REPARTITION_FILE_MIN_SIZE: expr) => {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
             let mut config = ConfigOptions::new();
             config.execution.target_partitions = $TAGRET_PARTITIONS;
-            config.execution.parallel_file_scan = $PARALLEL_SCAN;
+            config.optimizer.repartition_file_scans = $REPARTITION_FILE_SCANS;
+            config.optimizer.repartition_file_min_size = $REPARTITION_FILE_MIN_SIZE;
 
             // run optimizer
             let optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
@@ -900,7 +908,7 @@ mod tests {
             "ParquetExec: limit=None, partitions={2 groups: [[x:0..50], [x:50..100]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan, 2, true);
+        assert_optimized!(expected, plan, 2, true, 10);
         Ok(())
     }
 
@@ -916,7 +924,7 @@ mod tests {
             "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan, 2, true);
+        assert_optimized!(expected, plan, 2, true, 10);
         Ok(())
     }
 
@@ -933,7 +941,7 @@ mod tests {
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan, 2, true);
+        assert_optimized!(expected, plan, 2, true, 10);
         Ok(())
     }
 
@@ -952,7 +960,7 @@ mod tests {
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan, 2, true);
+        assert_optimized!(expected, plan, 2, true, 10);
         Ok(())
     }
 
@@ -977,7 +985,7 @@ mod tests {
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan, 2, true);
+        assert_optimized!(expected, plan, 2, true, 10);
         Ok(())
     }
 
@@ -995,7 +1003,7 @@ mod tests {
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan, 2, true);
+        assert_optimized!(expected, plan, 2, true, 10);
         Ok(())
     }
 
@@ -1010,7 +1018,7 @@ mod tests {
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan, 2, true);
+        assert_optimized!(expected, plan, 2, true, 10);
         Ok(())
     }
 
@@ -1028,7 +1036,7 @@ mod tests {
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan, 2, true);
+        assert_optimized!(expected, plan, 2, true, 10);
         Ok(())
     }
 
@@ -1045,7 +1053,7 @@ mod tests {
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan, 2, true);
+        assert_optimized!(expected, plan, 2, true, 10);
         Ok(())
     }
 
@@ -1061,7 +1069,7 @@ mod tests {
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan, 2, true);
+        assert_optimized!(expected, plan, 2, true, 10);
         Ok(())
     }
 

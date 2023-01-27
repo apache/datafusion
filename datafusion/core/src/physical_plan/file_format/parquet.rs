@@ -243,7 +243,11 @@ impl ParquetExec {
     }
 
     /// Redistribute files across partitions according to their size
-    pub fn get_repartitioned(&self, target_partitions: usize) -> Self {
+    pub fn get_repartitioned(
+        &self,
+        target_partitions: usize,
+        repartition_file_min_size: usize,
+    ) -> Self {
         let flattened_files = self
             .base_config()
             .file_groups
@@ -261,6 +265,10 @@ impl ParquetExec {
             .iter()
             .map(|f| f.object_meta.size as i64)
             .sum::<i64>();
+        if total_size < (repartition_file_min_size as i64) {
+            return self.clone();
+        }
+
         let target_partition_size =
             (total_size as usize + (target_partitions) - 1) / (target_partitions);
 
@@ -1738,7 +1746,7 @@ mod tests {
 
         let actual = file_groups_to_vec(
             parquet_exec
-                .get_repartitioned(4)
+                .get_repartitioned(4, 10)
                 .base_config()
                 .file_groups
                 .clone(),
@@ -1775,7 +1783,7 @@ mod tests {
 
         let actual = file_groups_to_vec(
             parquet_exec
-                .get_repartitioned(96)
+                .get_repartitioned(96, 5)
                 .base_config()
                 .file_groups
                 .clone(),
@@ -1817,7 +1825,7 @@ mod tests {
 
         let actual = file_groups_to_vec(
             parquet_exec
-                .get_repartitioned(3)
+                .get_repartitioned(3, 10)
                 .base_config()
                 .file_groups
                 .clone(),
@@ -1855,7 +1863,7 @@ mod tests {
 
         let actual = file_groups_to_vec(
             parquet_exec
-                .get_repartitioned(2)
+                .get_repartitioned(2, 10)
                 .base_config()
                 .file_groups
                 .clone(),
@@ -1869,7 +1877,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parquet_exec_repartition_no_action() {
+    async fn parquet_exec_repartition_no_action_ranges() {
         // No action due to Some(range) in second file
         let partitioned_file_1 = PartitionedFile::new("a".to_string(), 123);
         let mut partitioned_file_2 = PartitionedFile::new("b".to_string(), 144);
@@ -1893,11 +1901,40 @@ mod tests {
         );
 
         let actual = parquet_exec
-            .get_repartitioned(65)
+            .get_repartitioned(65, 10)
             .base_config()
             .file_groups
             .clone();
         assert_eq!(2, actual.len());
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_repartition_no_action_min_size() {
+        // No action due to target_partition_size
+        let partitioned_file = PartitionedFile::new("a".to_string(), 123);
+        let single_partition = vec![vec![partitioned_file]];
+        let parquet_exec = ParquetExec::new(
+            FileScanConfig {
+                object_store_url: ObjectStoreUrl::local_filesystem(),
+                file_groups: single_partition,
+                file_schema: Arc::new(Schema::empty()),
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering: None,
+                infinite_source: false,
+            },
+            None,
+            None,
+        );
+
+        let actual = parquet_exec
+            .get_repartitioned(65, 500)
+            .base_config()
+            .file_groups
+            .clone();
+        assert_eq!(1, actual.len());
     }
 
     fn file_groups_to_vec(
