@@ -244,32 +244,28 @@ impl ParquetExec {
 
     /// Redistribute files across partitions according to their size
     pub fn get_repartitioned(&self, target_partitions: usize) -> Self {
-        // Perform redistribution only in case all files should be read from beginning to end
-        let has_ranges = self
+        let flattened_files = self
             .base_config()
             .file_groups
             .iter()
             .flatten()
-            .any(|f| f.range.is_some());
+            .collect::<Vec<_>>();
+
+        // Perform redistribution only in case all files should be read from beginning to end
+        let has_ranges = flattened_files.iter().any(|f| f.range.is_some());
         if has_ranges {
             return self.clone();
         }
 
-        let total_size = self
-            .base_config()
-            .file_groups
+        let total_size = flattened_files
             .iter()
-            .flatten()
             .map(|f| f.object_meta.size as i64)
             .sum::<i64>();
         let target_partition_size =
             (total_size as usize + (target_partitions) - 1) / (target_partitions);
 
-        let repartitioned_files = self
-            .base_config()
-            .file_groups
-            .iter()
-            .flatten()
+        let repartitioned_files = flattened_files
+            .into_iter()
             .scan(RepartitionState::default(), |state, source_file| {
                 let mut produced_files = vec![];
                 let mut range_start = 0;

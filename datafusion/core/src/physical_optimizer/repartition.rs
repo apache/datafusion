@@ -730,6 +730,24 @@ mod tests {
     }
 
     #[test]
+    fn repartition_ignores_sort_preserving_merge_with_union() -> Result<()> {
+        // 2 sorted parquet files unioned (partitions are concatenated, sort is preserved)
+        let input = union_exec(vec![parquet_exec_sorted(); 2]);
+        let plan = sort_preserving_merge_exec(input);
+
+        // should not repartition / sort (as the data was already sorted)
+        let expected = &[
+            "SortPreservingMergeExec: [c1@0 ASC]",
+            "UnionExec",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
+        ];
+
+        assert_optimized!(expected, plan);
+        Ok(())
+    }
+
+    #[test]
     fn repartition_does_not_destroy_sort() -> Result<()> {
         //  SortRequired
         //    Parquet(sorted)
@@ -1010,7 +1028,7 @@ mod tests {
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan, 2, true);
         Ok(())
     }
 
