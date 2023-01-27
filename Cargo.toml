@@ -54,8 +54,8 @@ rpath = false
 
 
 [patch.crates-io]
-arrow = { git = "https://github.com/tustvold/arrow-rs.git", rev = "3c7b919b9ff690a067d4c72e39e322d98ed51995" }
-arrow-buffer = { git = "https://github.com/tustvold/arrow-rs.git", rev = "3c7b919b9ff690a067d4c72e39e322d98ed51995" }
-arrow-flight = { git = "https://github.com/tustvold/arrow-rs.git", rev = "3c7b919b9ff690a067d4c72e39e322d98ed51995" }
-arrow-schema = { git = "https://github.com/tustvold/arrow-rs.git", rev = "3c7b919b9ff690a067d4c72e39e322d98ed51995" }
-parquet = { git = "https://github.com/tustvold/arrow-rs.git", rev = "3c7b919b9ff690a067d4c72e39e322d98ed51995" }
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "d9c2681a8a477aa19feb492e536f9e1a034d2c8d" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "d9c2681a8a477aa19feb492e536f9e1a034d2c8d" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "d9c2681a8a477aa19feb492e536f9e1a034d2c8d" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "d9c2681a8a477aa19feb492e536f9e1a034d2c8d" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "d9c2681a8a477aa19feb492e536f9e1a034d2c8d" }

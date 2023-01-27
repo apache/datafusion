@@ -218,7 +218,7 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::Decimal256(_, _) => {
                 return Err(Error::General("Proto serialization error: The Decimal256 data type is not yet supported".to_owned()))
             }
-            DataType::Map(_, _) => {
+            DataType::Map(_, _) | DataType::RunEndEncoded(_, _) => {
                 return Err(Error::General(
                     "Proto serialization error: The Map data type is not yet supported".to_owned()
                 ))

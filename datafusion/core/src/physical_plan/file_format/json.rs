@@ -33,7 +33,7 @@ use arrow::{datatypes::SchemaRef, json};
 
 use bytes::{Buf, Bytes};
 
-use arrow::json::raw::{RawDecoder, RawReaderBuilder};
+use arrow::json::RawReaderBuilder;
 use futures::{ready, stream, StreamExt, TryStreamExt};
 use object_store::{GetResult, ObjectStore};
 use std::any::Any;
@@ -177,7 +177,10 @@ impl FileOpener for JsonOpener {
                     Ok(futures::stream::iter(reader).boxed())
                 }
                 GetResult::Stream(s) => {
-                    let mut decoder = RawDecoder::try_new(schema, batch_size)?;
+                    let mut decoder = RawReaderBuilder::new(schema)
+                        .with_batch_size(batch_size)
+                        .build_decoder()?;
+
                     let s = s.map_err(Into::into);
                     let mut input = file_compression_type.convert_stream(s)?.fuse();
                     let mut buffered = Bytes::new();

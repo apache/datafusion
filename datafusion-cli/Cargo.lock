@@ -69,7 +69,7 @@ checksum = "8da52d66c7071e2e3fa2a1e5c6d088fec47b593032b254f5e980de8ea54454d6"
 [[package]]
 name = "arrow"
 version = "31.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=3c7b919b9ff690a067d4c72e39e322d98ed51995#3c7b919b9ff690a067d4c72e39e322d98ed51995"
+source = "git+https://github.com/apache/arrow-rs.git?rev=d9c2681a8a477aa19feb492e536f9e1a034d2c8d#d9c2681a8a477aa19feb492e536f9e1a034d2c8d"
 dependencies = [
  "ahash",
  "arrow-arith",
@@ -91,7 +91,7 @@ dependencies = [
 [[package]]
 name = "arrow-arith"
 version = "31.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=3c7b919b9ff690a067d4c72e39e322d98ed51995#3c7b919b9ff690a067d4c72e39e322d98ed51995"
+source = "git+https://github.com/apache/arrow-rs.git?rev=d9c2681a8a477aa19feb492e536f9e1a034d2c8d#d9c2681a8a477aa19feb492e536f9e1a034d2c8d"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -105,7 +105,7 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "31.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=3c7b919b9ff690a067d4c72e39e322d98ed51995#3c7b919b9ff690a067d4c72e39e322d98ed51995"
+source = "git+https://github.com/apache/arrow-rs.git?rev=d9c2681a8a477aa19feb492e536f9e1a034d2c8d#d9c2681a8a477aa19feb492e536f9e1a034d2c8d"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -120,7 +120,7 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "31.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=3c7b919b9ff690a067d4c72e39e322d98ed51995#3c7b919b9ff690a067d4c72e39e322d98ed51995"
+source = "git+https://github.com/apache/arrow-rs.git?rev=d9c2681a8a477aa19feb492e536f9e1a034d2c8d#d9c2681a8a477aa19feb492e536f9e1a034d2c8d"
 dependencies = [
  "half",
  "num",
@@ -129,7 +129,7 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "31.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=3c7b919b9ff690a067d4c72e39e322d98ed51995#3c7b919b9ff690a067d4c72e39e322d98ed51995"
+source = "git+https://github.com/apache/arrow-rs.git?rev=d9c2681a8a477aa19feb492e536f9e1a034d2c8d#d9c2681a8a477aa19feb492e536f9e1a034d2c8d"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -144,7 +144,7 @@ dependencies = [
 [[package]]
 name = "arrow-csv"
 version = "31.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=3c7b919b9ff690a067d4c72e39e322d98ed51995#3c7b919b9ff690a067d4c72e39e322d98ed51995"
+source = "git+https://github.com/apache/arrow-rs.git?rev=d9c2681a8a477aa19feb492e536f9e1a034d2c8d#d9c2681a8a477aa19feb492e536f9e1a034d2c8d"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -162,7 +162,7 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "31.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=3c7b919b9ff690a067d4c72e39e322d98ed51995#3c7b919b9ff690a067d4c72e39e322d98ed51995"
+source = "git+https://github.com/apache/arrow-rs.git?rev=d9c2681a8a477aa19feb492e536f9e1a034d2c8d#d9c2681a8a477aa19feb492e536f9e1a034d2c8d"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -173,7 +173,7 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "31.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=3c7b919b9ff690a067d4c72e39e322d98ed51995#3c7b919b9ff690a067d4c72e39e322d98ed51995"
+source = "git+https://github.com/apache/arrow-rs.git?rev=d9c2681a8a477aa19feb492e536f9e1a034d2c8d#d9c2681a8a477aa19feb492e536f9e1a034d2c8d"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -186,7 +186,7 @@ dependencies = [
 [[package]]
 name = "arrow-json"
 version = "31.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=3c7b919b9ff690a067d4c72e39e322d98ed51995#3c7b919b9ff690a067d4c72e39e322d98ed51995"
+source = "git+https://github.com/apache/arrow-rs.git?rev=d9c2681a8a477aa19feb492e536f9e1a034d2c8d#d9c2681a8a477aa19feb492e536f9e1a034d2c8d"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -204,7 +204,7 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "31.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=3c7b919b9ff690a067d4c72e39e322d98ed51995#3c7b919b9ff690a067d4c72e39e322d98ed51995"
+source = "git+https://github.com/apache/arrow-rs.git?rev=d9c2681a8a477aa19feb492e536f9e1a034d2c8d#d9c2681a8a477aa19feb492e536f9e1a034d2c8d"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -217,7 +217,7 @@ dependencies = [
 [[package]]
 name = "arrow-row"
 version = "31.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=3c7b919b9ff690a067d4c72e39e322d98ed51995#3c7b919b9ff690a067d4c72e39e322d98ed51995"
+source = "git+https://github.com/apache/arrow-rs.git?rev=d9c2681a8a477aa19feb492e536f9e1a034d2c8d#d9c2681a8a477aa19feb492e536f9e1a034d2c8d"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -231,12 +231,12 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "31.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=3c7b919b9ff690a067d4c72e39e322d98ed51995#3c7b919b9ff690a067d4c72e39e322d98ed51995"
+source = "git+https://github.com/apache/arrow-rs.git?rev=d9c2681a8a477aa19feb492e536f9e1a034d2c8d#d9c2681a8a477aa19feb492e536f9e1a034d2c8d"
 
 [[package]]
 name = "arrow-select"
 version = "31.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=3c7b919b9ff690a067d4c72e39e322d98ed51995#3c7b919b9ff690a067d4c72e39e322d98ed51995"
+source = "git+https://github.com/apache/arrow-rs.git?rev=d9c2681a8a477aa19feb492e536f9e1a034d2c8d#d9c2681a8a477aa19feb492e536f9e1a034d2c8d"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -248,7 +248,7 @@ dependencies = [
 [[package]]
 name = "arrow-string"
 version = "31.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=3c7b919b9ff690a067d4c72e39e322d98ed51995#3c7b919b9ff690a067d4c72e39e322d98ed51995"
+source = "git+https://github.com/apache/arrow-rs.git?rev=d9c2681a8a477aa19feb492e536f9e1a034d2c8d#d9c2681a8a477aa19feb492e536f9e1a034d2c8d"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -973,12 +973,12 @@ dependencies = [
 
 [[package]]
 name = "flatbuffers"
-version = "22.9.29"
+version = "23.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ce016b9901aef3579617931fbb2df8fc9a9f7cb95a16eb8acc8148209bb9e70"
+checksum = "77f5399c2c9c50ae9418e522842ad362f61ee48b346ac106807bd355a8a7c619"
 dependencies = [
  "bitflags",
- "thiserror",
+ "rustc_version",
 ]
 
 [[package]]
@@ -1771,7 +1771,7 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "31.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=3c7b919b9ff690a067d4c72e39e322d98ed51995#3c7b919b9ff690a067d4c72e39e322d98ed51995"
+source = "git+https://github.com/apache/arrow-rs.git?rev=d9c2681a8a477aa19feb492e536f9e1a034d2c8d#d9c2681a8a477aa19feb492e536f9e1a034d2c8d"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -2042,6 +2042,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustc_version"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfa0f585226d2e68097d4f95d113b15b83a82e819ab25717ec0590d9584ef366"
+dependencies = [
+ "semver",
+]
+
+[[package]]
 name = "rustix"
 version = "0.36.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2141,6 +2150,12 @@ dependencies = [
  "ring",
  "untrusted",
 ]
+
+[[package]]
+name = "semver"
+version = "1.0.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58bc9567378fc7690d6b2addae4e60ac2eeea07becb2c64b9f218b53865cba2a"
 
 [[package]]
 name = "seq-macro"
