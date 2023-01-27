@@ -33,16 +33,20 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
 use futures::future::{BoxFuture, Shared};
-use futures::{ready, FutureExt};
+use futures::{ready, FutureExt, TryStreamExt};
+use log::debug;
 use parking_lot::Mutex;
 use std::cmp::max;
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Instant;
 
+use crate::execution::context::TaskContext;
 use crate::physical_plan::{
-    ColumnStatistics, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
+    coalesce_batches::concat_batches, CoalescePartitionsExec, ColumnStatistics,
+    EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
 };
 use datafusion_physical_expr::rewrite::TreeNodeRewritable;
 
@@ -933,6 +937,43 @@ pub(crate) fn get_semi_indices(
     (0..row_count)
         .filter_map(|idx| (bitmap.get_bit(idx)).then_some(idx as u32))
         .collect::<UInt32Array>()
+}
+
+/// Asynchronously collect the result of the join input
+pub(crate) async fn load_join_input(
+    input: Arc<dyn ExecutionPlan>,
+    context: Arc<TaskContext>,
+) -> Result<RecordBatch> {
+    let start = Instant::now();
+
+    // merge all parts into a single stream
+    let merge = {
+        if input.output_partitioning().partition_count() != 1 {
+            Arc::new(CoalescePartitionsExec::new(input.clone()))
+        } else {
+            input.clone()
+        }
+    };
+    let stream = merge.execute(0, context)?;
+
+    // Load all batches and count the rows
+    let (batches, num_rows) = stream
+        .try_fold((Vec::new(), 0usize), |mut acc, batch| async {
+            acc.1 += batch.num_rows();
+            acc.0.push(batch);
+            Ok(acc)
+        })
+        .await?;
+
+    let merged_batch = concat_batches(&input.schema(), &batches, num_rows)?;
+
+    debug!(
+        "Built build-side of cross-join/nested-loop-join containing {} rows in {} ms",
+        num_rows,
+        start.elapsed().as_millis()
+    );
+
+    Ok(merged_batch)
 }
 
 #[cfg(test)]

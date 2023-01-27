@@ -18,8 +18,8 @@
 //! Defines the cross join plan for loading the left side of the cross join
 //! and producing batches in parallel for the right partitions
 
+use futures::Stream;
 use futures::{ready, StreamExt};
-use futures::{Stream, TryStreamExt};
 use std::{any::Any, sync::Arc, task::Poll};
 
 use arrow::datatypes::{Schema, SchemaRef};
@@ -28,7 +28,6 @@ use arrow::record_batch::RecordBatch;
 
 use crate::execution::context::TaskContext;
 use crate::physical_plan::{
-    coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
     ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
     ExecutionPlan, Partitioning, PhysicalSortExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
@@ -40,8 +39,8 @@ use log::debug;
 use std::time::Instant;
 
 use super::utils::{
-    adjust_right_output_partitioning, cross_join_equivalence_properties, OnceAsync,
-    OnceFut,
+    adjust_right_output_partitioning, cross_join_equivalence_properties, load_join_input,
+    OnceAsync, OnceFut,
 };
 
 /// Data of the left side
@@ -92,43 +91,6 @@ impl CrossJoinExec {
     pub fn right(&self) -> &Arc<dyn ExecutionPlan> {
         &self.right
     }
-}
-
-/// Asynchronously collect the result of the left child
-async fn load_left_input(
-    left: Arc<dyn ExecutionPlan>,
-    context: Arc<TaskContext>,
-) -> Result<JoinLeftData> {
-    let start = Instant::now();
-
-    // merge all left parts into a single stream
-    let merge = {
-        if left.output_partitioning().partition_count() != 1 {
-            Arc::new(CoalescePartitionsExec::new(left.clone()))
-        } else {
-            left.clone()
-        }
-    };
-    let stream = merge.execute(0, context)?;
-
-    // Load all batches and count the rows
-    let (batches, num_rows) = stream
-        .try_fold((Vec::new(), 0usize), |mut acc, batch| async {
-            acc.1 += batch.num_rows();
-            acc.0.push(batch);
-            Ok(acc)
-        })
-        .await?;
-
-    let merged_batch = concat_batches(&left.schema(), &batches, num_rows)?;
-
-    debug!(
-        "Built build-side of cross join containing {} rows in {} ms",
-        num_rows,
-        start.elapsed().as_millis()
-    );
-
-    Ok(merged_batch)
 }
 
 impl ExecutionPlan for CrossJoinExec {
@@ -208,7 +170,7 @@ impl ExecutionPlan for CrossJoinExec {
 
         let left_fut = self
             .left_fut
-            .once(|| load_left_input(self.left.clone(), context));
+            .once(|| load_join_input(self.left.clone(), context));
 
         Ok(Box::pin(CrossJoinStream {
             schema: self.schema.clone(),

@@ -23,8 +23,8 @@ use crate::physical_plan::joins::utils::{
     adjust_indices_by_join_type, adjust_right_output_partitioning,
     apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
     check_join_is_valid, combine_join_equivalence_properties, estimate_join_statistics,
-    get_final_indices_from_bit_map, need_produce_result_in_final, ColumnIndex,
-    JoinFilter, OnceAsync, OnceFut,
+    get_final_indices_from_bit_map, load_join_input, need_produce_result_in_final,
+    ColumnIndex, JoinFilter, OnceAsync, OnceFut,
 };
 use crate::physical_plan::{
     DisplayFormatType, Distribution, ExecutionPlan, Partitioning, RecordBatchStream,
@@ -33,26 +33,32 @@ use crate::physical_plan::{
 use arrow::array::{
     BooleanBufferBuilder, UInt32Array, UInt32Builder, UInt64Array, UInt64Builder,
 };
+use arrow::buffer::{buffer_bin_or, Buffer};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Statistics;
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortExpr};
-use futures::{ready, Stream, StreamExt, TryStreamExt};
-use log::debug;
+use futures::{ready, Stream, StreamExt};
+use parking_lot::Mutex;
 use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 use std::task::Poll;
-use std::time::Instant;
 
 use crate::error::Result;
 use crate::execution::context::TaskContext;
-use crate::physical_plan::coalesce_batches::concat_batches;
 
 /// Data of the left side
 type JoinLeftData = RecordBatch;
+
+/// Global state for all partations.
+#[derive(Debug)]
+struct NestedLoopJoinState {
+    remain_partation_count: usize,
+    visited_left_buffer: Option<Buffer>,
+}
 
 ///
 #[derive(Debug)]
@@ -69,6 +75,8 @@ pub struct NestedLoopJoinExec {
     schema: SchemaRef,
     /// Build-side data
     left_fut: OnceAsync<JoinLeftData>,
+    // Inner state of nested loop join
+    state: Arc<Mutex<NestedLoopJoinState>>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
 }
@@ -86,6 +94,7 @@ impl NestedLoopJoinExec {
         check_join_is_valid(&left_schema, &right_schema, &[])?;
         let (schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
+        let right_partation_count = right.output_partitioning().partition_count();
         Ok(NestedLoopJoinExec {
             left,
             right,
@@ -94,21 +103,11 @@ impl NestedLoopJoinExec {
             schema: Arc::new(schema),
             left_fut: Default::default(),
             column_indices,
+            state: Arc::new(Mutex::new(NestedLoopJoinState {
+                remain_partation_count: right_partation_count,
+                visited_left_buffer: None,
+            })),
         })
-    }
-
-    fn is_single_partition_for_left(&self) -> bool {
-        matches!(
-            self.required_input_distribution()[0],
-            Distribution::SinglePartition
-        )
-    }
-
-    fn is_single_partition_for_right(&self) -> bool {
-        matches!(
-            self.required_input_distribution()[1],
-            Distribution::SinglePartition
-        )
     }
 }
 
@@ -122,26 +121,18 @@ impl ExecutionPlan for NestedLoopJoinExec {
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        // the partition of output is determined by the rule of `required_input_distribution`
-        // TODO we can replace it by `partitioned_join_output_partitioning`
+        let left_columns_len = self.left.schema().fields.len();
         match self.join_type {
-            // use the left partition
-            JoinType::Inner
-            | JoinType::Left
-            | JoinType::LeftSemi
-            | JoinType::LeftAnti
-            | JoinType::Full => self.left.output_partitioning(),
-            // use the right partition
-            JoinType::Right => {
-                // if the partition of right is hash,
-                // and the right partition should be adjusted the column index for the right expr
-                adjust_right_output_partitioning(
-                    self.right.output_partitioning(),
-                    self.left.schema().fields.len(),
+            JoinType::Inner | JoinType::Right => adjust_right_output_partitioning(
+                self.right.output_partitioning(),
+                left_columns_len,
+            ),
+            JoinType::RightSemi | JoinType::RightAnti => self.right.output_partitioning(),
+            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::Full => {
+                Partitioning::UnknownPartitioning(
+                    self.right.output_partitioning().partition_count(),
                 )
             }
-            // use the right partition
-            JoinType::RightSemi | JoinType::RightAnti => self.right.output_partitioning(),
         }
     }
 
@@ -151,7 +142,10 @@ impl ExecutionPlan for NestedLoopJoinExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        distribution_from_join_type(&self.join_type)
+        vec![
+            Distribution::SinglePartition,
+            Distribution::UnspecifiedDistribution,
+        ]
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
@@ -187,40 +181,22 @@ impl ExecutionPlan for NestedLoopJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // left side
-        let left_fut = if self.is_single_partition_for_left() {
-            // if the distribution of left is `SinglePartition`, just need to collect the left one
-            self.left_fut.once(|| {
-                // just one partition for the left side, and the first partition is all of data for left
-                load_left_specified_partition(0, self.left.clone(), context.clone())
-            })
-        } else {
-            // the distribution of left is not single partition, just need the specified partition for left
-            OnceFut::new(load_left_specified_partition(
-                partition,
-                self.left.clone(),
-                context.clone(),
-            ))
-        };
-        // right side
-        let right_side = if self.is_single_partition_for_right() {
-            // the distribution of right is `SinglePartition`
-            // if the distribution of right is `SinglePartition`, just need to collect the right one
-            self.right.execute(0, context)?
-        } else {
-            // the distribution of right is not single partition, just need the specified partition for right
-            self.right.execute(partition, context)?
-        };
+        let stream = self.right.execute(partition, context.clone())?;
+
+        let left_fut = self
+            .left_fut
+            .once(|| load_join_input(self.left.clone(), context));
 
         Ok(Box::pin(NestedLoopJoinStream {
             schema: self.schema.clone(),
             filter: self.filter.clone(),
             join_type: self.join_type,
             left_fut,
-            right: right_side,
+            right: stream,
             is_exhausted: false,
             visited_left_side: None,
             column_indices: self.column_indices.clone(),
+            state: self.state.clone(),
         }))
     }
 
@@ -250,61 +226,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
     }
 }
 
-// For the nested loop join, different join type need the different distribution for
-// left and right node.
-fn distribution_from_join_type(join_type: &JoinType) -> Vec<Distribution> {
-    match join_type {
-        JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
-            // need the left data, and the right should be one partition
-            vec![
-                Distribution::UnspecifiedDistribution,
-                Distribution::SinglePartition,
-            ]
-        }
-        JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
-            // need the right data, and the left should be one partition
-            vec![
-                Distribution::SinglePartition,
-                Distribution::UnspecifiedDistribution,
-            ]
-        }
-        JoinType::Full => {
-            // need the left and right data, and the left and right should be one partition
-            vec![Distribution::SinglePartition, Distribution::SinglePartition]
-        }
-    }
-}
-
-/// Asynchronously collect the result of the left child for the specified partition
-async fn load_left_specified_partition(
-    partition: usize,
-    left: Arc<dyn ExecutionPlan>,
-    context: Arc<TaskContext>,
-) -> Result<JoinLeftData> {
-    let start = Instant::now();
-    let stream = left.execute(partition, context)?;
-
-    // Load all batches and count the rows
-    let (batches, num_rows) = stream
-        .try_fold((Vec::new(), 0usize), |mut acc, batch| async {
-            acc.1 += batch.num_rows();
-            acc.0.push(batch);
-            Ok(acc)
-        })
-        .await?;
-
-    let merged_batch = concat_batches(&left.schema(), &batches, num_rows)?;
-
-    debug!(
-        "Built left-side of nested loop join containing {} rows in {} ms for partition {}",
-        num_rows,
-        start.elapsed().as_millis(),
-        partition
-    );
-
-    Ok(merged_batch)
-}
-
 /// A stream that issues [RecordBatch]es as they arrive from the right  of the join.
 struct NestedLoopJoinStream {
     /// Input schema
@@ -323,6 +244,8 @@ struct NestedLoopJoinStream {
     visited_left_side: Option<BooleanBufferBuilder>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
+    /// state
+    state: Arc<Mutex<NestedLoopJoinState>>,
     // TODO: support null aware equal
     // null_equals_null: bool
 }
@@ -452,30 +375,68 @@ impl NestedLoopJoinStream {
                         }
                         Err(e) => Some(Err(e)),
                     };
+
                     result
                 }
                 Some(err) => Some(err),
                 None => {
                     if need_produce_result_in_final(self.join_type) && !self.is_exhausted
                     {
-                        // use the global left bitmap to produce the left indices and right indices
-                        let (left_side, right_side) = get_final_indices_from_bit_map(
-                            visited_left_side,
-                            self.join_type,
-                        );
-                        let empty_right_batch =
-                            RecordBatch::new_empty(self.right.schema());
-                        // use the left and right indices to produce the batch result
-                        let result = build_batch_from_indices(
-                            &self.schema,
-                            left_data,
-                            &empty_right_batch,
-                            left_side,
-                            right_side,
-                            &self.column_indices,
-                        );
+                        // set flag
                         self.is_exhausted = true;
-                        Some(result)
+
+                        let mut state = self.state.lock();
+                        assert!(state.remain_partation_count > 0);
+
+                        // merge current visited_left_side to global state
+                        let num_rows = left_data.num_rows();
+                        let current_buffer = visited_left_side.finish();
+                        let merged_buffer = if let Some(global_buffer) =
+                            state.visited_left_buffer.as_ref()
+                        {
+                            buffer_bin_or(global_buffer, 0, &current_buffer, 0, num_rows)
+                        } else {
+                            current_buffer
+                        };
+
+                        state.remain_partation_count -= 1;
+                        // the states of other partitions have been merged to global, produce the final result.
+                        if state.remain_partation_count == 0 {
+                            let merged_visited_left_side =
+                                match merged_buffer.into_mutable() {
+                                    Ok(buffer) => BooleanBufferBuilder::new_from_buffer(
+                                        buffer, num_rows,
+                                    ),
+                                    Err(_) => {
+                                        return Some(Err(ArrowError::ComputeError(
+                                            "Build global visited_left_side error"
+                                                .to_string(),
+                                        )))
+                                    }
+                                };
+                            // use the global left bitmap to produce the left indices and right indices
+                            let (left_side, right_side) = get_final_indices_from_bit_map(
+                                &merged_visited_left_side,
+                                self.join_type,
+                            );
+                            let empty_right_batch =
+                                RecordBatch::new_empty(self.right.schema());
+                            // use the left and right indices to produce the batch result
+                            let result = build_batch_from_indices(
+                                &self.schema,
+                                left_data,
+                                &empty_right_batch,
+                                left_side,
+                                right_side,
+                                &self.column_indices,
+                            );
+
+                            state.visited_left_buffer = None;
+                            Some(result)
+                        } else {
+                            state.visited_left_buffer = Some(merged_buffer);
+                            None
+                        }
                     } else {
                         // end of the join loop
                         None
@@ -507,9 +468,7 @@ mod tests {
     use crate::physical_expr::expressions::BinaryExpr;
     use crate::{
         assert_batches_sorted_eq,
-        physical_plan::{
-            common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
-        },
+        physical_plan::{common, expressions::Column, memory::MemoryExec},
         test::{build_table_i32, columns},
     };
     use arrow::datatypes::{DataType, Field};
@@ -546,6 +505,21 @@ mod tests {
             ("a2", &vec![12, 2, 10]),
             ("b2", &vec![10, 2, 10]),
             ("c2", &vec![40, 80, 100]),
+        )
+    }
+
+    fn build_multi_part_right_table() -> Arc<dyn ExecutionPlan> {
+        let batch1 =
+            build_table_i32(("a2", &vec![12]), ("b2", &vec![10]), ("c2", &vec![40]));
+        let batch2 =
+            build_table_i32(("a2", &vec![2]), ("b2", &vec![2]), ("c2", &vec![80]));
+        let batch3 =
+            build_table_i32(("a2", &vec![10]), ("b2", &vec![10]), ("c2", &vec![100]));
+        let batch4 = build_table_i32(("a2", &vec![]), ("b2", &vec![]), ("c2", &vec![]));
+        let schema = batch1.schema();
+        Arc::new(
+            MemoryExec::try_new(&[vec![batch1, batch2, batch3, batch4]], schema, None)
+                .unwrap(),
         )
     }
 
@@ -600,36 +574,12 @@ mod tests {
         join_filter: Option<JoinFilter>,
         context: Arc<TaskContext>,
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
-        let partition_count = 4;
-        let mut output_partition = 1;
-        let distribution = distribution_from_join_type(join_type);
-        // left
-        let left = if matches!(distribution[0], Distribution::SinglePartition) {
-            left
-        } else {
-            output_partition = partition_count;
-            Arc::new(RepartitionExec::try_new(
-                left,
-                Partitioning::RoundRobinBatch(partition_count),
-            )?)
-        } as Arc<dyn ExecutionPlan>;
-
-        let right = if matches!(distribution[1], Distribution::SinglePartition) {
-            right
-        } else {
-            output_partition = partition_count;
-            Arc::new(RepartitionExec::try_new(
-                right,
-                Partitioning::RoundRobinBatch(partition_count),
-            )?)
-        } as Arc<dyn ExecutionPlan>;
-
-        // Use the required distribution for nested loop join to test partition data
+        let output_partation_count = right.output_partitioning().partition_count();
         let nested_loop_join =
             NestedLoopJoinExec::try_new(left, right, join_filter, join_type)?;
         let columns = columns(&nested_loop_join.schema());
         let mut batches = vec![];
-        for i in 0..output_partition {
+        for i in 0..output_partation_count {
             let stream = nested_loop_join.execute(i, context.clone())?;
             let more_batches = common::collect(stream).await?;
             batches.extend(
@@ -642,22 +592,55 @@ mod tests {
         Ok((columns, batches))
     }
 
+    // single batch collect
+    async fn join_collect(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        join_type: &JoinType,
+        join_filter: Option<JoinFilter>,
+        context: Arc<TaskContext>,
+    ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
+        // let right = if matches!(distribution[1], Distribution::SinglePartition) {
+        //     right
+        // } else {
+        //     output_partition = partition_count;
+        //     Arc::new(RepartitionExec::try_new(
+        //         right,
+        //         Partitioning::RoundRobinBatch(partition_count),
+        //     )?)
+        // } as Arc<dyn ExecutionPlan>;
+
+        // // Use the required distribution for nested loop join to test partition data
+        // let nested_loop_join =
+        //     NestedLoopJoinExec::try_new(left, right, join_filter, join_type)?;
+        // let columns = columns(&nested_loop_join.schema());
+        // let mut batches = vec![];
+        // for i in 0..output_partition {
+        //     let stream = nested_loop_join.execute(i, context.clone())?;
+        //     let more_batches = common::collect(stream).await?;
+        //     batches.extend(
+        //         more_batches
+        //             .into_iter()
+        //             .filter(|b| b.num_rows() > 0)
+        //             .collect::<Vec<_>>(),
+        //     );
+        // }
+        // Ok((columns, batches))
+        let join = NestedLoopJoinExec::try_new(left, right, join_filter, join_type)?;
+        let columns_header = columns(&join.schema());
+
+        let stream = join.execute(0, context.clone())?;
+        let batches = common::collect(stream).await?;
+
+        Ok((columns_header, batches))
+    }
+
     #[tokio::test]
     async fn join_inner_with_filter() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
         let left = build_left_table();
-        let right = build_right_table();
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
-            left,
-            right,
-            &JoinType::Inner,
-            Some(filter),
-            task_ctx,
-        )
-        .await?;
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+
         let expected = vec![
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b2 | c2 |",
@@ -666,7 +649,36 @@ mod tests {
             "+----+----+----+----+----+----+",
         ];
 
-        assert_batches_sorted_eq!(expected, &batches);
+        // single partation
+        {
+            let task_ctx = session_ctx.task_ctx();
+            let (columns, batches) = join_collect(
+                left.clone(),
+                build_right_table(),
+                &JoinType::Inner,
+                Some(filter.clone()),
+                task_ctx,
+            )
+            .await?;
+            assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+
+            assert_batches_sorted_eq!(expected, &batches);
+        }
+
+        // multiple partation
+        {
+            let task_ctx = session_ctx.task_ctx();
+            let (columns, batches) = multi_partitioned_join_collect(
+                left,
+                build_multi_part_right_table(),
+                &JoinType::Inner,
+                Some(filter),
+                task_ctx,
+            )
+            .await?;
+            assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+            assert_batches_sorted_eq!(expected, &batches);
+        }
 
         Ok(())
     }
@@ -674,20 +686,9 @@ mod tests {
     #[tokio::test]
     async fn join_left_with_filter() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
         let left = build_left_table();
-        let right = build_right_table();
-
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
-            left,
-            right,
-            &JoinType::Left,
-            Some(filter),
-            task_ctx,
-        )
-        .await?;
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+
         let expected = vec![
             "+----+----+-----+----+----+----+",
             "| a1 | b1 | c1  | a2 | b2 | c2 |",
@@ -698,7 +699,37 @@ mod tests {
             "+----+----+-----+----+----+----+",
         ];
 
-        assert_batches_sorted_eq!(expected, &batches);
+        // single partation
+        {
+            let right = build_right_table();
+            let task_ctx = session_ctx.task_ctx();
+            let (columns, batches) = join_collect(
+                left.clone(),
+                right.clone(),
+                &JoinType::Left,
+                Some(filter.clone()),
+                task_ctx.clone(),
+            )
+            .await?;
+            assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+            assert_batches_sorted_eq!(expected, &batches);
+        }
+
+        // multiple partation
+        {
+            let right = build_multi_part_right_table();
+            let task_ctx = session_ctx.task_ctx();
+            let (columns, batches) = multi_partitioned_join_collect(
+                left,
+                right,
+                &JoinType::Left,
+                Some(filter),
+                task_ctx,
+            )
+            .await?;
+            assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+            assert_batches_sorted_eq!(expected, &batches);
+        }
 
         Ok(())
     }
@@ -706,20 +737,9 @@ mod tests {
     #[tokio::test]
     async fn join_right_with_filter() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
         let left = build_left_table();
-        let right = build_right_table();
-
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
-            left,
-            right,
-            &JoinType::Right,
-            Some(filter),
-            task_ctx,
-        )
-        .await?;
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+
         let expected = vec![
             "+----+----+----+----+----+-----+",
             "| a1 | b1 | c1 | a2 | b2 | c2  |",
@@ -730,7 +750,37 @@ mod tests {
             "+----+----+----+----+----+-----+",
         ];
 
-        assert_batches_sorted_eq!(expected, &batches);
+        // single partation
+        {
+            let right = build_right_table();
+            let task_ctx = session_ctx.task_ctx();
+            let (columns, batches) = join_collect(
+                left.clone(),
+                right.clone(),
+                &JoinType::Right,
+                Some(filter.clone()),
+                task_ctx.clone(),
+            )
+            .await?;
+            assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+            assert_batches_sorted_eq!(expected, &batches);
+        }
+
+        // multiple partation
+        {
+            let right = build_multi_part_right_table();
+            let task_ctx = session_ctx.task_ctx();
+            let (columns, batches) = multi_partitioned_join_collect(
+                left,
+                right,
+                &JoinType::Right,
+                Some(filter),
+                task_ctx,
+            )
+            .await?;
+            assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+            assert_batches_sorted_eq!(expected, &batches);
+        }
 
         Ok(())
     }
@@ -738,20 +788,8 @@ mod tests {
     #[tokio::test]
     async fn join_full_with_filter() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
         let left = build_left_table();
-        let right = build_right_table();
-
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
-            left,
-            right,
-            &JoinType::Full,
-            Some(filter),
-            task_ctx,
-        )
-        .await?;
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
         let expected = vec![
             "+----+----+-----+----+----+-----+",
             "| a1 | b1 | c1  | a2 | b2 | c2  |",
@@ -764,7 +802,37 @@ mod tests {
             "+----+----+-----+----+----+-----+",
         ];
 
-        assert_batches_sorted_eq!(expected, &batches);
+        // single partation
+        {
+            let right = build_right_table();
+            let task_ctx = session_ctx.task_ctx();
+            let (columns, batches) = join_collect(
+                left.clone(),
+                right.clone(),
+                &JoinType::Full,
+                Some(filter.clone()),
+                task_ctx.clone(),
+            )
+            .await?;
+            assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+            assert_batches_sorted_eq!(expected, &batches);
+        }
+
+        // multiple partation
+        {
+            let right = build_multi_part_right_table();
+            let task_ctx = session_ctx.task_ctx();
+            let (columns, batches) = multi_partitioned_join_collect(
+                left,
+                right,
+                &JoinType::Full,
+                Some(filter),
+                task_ctx,
+            )
+            .await?;
+            assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+            assert_batches_sorted_eq!(expected, &batches);
+        }
 
         Ok(())
     }
@@ -772,20 +840,8 @@ mod tests {
     #[tokio::test]
     async fn join_left_semi_with_filter() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
         let left = build_left_table();
-        let right = build_right_table();
-
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
-            left,
-            right,
-            &JoinType::LeftSemi,
-            Some(filter),
-            task_ctx,
-        )
-        .await?;
-        assert_eq!(columns, vec!["a1", "b1", "c1"]);
         let expected = vec![
             "+----+----+----+",
             "| a1 | b1 | c1 |",
@@ -794,7 +850,37 @@ mod tests {
             "+----+----+----+",
         ];
 
-        assert_batches_sorted_eq!(expected, &batches);
+        // single partation
+        {
+            let right = build_right_table();
+            let task_ctx = session_ctx.task_ctx();
+            let (columns, batches) = join_collect(
+                left.clone(),
+                right.clone(),
+                &JoinType::LeftSemi,
+                Some(filter.clone()),
+                task_ctx.clone(),
+            )
+            .await?;
+            assert_eq!(columns, vec!["a1", "b1", "c1"]);
+            assert_batches_sorted_eq!(expected, &batches);
+        }
+
+        // multiple partation
+        {
+            let right = build_multi_part_right_table();
+            let task_ctx = session_ctx.task_ctx();
+            let (columns, batches) = multi_partitioned_join_collect(
+                left,
+                right,
+                &JoinType::LeftSemi,
+                Some(filter),
+                task_ctx,
+            )
+            .await?;
+            assert_eq!(columns, vec!["a1", "b1", "c1"]);
+            assert_batches_sorted_eq!(expected, &batches);
+        }
 
         Ok(())
     }
@@ -802,20 +888,8 @@ mod tests {
     #[tokio::test]
     async fn join_left_anti_with_filter() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
         let left = build_left_table();
-        let right = build_right_table();
-
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
-            left,
-            right,
-            &JoinType::LeftAnti,
-            Some(filter),
-            task_ctx,
-        )
-        .await?;
-        assert_eq!(columns, vec!["a1", "b1", "c1"]);
         let expected = vec![
             "+----+----+-----+",
             "| a1 | b1 | c1  |",
@@ -825,7 +899,37 @@ mod tests {
             "+----+----+-----+",
         ];
 
-        assert_batches_sorted_eq!(expected, &batches);
+        // single partation
+        {
+            let right = build_right_table();
+            let task_ctx = session_ctx.task_ctx();
+            let (columns, batches) = join_collect(
+                left.clone(),
+                right.clone(),
+                &JoinType::LeftAnti,
+                Some(filter.clone()),
+                task_ctx.clone(),
+            )
+            .await?;
+            assert_eq!(columns, vec!["a1", "b1", "c1"]);
+            assert_batches_sorted_eq!(expected, &batches);
+        }
+
+        // multiple partation
+        {
+            let right = build_multi_part_right_table();
+            let task_ctx = session_ctx.task_ctx();
+            let (columns, batches) = multi_partitioned_join_collect(
+                left,
+                right,
+                &JoinType::LeftAnti,
+                Some(filter),
+                task_ctx,
+            )
+            .await?;
+            assert_eq!(columns, vec!["a1", "b1", "c1"]);
+            assert_batches_sorted_eq!(expected, &batches);
+        }
 
         Ok(())
     }
@@ -833,20 +937,8 @@ mod tests {
     #[tokio::test]
     async fn join_right_semi_with_filter() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
         let left = build_left_table();
-        let right = build_right_table();
-
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
-            left,
-            right,
-            &JoinType::RightSemi,
-            Some(filter),
-            task_ctx,
-        )
-        .await?;
-        assert_eq!(columns, vec!["a2", "b2", "c2"]);
         let expected = vec![
             "+----+----+----+",
             "| a2 | b2 | c2 |",
@@ -855,7 +947,37 @@ mod tests {
             "+----+----+----+",
         ];
 
-        assert_batches_sorted_eq!(expected, &batches);
+        // single partation
+        {
+            let right = build_right_table();
+            let task_ctx = session_ctx.task_ctx();
+            let (columns, batches) = join_collect(
+                left.clone(),
+                right.clone(),
+                &JoinType::RightSemi,
+                Some(filter.clone()),
+                task_ctx.clone(),
+            )
+            .await?;
+            assert_eq!(columns, vec!["a2", "b2", "c2"]);
+            assert_batches_sorted_eq!(expected, &batches);
+        }
+
+        // multiple partation
+        {
+            let right = build_multi_part_right_table();
+            let task_ctx = session_ctx.task_ctx();
+            let (columns, batches) = multi_partitioned_join_collect(
+                left,
+                right,
+                &JoinType::RightSemi,
+                Some(filter),
+                task_ctx,
+            )
+            .await?;
+            assert_eq!(columns, vec!["a2", "b2", "c2"]);
+            assert_batches_sorted_eq!(expected, &batches);
+        }
 
         Ok(())
     }
@@ -863,20 +985,8 @@ mod tests {
     #[tokio::test]
     async fn join_right_anti_with_filter() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
         let left = build_left_table();
-        let right = build_right_table();
-
         let filter = prepare_join_filter();
-        let (columns, batches) = multi_partitioned_join_collect(
-            left,
-            right,
-            &JoinType::RightAnti,
-            Some(filter),
-            task_ctx,
-        )
-        .await?;
-        assert_eq!(columns, vec!["a2", "b2", "c2"]);
         let expected = vec![
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
@@ -886,7 +996,37 @@ mod tests {
             "+----+----+-----+",
         ];
 
-        assert_batches_sorted_eq!(expected, &batches);
+        // single partation
+        {
+            let right = build_right_table();
+            let task_ctx = session_ctx.task_ctx();
+            let (columns, batches) = join_collect(
+                left.clone(),
+                right.clone(),
+                &JoinType::RightAnti,
+                Some(filter.clone()),
+                task_ctx.clone(),
+            )
+            .await?;
+            assert_eq!(columns, vec!["a2", "b2", "c2"]);
+            assert_batches_sorted_eq!(expected, &batches);
+        }
+
+        // multiple partation
+        {
+            let right = build_multi_part_right_table();
+            let task_ctx = session_ctx.task_ctx();
+            let (columns, batches) = multi_partitioned_join_collect(
+                left,
+                right,
+                &JoinType::RightAnti,
+                Some(filter),
+                task_ctx,
+            )
+            .await?;
+            assert_eq!(columns, vec!["a2", "b2", "c2"]);
+            assert_batches_sorted_eq!(expected, &batches);
+        }
 
         Ok(())
     }
