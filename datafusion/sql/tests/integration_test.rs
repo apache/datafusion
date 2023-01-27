@@ -189,6 +189,10 @@ Dml: op=[Insert] table=[test_decimal]
     "INSERT INTO test_decimal (id, price, price) VALUES (1, 2, 3), (4, 5, 6)",
     "Schema error: Schema contains duplicate unqualified field name 'price'"
 )]
+#[case::non_existing_column(
+    "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
+    "Schema error: No field named 'nonexistent'. Valid fields are 'id', 'price'."
+)]
 #[case::type_mismatch(
     "INSERT INTO test_decimal SELECT '2022-01-01', to_timestamp('2022-01-01T12:00:00')",
     "Error during planning: Cannot automatically convert Timestamp(Nanosecond, None) to Decimal128(10, 2)"
