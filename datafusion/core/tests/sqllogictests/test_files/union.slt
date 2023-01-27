@@ -136,7 +136,7 @@ SELECT SUM(d) FROM (
 statement ok
 CREATE table t as SELECT 1 as a
 
-query T
+query I
 SELECT COUNT(*) FROM (
     SELECT a from t
     UNION ALL
@@ -179,7 +179,7 @@ Alice
 John
 
 # union_with_type_coercion
-query T
+query IT
 (
     SELECT id, name FROM t1
     EXCEPT
