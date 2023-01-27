@@ -34,6 +34,8 @@ use datafusion_expr::{AggregateUDF, ScalarUDF};
 use datafusion_sql::parser::DFParser;
 use datafusion_sql::planner::{ContextProvider, ParserOptions, SqlToRel};
 
+use rstest::rstest;
+
 #[test]
 fn parse_decimals() {
     let test_data = [
@@ -163,7 +165,7 @@ fn plan_insert() {
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
     let plan = r#"
 Dml: op=[Insert] table=[person]
-  Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+  Projection: CAST(column1 AS id AS UInt32), column2 AS first_name, column3 AS last_name
     Values: (Int64(1), Utf8("Alan"), Utf8("Turing"))
     "#
     .trim();
@@ -175,12 +177,24 @@ fn plan_update() {
     let sql = "update person set last_name='Kay' where id=1";
     let plan = r#"
 Dml: op=[Update] table=[person]
-  Projection: person.age AS age, person.birth_date AS birth_date, person.first_name AS first_name, person.id AS id, Utf8("Kay") AS last_name, person.salary AS salary, person.state AS state, person.😀 AS 😀
+  Projection: person.id AS id, person.first_name AS first_name, Utf8("Kay") AS last_name, person.age AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
     Filter: id = Int64(1)
       TableScan: person
       "#
     .trim();
     quick_test(sql, plan);
+}
+
+#[rstest]
+#[case::missing_assignement_target("UPDATE person SET doesnotexist = true")]
+#[case::missing_assignement_expression("UPDATE person SET age = doesnotexist + 42")]
+#[case::missing_selection_expression(
+    "UPDATE person SET age = 42 WHERE doesnotexist = true"
+)]
+#[test]
+fn update_column_does_not_exist(#[case] sql: &str) {
+    let err = logical_plan(sql).expect_err("query should have failed");
+    assert_field_not_found(err, "doesnotexist");
 }
 
 #[test]
@@ -1463,6 +1477,27 @@ fn select_7480_2() {
 fn create_external_table_csv() {
     let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'";
     let expected = "CreateExternalTable: Bare { table: \"t\" }";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn create_schema_with_quoted_name() {
+    let sql = "CREATE SCHEMA \"quoted_schema_name\"";
+    let expected = "CreateCatalogSchema: \"quoted_schema_name\"";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn create_schema_with_quoted_unnormalized_name() {
+    let sql = "CREATE SCHEMA \"Foo\"";
+    let expected = "CreateCatalogSchema: \"Foo\"";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn create_schema_with_unquoted_normalized_name() {
+    let sql = "CREATE SCHEMA Foo";
+    let expected = "CreateCatalogSchema: \"foo\"";
     quick_test(sql, expected);
 }
 
@@ -3360,7 +3395,7 @@ fn test_prepare_statement_update_infer() {
 
     let expected_plan = r#"
 Dml: op=[Update] table=[person]
-  Projection: $1 AS age, person.birth_date AS birth_date, person.first_name AS first_name, person.id AS id, person.last_name AS last_name, person.salary AS salary, person.state AS state, person.😀 AS 😀
+  Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
     Filter: id = $2
       TableScan: person
         "#
@@ -3380,7 +3415,7 @@ Dml: op=[Update] table=[person]
     let param_values = vec![ScalarValue::Int32(Some(42)), ScalarValue::UInt32(Some(1))];
     let expected_plan = r#"
 Dml: op=[Update] table=[person]
-  Projection: Int32(42) AS age, person.birth_date AS birth_date, person.first_name AS first_name, person.id AS id, person.last_name AS last_name, person.salary AS salary, person.state AS state, person.😀 AS 😀
+  Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
     Filter: id = UInt32(1)
       TableScan: person
         "#

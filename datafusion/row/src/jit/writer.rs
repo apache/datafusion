@@ -139,7 +139,7 @@ fn gen_write_row(schema: &Schema, assembler: &Assembler) -> Result<GeneratedFunc
     let mut b = builder.enter_block();
     for (i, f) in schema.fields().iter().enumerate() {
         let dt = f.data_type();
-        let arr = format!("a{}", i);
+        let arr = format!("a{i}");
         b.declare_as(
             &arr,
             b.call("column", vec![b.id("batch")?, b.lit_i(i as i64)])?,
@@ -182,9 +182,9 @@ fn gen_write_row(schema: &Schema, assembler: &Assembler) -> Result<GeneratedFunc
     Ok(b.build())
 }
 
-fn write_typed_field_stmt<'a>(
+fn write_typed_field_stmt(
     dt: &DataType,
-    b: &mut CodeBlock<'a>,
+    b: &mut CodeBlock,
     params: Vec<Expr>,
 ) -> Result<()> {
     use DataType::*;

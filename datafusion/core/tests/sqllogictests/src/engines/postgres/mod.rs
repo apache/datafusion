@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use async_trait::async_trait;
@@ -47,13 +48,13 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub struct Postgres {
     client: tokio_postgres::Client,
     join_handle: JoinHandle<()>,
-    /// Filename, for display purposes
-    file_name: String,
+    /// Relative test file path
+    relative_path: PathBuf,
 }
 
 impl Postgres {
-    /// Creates a runner for executing queries against an existing
-    /// posgres connection. `file_name` is used for display output
+    /// Creates a runner for executing queries against an existing postgres connection.
+    /// `relative_path` is used for display output and to create a postgres schema.
     ///
     /// The database connection details can be overridden by the
     /// `PG_URI` environment variable.
@@ -65,9 +66,7 @@ impl Postgres {
     /// ```
     ///
     /// See https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html#url for format
-    pub async fn connect(file_name: impl Into<String>) -> Result<Self> {
-        let file_name = file_name.into();
-
+    pub async fn connect(relative_path: PathBuf) -> Result<Self> {
         let uri =
             std::env::var("PG_URI").map_or(PG_URI.to_string(), std::convert::identity);
 
@@ -89,26 +88,26 @@ impl Postgres {
             }
         });
 
-        let schema = schema_name(&file_name);
+        let schema = schema_name(&relative_path);
 
         // create a new clean schema for running the test
         debug!("Creating new empty schema '{schema}'");
         client
-            .execute(&format!("DROP SCHEMA IF EXISTS {} CASCADE", schema), &[])
+            .execute(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"), &[])
             .await?;
 
         client
-            .execute(&format!("CREATE SCHEMA {}", schema), &[])
+            .execute(&format!("CREATE SCHEMA {schema}"), &[])
             .await?;
 
         client
-            .execute(&format!("SET search_path TO {}", schema), &[])
+            .execute(&format!("SET search_path TO {schema}"), &[])
             .await?;
 
         Ok(Self {
             client,
             join_handle,
-            file_name,
+            relative_path,
         })
     }
 
@@ -168,7 +167,7 @@ impl Postgres {
 
         // read the input file as a string ans feed it to the copy command
         let data = std::fs::read_to_string(filename)
-            .map_err(|e| Error::Copy(format!("Error reading {}: {}", filename, e)))?;
+            .map_err(|e| Error::Copy(format!("Error reading {filename}: {e}")))?;
 
         let mut data_stream = futures::stream::iter(vec![Ok(Bytes::from(data))]).boxed();
 
@@ -188,12 +187,18 @@ fn no_quotes(t: &str) -> &str {
 
 /// Given a file name like pg_compat_foo.slt
 /// return a schema name
-fn schema_name(file_name: &str) -> &str {
-    file_name
-        .split('.')
-        .next()
-        .unwrap_or("default_schema")
-        .trim_start_matches("pg_")
+fn schema_name(relative_path: &Path) -> String {
+    relative_path
+        .file_name()
+        .map(|name| {
+            name.to_string_lossy()
+                .chars()
+                .filter(|ch| ch.is_ascii_alphabetic())
+                .collect::<String>()
+                .trim_start_matches("pg_")
+                .to_string()
+        })
+        .unwrap_or_else(|| "default_schema".to_string())
 }
 
 impl Drop for Postgres {
@@ -231,7 +236,7 @@ fn cell_to_string(row: &Row, column: &Column, idx: usize) -> String {
         Type::TIMESTAMP => {
             let value: Option<NaiveDateTime> = row.get(idx);
             value
-                .map(|d| format!("{:?}", d))
+                .map(|d| format!("{d:?}"))
                 .unwrap_or_else(|| "NULL".to_string())
         }
         Type::BOOL => make_string!(row, idx, bool, bool_to_str),
@@ -249,7 +254,11 @@ impl sqllogictest::AsyncDB for Postgres {
     type Error = Error;
 
     async fn run(&mut self, sql: &str) -> Result<DBOutput, Self::Error> {
-        println!("[{}] Running query: \"{}\"", self.file_name, sql);
+        println!(
+            "[{}] Running query: \"{}\"",
+            self.relative_path.display(),
+            sql
+        );
 
         let lower_sql = sql.trim_start().to_ascii_lowercase();
 

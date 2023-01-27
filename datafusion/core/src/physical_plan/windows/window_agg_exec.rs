@@ -168,8 +168,8 @@ impl ExecutionPlan for WindowAggExec {
         self.input().output_ordering()
     }
 
-    fn maintains_input_order(&self) -> bool {
-        true
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
     }
 
     fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {

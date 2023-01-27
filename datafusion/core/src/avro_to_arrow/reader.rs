@@ -20,7 +20,7 @@ use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::record_batch::RecordBatch;
 use crate::error::Result;
 use arrow::error::Result as ArrowResult;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek};
 use std::sync::Arc;
 
 /// Avro file reader builder
@@ -112,7 +112,7 @@ impl ReaderBuilder {
             Some(schema) => schema,
             None => Arc::new(super::read_avro_schema_from_reader(&mut source)?),
         };
-        source.seek(SeekFrom::Start(0))?;
+        source.rewind()?;
         Reader::try_new(source, schema, self.batch_size, self.projection)
     }
 }
@@ -178,7 +178,7 @@ mod tests {
 
     fn build_reader(name: &str) -> Reader<File> {
         let testdata = crate::test_util::arrow_test_data();
-        let filename = format!("{}/avro/{}", testdata, name);
+        let filename = format!("{testdata}/avro/{name}");
         let builder = ReaderBuilder::new().read_schema().with_batch_size(64);
         builder.build(File::open(filename).unwrap()).unwrap()
     }

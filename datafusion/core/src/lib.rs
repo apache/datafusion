@@ -107,13 +107,13 @@
 //! that it passes through until a result is obtained. Broadly, they are:
 //!
 //! 1. The string is parsed to an Abstract syntax tree (AST) using [sqlparser](https://docs.rs/sqlparser/0.6.1/sqlparser/).
-//! 2. The planner [`SqlToRel`](sql::planner::SqlToRel) converts logical expressions on the AST to logical expressions [`Expr`s](logical_plan::Expr).
-//! 3. The planner [`SqlToRel`](sql::planner::SqlToRel) converts logical nodes on the AST to a [`LogicalPlan`](logical_plan::LogicalPlan).
-//! 4. [`OptimizerRules`](optimizer::optimizer::OptimizerRule) are applied to the [`LogicalPlan`](logical_plan::LogicalPlan) to optimize it.
-//! 5. The [`LogicalPlan`](logical_plan::LogicalPlan) is converted to an [`ExecutionPlan`](physical_plan::ExecutionPlan) by a [`PhysicalPlanner`](physical_plan::PhysicalPlanner)
+//! 2. The planner [`SqlToRel`](sql::planner::SqlToRel) converts logical expressions on the AST to logical expressions [`Expr`s](datafusion_expr::Expr).
+//! 3. The planner [`SqlToRel`](sql::planner::SqlToRel) converts logical nodes on the AST to a [`LogicalPlan`](datafusion_expr::LogicalPlan).
+//! 4. [`OptimizerRules`](optimizer::optimizer::OptimizerRule) are applied to the [`LogicalPlan`](datafusion_expr::LogicalPlan) to optimize it.
+//! 5. The [`LogicalPlan`](datafusion_expr::LogicalPlan) is converted to an [`ExecutionPlan`](physical_plan::ExecutionPlan) by a [`PhysicalPlanner`](physical_plan::PhysicalPlanner)
 //! 6. The [`ExecutionPlan`](physical_plan::ExecutionPlan) is executed against data through the [`SessionContext`](execution::context::SessionContext)
 //!
-//! With a [`DataFrame`](dataframe::DataFrame) API, steps 1-3 are not used as the DataFrame builds the [`LogicalPlan`](logical_plan::LogicalPlan) directly.
+//! With a [`DataFrame`](dataframe::DataFrame) API, steps 1-3 are not used as the DataFrame builds the [`LogicalPlan`](datafusion_expr::LogicalPlan) directly.
 //!
 //! Phases 1-5 are typically cheap when compared to phase 6, and thus DataFusion puts a
 //! lot of effort to ensure that phase 6 runs efficiently and without errors.
@@ -122,11 +122,11 @@
 //!
 //! ### Logical plan
 //!
-//! Logical planning yields [`logical plans`](logical_plan::LogicalPlan) and [`logical expressions`](logical_plan::Expr).
+//! Logical planning yields [`logical plans`](datafusion_expr::LogicalPlan) and [`logical expressions`](datafusion_expr::Expr).
 //! These are [`Schema`](arrow::datatypes::Schema)-aware traits that represent statements whose result is independent of how it should physically be executed.
 //!
-//! A [`LogicalPlan`](logical_plan::LogicalPlan) is a Directed Acyclic Graph (DAG) of other [`LogicalPlan`s](logical_plan::LogicalPlan) and each node contains logical expressions ([`Expr`s](logical_plan::Expr)).
-//! All of these are located in [`logical_plan`](logical_plan).
+//! A [`LogicalPlan`](datafusion_expr::LogicalPlan) is a Directed Acyclic Graph (DAG) of other [`LogicalPlan`s](datafusion_expr::LogicalPlan) and each node contains logical expressions ([`Expr`s](logical_expr::Expr)).
+//! All of these are located in [`datafusion_expr`](datafusion_expr).
 //!
 //! ### Physical plan
 //!
