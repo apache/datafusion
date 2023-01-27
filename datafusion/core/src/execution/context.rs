@@ -103,7 +103,7 @@ use datafusion_sql::planner::object_name_to_table_reference;
 use uuid::Uuid;
 
 use super::options::{
-    AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
+    AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions, ReadOptions,
 };
 
 /// SessionContext is the main interface for executing queries with DataFusion. It stands for
@@ -607,6 +607,32 @@ impl SessionContext {
             .insert(f.name.clone(), Arc::new(f));
     }
 
+    /// Creates a [`DataFrame`] for reading a data source.
+    ///
+    /// For more control such as reading multiple files, you can use
+    /// [`read_table`](Self::read_table) with a [`ListingTable`].
+    async fn _read_type<'a>(
+        &self,
+        table_path: impl AsRef<str>,
+        options: impl ReadOptions<'a>,
+    ) -> Result<DataFrame> {
+        let table_path = ListingTableUrl::parse(table_path)?;
+        let session_config = self.copied_config();
+        let listing_options = options.to_listing_options(&session_config);
+        let resolved_schema = match options
+            .get_resolved_schema(&session_config, self.state(), table_path.clone())
+            .await
+        {
+            Ok(resolved_schema) => resolved_schema,
+            Err(e) => return Err(e),
+        };
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+        let provider = ListingTable::try_new(config)?;
+        self.read_table(Arc::new(provider))
+    }
+
     /// Creates a [`DataFrame`] for reading an Avro data source.
     ///
     /// For more control such as reading multiple files, you can use
@@ -616,31 +642,7 @@ impl SessionContext {
         table_path: impl AsRef<str>,
         options: AvroReadOptions<'_>,
     ) -> Result<DataFrame> {
-        let table_path = ListingTableUrl::parse(table_path)?;
-        let target_partitions = self.copied_config().target_partitions();
-
-        let listing_options = options.to_listing_options(target_partitions);
-
-        let resolved_schema = match (options.schema, options.infinite) {
-            (Some(s), _) => Arc::new(s.to_owned()),
-            (None, false) => {
-                listing_options
-                    .infer_schema(&self.state(), &table_path)
-                    .await?
-            }
-            (None, true) => {
-                return Err(DataFusionError::Plan(
-                    "Schema inference for infinite data sources is not supported."
-                        .to_string(),
-                ))
-            }
-        };
-
-        let config = ListingTableConfig::new(table_path)
-            .with_listing_options(listing_options)
-            .with_schema(resolved_schema);
-        let provider = ListingTable::try_new(config)?;
-        self.read_table(Arc::new(provider))
+        self._read_type(table_path, options).await
     }
 
     /// Creates a [`DataFrame`] for reading an Json data source.
@@ -652,31 +654,7 @@ impl SessionContext {
         table_path: impl AsRef<str>,
         options: NdJsonReadOptions<'_>,
     ) -> Result<DataFrame> {
-        let table_path = ListingTableUrl::parse(table_path)?;
-        let target_partitions = self.copied_config().target_partitions();
-
-        let listing_options = options.to_listing_options(target_partitions);
-
-        let resolved_schema = match (options.schema, options.infinite) {
-            (Some(s), _) => Arc::new(s.to_owned()),
-            (None, false) => {
-                listing_options
-                    .infer_schema(&self.state(), &table_path)
-                    .await?
-            }
-            (None, true) => {
-                return Err(DataFusionError::Plan(
-                    "Schema inference for infinite data sources is not supported."
-                        .to_string(),
-                ))
-            }
-        };
-        let config = ListingTableConfig::new(table_path)
-            .with_listing_options(listing_options)
-            .with_schema(resolved_schema);
-        let provider = ListingTable::try_new(config)?;
-
-        self.read_table(Arc::new(provider))
+        self._read_type(table_path, options).await
     }
 
     /// Creates an empty DataFrame.
@@ -696,29 +674,7 @@ impl SessionContext {
         table_path: impl AsRef<str>,
         options: CsvReadOptions<'_>,
     ) -> Result<DataFrame> {
-        let table_path = ListingTableUrl::parse(table_path)?;
-        let target_partitions = self.copied_config().target_partitions();
-        let listing_options = options.to_listing_options(target_partitions);
-        let resolved_schema = match (options.schema, options.infinite) {
-            (Some(s), _) => Arc::new(s.to_owned()),
-            (None, false) => {
-                listing_options
-                    .infer_schema(&self.state(), &table_path)
-                    .await?
-            }
-            (None, true) => {
-                return Err(DataFusionError::Plan(
-                    "Schema inference for infinite data sources is not supported."
-                        .to_string(),
-                ))
-            }
-        };
-        let config = ListingTableConfig::new(table_path.clone())
-            .with_listing_options(listing_options)
-            .with_schema(resolved_schema);
-
-        let provider = ListingTable::try_new(config)?;
-        self.read_table(Arc::new(provider))
+        self._read_type(table_path, options).await
     }
 
     /// Creates a [`DataFrame`] for reading a Parquet data source.
@@ -730,20 +686,7 @@ impl SessionContext {
         table_path: impl AsRef<str>,
         options: ParquetReadOptions<'_>,
     ) -> Result<DataFrame> {
-        let table_path = ListingTableUrl::parse(table_path)?;
-        let listing_options = options.to_listing_options(&self.state.read().config);
-
-        // with parquet we resolve the schema in all cases
-        let resolved_schema = listing_options
-            .infer_schema(&self.state(), &table_path)
-            .await?;
-
-        let config = ListingTableConfig::new(table_path)
-            .with_listing_options(listing_options)
-            .with_schema(resolved_schema);
-
-        let provider = ListingTable::try_new(config)?;
-        self.read_table(Arc::new(provider))
+        self._read_type(table_path, options).await
     }
 
     /// Creates a [`DataFrame`] for a [`TableProvider`] such as a
@@ -812,8 +755,7 @@ impl SessionContext {
         table_path: &str,
         options: CsvReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options =
-            options.to_listing_options(self.copied_config().target_partitions());
+        let listing_options = options.to_listing_options(&self.copied_config());
 
         self.register_listing_table(
             name,
@@ -835,8 +777,7 @@ impl SessionContext {
         table_path: &str,
         options: NdJsonReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options =
-            options.to_listing_options(self.copied_config().target_partitions());
+        let listing_options = options.to_listing_options(&self.copied_config());
 
         self.register_listing_table(
             name,
@@ -872,8 +813,7 @@ impl SessionContext {
         table_path: &str,
         options: AvroReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options =
-            options.to_listing_options(self.copied_config().target_partitions());
+        let listing_options = options.to_listing_options(&self.copied_config());
 
         self.register_listing_table(
             name,

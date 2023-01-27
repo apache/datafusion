@@ -179,29 +179,21 @@ fn optimize_partitions(
         let children = plan
             .children()
             .iter()
-            .map(|child| {
-                // does plan itelf (not parent) require its input to
+            .enumerate()
+            .map(|(idx, child)| {
+                // Does plan itself (not its parent) require its input to
                 // be sorted in some way?
                 let required_input_ordering =
                     plan_has_required_input_ordering(plan.as_ref());
 
-                let can_reorder_child = if can_reorder {
-                    // parent of `plan` will not use any particular order
-
-                    // if `plan` itself doesn't need order OR
-                    !required_input_ordering ||
-                    // child has no order to preserve
-                        child.output_ordering().is_none()
-                } else {
-                    // parent would like to use the `plan`'s output
-                    // order.
-
-                    // if `plan` doesn't maintain the input order and
-                    // doesn't need the child's output order itself
-                    (!plan.maintains_input_order() &&  !required_input_ordering) ||
-                    // child has no ordering to preserve
-                        child.output_ordering().is_none()
-                };
+                // We can reorder a child if:
+                //   - It has no ordering to preserve, or
+                //   - Its parent has no required input ordering and does not
+                //     maintain input ordering.
+                // Check if this condition holds:
+                let can_reorder_child = child.output_ordering().is_none()
+                    || (!required_input_ordering
+                        && (can_reorder || !plan.maintains_input_order()[idx]));
 
                 optimize_partitions(
                     target_partitions,

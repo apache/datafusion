@@ -781,6 +781,7 @@ mod tests {
     use crate::prelude::*;
     use crate::{
         datasource::file_format::{avro::AvroFormat, parquet::ParquetFormat},
+        execution::options::ReadOptions,
         logical_expr::{col, lit},
         test::{columns, object_store::register_test_store},
     };
@@ -1097,7 +1098,8 @@ mod tests {
         #[values(true, false)] infinite_data: bool,
     ) -> Result<()> {
         let config = CsvReadOptions::new().mark_infinite(infinite_data);
-        let listing_options = config.to_listing_options(1);
+        let session_config = SessionConfig::new().with_target_partitions(1);
+        let listing_options = config.to_listing_options(&session_config);
         unbounded_table_helper(FileType::CSV, listing_options, infinite_data).await
     }
 
@@ -1107,7 +1109,8 @@ mod tests {
         #[values(true, false)] infinite_data: bool,
     ) -> Result<()> {
         let config = NdJsonReadOptions::default().mark_infinite(infinite_data);
-        let listing_options = config.to_listing_options(1);
+        let session_config = SessionConfig::new().with_target_partitions(1);
+        let listing_options = config.to_listing_options(&session_config);
         unbounded_table_helper(FileType::JSON, listing_options, infinite_data).await
     }
 
@@ -1117,7 +1120,8 @@ mod tests {
         #[values(true, false)] infinite_data: bool,
     ) -> Result<()> {
         let config = AvroReadOptions::default().mark_infinite(infinite_data);
-        let listing_options = config.to_listing_options(1);
+        let session_config = SessionConfig::new().with_target_partitions(1);
+        let listing_options = config.to_listing_options(&session_config);
         unbounded_table_helper(FileType::AVRO, listing_options, infinite_data).await
     }
 

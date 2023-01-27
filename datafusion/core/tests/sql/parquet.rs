@@ -18,7 +18,7 @@
 use std::{fs, path::Path};
 
 use ::parquet::arrow::ArrowWriter;
-use datafusion::datasource::listing::ListingOptions;
+use datafusion::{datasource::listing::ListingOptions, execution::options::ReadOptions};
 use datafusion_common::cast::{as_list_array, as_primitive_array, as_string_array};
 use tempfile::TempDir;
 

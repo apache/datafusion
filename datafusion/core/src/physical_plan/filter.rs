@@ -118,9 +118,9 @@ impl ExecutionPlan for FilterExec {
         self.input.output_ordering()
     }
 
-    fn maintains_input_order(&self) -> bool {
+    fn maintains_input_order(&self) -> Vec<bool> {
         // tell optimizer this operator doesn't reorder its input
-        true
+        vec![true]
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {

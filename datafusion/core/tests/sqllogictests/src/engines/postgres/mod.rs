@@ -93,15 +93,15 @@ impl Postgres {
         // create a new clean schema for running the test
         debug!("Creating new empty schema '{schema}'");
         client
-            .execute(&format!("DROP SCHEMA IF EXISTS {} CASCADE", schema), &[])
+            .execute(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"), &[])
             .await?;
 
         client
-            .execute(&format!("CREATE SCHEMA {}", schema), &[])
+            .execute(&format!("CREATE SCHEMA {schema}"), &[])
             .await?;
 
         client
-            .execute(&format!("SET search_path TO {}", schema), &[])
+            .execute(&format!("SET search_path TO {schema}"), &[])
             .await?;
 
         Ok(Self {
@@ -167,7 +167,7 @@ impl Postgres {
 
         // read the input file as a string ans feed it to the copy command
         let data = std::fs::read_to_string(filename)
-            .map_err(|e| Error::Copy(format!("Error reading {}: {}", filename, e)))?;
+            .map_err(|e| Error::Copy(format!("Error reading {filename}: {e}")))?;
 
         let mut data_stream = futures::stream::iter(vec![Ok(Bytes::from(data))]).boxed();
 
@@ -236,7 +236,7 @@ fn cell_to_string(row: &Row, column: &Column, idx: usize) -> String {
         Type::TIMESTAMP => {
             let value: Option<NaiveDateTime> = row.get(idx);
             value
-                .map(|d| format!("{:?}", d))
+                .map(|d| format!("{d:?}"))
                 .unwrap_or_else(|| "NULL".to_string())
         }
         Type::BOOL => make_string!(row, idx, bool, bool_to_str),

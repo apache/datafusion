@@ -344,8 +344,7 @@ impl ConfigField for ConfigOptions {
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
             _ => Err(DataFusionError::Internal(format!(
-                "Config value \"{}\" not found on ConfigOptions",
-                key
+                "Config value \"{key}\" not found on ConfigOptions"
             ))),
         }
     }
