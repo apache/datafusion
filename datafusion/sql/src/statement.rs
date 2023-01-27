@@ -508,6 +508,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 plan,
                 stringified_plans,
                 schema,
+                logical_optimization_succeeded: false,
             }))
         }
     }

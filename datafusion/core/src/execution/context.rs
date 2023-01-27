@@ -27,7 +27,7 @@ use crate::{
         optimizer::PhysicalOptimizerRule,
     },
 };
-use datafusion_expr::DescribeTable;
+use datafusion_expr::{DescribeTable, StringifiedPlan};
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
@@ -1766,7 +1766,7 @@ impl SessionState {
             let mut stringified_plans = e.stringified_plans.clone();
 
             // optimize the child plan, capturing the output of each optimizer
-            let plan = self.optimizer.optimize(
+            let (plan, logical_optimization_succeeded) = match self.optimizer.optimize(
                 e.plan.as_ref(),
                 self,
                 |optimized_plan, optimizer| {
@@ -1774,13 +1774,23 @@ impl SessionState {
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
                     stringified_plans.push(optimized_plan.to_stringified(plan_type));
                 },
-            )?;
+            ) {
+                Ok(plan) => (Arc::new(plan), true),
+                Err(DataFusionError::Context(optimizer_name, err)) => {
+                    let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
+                    stringified_plans
+                        .push(StringifiedPlan::new(plan_type, err.to_string()));
+                    (e.plan.clone(), false)
+                }
+                Err(e) => return Err(e),
+            };
 
             Ok(LogicalPlan::Explain(Explain {
                 verbose: e.verbose,
-                plan: Arc::new(plan),
+                plan,
                 stringified_plans,
                 schema: e.schema.clone(),
+                logical_optimization_succeeded,
             }))
         } else {
             self.optimizer.optimize(plan, self, |_, _| {})
