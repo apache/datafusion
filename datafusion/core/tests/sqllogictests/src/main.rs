@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use log::info;
 
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{SessionConfig, SessionContext};
 
 use crate::engines::datafusion::DataFusion;
 use crate::engines::postgres::Postgres;
@@ -140,18 +140,22 @@ fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Box<dyn Iterator<Item = PathBu
 
 /// Create a SessionContext, configured for the specific test
 async fn context_for_test_file(relative_path: &Path) -> SessionContext {
+    let config = SessionConfig::new()
+        // hardcode target partitions so plans are deterministic
+        .with_target_partitions(4);
+
+    let ctx = SessionContext::with_config(config);
+
     match relative_path.file_name().unwrap().to_str().unwrap() {
         "aggregate.slt" | "select.slt" => {
             info!("Registering aggregate tables");
-            let ctx = SessionContext::new();
             setup::register_aggregate_tables(&ctx).await;
-            ctx
         }
         _ => {
             info!("Using default SessionContext");
-            SessionContext::new()
         }
-    }
+    };
+    ctx
 }
 
 /// Parsed command line options
