@@ -867,7 +867,7 @@ mod tests {
             .write_parquet(&out_dir, None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
-        assert_eq!("Parquet error: Arrow: underlying Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
+        assert_eq!("Parquet error: External: Parser error: Error while parsing value d for column 0 at line 4", e.to_string());
         Ok(())
     }
 
