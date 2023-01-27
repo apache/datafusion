@@ -38,11 +38,11 @@ use substrait::proto::{
     },
     extensions::simple_extension_declaration::MappingType,
     function_argument::ArgType,
-    join_rel, plan_rel,
+    join_rel, plan_rel, r#type,
     read_rel::ReadType,
     rel::RelType,
     sort_field::{SortDirection, SortKind::*},
-    AggregateFunction, Expression, Plan, Rel,
+    AggregateFunction, Expression, Plan, Rel, Type,
 };
 
 use datafusion::logical_expr::expr::Sort;
@@ -78,8 +78,7 @@ pub fn name_to_op(name: &str) -> Result<Operator> {
         "bitwise_shift_right" => Ok(Operator::BitwiseShiftRight),
         "bitwise_shift_left" => Ok(Operator::BitwiseShiftLeft),
         _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported function name: {:?}",
-            name
+            "Unsupported function name: {name:?}"
         ))),
     }
 }
@@ -99,8 +98,7 @@ pub async fn from_substrait_plan(
                     Ok((ext_f.function_anchor, &ext_f.name))
                 }
                 _ => Err(DataFusionError::NotImplemented(format!(
-                    "Extension type not supported: {:?}",
-                    ext
+                    "Extension type not supported: {ext:?}"
                 ))),
             },
             None => Err(DataFusionError::NotImplemented(
@@ -327,29 +325,42 @@ pub async fn from_substrait_rel(
             )
             .await?;
             let predicates = split_conjunction(&on);
-            let pairs = predicates
+            // TODO: collect only one null_eq_null
+            let join_exprs: Vec<(Column, Column, bool)> = predicates
                 .iter()
                 .map(|p| match p {
-                    Expr::BinaryExpr(BinaryExpr {
-                        left,
-                        op: Operator::Eq,
-                        right,
-                    }) => match (left.as_ref(), right.as_ref()) {
-                        (Expr::Column(l), Expr::Column(r)) => {
-                            Ok((l.flat_name(), r.flat_name()))
+                    Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                        match (left.as_ref(), right.as_ref()) {
+                            (Expr::Column(l), Expr::Column(r)) => match op {
+                                Operator::Eq => Ok((l.clone(), r.clone(), false)),
+                                Operator::IsNotDistinctFrom => {
+                                    Ok((l.clone(), r.clone(), true))
+                                }
+                                _ => Err(DataFusionError::Internal(
+                                    "invalid join condition op".to_string(),
+                                )),
+                            },
+                            _ => Err(DataFusionError::Internal(
+                                "invalid join condition expresssion".to_string(),
+                            )),
                         }
-                        _ => Err(DataFusionError::Internal(
-                            "invalid join condition".to_string(),
-                        )),
-                    },
+                    }
                     _ => Err(DataFusionError::Internal(
-                        "invalid join condition".to_string(),
+                        "Non-binary expression is not supported in join condition"
+                            .to_string(),
                     )),
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let (left_cols, right_cols): (Vec<_>, Vec<_>) = pairs.iter().cloned().unzip();
-            left.join(right.build()?, join_type, (left_cols, right_cols), None)?
-                .build()
+            let (left_cols, right_cols, null_eq_nulls): (Vec<_>, Vec<_>, Vec<_>) =
+                itertools::multiunzip(join_exprs);
+            left.join_detailed(
+                right.build()?,
+                join_type,
+                (left_cols, right_cols),
+                None,
+                null_eq_nulls[0],
+            )?
+            .build()
         }
         Some(RelType::Read(read)) => match &read.as_ref().read_type {
             Some(ReadType::NamedTable(nt)) => {
@@ -431,15 +442,13 @@ fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
             join_rel::JoinType::Semi => Ok(JoinType::LeftSemi),
             _ => {
                 return Err(DataFusionError::Internal(format!(
-                    "unsupported join type {:?}",
-                    substrait_join_type
+                    "unsupported join type {substrait_join_type:?}"
                 )))
             }
         }
     } else {
         return Err(DataFusionError::Internal(format!(
-            "invalid join type variant {:?}",
-            join_type
+            "invalid join type variant {join_type:?}"
         )));
     }
 }
@@ -601,8 +610,7 @@ pub async fn from_substrait_rex(
                     })))
                 }
                 (l, r) => Err(DataFusionError::NotImplemented(format!(
-                    "Invalid arguments for binary expression: {:?} and {:?}",
-                    l, r
+                    "Invalid arguments for binary expression: {l:?} and {r:?}"
                 ))),
             }
         }
@@ -640,14 +648,12 @@ pub async fn from_substrait_rex(
                     ))?;
                     let p = d.precision.try_into().map_err(|e| {
                         DataFusionError::Substrait(format!(
-                            "Failed to parse decimal precision: {}",
-                            e
+                            "Failed to parse decimal precision: {e}"
                         ))
                     })?;
                     let s = d.scale.try_into().map_err(|e| {
                         DataFusionError::Substrait(format!(
-                            "Failed to parse decimal scale: {}",
-                            e
+                            "Failed to parse decimal scale: {e}"
                         ))
                     })?;
                     Ok(Arc::new(Expr::Literal(ScalarValue::Decimal128(
@@ -662,6 +668,9 @@ pub async fn from_substrait_rex(
                 Some(LiteralType::Binary(b)) => Ok(Arc::new(Expr::Literal(
                     ScalarValue::Binary(Some(b.clone())),
                 ))),
+                Some(LiteralType::Null(ntype)) => {
+                    Ok(Arc::new(Expr::Literal(from_substrait_null(ntype)?)))
+                }
                 _ => {
                     return Err(DataFusionError::NotImplemented(format!(
                         "Unsupported literal_type: {:?}",
@@ -673,5 +682,28 @@ pub async fn from_substrait_rex(
         _ => Err(DataFusionError::NotImplemented(
             "unsupported rex_type".to_string(),
         )),
+    }
+}
+
+fn from_substrait_null(null_type: &Type) -> Result<ScalarValue> {
+    if let Some(kind) = &null_type.kind {
+        match kind {
+            r#type::Kind::I8(_) => Ok(ScalarValue::Int8(None)),
+            r#type::Kind::I16(_) => Ok(ScalarValue::Int16(None)),
+            r#type::Kind::I32(_) => Ok(ScalarValue::Int32(None)),
+            r#type::Kind::I64(_) => Ok(ScalarValue::Int64(None)),
+            r#type::Kind::Decimal(d) => Ok(ScalarValue::Decimal128(
+                None,
+                d.precision as u8,
+                d.scale as i8,
+            )),
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "Unsupported null kind: {kind:?}"
+            ))),
+        }
+    } else {
+        Err(DataFusionError::NotImplemented(
+            "Null type without kind is not supported".to_string(),
+        ))
     }
 }

@@ -67,7 +67,6 @@ mod tests {
         roundtrip("SELECT * FROM data WHERE d AND a > 1").await
     }
 
-    #[ignore] // tracked in https://github.com/apache/arrow-datafusion/issues/4897
     #[tokio::test]
     async fn select_with_limit() -> Result<()> {
         roundtrip_fill_na("SELECT * FROM data LIMIT 100").await
@@ -99,6 +98,11 @@ mod tests {
     #[tokio::test]
     async fn decimal_literal() -> Result<()> {
         roundtrip("SELECT * FROM data WHERE b > 2.5").await
+    }
+
+    #[tokio::test]
+    async fn null_decimal_literal() -> Result<()> {
+        roundtrip("SELECT * FROM data WHERE b = NULL").await
     }
 
     #[tokio::test]
@@ -172,6 +176,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aggregate_case() -> Result<()> {
+        assert_expected_plan(
+            "SELECT SUM(CASE WHEN a > 0 THEN 1 ELSE NULL END) FROM data",
+            "Projection: SUM(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE Int64(NULL) END)\
+            \n  Aggregate: groupBy=[[]], aggr=[[SUM(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE Int64(NULL) END)]]\
+            \n    TableScan: data projection=[a]",
+        )
+        .await
+    }
+
+    #[tokio::test]
     async fn roundtrip_inner_join() -> Result<()> {
         roundtrip("SELECT data.a FROM data JOIN data2 ON data.a = data2.a").await
     }
@@ -204,13 +219,29 @@ mod tests {
             .await
     }
 
+    #[tokio::test]
+    async fn simple_intersect() -> Result<()> {
+        assert_expected_plan(
+            "SELECT COUNT(*) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
+            "Projection: COUNT(Int16(1))\
+            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int16(1))]]\
+            \n    LeftSemi Join: data.a = data2.a\
+            \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
+            \n        TableScan: data projection=[a]\
+            \n      Projection: data2.a\
+            \n        TableScan: data2 projection=[a]",
+        )
+        .await
+    }
+
     async fn assert_expected_plan(sql: &str, expected_plan_str: &str) -> Result<()> {
         let mut ctx = create_context().await?;
         let df = ctx.sql(sql).await?;
         let plan = df.into_optimized_plan()?;
         let proto = to_substrait_plan(&plan)?;
         let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
-        let plan2str = format!("{:?}", plan2);
+        let plan2 = ctx.state().optimize(&plan2)?;
+        let plan2str = format!("{plan2:?}");
         assert_eq!(expected_plan_str, &plan2str);
         Ok(())
     }
@@ -221,10 +252,11 @@ mod tests {
         let plan1 = df.into_optimized_plan()?;
         let proto = to_substrait_plan(&plan1)?;
         let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+        let plan2 = ctx.state().optimize(&plan2)?;
 
         // Format plan string and replace all None's with 0
-        let plan1str = format!("{:?}", plan1).replace("None", "0");
-        let plan2str = format!("{:?}", plan2).replace("None", "0");
+        let plan1str = format!("{plan1:?}").replace("None", "0");
+        let plan2str = format!("{plan2:?}").replace("None", "0");
 
         assert_eq!(plan1str, plan2str);
         Ok(())
@@ -244,11 +276,11 @@ mod tests {
         let proto = to_substrait_plan(&df.into_optimized_plan()?)?;
         let plan = from_substrait_plan(&mut ctx, &proto).await?;
 
-        println!("{:#?}", plan_with_alias);
-        println!("{:#?}", plan);
+        println!("{plan_with_alias:#?}");
+        println!("{plan:#?}");
 
-        let plan1str = format!("{:?}", plan_with_alias);
-        let plan2str = format!("{:?}", plan);
+        let plan1str = format!("{plan_with_alias:?}");
+        let plan2str = format!("{plan:?}");
         assert_eq!(plan1str, plan2str);
         Ok(())
     }
@@ -260,13 +292,13 @@ mod tests {
         let plan = df.into_optimized_plan()?;
         let proto = to_substrait_plan(&plan)?;
         let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
-        let plan2 = ctx.optimize(&plan2)?;
+        let plan2 = ctx.state().optimize(&plan2)?;
 
-        println!("{:#?}", plan);
-        println!("{:#?}", plan2);
+        println!("{plan:#?}");
+        println!("{plan2:#?}");
 
-        let plan1str = format!("{:?}", plan);
-        let plan2str = format!("{:?}", plan2);
+        let plan1str = format!("{plan:?}");
+        let plan2str = format!("{plan2:?}");
         assert_eq!(plan1str, plan2str);
         Ok(())
     }
@@ -304,9 +336,9 @@ mod tests {
             Field::new("d", DataType::Boolean, true),
         ]);
         explicit_options.schema = Some(&schema);
-        ctx.register_csv("data", "tests/testdata/data.csv", explicit_options.clone())
+        ctx.register_csv("data", "tests/testdata/data.csv", explicit_options)
             .await?;
-        ctx.register_csv("data2", "tests/testdata/data.csv", explicit_options)
+        ctx.register_csv("data2", "tests/testdata/data.csv", CsvReadOptions::new())
             .await?;
         Ok(ctx)
     }

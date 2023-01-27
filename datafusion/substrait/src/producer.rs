@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use datafusion::{
     error::{DataFusionError, Result},
@@ -45,7 +45,7 @@ use substrait::proto::{
         simple_extension_declaration::{ExtensionFunction, MappingType},
     },
     function_argument::ArgType,
-    join_rel, plan_rel,
+    join_rel, plan_rel, r#type,
     read_rel::{NamedTable, ReadType},
     rel::RelType,
     sort_field::{SortDirection, SortKind},
@@ -246,11 +246,6 @@ pub fn to_substrait_rel(
             let right = to_substrait_rel(join.right.as_ref(), extension_info)?;
             let join_type = to_substrait_jointype(join.join_type);
             // we only support basic joins so return an error for anything not yet supported
-            if join.null_equals_null {
-                return Err(DataFusionError::NotImplemented(
-                    "join null_equals_null".to_string(),
-                ));
-            }
             if join.filter.is_some() {
                 return Err(DataFusionError::NotImplemented("join filter".to_string()));
             }
@@ -264,11 +259,20 @@ pub fn to_substrait_rel(
             }
             // map the left and right columns to binary expressions in the form `l = r`
             // build a single expression for the ON condition, such as `l.a = r.a AND l.b = r.b`
+            let eq_op = if join.null_equals_null {
+                Operator::IsNotDistinctFrom
+            } else {
+                Operator::Eq
+            };
             let join_expression = join
                 .on
                 .iter()
-                .map(|(l, r)| binary_expr(l.clone(), Operator::Eq, r.clone()))
+                .map(|(l, r)| binary_expr(l.clone(), eq_op, r.clone()))
                 .reduce(|acc: Expr, expr: Expr| acc.and(expr));
+            // join schema from left and right to maintain all nececesary columns from inputs
+            // note that we cannot simple use join.schema here since we discard some input columns
+            // when performing semi and anti joins
+            let join_schema = join.left.schema().join(join.right.schema());
             if let Some(e) = join_expression {
                 Ok(Box::new(Rel {
                     rel_type: Some(RelType::Join(Box::new(JoinRel {
@@ -278,7 +282,7 @@ pub fn to_substrait_rel(
                         r#type: join_type as i32,
                         expression: Some(Box::new(to_substrait_rex(
                             &e,
-                            &join.schema,
+                            &Arc::new(join_schema?),
                             extension_info,
                         )?)),
                         post_join_filter: None,
@@ -297,8 +301,7 @@ pub fn to_substrait_rel(
             to_substrait_rel(alias.input.as_ref(), extension_info)
         }
         _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported operator: {:?}",
-            plan
+            "Unsupported operator: {plan:?}"
         ))),
     }
 }
@@ -381,10 +384,14 @@ pub fn to_substrait_agg_measure(
                     None => None
                 }
             })
-        },
+        }
+        Expr::Alias(expr, _name) => {
+            to_substrait_agg_measure(expr, schema, extension_info)
+        }
         _ => Err(DataFusionError::Internal(format!(
-            "Expression must be compatible with aggregation. Unsupported expression: {:?}",
-            expr
+            "Expression must be compatible with aggregation. Unsupported expression: {:?}. ExpressionType: {:?}",
+            expr,
+            expr.variant_name()
         ))),
     }
 }
@@ -576,6 +583,7 @@ pub fn to_substrait_rex(
                 ScalarValue::Int16(Some(n)) => Some(LiteralType::I16(*n as i32)),
                 ScalarValue::Int32(Some(n)) => Some(LiteralType::I32(*n)),
                 ScalarValue::Int64(Some(n)) => Some(LiteralType::I64(*n)),
+                ScalarValue::UInt8(Some(n)) => Some(LiteralType::I16(*n as i32)), // Substrait currently does not support unsigned integer
                 ScalarValue::Boolean(Some(b)) => Some(LiteralType::Boolean(*b)),
                 ScalarValue::Float32(Some(f)) => Some(LiteralType::Fp32(*f)),
                 ScalarValue::Float64(Some(f)) => Some(LiteralType::Fp64(*f)),
@@ -591,12 +599,7 @@ pub fn to_substrait_rex(
                 ScalarValue::Binary(Some(b)) => Some(LiteralType::Binary(b.clone())),
                 ScalarValue::LargeBinary(Some(b)) => Some(LiteralType::Binary(b.clone())),
                 ScalarValue::Date32(Some(d)) => Some(LiteralType::Date(*d)),
-                _ => {
-                    return Err(DataFusionError::NotImplemented(format!(
-                        "Unsupported literal: {:?}",
-                        value
-                    )))
-                }
+                _ => Some(try_to_substrait_null(value)?),
             };
             Ok(Expression {
                 rex_type: Some(RexType::Literal(Literal {
@@ -608,8 +611,52 @@ pub fn to_substrait_rex(
         }
         Expr::Alias(expr, _alias) => to_substrait_rex(expr, schema, extension_info),
         _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported expression: {:?}",
-            expr
+            "Unsupported expression: {expr:?}"
+        ))),
+    }
+}
+
+fn try_to_substrait_null(v: &ScalarValue) -> Result<LiteralType> {
+    let default_type_ref = 0;
+    let default_nullability = r#type::Nullability::Nullable as i32;
+    match v {
+        ScalarValue::Int8(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::I8(r#type::I8 {
+                type_variation_reference: default_type_ref,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::Int16(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::I16(r#type::I16 {
+                type_variation_reference: default_type_ref,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::Int32(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::I32(r#type::I32 {
+                type_variation_reference: default_type_ref,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::Int64(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::I64(r#type::I64 {
+                type_variation_reference: default_type_ref,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::Decimal128(None, p, s) => {
+            Ok(LiteralType::Null(substrait::proto::Type {
+                kind: Some(r#type::Kind::Decimal(r#type::Decimal {
+                    scale: *s as i32,
+                    precision: *p as i32,
+                    type_variation_reference: default_type_ref,
+                    nullability: default_nullability,
+                })),
+            }))
+        }
+        // TODO: Extend support for remaining data types
+        _ => Err(DataFusionError::NotImplemented(format!(
+            "Unsupported literal: {v:?}"
         ))),
     }
 }
@@ -641,8 +688,7 @@ fn substrait_sort_field(
             })
         }
         _ => Err(DataFusionError::NotImplemented(format!(
-            "Expecting sort expression but got {:?}",
-            expr
+            "Expecting sort expression but got {expr:?}"
         ))),
     }
 }

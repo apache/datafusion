@@ -46,5 +46,7 @@ digraph G {
 
 	datafusion_proto -> datafusion
 
+	datafusion_substrait -> datafusion
+
 	datafusion_cli -> datafusion
 }
