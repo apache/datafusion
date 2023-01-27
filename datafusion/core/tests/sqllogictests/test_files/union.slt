@@ -76,7 +76,7 @@ ORDER BY name
 3 John
 
 # union all
-query T
+query I
 SELECT 1 as x
 UNION ALL
 SELECT 2 as x
@@ -105,7 +105,7 @@ STORED AS CSV
 WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
-query T
+query I
 select COUNT(*) from (
     SELECT c1 FROM aggregate_test_100
     UNION ALL
@@ -115,7 +115,7 @@ select COUNT(*) from (
 200
 
 # union_distinct
-query T
+query I
 SELECT 1 as x
 UNION
 SELECT 1 as x
@@ -123,7 +123,7 @@ SELECT 1 as x
 1
 
 # union_all_with_aggregate
-query T
+query I
 SELECT SUM(d) FROM (
     SELECT 1 as c, 2 as d
     UNION ALL
@@ -146,14 +146,14 @@ SELECT COUNT(*) FROM (
 2
 
 # union_schemas
-query T
+query I
 SELECT 1 A UNION ALL SELECT 2 order by 1
 ----
 1
 2
 
 # union_schemas
-query T
+query I
 SELECT 1 UNION SELECT 2 order by 1
 ----
 1
@@ -161,17 +161,19 @@ SELECT 1 UNION SELECT 2 order by 1
 
 # union_with_except_input
 query T
-(
-    SELECT name FROM t1
-    EXCEPT
-    SELECT name FROM t2
-)
-UNION ALL
-(
-    SELECT name FROM t2
-    EXCEPT
-    SELECT name FROM t1
-)
+SELECT * FROM (
+    (
+        SELECT name FROM t1
+        EXCEPT
+        SELECT name FROM t2
+    )
+    UNION ALL
+    (
+        SELECT name FROM t2
+        EXCEPT
+        SELECT name FROM t1
+    )
+) ORDER BY name
 ----
 Alice
 John
