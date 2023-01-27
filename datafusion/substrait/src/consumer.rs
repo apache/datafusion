@@ -325,29 +325,42 @@ pub async fn from_substrait_rel(
             )
             .await?;
             let predicates = split_conjunction(&on);
-            let pairs = predicates
+            // TODO: collect only one null_eq_null
+            let join_exprs: Vec<(Column, Column, bool)> = predicates
                 .iter()
                 .map(|p| match p {
-                    Expr::BinaryExpr(BinaryExpr {
-                        left,
-                        op: Operator::Eq,
-                        right,
-                    }) => match (left.as_ref(), right.as_ref()) {
-                        (Expr::Column(l), Expr::Column(r)) => {
-                            Ok((l.flat_name(), r.flat_name()))
+                    Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                        match (left.as_ref(), right.as_ref()) {
+                            (Expr::Column(l), Expr::Column(r)) => match op {
+                                Operator::Eq => Ok((l.clone(), r.clone(), false)),
+                                Operator::IsNotDistinctFrom => {
+                                    Ok((l.clone(), r.clone(), true))
+                                }
+                                _ => Err(DataFusionError::Internal(
+                                    "invalid join condition op".to_string(),
+                                )),
+                            },
+                            _ => Err(DataFusionError::Internal(
+                                "invalid join condition expresssion".to_string(),
+                            )),
                         }
-                        _ => Err(DataFusionError::Internal(
-                            "invalid join condition".to_string(),
-                        )),
-                    },
+                    }
                     _ => Err(DataFusionError::Internal(
-                        "invalid join condition".to_string(),
+                        "Non-binary expression is not supported in join condition"
+                            .to_string(),
                     )),
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let (left_cols, right_cols): (Vec<_>, Vec<_>) = pairs.iter().cloned().unzip();
-            left.join(right.build()?, join_type, (left_cols, right_cols), None)?
-                .build()
+            let (left_cols, right_cols, null_eq_nulls): (Vec<_>, Vec<_>, Vec<_>) =
+                itertools::multiunzip(join_exprs);
+            left.join_detailed(
+                right.build()?,
+                join_type,
+                (left_cols, right_cols),
+                None,
+                null_eq_nulls[0],
+            )?
+            .build()
         }
         Some(RelType::Read(read)) => match &read.as_ref().read_type {
             Some(ReadType::NamedTable(nt)) => {
