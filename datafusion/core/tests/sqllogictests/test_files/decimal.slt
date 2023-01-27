@@ -15,20 +15,25 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query R
-select cast(1.23 as decimal(10,4));
+query ?R
+select arrow_typeof(cast(1.23 as decimal(10,4))),
+       cast(1.23 as decimal(10,4));
 ----
-1.23
+Decimal128(10, 4) 1.23
 
-query R
-select cast(cast(1.23 as decimal(10,3)) as decimal(10,4));
-----
-1.23
 
-query R
-select cast(1.2345 as decimal(24,2));
+query ?R
+select arrow_typeof(cast(cast(1.23 as decimal(10,3)) as decimal(10,4))),
+       cast(cast(1.23 as decimal(10,3)) as decimal(10,4));
 ----
-1.23
+Decimal128(10, 4) 1.23
+
+
+query ?R
+select arrow_typeof(cast(1.2345 as decimal(24,2))), cast(1.2345 as decimal(24,2));
+----
+Decimal128(24, 2) 1.23
+
 
 query ok
 CREATE EXTERNAL TABLE decimal_simple (
@@ -41,6 +46,13 @@ c5 DECIMAL(12,7) NOT NULL
 STORED AS CSV
 WITH HEADER ROW
 LOCATION 'tests/data/decimal_data.csv';
+
+
+query ??
+select arrow_typeof(c1), arrow_typeof(c5) from decimal_simple where c1 > c5 limit 1;
+----
+Decimal128(10, 6) Decimal128(12, 7)
+
 
 query R
 SELECT c1 from decimal_simple;
@@ -84,27 +96,32 @@ select * from decimal_simple where c1 > c5;
 0.00005 0.000000000005 8 false 0.000033
 
 
-query R
-select min(c1) from decimal_simple where c4=false;
+query ?R
+select arrow_typeof(min(c1)), min(c1) from decimal_simple where c4=false;
 ----
-0.00002
+Decimal128(10, 6) 0.00002
 
-query R
-select max(c1) from decimal_simple where c4=false;
+
+query ?R
+select arrow_typeof(max(c1)), max(c1) from decimal_simple where c4=false;
 ----
-0.00005
+Decimal128(10, 6) 0.00005
 
 
+# inferred precision is 10+10
+# inferred scale is the original scale
 query R
-select sum(c1) from decimal_simple;
+select arrow_typeof(sum(c1)), sum(c1) from decimal_simple;
 ----
-0.00055
+Decimal128(20, 6) 0.00055
 
 
-query R
-select avg(c1) from decimal_simple;
+# inferred precision is original precision + 4
+# inferred scale is the original scale + 4
+query ?R
+select arrow_typeof(avg(c1)), avg(c1) from decimal_simple;
 ----
-0.0000366666
+Decimal128(14, 10) 0.0000366666
 
 
 query RRI?R
@@ -182,6 +199,12 @@ select * from decimal_simple where c1 >= 0.00002;
 0.00005 0.000000000005 1 false 0.0001
 
 
+query ?
+select arrow_typeof(c1+1) from decimal_simple limit 1;
+----
+Decimal128(27, 6)
+
+
 query R
 select c1+1 from decimal_simple;
 ----
@@ -200,6 +223,13 @@ select c1+1 from decimal_simple;
 1.00005
 1.00005
 1.00005
+
+
+# array decimal(10,6) + array decimal(12,7) => decimal(13,7)
+query ?
+select arrow_typeof(c1+c5) from decimal_simple limit 1;
+----
+Decimal128(13, 7)
 
 
 query R
@@ -222,6 +252,12 @@ select c1+c5 from decimal_simple;
 0.00015
 
 
+query ?
+select arrow_typeof(c1-1) from decimal_simple limit 1;
+----
+Decimal128(27, 6)
+
+
 query R
 select c1-1 from decimal_simple;
 ----
@@ -240,6 +276,12 @@ select c1-1 from decimal_simple;
 -0.99995
 -0.99995
 -0.99995
+
+
+query ?
+select arrow_typeof(c1-c5) from decimal_simple limit 1;
+----
+Decimal128(13, 7)
 
 
 query R
@@ -262,6 +304,12 @@ select c1-c5 from decimal_simple;
 -0.00005
 
 
+query ?
+select arrow_typeof(c1*20) from decimal_simple limit 1;
+----
+Decimal128(31, 6)
+
+
 query R
 select c1*20 from decimal_simple;
 ----
@@ -280,6 +328,12 @@ select c1*20 from decimal_simple;
 0.001
 0.001
 0.001
+
+
+query ?
+select arrow_typeof(c1*c5) from decimal_simple limit 1;
+----
+Decimal128(23, 13)
 
 
 query R
@@ -302,6 +356,12 @@ select c1*c5 from decimal_simple;
 0.000000005
 
 
+query ?
+select arrow_typeof(c1/cast(0.00001 as decimal(5,5))) from decimal_simple limit 1;
+----
+Decimal128(21, 12)
+
+
 query R
 select c1/cast(0.00001 as decimal(5,5)) from decimal_simple;
 ----
@@ -320,6 +380,12 @@ select c1/cast(0.00001 as decimal(5,5)) from decimal_simple;
 5
 5
 5
+
+
+query ?
+select arrow_typeof(c1/c5) from decimal_simple limit 1;
+----
+Decimal128(30, 19)
 
 
 query R
@@ -342,6 +408,12 @@ select c1/c5 from decimal_simple;
 0.5
 
 
+query ?
+select arrow_typeof(c5%cast(0.00001 as decimal(5,5))) from decimal_simple limit 1;
+----
+Decimal128(7, 7)
+
+
 query R
 select c5%cast(0.00001 as decimal(5,5)) from decimal_simple;
 ----
@@ -362,6 +434,12 @@ select c5%cast(0.00001 as decimal(5,5)) from decimal_simple;
 0
 
 
+query ?
+select arrow_typeof(c1%c5) from decimal_simple limit 1;
+----
+Decimal128(11, 7)
+
+
 query R
 select c1%c5 from decimal_simple;
 ----
@@ -378,6 +456,32 @@ select c1%c5 from decimal_simple;
 0.00005
 0.00005
 0.000017
+0.00005
+0.00005
+
+
+query ?
+select arrow_typeof(abs(c1)) from decimal_simple limit 1;
+----
+Float64
+
+
+query R
+SELECT abs(c1) from decimal_simple;
+----
+0.00001
+0.00002
+0.00002
+0.00003
+0.00003
+0.00003
+0.00004
+0.00004
+0.00004
+0.00004
+0.00005
+0.00005
+0.00005
 0.00005
 0.00005
 
@@ -433,6 +537,7 @@ select * from decimal_simple where c1 >= 0.00004 order by c1 desc;
 0.00004 0.000000000004 14 true 0.00004
 0.00004 0.000000000004 8 false 0.000044
 
+
 query RRI?R
 select * from decimal_simple where c1 < 0.00003 order by c1 desc,c4;
 ----
@@ -466,32 +571,24 @@ select count(*),c1,c4 from decimal_simple group by c1,c4 order by c1,c4;
 
 
 query R
-SELECT abs(c1) from decimal_simple;
+select arrow_typeof(cast(400420638.54 as decimal(12,2))), cast(400420638.54 as decimal(12,2));
 ----
-0.00001
-0.00002
-0.00002
-0.00003
-0.00003
-0.00003
-0.00004
-0.00004
-0.00004
-0.00004
-0.00005
-0.00005
-0.00005
-0.00005
-0.00005
+Decimal128(12, 2) 400420638.54
 
 
 query R
-select cast(400420638.54 as decimal(12,2));
+select arrow_typeof(cast(400420638.54 as decimal(12,2)) * 1.0), cast(400420638.54 as decimal(12,2)) * 1.0;
 ----
-400420638.54
+Float64 400420638.54
 
 
-query R
-select cast(400420638.54 as decimal(12,2)) * 1.0;
+query ??
+select arrow_typeof(a < null), a < null from (values (1.1::decimal)) as t(a);
 ----
-400420638.54
+Boolean NULL
+
+
+query ??
+select arrow_typeof(null <= a), null <= a from (values (1.1::decimal)) as t(a);
+----
+Boolean NULL
