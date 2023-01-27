@@ -53,10 +53,10 @@ use crate::execution::context::TaskContext;
 /// Data of the left side
 type JoinLeftData = RecordBatch;
 
-/// Global state for all partations.
+/// Global state for all partitions.
 #[derive(Debug)]
 struct NestedLoopJoinState {
-    remain_partation_count: usize,
+    remain_partition_count: usize,
     visited_left_buffer: Option<Buffer>,
 }
 
@@ -94,7 +94,7 @@ impl NestedLoopJoinExec {
         check_join_is_valid(&left_schema, &right_schema, &[])?;
         let (schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
-        let right_partation_count = right.output_partitioning().partition_count();
+        let remain_partition_count = right.output_partitioning().partition_count();
         Ok(NestedLoopJoinExec {
             left,
             right,
@@ -104,7 +104,7 @@ impl NestedLoopJoinExec {
             left_fut: Default::default(),
             column_indices,
             state: Arc::new(Mutex::new(NestedLoopJoinState {
-                remain_partation_count: right_partation_count,
+                remain_partition_count,
                 visited_left_buffer: None,
             })),
         })
@@ -386,7 +386,7 @@ impl NestedLoopJoinStream {
                         self.is_exhausted = true;
 
                         let mut state = self.state.lock();
-                        assert!(state.remain_partation_count > 0);
+                        assert!(state.remain_partition_count > 0);
 
                         // merge current visited_left_side to global state
                         let num_rows = left_data.num_rows();
@@ -399,9 +399,9 @@ impl NestedLoopJoinStream {
                             current_buffer
                         };
 
-                        state.remain_partation_count -= 1;
+                        state.remain_partition_count -= 1;
                         // the states of other partitions have been merged to global, produce the final result.
-                        if state.remain_partation_count == 0 {
+                        if state.remain_partition_count == 0 {
                             let merged_visited_left_side =
                                 match merged_buffer.into_mutable() {
                                     Ok(buffer) => BooleanBufferBuilder::new_from_buffer(
@@ -574,12 +574,12 @@ mod tests {
         join_filter: Option<JoinFilter>,
         context: Arc<TaskContext>,
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
-        let output_partation_count = right.output_partitioning().partition_count();
+        let output_partition_count = right.output_partitioning().partition_count();
         let nested_loop_join =
             NestedLoopJoinExec::try_new(left, right, join_filter, join_type)?;
         let columns = columns(&nested_loop_join.schema());
         let mut batches = vec![];
-        for i in 0..output_partation_count {
+        for i in 0..output_partition_count {
             let stream = nested_loop_join.execute(i, context.clone())?;
             let more_batches = common::collect(stream).await?;
             batches.extend(
@@ -600,32 +600,6 @@ mod tests {
         join_filter: Option<JoinFilter>,
         context: Arc<TaskContext>,
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
-        // let right = if matches!(distribution[1], Distribution::SinglePartition) {
-        //     right
-        // } else {
-        //     output_partition = partition_count;
-        //     Arc::new(RepartitionExec::try_new(
-        //         right,
-        //         Partitioning::RoundRobinBatch(partition_count),
-        //     )?)
-        // } as Arc<dyn ExecutionPlan>;
-
-        // // Use the required distribution for nested loop join to test partition data
-        // let nested_loop_join =
-        //     NestedLoopJoinExec::try_new(left, right, join_filter, join_type)?;
-        // let columns = columns(&nested_loop_join.schema());
-        // let mut batches = vec![];
-        // for i in 0..output_partition {
-        //     let stream = nested_loop_join.execute(i, context.clone())?;
-        //     let more_batches = common::collect(stream).await?;
-        //     batches.extend(
-        //         more_batches
-        //             .into_iter()
-        //             .filter(|b| b.num_rows() > 0)
-        //             .collect::<Vec<_>>(),
-        //     );
-        // }
-        // Ok((columns, batches))
         let join = NestedLoopJoinExec::try_new(left, right, join_filter, join_type)?;
         let columns_header = columns(&join.schema());
 
@@ -649,7 +623,7 @@ mod tests {
             "+----+----+----+----+----+----+",
         ];
 
-        // single partation
+        // single partition
         {
             let task_ctx = session_ctx.task_ctx();
             let (columns, batches) = join_collect(
@@ -665,7 +639,7 @@ mod tests {
             assert_batches_sorted_eq!(expected, &batches);
         }
 
-        // multiple partation
+        // multiple partition
         {
             let task_ctx = session_ctx.task_ctx();
             let (columns, batches) = multi_partitioned_join_collect(
@@ -699,7 +673,7 @@ mod tests {
             "+----+----+-----+----+----+----+",
         ];
 
-        // single partation
+        // single partition
         {
             let right = build_right_table();
             let task_ctx = session_ctx.task_ctx();
@@ -715,7 +689,7 @@ mod tests {
             assert_batches_sorted_eq!(expected, &batches);
         }
 
-        // multiple partation
+        // multiple partition
         {
             let right = build_multi_part_right_table();
             let task_ctx = session_ctx.task_ctx();
@@ -750,7 +724,7 @@ mod tests {
             "+----+----+----+----+----+-----+",
         ];
 
-        // single partation
+        // single partition
         {
             let right = build_right_table();
             let task_ctx = session_ctx.task_ctx();
@@ -766,7 +740,7 @@ mod tests {
             assert_batches_sorted_eq!(expected, &batches);
         }
 
-        // multiple partation
+        // multiple partition
         {
             let right = build_multi_part_right_table();
             let task_ctx = session_ctx.task_ctx();
@@ -802,7 +776,7 @@ mod tests {
             "+----+----+-----+----+----+-----+",
         ];
 
-        // single partation
+        // single partition
         {
             let right = build_right_table();
             let task_ctx = session_ctx.task_ctx();
@@ -818,7 +792,7 @@ mod tests {
             assert_batches_sorted_eq!(expected, &batches);
         }
 
-        // multiple partation
+        // multiple partition
         {
             let right = build_multi_part_right_table();
             let task_ctx = session_ctx.task_ctx();
@@ -850,7 +824,7 @@ mod tests {
             "+----+----+----+",
         ];
 
-        // single partation
+        // single partition
         {
             let right = build_right_table();
             let task_ctx = session_ctx.task_ctx();
@@ -866,7 +840,7 @@ mod tests {
             assert_batches_sorted_eq!(expected, &batches);
         }
 
-        // multiple partation
+        // multiple partition
         {
             let right = build_multi_part_right_table();
             let task_ctx = session_ctx.task_ctx();
@@ -899,7 +873,7 @@ mod tests {
             "+----+----+-----+",
         ];
 
-        // single partation
+        // single partition
         {
             let right = build_right_table();
             let task_ctx = session_ctx.task_ctx();
@@ -915,7 +889,7 @@ mod tests {
             assert_batches_sorted_eq!(expected, &batches);
         }
 
-        // multiple partation
+        // multiple partition
         {
             let right = build_multi_part_right_table();
             let task_ctx = session_ctx.task_ctx();
@@ -947,7 +921,7 @@ mod tests {
             "+----+----+----+",
         ];
 
-        // single partation
+        // single partition
         {
             let right = build_right_table();
             let task_ctx = session_ctx.task_ctx();
@@ -963,7 +937,7 @@ mod tests {
             assert_batches_sorted_eq!(expected, &batches);
         }
 
-        // multiple partation
+        // multiple partition
         {
             let right = build_multi_part_right_table();
             let task_ctx = session_ctx.task_ctx();
@@ -996,7 +970,7 @@ mod tests {
             "+----+----+-----+",
         ];
 
-        // single partation
+        // single partition
         {
             let right = build_right_table();
             let task_ctx = session_ctx.task_ctx();
@@ -1012,7 +986,7 @@ mod tests {
             assert_batches_sorted_eq!(expected, &batches);
         }
 
-        // multiple partation
+        // multiple partition
         {
             let right = build_multi_part_right_table();
             let task_ctx = session_ctx.task_ctx();

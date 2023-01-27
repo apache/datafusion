@@ -3300,7 +3300,7 @@ async fn two_in_subquery_to_join_with_outer_filter() -> Result<()> {
 }
 
 #[tokio::test]
-async fn nested_loop_join_with_right_repartation() -> Result<()> {
+async fn nested_loop_join_with_right_repartition() -> Result<()> {
     let ctx = create_nested_loop_join_context()?;
 
     let sql = "SELECT t1.t1_id, t2.t2_id FROM t1 INNER JOIN t2 ON t1.t1_id > t2.t2_id 
