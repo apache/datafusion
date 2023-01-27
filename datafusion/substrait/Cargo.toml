@@ -24,6 +24,7 @@ rust-version = "1.62"
 [dependencies]
 async-recursion = "1.0"
 datafusion = { version = "17.0.0", path = "../core" }
+itertools = "0.10.5"
 prost = "0.11"
 prost-types = "0.11"
 substrait = "0.4"
