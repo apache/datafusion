@@ -929,6 +929,22 @@ mod tests {
     }
 
     #[test]
+    fn parallelization_two_partitions_into_four() -> Result<()> {
+        let plan = aggregate(parquet_exec_two_partitions());
+
+        let expected = [
+            "AggregateExec: mode=Final, gby=[], aggr=[]",
+            "CoalescePartitionsExec",
+            "AggregateExec: mode=Partial, gby=[], aggr=[]",
+            // Multiple source files splitted across partitions
+            "ParquetExec: limit=None, partitions={4 groups: [[x:0..75], [x:75..100, y:0..50], [y:50..125], [y:125..200]]}, projection=[c1]",
+        ];
+
+        assert_optimized!(expected, plan, 4, true, 10);
+        Ok(())
+    }
+
+    #[test]
     fn parallelization_sorted_limit() -> Result<()> {
         let plan = limit_exec(sort_exec(parquet_exec(), false));
 
