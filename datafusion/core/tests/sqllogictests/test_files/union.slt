@@ -80,6 +80,7 @@ query I
 SELECT 1 as x
 UNION ALL
 SELECT 2 as x
+ORDER BY x
 ----
 1
 2
@@ -119,6 +120,7 @@ query I
 SELECT 1 as x
 UNION
 SELECT 1 as x
+ORDER BY x
 ----
 1
 
@@ -147,33 +149,32 @@ SELECT COUNT(*) FROM (
 
 # union_schemas
 query I
-SELECT 1 A UNION ALL SELECT 2 order by 1
+SELECT 1 A UNION ALL SELECT 2 ORDER BY 1
 ----
 1
 2
 
 # union_schemas
 query I
-SELECT 1 UNION SELECT 2 order by 1
+SELECT 1 UNION SELECT 2 ORDER BY 1
 ----
 1
 2
 
 # union_with_except_input
 query T
-SELECT * FROM (
-    (
-        SELECT name FROM t1
-        EXCEPT
-        SELECT name FROM t2
-    )
-    UNION ALL
-    (
-        SELECT name FROM t2
-        EXCEPT
-        SELECT name FROM t1
-    )
-) ORDER BY name
+(
+    SELECT name FROM t1
+    EXCEPT
+    SELECT name FROM t2
+)
+UNION ALL
+(
+    SELECT name FROM t2
+    EXCEPT
+    SELECT name FROM t1
+)
+ORDER BY name
 ----
 Alice
 John
@@ -191,6 +192,7 @@ UNION ALL
     EXCEPT
     SELECT id, name FROM t1
 )
+ORDER BY name
 ----
 3 Alice
 3 John
