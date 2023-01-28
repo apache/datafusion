@@ -27,7 +27,8 @@ use std::task::{Context, Poll};
 use std::time::Instant;
 
 use arrow::datatypes::SchemaRef;
-use arrow::{error::Result as ArrowResult, record_batch::RecordBatch};
+use arrow::error::ArrowError;
+use arrow::record_batch::RecordBatch;
 use datafusion_common::ScalarValue;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
@@ -45,7 +46,7 @@ use crate::physical_plan::RecordBatchStream;
 
 /// A fallible future that resolves to a stream of [`RecordBatch`]
 pub type FileOpenFuture =
-    BoxFuture<'static, Result<BoxStream<'static, ArrowResult<RecordBatch>>>>;
+    BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch, ArrowError>>>>;
 
 /// Generic API for opening a file using an [`ObjectStore`] and resolving to a
 /// stream of [`RecordBatch`]
@@ -96,7 +97,7 @@ enum FileStreamState {
         /// Partitioning column values for the current batch_iter
         partition_values: Vec<ScalarValue>,
         /// The reader instance
-        reader: BoxStream<'static, ArrowResult<RecordBatch>>,
+        reader: BoxStream<'static, Result<RecordBatch, ArrowError>>,
     },
     /// Encountered an error
     Error,
@@ -201,10 +202,7 @@ impl<F: FileOpener> FileStream<F> {
         })
     }
 
-    fn poll_inner(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<ArrowResult<RecordBatch>>> {
+    fn poll_inner(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<RecordBatch>>> {
         loop {
             match &mut self.state {
                 FileStreamState::Idle => {
@@ -230,7 +228,7 @@ impl<F: FileOpener> FileStream<F> {
                         }
                         Err(e) => {
                             self.state = FileStreamState::Error;
-                            return Poll::Ready(Some(Err(e.into())));
+                            return Poll::Ready(Some(Err(e)));
                         }
                     }
                 }
@@ -249,7 +247,7 @@ impl<F: FileOpener> FileStream<F> {
                     }
                     Err(e) => {
                         self.state = FileStreamState::Error;
-                        return Poll::Ready(Some(Err(e.into())));
+                        return Poll::Ready(Some(Err(e)));
                     }
                 },
                 FileStreamState::Scan {
@@ -260,7 +258,11 @@ impl<F: FileOpener> FileStream<F> {
                         self.file_stream_metrics.time_scanning_until_data.stop();
                         self.file_stream_metrics.time_scanning_total.stop();
                         let result = result
-                            .and_then(|b| self.pc_projector.project(b, partition_values))
+                            .and_then(|b| {
+                                self.pc_projector
+                                    .project(b, partition_values)
+                                    .map_err(|e| ArrowError::ExternalError(e.into()))
+                            })
                             .map(|batch| match &mut self.remain {
                                 Some(remain) => {
                                     if *remain > batch.num_rows() {
@@ -280,7 +282,7 @@ impl<F: FileOpener> FileStream<F> {
                             self.state = FileStreamState::Error
                         }
                         self.file_stream_metrics.time_scanning_total.start();
-                        return Poll::Ready(Some(result));
+                        return Poll::Ready(Some(result.map_err(Into::into)));
                     }
                     None => {
                         self.file_stream_metrics.time_scanning_until_data.stop();
@@ -297,7 +299,7 @@ impl<F: FileOpener> FileStream<F> {
 }
 
 impl<F: FileOpener> Stream for FileStream<F> {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,

@@ -25,7 +25,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
 
-use arrow::error::Result as ArrowResult;
 use arrow::{
     datatypes::{Field, Schema, SchemaRef},
     record_batch::RecordBatch,
@@ -358,7 +357,7 @@ impl RecordBatchStream for CombinedRecordBatchStream {
 }
 
 impl Stream for CombinedRecordBatchStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -426,7 +425,7 @@ impl RecordBatchStream for ObservedStream {
 }
 
 impl futures::Stream for ObservedStream {
-    type Item = arrow::error::Result<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,

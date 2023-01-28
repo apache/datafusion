@@ -42,11 +42,11 @@ use arrow::array::{make_array, Array, ArrayRef, MutableArrayData};
 pub use arrow::compute::SortOptions;
 use arrow::compute::{concat, lexsort_to_indices, take, SortColumn, TakeOptions};
 use arrow::datatypes::SchemaRef;
-use arrow::error::{ArrowError, Result as ArrowResult};
+use arrow::error::ArrowError;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use datafusion_physical_expr::EquivalenceProperties;
-use futures::{Stream, StreamExt, TryFutureExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use log::{debug, error};
 use std::any::Any;
 use std::cmp::{min, Ordering};
@@ -503,7 +503,7 @@ impl SortedSizedRecordBatchStream {
 }
 
 impl Stream for SortedSizedRecordBatchStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -531,7 +531,8 @@ impl Stream for SortedSizedRecordBatchStream {
                         make_array(mutable.freeze())
                     })
                     .collect::<Vec<_>>();
-                let batch = RecordBatch::try_new(self.schema.clone(), output);
+                let batch =
+                    RecordBatch::try_new(self.schema.clone(), output).map_err(Into::into);
                 let poll = Poll::Ready(Some(batch));
                 self.metrics.record_poll(poll)
             }
@@ -575,10 +576,8 @@ fn read_spill_as_stream(
     path: NamedTempFile,
     schema: SchemaRef,
 ) -> Result<SendableRecordBatchStream> {
-    let (sender, receiver): (
-        Sender<ArrowResult<RecordBatch>>,
-        Receiver<ArrowResult<RecordBatch>>,
-    ) = tokio::sync::mpsc::channel(2);
+    let (sender, receiver): (Sender<Result<RecordBatch>>, Receiver<Result<RecordBatch>>) =
+        tokio::sync::mpsc::channel(2);
     let join_handle = task::spawn_blocking(move || {
         if let Err(e) = read_spill(sender, path.path()) {
             error!("Failure while reading spill file: {:?}. Error: {}", path, e);
@@ -592,7 +591,7 @@ fn read_spill_as_stream(
 }
 
 fn write_sorted(
-    mut receiver: Receiver<ArrowResult<RecordBatch>>,
+    mut receiver: Receiver<Result<RecordBatch>>,
     path: PathBuf,
     schema: SchemaRef,
 ) -> Result<()> {
@@ -610,12 +609,12 @@ fn write_sorted(
     Ok(())
 }
 
-fn read_spill(sender: Sender<ArrowResult<RecordBatch>>, path: &Path) -> Result<()> {
+fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
     let file = BufReader::new(File::open(path)?);
     let reader = FileReader::try_new(file, None)?;
     for batch in reader {
         sender
-            .blocking_send(batch)
+            .blocking_send(batch.map_err(Into::into))
             .map_err(|e| DataFusionError::Execution(format!("{e}")))?;
     }
     Ok(())
@@ -771,17 +770,14 @@ impl ExecutionPlan for SortExec {
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
-            futures::stream::once(
-                do_sort(
-                    input,
-                    partition,
-                    self.expr.clone(),
-                    self.metrics_set.clone(),
-                    context,
-                    self.fetch(),
-                )
-                .map_err(|e| ArrowError::ExternalError(Box::new(e))),
-            )
+            futures::stream::once(do_sort(
+                input,
+                partition,
+                self.expr.clone(),
+                self.metrics_set.clone(),
+                context,
+                self.fetch(),
+            ))
             .try_flatten(),
         )))
     }
@@ -818,7 +814,7 @@ fn sort_batch(
     schema: SchemaRef,
     expr: &[PhysicalSortExpr],
     fetch: Option<usize>,
-) -> ArrowResult<BatchWithSortArray> {
+) -> Result<BatchWithSortArray> {
     let sort_columns = expr
         .iter()
         .map(|e| e.evaluate_to_sort_column(&batch))
@@ -843,8 +839,9 @@ fn sort_batch(
                     }),
                 )
             })
-            .collect::<ArrowResult<Vec<ArrayRef>>>()?,
-    )?;
+            .collect::<Result<Vec<ArrayRef>, ArrowError>>()?,
+    )
+    .map_err(Into::<DataFusionError>::into)?;
 
     let sort_arrays = sort_columns
         .into_iter()

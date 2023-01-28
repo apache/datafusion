@@ -29,7 +29,6 @@ use super::{
 };
 use crate::error::Result;
 use arrow::datatypes::SchemaRef;
-use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
 use crate::execution::context::TaskContext;
@@ -178,7 +177,7 @@ impl MemoryStream {
 }
 
 impl Stream for MemoryStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
