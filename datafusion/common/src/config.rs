@@ -269,7 +269,9 @@ config_namespace! {
         pub repartition_joins: bool, default = true
 
         /// When set to true, file groups will be repartitioned to achieve maximum parallelism.
-        /// Currently supported only for Parquet format
+        /// Currently supported only for Parquet format in which case
+        /// multiple row groups from the same file may be read concurrently. If false then each
+        /// row group is read serially, though different files may be read in parallel.
         pub repartition_file_scans: bool, default = false
 
         /// Should DataFusion repartition data using the partitions keys to execute window
