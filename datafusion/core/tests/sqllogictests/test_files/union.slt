@@ -80,7 +80,7 @@ query I
 SELECT 1 as x
 UNION ALL
 SELECT 2 as x
-ORDER BY 1
+ORDER BY x
 ----
 1
 2
