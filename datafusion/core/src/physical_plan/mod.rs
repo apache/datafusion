@@ -661,6 +661,7 @@ pub mod stream;
 pub mod streaming;
 pub mod udaf;
 pub mod union;
+pub mod unnest;
 pub mod values;
 pub mod windows;
 

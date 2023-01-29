@@ -26,7 +26,7 @@ use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, Distinct, Extension, Filter, Join,
     Limit, Partitioning, Prepare, Projection, Repartition, Sort as SortPlan, Subquery,
-    SubqueryAlias, Union, Values, Window,
+    SubqueryAlias, Union, Unnest, Values, Window,
 };
 use crate::{
     BinaryExpr, Cast, DmlStatement, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
@@ -739,6 +739,13 @@ pub fn from_plan(
             Ok(plan.clone())
         }
         LogicalPlan::DescribeTable(_) => Ok(plan.clone()),
+        LogicalPlan::Unnest(Unnest { column, schema, .. }) => {
+            Ok(LogicalPlan::Unnest(Unnest {
+                input: Arc::new(inputs[0].clone()),
+                column: column.clone(),
+                schema: schema.clone(),
+            }))
+        }
     }
 }
 

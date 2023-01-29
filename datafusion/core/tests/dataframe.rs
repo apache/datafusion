@@ -17,7 +17,10 @@
 
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::{
-    array::{Int32Array, StringArray, UInt32Array},
+    array::{
+        ArrayRef, Int32Array, Int32Builder, ListBuilder, StringArray, StringBuilder,
+        StructBuilder, UInt32Array, UInt32Builder,
+    },
     record_batch::RecordBatch,
 };
 use datafusion::from_slice::FromSlice;
@@ -500,6 +503,91 @@ async fn right_anti_filter_push_down() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn unnest_columns() -> Result<()> {
+    const NUM_ROWS: usize = 4;
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let results = df.collect().await?;
+    let expected = vec![
+        r#"+----------+------------------------------------------------------------+--------------------+"#,
+        r#"| shape_id | points                                                     | tags               |"#,
+        r#"+----------+------------------------------------------------------------+--------------------+"#,
+        r#"| 1        | [{"x": -3, "y": -4}, {"x": -3, "y": 6}, {"x": 2, "y": -2}] | [tag1]             |"#,
+        r#"| 2        |                                                            | [tag1, tag2]       |"#,
+        r#"| 3        | [{"x": -9, "y": 2}, {"x": -10, "y": -4}]                   |                    |"#,
+        r#"| 4        | [{"x": -3, "y": 5}, {"x": 2, "y": -1}]                     | [tag1, tag2, tag3] |"#,
+        r#"+----------+------------------------------------------------------------+--------------------+"#,
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    // Unnest tags
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let results = df.unnest_column("tags")?.collect().await?;
+    let expected = vec![
+        r#"+----------+------------------------------------------------------------+------+"#,
+        r#"| shape_id | points                                                     | tags |"#,
+        r#"+----------+------------------------------------------------------------+------+"#,
+        r#"| 1        | [{"x": -3, "y": -4}, {"x": -3, "y": 6}, {"x": 2, "y": -2}] | tag1 |"#,
+        r#"| 2        |                                                            | tag1 |"#,
+        r#"| 2        |                                                            | tag2 |"#,
+        r#"| 3        | [{"x": -9, "y": 2}, {"x": -10, "y": -4}]                   |      |"#,
+        r#"| 4        | [{"x": -3, "y": 5}, {"x": 2, "y": -1}]                     | tag1 |"#,
+        r#"| 4        | [{"x": -3, "y": 5}, {"x": 2, "y": -1}]                     | tag2 |"#,
+        r#"| 4        | [{"x": -3, "y": 5}, {"x": 2, "y": -1}]                     | tag3 |"#,
+        r#"+----------+------------------------------------------------------------+------+"#,
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    // Unnest points
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let results = df.unnest_column("points")?.collect().await?;
+    let expected = vec![
+        r#"+----------+---------------------+--------------------+"#,
+        r#"| shape_id | points              | tags               |"#,
+        r#"+----------+---------------------+--------------------+"#,
+        r#"| 1        | {"x": -3, "y": -4}  | [tag1]             |"#,
+        r#"| 1        | {"x": -3, "y": 6}   | [tag1]             |"#,
+        r#"| 1        | {"x": 2, "y": -2}   | [tag1]             |"#,
+        r#"| 2        |                     | [tag1, tag2]       |"#,
+        r#"| 3        | {"x": -9, "y": 2}   |                    |"#,
+        r#"| 3        | {"x": -10, "y": -4} |                    |"#,
+        r#"| 4        | {"x": -3, "y": 5}   | [tag1, tag2, tag3] |"#,
+        r#"| 4        | {"x": 2, "y": -1}   | [tag1, tag2, tag3] |"#,
+        r#"+----------+---------------------+--------------------+"#,
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    // Unnest both points and tags.
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let results = df
+        .unnest_column("points")?
+        .unnest_column("tags")?
+        .collect()
+        .await?;
+    let expected = vec![
+        r#"+----------+---------------------+------+"#,
+        r#"| shape_id | points              | tags |"#,
+        r#"+----------+---------------------+------+"#,
+        r#"| 1        | {"x": -3, "y": -4}  | tag1 |"#,
+        r#"| 1        | {"x": -3, "y": 6}   | tag1 |"#,
+        r#"| 1        | {"x": 2, "y": -2}   | tag1 |"#,
+        r#"| 2        |                     | tag1 |"#,
+        r#"| 2        |                     | tag2 |"#,
+        r#"| 3        | {"x": -9, "y": 2}   |      |"#,
+        r#"| 3        | {"x": -10, "y": -4} |      |"#,
+        r#"| 4        | {"x": -3, "y": 5}   | tag1 |"#,
+        r#"| 4        | {"x": -3, "y": 5}   | tag2 |"#,
+        r#"| 4        | {"x": -3, "y": 5}   | tag3 |"#,
+        r#"| 4        | {"x": 2, "y": -1}   | tag1 |"#,
+        r#"| 4        | {"x": 2, "y": -1}   | tag2 |"#,
+        r#"| 4        | {"x": 2, "y": -1}   | tag3 |"#,
+        r#"+----------+---------------------+------+"#,
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
 async fn create_test_table() -> Result<DataFrame> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
@@ -574,4 +662,71 @@ fn create_join_context() -> Result<SessionContext> {
     ctx.register_batch("t2", batch2)?;
 
     Ok(ctx)
+}
+
+/// Create a data frame that contains nested types.
+///
+/// Create a data frame with nested types, each row contains:
+/// - shape_id an integer primary key
+/// - points A list of points structs {x, y}
+/// - A list of tags.
+async fn table_with_nested_types(n: usize) -> Result<DataFrame> {
+    use rand::prelude::*;
+
+    let mut shape_id_builder = UInt32Builder::new();
+    let mut points_builder = ListBuilder::new(StructBuilder::from_fields(
+        vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("y", DataType::Int32, false),
+        ],
+        5,
+    ));
+    let mut tags_builder = ListBuilder::new(StringBuilder::new());
+
+    let mut rng = StdRng::seed_from_u64(197);
+
+    for idx in 0..n {
+        // Append shape id.
+        shape_id_builder.append_value(idx as u32 + 1);
+
+        // Add a random number of points
+        let num_points: usize = rng.gen_range(0..4);
+        if num_points > 0 {
+            for _ in 0..num_points.max(2) {
+                // Add x value
+                points_builder
+                    .values()
+                    .field_builder::<Int32Builder>(0)
+                    .unwrap()
+                    .append_value(rng.gen_range(-10..10));
+                // Add y value
+                points_builder
+                    .values()
+                    .field_builder::<Int32Builder>(1)
+                    .unwrap()
+                    .append_value(rng.gen_range(-10..10));
+                points_builder.values().append(true);
+            }
+        }
+
+        // Append null if num points is 0.
+        points_builder.append(num_points > 0);
+
+        // Append tags.
+        let num_tags: usize = rng.gen_range(0..5);
+        for id in 0..num_tags {
+            tags_builder.values().append_value(format!("tag{}", id + 1));
+        }
+        tags_builder.append(num_tags > 0);
+    }
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("shape_id", Arc::new(shape_id_builder.finish()) as ArrayRef),
+        ("points", Arc::new(points_builder.finish()) as ArrayRef),
+        ("tags", Arc::new(tags_builder.finish()) as ArrayRef),
+    ])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("shapes", batch)?;
+    ctx.table("shapes").await
 }

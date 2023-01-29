@@ -29,7 +29,7 @@ use crate::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
         JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
         Projection, Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan,
-        Union, Values, Window,
+        Union, Unnest, Values, Window,
     },
     utils::{
         can_hash, expand_qualified_wildcard, expand_wildcard,
@@ -891,6 +891,16 @@ impl LogicalPlanBuilder {
             null_equals_null: false,
         })))
     }
+
+    /// Unnest the given column.
+    pub fn unnest_column(self, column: impl Into<Column>) -> Result<Self> {
+        let unnest_field = self
+            .plan
+            .schema()
+            .field_from_column(&column.into())?
+            .clone();
+        Ok(Self::from(unnest(self.plan, unnest_field)?))
+    }
 }
 
 /// Creates a schema for a join operation.
@@ -1172,6 +1182,50 @@ impl TableSource for LogicalTableSource {
     fn schema(&self) -> SchemaRef {
         self.table_schema.clone()
     }
+}
+
+/// Create an unnest plan.
+pub fn unnest(input_plan: LogicalPlan, input_field: DFField) -> Result<LogicalPlan> {
+    // Extract the type of the nested field in the list.
+    let unnested_field = match input_field.data_type() {
+        DataType::List(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::LargeList(field) => DFField::new(
+            input_field.qualifier().map(String::as_str),
+            input_field.name(),
+            field.data_type().clone(),
+            input_field.is_nullable(),
+        ),
+        _ => {
+            // If the unnest field is not a list type return the input plan.
+            return Ok(input_plan);
+        }
+    };
+
+    // Update the schema with the unnest column type changed to contain the nested type.
+    let input_schema = input_plan.schema();
+    let fields = input_schema
+        .fields()
+        .iter()
+        .map(|f| {
+            if f == &input_field {
+                unnested_field.clone()
+            } else {
+                f.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let schema = Arc::new(DFSchema::new_with_metadata(
+        fields,
+        input_schema.metadata().clone(),
+    )?);
+
+    Ok(LogicalPlan::Unnest(Unnest {
+        input: Arc::new(input_plan),
+        column: unnested_field.qualified_column(),
+        schema,
+    }))
 }
 
 #[cfg(test)]
