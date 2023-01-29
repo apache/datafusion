@@ -26,8 +26,8 @@ use crate::utils::normalize_ident;
 use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, DataFusionError, ExprSchema, OwnedTableReference,
-    Result, TableReference, ToDFSchema,
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ExprSchema,
+    OwnedTableReference, Result, TableReference, ToDFSchema,
 };
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::logical_plan::builder::project;
@@ -792,6 +792,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let arrow_schema = (*provider.schema()).clone();
         let table_schema = DFSchema::try_from(arrow_schema)?;
 
+        let fields = if columns.is_empty() {
+            // Empty means we're inserting into all columns of the table
+            table_schema.fields().clone()
+        } else {
+            let fields = columns
+                .iter()
+                .map(|c| {
+                    Ok(table_schema
+                        .field_with_unqualified_name(&normalize_ident(c.clone()))?
+                        .clone())
+                })
+                .collect::<Result<Vec<DFField>>>()?;
+            // Validate no duplicate fields
+            let table_schema =
+                DFSchema::new_with_metadata(fields, table_schema.metadata().clone())?;
+            table_schema.fields().clone()
+        };
+
         // infer types for Values clause... other types should be resolvable the regular way
         let mut prepare_param_data_types = BTreeMap::new();
         if let SetExpr::Values(ast::Values { rows, .. }) = (*source.body).clone() {
@@ -804,14 +822,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     "Can't parse placeholder: {name}"
                                 ))
                             })? - 1;
-                        let col = columns.get(idx).ok_or_else(|| {
+                        let field = fields.get(idx).ok_or_else(|| {
                             DataFusionError::Plan(format!(
                                 "Placeholder ${} refers to a non existent column",
                                 idx + 1
                             ))
                         })?;
-                        let field =
-                            table_schema.field_with_name(None, col.value.as_str())?;
                         let dt = field.field().data_type().clone();
                         let _ = prepare_param_data_types.insert(name, dt);
                     }
@@ -824,21 +840,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut planner_context =
             PlannerContext::new_with_prepare_param_data_types(prepare_param_data_types);
         let source = self.query_to_plan(*source, &mut planner_context)?;
-        if columns.len() != source.schema().fields().len() {
+        if fields.len() != source.schema().fields().len() {
             Err(DataFusionError::Plan(
                 "Column count doesn't match insert query!".to_owned(),
             ))?;
         }
-        let values_schema = source.schema();
-        let exprs = columns
+        let exprs = fields
             .iter()
             .zip(source.schema().fields().iter())
-            .map(|(c, f)| {
-                let col_name = c.value.clone();
-                let col = table_schema.field_with_name(None, col_name.as_str())?;
-                let expr = datafusion_expr::Expr::Column(Column::from(f.name().clone()))
-                    .alias(col_name)
-                    .cast_to(col.data_type(), values_schema)?;
+            .map(|(target_field, source_field)| {
+                let expr =
+                    datafusion_expr::Expr::Column(source_field.unqualified_column())
+                        .cast_to(target_field.data_type(), source.schema())?
+                        .alias(target_field.name());
                 Ok(expr)
             })
             .collect::<Result<Vec<datafusion_expr::Expr>>>()?;

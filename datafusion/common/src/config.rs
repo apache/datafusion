@@ -323,7 +323,7 @@ pub struct ConfigOptions {
     pub catalog: CatalogOptions,
     /// Execution options
     pub execution: ExecutionOptions,
-    /// Explain options
+    /// Optimizer options
     pub optimizer: OptimizerOptions,
     /// Explain options
     pub explain: ExplainOptions,
