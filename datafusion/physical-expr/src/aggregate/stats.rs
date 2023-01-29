@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// Enum used for differenciating population and sample for statistical functions
+/// Enum used for differentiating population and sample for statistical functions
 #[derive(Debug, Clone, Copy)]
 pub enum StatsType {
     /// Population

@@ -97,8 +97,8 @@ impl CaseExpr {
     }
 
     /// Optional base expression that can be compared to literal values in the "when" expressions
-    pub fn expr(&self) -> &Option<Arc<dyn PhysicalExpr>> {
-        &self.expr
+    pub fn expr(&self) -> Option<&Arc<dyn PhysicalExpr>> {
+        self.expr.as_ref()
     }
 
     /// One or more when/then expressions
