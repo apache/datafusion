@@ -102,7 +102,7 @@ statement ok
 SET datafusion.execution.target_partitions=7
 
 # show all variables
-query R
+query R rowsort
 SHOW ALL
 ----
 datafusion.catalog.create_default_catalog_and_schema true
@@ -163,7 +163,7 @@ datafusion.execution.time_zone +00:00
 statement ok
 CREATE OR REPLACE TABLE some_table AS VALUES (1,2),(3,4);
 
-query R
+query R rowsort
 DESCRIBE some_table
 ----
 column1 Int64 YES
@@ -177,7 +177,7 @@ DROP TABLE public.some_table;
 statement ok
 CREATE OR REPLACE TABLE public.some_table AS VALUES (1,2),(3,4);
 
-query R
+query R rowsort
 DESCRIBE public.some_table
 ----
 column1 Int64 YES
@@ -191,7 +191,7 @@ DROP TABLE public.some_table;
 statement ok
 CREATE OR REPLACE TABLE datafusion.public.some_table AS VALUES (1,2),(3,4);
 
-query R
+query R rowsort
 DESCRIBE datafusion.public.some_table
 ----
 column1 Int64 YES
@@ -207,13 +207,13 @@ describe table;
 
 
 # information_schema_show_tables
-query CCCC
+query CCCC rowsort
 SHOW TABLES
 ----
-datafusion information_schema tables VIEW
-datafusion information_schema views VIEW
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
 
 
 # information_schema_show_tables_no_information_schema
