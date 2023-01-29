@@ -153,7 +153,7 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_parquet("tests/data/example.parquet", ParquetReadOptions::new()).await?;
-    /// let df = df.unnest("a")?;
+    /// let df = df.unnest_column("a")?;
     /// # Ok(())
     /// # }
     /// ```
