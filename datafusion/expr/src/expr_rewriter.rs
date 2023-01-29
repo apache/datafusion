@@ -21,14 +21,16 @@ use crate::expr::{
     AggregateFunction, Between, BinaryExpr, Case, Cast, GetIndexedField, GroupingSet,
     Like, Sort, TryCast, WindowFunction,
 };
-use crate::logical_plan::{Aggregate, Projection};
-use crate::utils::grouping_set_to_exprlist;
+use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan};
 use datafusion_common::Result;
 use datafusion_common::{Column, DFSchema};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+
+mod order_by;
+pub use order_by::rewrite_sort_cols_by_aggs;
 
 /// Controls how the [ExprRewriter] recursion should proceed.
 pub enum RewriteRecursion {
@@ -331,89 +333,6 @@ where
     R: ExprRewriter,
 {
     v.into_iter().map(|expr| expr.rewrite(rewriter)).collect()
-}
-
-/// Rewrite sort on aggregate expressions to sort on the column of aggregate output
-/// For example, `max(x)` is written to `col("MAX(x)")`
-pub fn rewrite_sort_cols_by_aggs(
-    exprs: impl IntoIterator<Item = impl Into<Expr>>,
-    plan: &LogicalPlan,
-) -> Result<Vec<Expr>> {
-    exprs
-        .into_iter()
-        .map(|e| {
-            let expr = e.into();
-            match expr {
-                Expr::Sort(Sort {
-                    expr,
-                    asc,
-                    nulls_first,
-                }) => {
-                    let sort = Expr::Sort(Sort::new(
-                        Box::new(rewrite_sort_col_by_aggs(*expr, plan)?),
-                        asc,
-                        nulls_first,
-                    ));
-                    Ok(sort)
-                }
-                expr => Ok(expr),
-            }
-        })
-        .collect()
-}
-
-fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
-    match plan {
-        LogicalPlan::Aggregate(Aggregate {
-            input,
-            aggr_expr,
-            group_expr,
-            ..
-        }) => {
-            struct Rewriter<'a> {
-                plan: &'a LogicalPlan,
-                input: &'a LogicalPlan,
-                aggr_expr: &'a Vec<Expr>,
-                distinct_group_exprs: &'a Vec<Expr>,
-            }
-
-            impl<'a> ExprRewriter for Rewriter<'a> {
-                fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-                    let normalized_expr = normalize_col(expr.clone(), self.plan);
-                    if normalized_expr.is_err() {
-                        // The expr is not based on Aggregate plan output. Skip it.
-                        return Ok(expr);
-                    }
-                    let normalized_expr = normalized_expr?;
-                    if let Some(found_agg) = self
-                        .aggr_expr
-                        .iter()
-                        .chain(self.distinct_group_exprs)
-                        .find(|a| (**a) == normalized_expr)
-                    {
-                        let agg = normalize_col(found_agg.clone(), self.plan)?;
-                        let col = Expr::Column(
-                            agg.to_field(self.input.schema())
-                                .map(|f| f.qualified_column())?,
-                        );
-                        Ok(col)
-                    } else {
-                        Ok(expr)
-                    }
-                }
-            }
-
-            let distinct_group_exprs = grouping_set_to_exprlist(group_expr.as_slice())?;
-            expr.rewrite(&mut Rewriter {
-                plan,
-                input,
-                aggr_expr,
-                distinct_group_exprs: &distinct_group_exprs,
-            })
-        }
-        LogicalPlan::Projection(_) => rewrite_sort_col_by_aggs(expr, plan.inputs()[0]),
-        _ => Ok(expr),
-    }
 }
 
 /// Recursively call [`Column::normalize_with_schemas`] on all Column expressions

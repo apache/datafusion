@@ -18,37 +18,39 @@
 //! Physical exec for aggregate window function expressions.
 
 use std::any::Any;
-use std::iter::IntoIterator;
 use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::Array;
-use arrow::compute::SortOptions;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 
-use datafusion_common::Result;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{WindowFrame, WindowFrameUnits};
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::{Accumulator, WindowFrame, WindowFrameUnits};
 
-use crate::window::window_expr::reverse_order_bys;
-use crate::window::SlidingAggregateWindowExpr;
-use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
-use crate::{window::WindowExpr, AggregateExpr};
-
-use super::window_frame_state::WindowFrameContext;
+use crate::window::window_expr::{reverse_order_bys, AggregateWindowExpr};
+use crate::window::{
+    PartitionBatches, PartitionWindowAggStates, SlidingAggregateWindowExpr, WindowExpr,
+};
+use crate::{expressions::PhysicalSortExpr, AggregateExpr, PhysicalExpr};
 
 /// A window expr that takes the form of an aggregate function
+/// Aggregate Window Expressions that have the form
+/// `OVER({ROWS | RANGE| GROUPS} BETWEEN UNBOUNDED PRECEDING AND ...)`
+/// e.g cumulative window frames uses `PlainAggregateWindowExpr`. Where as Aggregate Window Expressions
+/// that have the form `OVER({ROWS | RANGE| GROUPS} BETWEEN M {PRECEDING| FOLLOWING} AND ...)`
+/// e.g sliding window frames uses `SlidingAggregateWindowExpr`.
 #[derive(Debug)]
-pub struct AggregateWindowExpr {
+pub struct PlainAggregateWindowExpr {
     aggregate: Arc<dyn AggregateExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
     window_frame: Arc<WindowFrame>,
 }
 
-impl AggregateWindowExpr {
-    /// create a new aggregate window function expression
+impl PlainAggregateWindowExpr {
+    /// Create a new aggregate window function expression
     pub fn new(
         aggregate: Arc<dyn AggregateExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
@@ -72,8 +74,7 @@ impl AggregateWindowExpr {
 /// peer based evaluation based on the fact that batch is pre-sorted given the sort columns
 /// and then per partition point we'll evaluate the peer group (e.g. SUM or MAX gives the same
 /// results for peers) and concatenate the results.
-
-impl WindowExpr for AggregateWindowExpr {
+impl WindowExpr for PlainAggregateWindowExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -92,42 +93,36 @@ impl WindowExpr for AggregateWindowExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        let sort_options: Vec<SortOptions> =
-            self.order_by.iter().map(|o| o.options).collect();
-        let mut row_wise_results: Vec<ScalarValue> = vec![];
+        self.aggregate_evaluate(batch)
+    }
 
-        let mut accumulator = self.aggregate.create_accumulator()?;
-        let length = batch.num_rows();
-        let (values, order_bys) = self.get_values_orderbys(batch)?;
+    fn evaluate_stateful(
+        &self,
+        partition_batches: &PartitionBatches,
+        window_agg_state: &mut PartitionWindowAggStates,
+    ) -> Result<()> {
+        self.aggregate_evaluate_stateful(partition_batches, window_agg_state)?;
 
-        let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
-        let mut last_range = Range { start: 0, end: 0 };
-
-        // We iterate on each row to perform a running calculation.
-        // First, cur_range is calculated, then it is compared with last_range.
-        for i in 0..length {
-            let cur_range =
-                window_frame_ctx.calculate_range(&order_bys, &sort_options, length, i)?;
-            let value = if cur_range.end == cur_range.start {
-                // We produce None if the window is empty.
-                ScalarValue::try_from(self.aggregate.field()?.data_type())?
-            } else {
-                // Accumulate any new rows that have entered the window:
-                let update_bound = cur_range.end - last_range.end;
-                if update_bound > 0 {
-                    let update: Vec<ArrayRef> = values
-                        .iter()
-                        .map(|v| v.slice(last_range.end, update_bound))
-                        .collect();
-                    accumulator.update_batch(&update)?
-                }
-                accumulator.evaluate()?
-            };
-            row_wise_results.push(value);
-            last_range = cur_range;
+        // Update window frame range for each partition. As we know that
+        // non-sliding aggregations will never call `retract_batch`, this value
+        // can safely increase, and we can remove "old" parts of the state.
+        // This enables us to run queries involving UNBOUNDED PRECEDING frames
+        // using bounded memory for suitable aggregations.
+        for partition_row in partition_batches.keys() {
+            let window_state =
+                window_agg_state.get_mut(partition_row).ok_or_else(|| {
+                    DataFusionError::Execution("Cannot find state".to_string())
+                })?;
+            let mut state = &mut window_state.state;
+            if self.window_frame.start_bound.is_unbounded() {
+                state.window_frame_range.start = if state.window_frame_range.end >= 1 {
+                    state.window_frame_range.end - 1
+                } else {
+                    0
+                };
+            }
         }
-
-        ScalarValue::iter_to_array(row_wise_results.into_iter())
+        Ok(())
     }
 
     fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>] {
@@ -146,7 +141,7 @@ impl WindowExpr for AggregateWindowExpr {
         self.aggregate.reverse_expr().map(|reverse_expr| {
             let reverse_window_frame = self.window_frame.reverse();
             if reverse_window_frame.start_bound.is_unbounded() {
-                Arc::new(AggregateWindowExpr::new(
+                Arc::new(PlainAggregateWindowExpr::new(
                     reverse_expr,
                     &self.partition_by.clone(),
                     &reverse_order_bys(&self.order_by),
@@ -166,8 +161,47 @@ impl WindowExpr for AggregateWindowExpr {
     fn uses_bounded_memory(&self) -> bool {
         // NOTE: Currently, groups queries do not support the bounded memory variant.
         self.aggregate.supports_bounded_execution()
-            && !self.window_frame.start_bound.is_unbounded()
             && !self.window_frame.end_bound.is_unbounded()
             && !matches!(self.window_frame.units, WindowFrameUnits::Groups)
+    }
+}
+
+impl AggregateWindowExpr for PlainAggregateWindowExpr {
+    fn get_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        self.aggregate.create_accumulator()
+    }
+
+    /// For a given range, calculate accumulation result inside the range on
+    /// `value_slice` and update accumulator state.
+    // We assume that `cur_range` contains `last_range` and their start points
+    // are same. In summary if `last_range` is `Range{start: a,end: b}` and
+    // `cur_range` is `Range{start: a1, end: b1}`, it is guaranteed that a1=a and b1>=b.
+    fn get_aggregate_result_inside_range(
+        &self,
+        last_range: &Range<usize>,
+        cur_range: &Range<usize>,
+        value_slice: &[ArrayRef],
+        accumulator: &mut Box<dyn Accumulator>,
+    ) -> Result<ScalarValue> {
+        let value = if cur_range.start == cur_range.end {
+            // We produce None if the window is empty.
+            ScalarValue::try_from(self.aggregate.field()?.data_type())?
+        } else {
+            // Accumulate any new rows that have entered the window:
+            let update_bound = cur_range.end - last_range.end;
+            // A non-sliding aggregation only processes new data, it never
+            // deals with expiring data as its starting point is always the
+            // same point (i.e. the beginning of the table/frame). Hence, we
+            // do not call `retract_batch`.
+            if update_bound > 0 {
+                let update: Vec<ArrayRef> = value_slice
+                    .iter()
+                    .map(|v| v.slice(last_range.end, update_bound))
+                    .collect();
+                accumulator.update_batch(&update)?
+            }
+            accumulator.evaluate()?
+        };
+        Ok(value)
     }
 }

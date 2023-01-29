@@ -40,7 +40,7 @@ use datafusion_expr::Accumulator;
 use datafusion_row::accessor::RowAccessor;
 
 /// AVG aggregate expression
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Avg {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
@@ -111,6 +111,10 @@ impl AggregateExpr for Avg {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
+    fn supports_bounded_execution(&self) -> bool {
+        true
+    }
+
     fn create_row_accumulator(
         &self,
         start_index: usize,
@@ -119,6 +123,10 @@ impl AggregateExpr for Avg {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        Some(Arc::new(self.clone()))
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
@@ -261,7 +269,7 @@ impl RowAccumulator for AvgRowAccumulator {
         assert_eq!(self.sum_datatype, DataType::Float64);
         Ok(match accessor.get_u64_opt(self.state_index()) {
             None => ScalarValue::Float64(None),
-            Some(0) => ScalarValue::Float64(Some(0.0)),
+            Some(0) => ScalarValue::Float64(None),
             Some(n) => ScalarValue::Float64(
                 accessor
                     .get_f64_opt(self.state_index() + 1)

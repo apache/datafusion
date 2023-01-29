@@ -127,7 +127,9 @@ struct FileStreamMetrics {
     /// Time elapsed for file opening
     pub time_opening: StartableTime,
     /// Time elapsed for file scanning + first record batch of decompression + decoding
-    pub time_scanning: StartableTime,
+    pub time_scanning_until_data: StartableTime,
+    /// Total elapsed time for for scanning + record batch decompression / decoding
+    pub time_scanning_total: StartableTime,
     /// Time elapsed for data decompression + decoding
     pub time_processing: StartableTime,
 }
@@ -140,9 +142,15 @@ impl FileStreamMetrics {
             start: None,
         };
 
-        let time_scanning = StartableTime {
+        let time_scanning_until_data = StartableTime {
             metrics: MetricBuilder::new(metrics)
-                .subset_time("time_elapsed_scanning", partition),
+                .subset_time("time_elapsed_scanning_until_data", partition),
+            start: None,
+        };
+
+        let time_scanning_total = StartableTime {
+            metrics: MetricBuilder::new(metrics)
+                .subset_time("time_elapsed_scanning_total", partition),
             start: None,
         };
 
@@ -154,7 +162,8 @@ impl FileStreamMetrics {
 
         Self {
             time_opening,
-            time_scanning,
+            time_scanning_until_data,
+            time_scanning_total,
             time_processing,
         }
     }
@@ -166,7 +175,7 @@ impl<F: FileOpener> FileStream<F> {
         config: &FileScanConfig,
         partition: usize,
         file_reader: F,
-        metrics: ExecutionPlanMetricsSet,
+        metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
         let (projected_schema, _) = config.project();
         let pc_projector = PartitionColumnProjector::new(
@@ -187,8 +196,8 @@ impl<F: FileOpener> FileStream<F> {
             file_reader,
             pc_projector,
             state: FileStreamState::Idle,
-            file_stream_metrics: FileStreamMetrics::new(&metrics, partition),
-            baseline_metrics: BaselineMetrics::new(&metrics, partition),
+            file_stream_metrics: FileStreamMetrics::new(metrics, partition),
+            baseline_metrics: BaselineMetrics::new(metrics, partition),
         })
     }
 
@@ -231,7 +240,8 @@ impl<F: FileOpener> FileStream<F> {
                 } => match ready!(future.poll_unpin(cx)) {
                     Ok(reader) => {
                         self.file_stream_metrics.time_opening.stop();
-                        self.file_stream_metrics.time_scanning.start();
+                        self.file_stream_metrics.time_scanning_until_data.start();
+                        self.file_stream_metrics.time_scanning_total.start();
                         self.state = FileStreamState::Scan {
                             partition_values: std::mem::take(partition_values),
                             reader,
@@ -247,7 +257,8 @@ impl<F: FileOpener> FileStream<F> {
                     partition_values,
                 } => match ready!(reader.poll_next_unpin(cx)) {
                     Some(result) => {
-                        self.file_stream_metrics.time_scanning.stop();
+                        self.file_stream_metrics.time_scanning_until_data.stop();
+                        self.file_stream_metrics.time_scanning_total.stop();
                         let result = result
                             .and_then(|b| self.pc_projector.project(b, partition_values))
                             .map(|batch| match &mut self.remain {
@@ -268,11 +279,12 @@ impl<F: FileOpener> FileStream<F> {
                         if result.is_err() {
                             self.state = FileStreamState::Error
                         }
-
+                        self.file_stream_metrics.time_scanning_total.start();
                         return Poll::Ready(Some(result));
                     }
                     None => {
-                        self.file_stream_metrics.time_scanning.stop();
+                        self.file_stream_metrics.time_scanning_until_data.stop();
+                        self.file_stream_metrics.time_scanning_total.stop();
                         self.state = FileStreamState::Idle;
                     }
                 },
@@ -353,9 +365,8 @@ mod tests {
             output_ordering: None,
             infinite_source: false,
         };
-
-        let file_stream =
-            FileStream::new(&config, 0, reader, ExecutionPlanMetricsSet::new()).unwrap();
+        let metrics_set = ExecutionPlanMetricsSet::new();
+        let file_stream = FileStream::new(&config, 0, reader, &metrics_set).unwrap();
 
         file_stream
             .map(|b| b.expect("No error expected in stream"))

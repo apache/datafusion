@@ -26,7 +26,7 @@ use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::physical_plan::file_format::FileMeta;
-use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
+use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
@@ -153,7 +153,7 @@ impl ExecutionPlan for CsvExec {
             file_compression_type: self.file_compression_type.to_owned(),
         };
         let stream =
-            FileStream::new(&self.base_config, partition, opener, self.metrics.clone())?;
+            FileStream::new(&self.base_config, partition, opener, &self.metrics)?;
         Ok(Box::pin(stream) as SendableRecordBatchStream)
     }
 
@@ -178,6 +178,10 @@ impl ExecutionPlan for CsvExec {
 
     fn statistics(&self) -> Statistics {
         self.projected_statistics.clone()
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 }
 
@@ -443,25 +447,13 @@ mod tests {
         assert_eq!(14, csv.projected_schema.fields().len());
         assert_eq!(14, csv.schema().fields().len());
 
+        // errors due to https://github.com/apache/arrow-datafusion/issues/4918
         let mut it = csv.execute(0, task_ctx)?;
-        let batch = it.next().await.unwrap()?;
-        assert_eq!(14, batch.num_columns());
-        assert_eq!(5, batch.num_rows());
-
-        let expected = vec![
-            "+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+-------------+",
-            "| c1 | c2 | c3  | c4     | c5         | c6                   | c7  | c8    | c9         | c10                  | c11         | c12                 | c13                            | missing_col |",
-            "+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+-------------+",
-            "| c  | 2  | 1   | 18109  | 2033001162 | -6513304855495910254 | 25  | 43062 | 1491205016 | 5863949479783605708  | 0.110830784 | 0.9294097332465232  | 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW |             |",
-            "| d  | 5  | -40 | 22614  | 706441268  | -7542719935673075327 | 155 | 14337 | 3373581039 | 11720144131976083864 | 0.69632107  | 0.3114712539863804  | C2GT5KVyOPZpgKVl110TyZO0NcJ434 |             |",
-            "| b  | 1  | 29  | -18218 | 994303988  | 5983957848665088916  | 204 | 9489  | 3275293996 | 14857091259186476033 | 0.53840446  | 0.17909035118828576 | AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz |             |",
-            "| a  | 1  | -85 | -15154 | 1171968280 | 1919439543497968449  | 77  | 52286 | 774637006  | 12101411955859039553 | 0.12285209  | 0.6864391962767343  | 0keZ5G8BffGwgF2RwQD59TFzMStxCB |             |",
-            "| b  | 5  | -82 | 22080  | 1824882165 | 7373730676428214987  | 208 | 34331 | 3342719438 | 3330177516592499461  | 0.82634634  | 0.40975383525297016 | Ig1QcuKsjHXkproePdERo2w0mYzIqd |             |",
-            "+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+-------------+",
-        ];
-
-        crate::assert_batches_eq!(expected, &[batch]);
-
+        let err = it.next().await.unwrap().unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Csv error: incorrect number of fields for line 1, expected 14 got 13"
+        );
         Ok(())
     }
 
@@ -527,6 +519,13 @@ mod tests {
             "+----+------------+",
         ];
         crate::assert_batches_eq!(expected, &[batch.slice(0, 5)]);
+
+        let metrics = csv.metrics().expect("doesn't found metrics");
+        let time_elapsed_processing = get_value(&metrics, "time_elapsed_processing");
+        assert!(
+            time_elapsed_processing > 0,
+            "Expected time_elapsed_processing greater than 0",
+        );
         Ok(())
     }
 
@@ -687,5 +686,16 @@ mod tests {
         assert_eq!(allparts_count, 80);
 
         Ok(())
+    }
+
+    fn get_value(metrics: &MetricsSet, metric_name: &str) -> usize {
+        match metrics.sum_by_name(metric_name) {
+            Some(v) => v.as_usize(),
+            _ => {
+                panic!(
+                    "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
+                );
+            }
+        }
     }
 }

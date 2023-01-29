@@ -19,7 +19,9 @@
 
 use crate::expr::{Sort, WindowFunction};
 use crate::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
-use crate::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
+use crate::expr_visitor::{
+    inspect_expr_pre, ExprVisitable, ExpressionVisitor, Recursion,
+};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, Distinct, Extension, Filter, Join,
@@ -27,8 +29,8 @@ use crate::logical_plan::{
     SubqueryAlias, Union, Values, Window,
 };
 use crate::{
-    BinaryExpr, Cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator,
-    TableScan, TryCast,
+    BinaryExpr, Cast, DmlStatement, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
+    Operator, TableScan, TryCast,
 };
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{
@@ -83,20 +85,16 @@ pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<Expr>> {
     }
 }
 
-/// Recursively walk an expression tree, collecting the unique set of column names
+/// Recursively walk an expression tree, collecting the unique set of columns
 /// referenced in the expression
-struct ColumnNameVisitor<'a> {
-    accum: &'a mut HashSet<Column>,
-}
-
-impl ExpressionVisitor for ColumnNameVisitor<'_> {
-    fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
+pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
+    inspect_expr_pre(expr, |expr| {
         match expr {
             Expr::Column(qc) => {
-                self.accum.insert(qc.clone());
+                accum.insert(qc.clone());
             }
             Expr::ScalarVariable(_, var_names) => {
-                self.accum.insert(Column::from_name(var_names.join(".")));
+                accum.insert(Column::from_name(var_names.join(".")));
             }
             Expr::Alias(_, _)
             | Expr::Literal(_)
@@ -134,15 +132,8 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             | Expr::GetIndexedField { .. }
             | Expr::Placeholder { .. } => {}
         }
-        Ok(Recursion::Continue(self))
-    }
-}
-
-/// Recursively walk an expression tree, collecting the unique set of columns
-/// referenced in the expression
-pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
-    expr.accept(ColumnNameVisitor { accum })?;
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.
@@ -489,6 +480,17 @@ pub fn from_plan(
                 schema.clone(),
             )?))
         }
+        LogicalPlan::Dml(DmlStatement {
+            table_name,
+            table_schema,
+            op,
+            ..
+        }) => Ok(LogicalPlan::Dml(DmlStatement {
+            table_name: table_name.clone(),
+            table_schema: table_schema.clone(),
+            op: op.clone(),
+            input: Arc::new(inputs[0].clone()),
+        })),
         LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {
             schema: schema.clone(),
             values: expr
@@ -736,6 +738,7 @@ pub fn from_plan(
             assert!(inputs.is_empty(), "{plan:?}  should have no inputs");
             Ok(plan.clone())
         }
+        LogicalPlan::DescribeTable(_) => Ok(plan.clone()),
     }
 }
 
@@ -850,27 +853,17 @@ pub fn find_column_exprs(exprs: &[Expr]) -> Vec<Expr> {
         .collect()
 }
 
-/// Recursively find all columns referenced by an expression
-#[derive(Debug, Default)]
-struct ColumnCollector {
-    exprs: Vec<Column>,
-}
-
-impl ExpressionVisitor for ColumnCollector {
-    fn pre_visit(mut self, expr: &Expr) -> Result<Recursion<Self>> {
-        if let Expr::Column(c) = expr {
-            self.exprs.push(c.clone())
-        }
-        Ok(Recursion::Continue(self))
-    }
-}
-
 pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
+    let mut exprs = vec![];
+    inspect_expr_pre(e, |expr| {
+        if let Expr::Column(c) = expr {
+            exprs.push(c.clone())
+        }
+        Ok(()) as Result<()>
+    })
     // As the `ExpressionVisitor` impl above always returns Ok, this
     // "can't" error
-    let ColumnCollector { exprs } = e
-        .accept(ColumnCollector::default())
-        .expect("Unexpected error");
+    .expect("Unexpected error");
     exprs
 }
 
@@ -887,43 +880,26 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
 
 /// Recursively walk an expression tree, collecting the column indexes
 /// referenced in the expression
-struct ColumnIndexesCollector<'a> {
-    schema: &'a DFSchemaRef,
-    indexes: Vec<usize>,
-}
-
-impl ExpressionVisitor for ColumnIndexesCollector<'_> {
-    fn pre_visit(mut self, expr: &Expr) -> Result<Recursion<Self>>
-    where
-        Self: ExpressionVisitor,
-    {
-        match expr {
-            Expr::Column(qc) => {
-                if let Ok(idx) = self.schema.index_of_column(qc) {
-                    self.indexes.push(idx);
-                }
-            }
-            Expr::Literal(_) => {
-                self.indexes.push(std::usize::MAX);
-            }
-            _ => {}
-        }
-        Ok(Recursion::Continue(self))
-    }
-}
-
 pub(crate) fn find_column_indexes_referenced_by_expr(
     e: &Expr,
     schema: &DFSchemaRef,
 ) -> Vec<usize> {
-    // As the `ExpressionVisitor` impl above always returns Ok, this
-    // "can't" error
-    let ColumnIndexesCollector { indexes, .. } = e
-        .accept(ColumnIndexesCollector {
-            schema,
-            indexes: vec![],
-        })
-        .expect("Unexpected error");
+    let mut indexes = vec![];
+    inspect_expr_pre(e, |expr| {
+        match expr {
+            Expr::Column(qc) => {
+                if let Ok(idx) = schema.index_of_column(qc) {
+                    indexes.push(idx);
+                }
+            }
+            Expr::Literal(_) => {
+                indexes.push(std::usize::MAX);
+            }
+            _ => {}
+        }
+        Ok(()) as Result<()>
+    })
+    .unwrap();
     indexes
 }
 
@@ -965,7 +941,10 @@ pub fn can_hash(data_type: &DataType) -> bool {
 }
 
 /// Check whether all columns are from the schema.
-fn check_all_column_from_schema(columns: &HashSet<Column>, schema: DFSchemaRef) -> bool {
+pub fn check_all_column_from_schema(
+    columns: &HashSet<Column>,
+    schema: DFSchemaRef,
+) -> bool {
     columns
         .iter()
         .all(|column| schema.index_of_column(column).is_ok())

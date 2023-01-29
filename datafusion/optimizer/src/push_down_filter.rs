@@ -108,13 +108,9 @@ fn on_lr_is_preserved(plan: &LogicalPlan) -> Result<(bool, bool)> {
             JoinType::Left => Ok((false, true)),
             JoinType::Right => Ok((true, false)),
             JoinType::Full => Ok((false, false)),
-            JoinType::LeftSemi
-            | JoinType::LeftAnti
-            | JoinType::RightSemi
-            | JoinType::RightAnti => {
-                // filter_push_down does not yet support SEMI/ANTI joins with join conditions
-                Ok((false, false))
-            }
+            JoinType::LeftSemi | JoinType::RightSemi => Ok((true, true)),
+            JoinType::LeftAnti => Ok((false, true)),
+            JoinType::RightAnti => Ok((true, false)),
         },
         LogicalPlan::CrossJoin(_) => Err(DataFusionError::Internal(
             "on_lr_is_preserved cannot be applied to CROSSJOIN nodes".to_string(),
@@ -397,7 +393,7 @@ fn push_down_all_join(
             .chain(once(keep_condition.into_iter().reduce(Expr::and).unwrap()))
             .collect()
     } else {
-        plan.expressions()
+        expr
     };
     let plan = from_plan(plan, &expr, &[left, right])?;
 
@@ -550,9 +546,9 @@ impl OptimizerRule for PushDownFilter {
                     )
                     .map(|e| (*e).clone())
                     .collect::<Vec<_>>();
-                let new_predicate = conjunction(new_predicates).ok_or(
-                    DataFusionError::Plan("at least one expression exists".to_string()),
-                )?;
+                let new_predicate = conjunction(new_predicates).ok_or_else(|| {
+                    DataFusionError::Plan("at least one expression exists".to_string())
+                })?;
                 let new_plan = LogicalPlan::Filter(Filter::try_new(
                     new_predicate,
                     child_filter.input.clone(),
@@ -2327,5 +2323,184 @@ mod tests {
             .try_optimize(&plan, &OptimizerContext::new())?
             .expect("failed to optimize plan");
         assert_optimized_plan_eq(&optimized_plan, expected)
+    }
+
+    #[test]
+    fn left_semi_join_with_filters() -> Result<()> {
+        let left = test_table_scan_with_name("test1")?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::LeftSemi,
+                (
+                    vec![Column::from_qualified_name("test1.a")],
+                    vec![Column::from_qualified_name("test2.a")],
+                ),
+                Some(
+                    col("test1.b")
+                        .gt(lit(1u32))
+                        .and(col("test2.b").gt(lit(2u32))),
+                ),
+            )?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{plan:?}"),
+            "LeftSemi Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)\
+            \n  TableScan: test1\
+            \n  Projection: test2.a, test2.b\
+            \n    TableScan: test2",
+        );
+
+        // Both side will be pushed down.
+        let expected = "\
+        LeftSemi Join: test1.a = test2.a\
+        \n  Filter: test1.b > UInt32(1)\
+        \n    TableScan: test1\
+        \n  Projection: test2.a, test2.b\
+        \n    Filter: test2.b > UInt32(2)\
+        \n      TableScan: test2";
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn right_semi_join_with_filters() -> Result<()> {
+        let left = test_table_scan_with_name("test1")?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::RightSemi,
+                (
+                    vec![Column::from_qualified_name("test1.a")],
+                    vec![Column::from_qualified_name("test2.a")],
+                ),
+                Some(
+                    col("test1.b")
+                        .gt(lit(1u32))
+                        .and(col("test2.b").gt(lit(2u32))),
+                ),
+            )?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{plan:?}"),
+            "RightSemi Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)\
+            \n  TableScan: test1\
+            \n  Projection: test2.a, test2.b\
+            \n    TableScan: test2",
+        );
+
+        // Both side will be pushed down.
+        let expected = "\
+        RightSemi Join: test1.a = test2.a\
+        \n  Filter: test1.b > UInt32(1)\
+        \n    TableScan: test1\
+        \n  Projection: test2.a, test2.b\
+        \n    Filter: test2.b > UInt32(2)\
+        \n      TableScan: test2";
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn left_anti_join_with_filters() -> Result<()> {
+        let table_scan = test_table_scan_with_name("test1")?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::LeftAnti,
+                (
+                    vec![Column::from_qualified_name("test1.a")],
+                    vec![Column::from_qualified_name("test2.a")],
+                ),
+                Some(
+                    col("test1.b")
+                        .gt(lit(1u32))
+                        .and(col("test2.b").gt(lit(2u32))),
+                ),
+            )?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{plan:?}"),
+            "LeftAnti Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)\
+            \n  Projection: test1.a, test1.b\
+            \n    TableScan: test1\
+            \n  Projection: test2.a, test2.b\
+            \n    TableScan: test2",
+        );
+
+        // For left anti, filter of the right side filter can be pushed down.
+        let expected = "\
+        LeftAnti Join: test1.a = test2.a Filter: test1.b > UInt32(1)\
+        \n  Projection: test1.a, test1.b\
+        \n    TableScan: test1\
+        \n  Projection: test2.a, test2.b\
+        \n    Filter: test2.b > UInt32(2)\
+        \n      TableScan: test2";
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn right_anti_join_with_filters() -> Result<()> {
+        let table_scan = test_table_scan_with_name("test1")?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::RightAnti,
+                (
+                    vec![Column::from_qualified_name("test1.a")],
+                    vec![Column::from_qualified_name("test2.a")],
+                ),
+                Some(
+                    col("test1.b")
+                        .gt(lit(1u32))
+                        .and(col("test2.b").gt(lit(2u32))),
+                ),
+            )?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{plan:?}"),
+            "RightAnti Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)\
+            \n  Projection: test1.a, test1.b\
+            \n    TableScan: test1\
+            \n  Projection: test2.a, test2.b\
+            \n    TableScan: test2",
+        );
+
+        // For right anti, filter of the left side can be pushed down.
+        let expected = "RightAnti Join: test1.a = test2.a Filter: test2.b > UInt32(2)\
+        \n  Projection: test1.a, test1.b\
+        \n    Filter: test1.b > UInt32(1)\
+        \n      TableScan: test1\
+        \n  Projection: test2.a, test2.b\
+        \n    TableScan: test2";
+        assert_optimized_plan_eq(&plan, expected)
     }
 }

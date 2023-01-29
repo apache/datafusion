@@ -24,7 +24,7 @@ use crate::physical_plan::{
 use arrow::datatypes::SchemaRef;
 
 use crate::execution::context::TaskContext;
-use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
+use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -122,7 +122,7 @@ impl ExecutionPlan for AvroExec {
         let opener = private::AvroOpener { config };
 
         let stream =
-            FileStream::new(&self.base_config, partition, opener, self.metrics.clone())?;
+            FileStream::new(&self.base_config, partition, opener, &self.metrics)?;
         Ok(Box::pin(stream))
     }
 
@@ -145,6 +145,10 @@ impl ExecutionPlan for AvroExec {
 
     fn statistics(&self) -> Statistics {
         self.projected_statistics.clone()
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 }
 
@@ -247,7 +251,7 @@ mod tests {
             .register_object_store("file", "", store.clone());
 
         let testdata = crate::test_util::arrow_test_data();
-        let filename = format!("{}/avro/alltypes_plain.avro", testdata);
+        let filename = format!("{testdata}/avro/alltypes_plain.avro");
         let meta = local_unpartitioned_file(filename);
 
         let file_schema = AvroFormat {}
@@ -311,7 +315,7 @@ mod tests {
         let state = session_ctx.state();
 
         let testdata = crate::test_util::arrow_test_data();
-        let filename = format!("{}/avro/alltypes_plain.avro", testdata);
+        let filename = format!("{testdata}/avro/alltypes_plain.avro");
         let object_store = Arc::new(LocalFileSystem::new()) as _;
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
@@ -384,7 +388,7 @@ mod tests {
         let state = session_ctx.state();
 
         let testdata = crate::test_util::arrow_test_data();
-        let filename = format!("{}/avro/alltypes_plain.avro", testdata);
+        let filename = format!("{testdata}/avro/alltypes_plain.avro");
         let object_store = Arc::new(LocalFileSystem::new()) as _;
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);

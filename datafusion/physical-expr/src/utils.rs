@@ -20,8 +20,8 @@ use crate::expressions::BinaryExpr;
 use crate::expressions::Column;
 use crate::expressions::UnKnownColumn;
 use crate::rewrite::TreeNodeRewritable;
-use crate::PhysicalExpr;
 use crate::PhysicalSortExpr;
+use crate::{EquivalenceProperties, PhysicalExpr};
 use datafusion_expr::Operator;
 
 use arrow::datatypes::SchemaRef;
@@ -185,6 +185,56 @@ pub fn normalize_sort_expr_with_equivalence_properties(
     }
 }
 
+/// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
+pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
+    provided: Option<&[PhysicalSortExpr]>,
+    required: Option<&[PhysicalSortExpr]>,
+    equal_properties: F,
+) -> bool {
+    match (provided, required) {
+        (_, None) => true,
+        (None, Some(_)) => false,
+        (Some(provided), Some(required)) => {
+            ordering_satisfy_concrete(provided, required, equal_properties)
+        }
+    }
+}
+
+pub fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(
+    provided: &[PhysicalSortExpr],
+    required: &[PhysicalSortExpr],
+    equal_properties: F,
+) -> bool {
+    if required.len() > provided.len() {
+        false
+    } else if required
+        .iter()
+        .zip(provided.iter())
+        .all(|(order1, order2)| order1.eq(order2))
+    {
+        true
+    } else if let eq_classes @ [_, ..] = equal_properties().classes() {
+        let normalized_required_exprs = required
+            .iter()
+            .map(|e| {
+                normalize_sort_expr_with_equivalence_properties(e.clone(), eq_classes)
+            })
+            .collect::<Vec<_>>();
+        let normalized_provided_exprs = provided
+            .iter()
+            .map(|e| {
+                normalize_sort_expr_with_equivalence_properties(e.clone(), eq_classes)
+            })
+            .collect::<Vec<_>>();
+        normalized_required_exprs
+            .iter()
+            .zip(normalized_provided_exprs.iter())
+            .all(|(order1, order2)| order1.eq(order2))
+    } else {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -194,6 +244,7 @@ mod tests {
     use arrow::compute::SortOptions;
     use datafusion_common::Result;
 
+    use arrow_schema::Schema;
     use std::sync::Arc;
 
     #[test]
@@ -340,6 +391,37 @@ mod tests {
             list4.as_slice()
         ));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_ordering_satisfy() -> Result<()> {
+        let crude = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("a", 0)),
+            options: SortOptions::default(),
+        }];
+        let crude = Some(&crude[..]);
+        let finer = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: SortOptions::default(),
+            },
+        ];
+        let finer = Some(&finer[..]);
+        let empty_schema = &Arc::new(Schema {
+            fields: vec![],
+            metadata: Default::default(),
+        });
+        assert!(ordering_satisfy(finer, crude, || {
+            EquivalenceProperties::new(empty_schema.clone())
+        }));
+        assert!(!ordering_satisfy(crude, finer, || {
+            EquivalenceProperties::new(empty_schema.clone())
+        }));
         Ok(())
     }
 }

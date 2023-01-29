@@ -154,8 +154,7 @@ macro_rules! config_namespace {
 config_namespace! {
     /// Options related to catalog and directory scanning
     pub struct CatalogOptions {
-        /// Number of partitions for query execution. Increasing partitions can increase
-        /// concurrency. Defaults to the number of cpu cores on the system.
+        /// Whether the default catalog and schema should be created automatically.
         pub create_default_catalog_and_schema: bool, default = true
 
         /// The default catalog name - this impacts what SQL queries use if not specified
@@ -342,8 +341,7 @@ impl ConfigField for ConfigOptions {
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
             _ => Err(DataFusionError::Internal(format!(
-                "Config value \"{}\" not found on ConfigOptions",
-                key
+                "Config value \"{key}\" not found on ConfigOptions"
             ))),
         }
     }

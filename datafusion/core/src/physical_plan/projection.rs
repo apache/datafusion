@@ -33,7 +33,7 @@ use crate::physical_plan::{
 };
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use log::debug;
 
 use super::expressions::{Column, PhysicalSortExpr};
@@ -196,9 +196,9 @@ impl ExecutionPlan for ProjectionExec {
         self.output_ordering.as_deref()
     }
 
-    fn maintains_input_order(&self) -> bool {
+    fn maintains_input_order(&self) -> Vec<bool> {
         // tell optimizer this operator doesn't reorder its input
-        true
+        vec![true]
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
@@ -328,7 +328,13 @@ impl ProjectionStream {
             .map(|r| r.map(|v| v.into_array(batch.num_rows())))
             .collect::<Result<Vec<_>>>()?;
 
-        RecordBatch::try_new(self.schema.clone(), arrays)
+        if arrays.is_empty() {
+            let options =
+                RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+            RecordBatch::try_new_with_options(self.schema.clone(), arrays, &options)
+        } else {
+            RecordBatch::try_new(self.schema.clone(), arrays)
+        }
     }
 }
 
@@ -372,6 +378,7 @@ impl RecordBatchStream for ProjectionStream {
 mod tests {
 
     use super::*;
+    use crate::physical_plan::common::collect;
     use crate::physical_plan::expressions::{self, col};
     use crate::prelude::SessionContext;
     use crate::scalar::ScalarValue;
@@ -414,6 +421,22 @@ mod tests {
         }
         assert_eq!(partitions, partition_count);
         assert_eq!(100, row_count);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn project_no_column() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+
+        let csv = test::scan_partitioned_csv(1)?;
+        let expected = collect(csv.execute(0, task_ctx.clone())?).await.unwrap();
+
+        let projection = ProjectionExec::try_new(vec![], csv)?;
+        let stream = projection.execute(0, task_ctx.clone())?;
+        let output = collect(stream).await.unwrap();
+        assert_eq!(output.len(), expected.len());
 
         Ok(())
     }

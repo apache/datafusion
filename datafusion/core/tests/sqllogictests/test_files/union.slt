@@ -57,8 +57,6 @@ ORDER BY name
 Alice
 John
 
-
-
 # union with type coercion
 query T
 (   
@@ -71,6 +69,128 @@ UNION ALL
     SELECT * FROM t2
     EXCEPT
     SELECT * FROM t1
+)
+ORDER BY name
+----
+3 Alice
+3 John
+
+# union all
+query I
+SELECT 1 as x
+UNION ALL
+SELECT 2 as x
+ORDER BY x
+----
+1
+2
+
+# csv_union_all
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+
+query I
+select COUNT(*) from (
+    SELECT c1 FROM aggregate_test_100
+    UNION ALL
+    SELECT c1 FROM aggregate_test_100
+)
+----
+200
+
+# union_distinct
+query I
+SELECT 1 as x
+UNION
+SELECT 1 as x
+ORDER BY x
+----
+1
+
+# union_all_with_aggregate
+query I
+SELECT SUM(d) FROM (
+    SELECT 1 as c, 2 as d
+    UNION ALL
+    SELECT 1 as c, 3 AS d
+) as a
+----
+5
+
+# union_all_with_count
+statement ok
+CREATE table t as SELECT 1 as a
+
+query I
+SELECT COUNT(*) FROM (
+    SELECT a from t
+    UNION ALL
+    SELECT a from t
+)
+----
+2
+
+# union_schemas
+query I
+SELECT 1 A UNION ALL SELECT 2 ORDER BY 1
+----
+1
+2
+
+# union_schemas
+query I
+SELECT 1 UNION SELECT 2 ORDER BY 1
+----
+1
+2
+
+# union_with_except_input
+query T
+(
+    SELECT name FROM t1
+    EXCEPT
+    SELECT name FROM t2
+)
+UNION ALL
+(
+    SELECT name FROM t2
+    EXCEPT
+    SELECT name FROM t1
+)
+ORDER BY name
+----
+Alice
+John
+
+# union_with_type_coercion
+query IT
+(
+    SELECT id, name FROM t1
+    EXCEPT
+    SELECT id, name FROM t2
+)
+UNION ALL
+(
+    SELECT id, name FROM t2
+    EXCEPT
+    SELECT id, name FROM t1
 )
 ORDER BY name
 ----

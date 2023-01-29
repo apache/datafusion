@@ -280,6 +280,19 @@ wherever it appears in the statement, using a value chosen at planning time.
 
 ### `array`
 
+### `arrow_typeof`
+
+Returns the underlying Arrow type of the the expression:
+
+```sql
+❯ select arrow_typeof(4 + 4.3);
++--------------------------------------+
+| arrowtypeof(Int64(4) + Float64(4.3)) |
++--------------------------------------+
+| Float64                              |
++--------------------------------------+
+```
+
 ### `in_list`
 
 ### `random`

@@ -237,8 +237,10 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::DropTable(_)
             | LogicalPlan::DropView(_)
             | LogicalPlan::SetVariable(_)
+            | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Distinct(_)
             | LogicalPlan::Extension(_)
+            | LogicalPlan::Dml(_)
             | LogicalPlan::Prepare(_) => {
                 // apply the optimization to all inputs of the plan
                 utils::optimize_children(self, plan, config)?

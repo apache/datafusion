@@ -1343,7 +1343,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                 "LogicalPlan serde is not yet implemented for DropView",
             )),
             LogicalPlan::SetVariable(_) => Err(proto_error(
-                "LogicalPlan serde is not yet implemented for DropView",
+                "LogicalPlan serde is not yet implemented for SetVariable",
+            )),
+            LogicalPlan::Dml(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for Dml",
+            )),
+            LogicalPlan::DescribeTable(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for DescribeTable",
             )),
         }
     }

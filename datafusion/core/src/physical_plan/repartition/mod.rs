@@ -331,16 +331,16 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        if self.maintains_input_order() {
+        if self.maintains_input_order()[0] {
             self.input().output_ordering()
         } else {
             None
         }
     }
 
-    fn maintains_input_order(&self) -> bool {
+    fn maintains_input_order(&self) -> Vec<bool> {
         // We preserve ordering when input partitioning is 1
-        self.input().output_partitioning().partition_count() <= 1
+        vec![self.input().output_partitioning().partition_count() <= 1]
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
@@ -445,7 +445,12 @@ impl ExecutionPlan for RepartitionExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(f, "RepartitionExec: partitioning={:?}", self.partitioning)
+                write!(
+                    f,
+                    "RepartitionExec: partitioning={:?}, input_partitions={}",
+                    self.partitioning,
+                    self.input.output_partitioning().partition_count()
+                )
             }
         }
     }

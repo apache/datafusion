@@ -18,6 +18,10 @@
 name: Dev
 on: [push, pull_request]
 
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
   rat:
     name: Release Audit Tool (RAT)
@@ -42,8 +46,7 @@ jobs:
           node-version: "14"
       - name: Prettier check
         run: |
-          # if you encounter error, try rerun the command below with --write instead of --check
-          # and commit the changes
+          # if you encounter error, rerun the command below and commit the changes
           #
           # ignore subproject CHANGELOG.md because they are machine generated
           npx prettier@2.7.1 --write \

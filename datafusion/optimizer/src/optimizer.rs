@@ -268,12 +268,16 @@ impl Optimizer {
                 match result {
                     Ok(Some(plan)) => {
                         if !plan.schema().equivalent_names_and_types(new_plan.schema()) {
-                            return Err(DataFusionError::Internal(format!(
+                            let e = DataFusionError::Internal(format!(
                                 "Optimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
                                 rule.name(),
                                 new_plan.schema(),
                                 plan.schema()
-                            )));
+                            ));
+                            return Err(DataFusionError::Context(
+                                rule.name().to_string(),
+                                Box::new(e),
+                            ));
                         }
                         new_plan = plan;
                         observer(&new_plan, rule.as_ref());
@@ -298,11 +302,15 @@ impl Optimizer {
                             e
                         );
                         } else {
-                            return Err(DataFusionError::Internal(format!(
+                            let e = DataFusionError::Internal(format!(
                                 "Optimizer rule '{}' failed due to unexpected error: {}",
                                 rule.name(),
                                 e
-                            )));
+                            ));
+                            return Err(DataFusionError::Context(
+                                rule.name().to_string(),
+                                Box::new(e),
+                            ));
                         }
                     }
                 }
@@ -436,7 +444,8 @@ mod tests {
         });
         let err = opt.optimize(&plan, &config, &observe).unwrap_err();
         assert_eq!(
-            "Internal error: Optimizer rule 'bad rule' failed due to unexpected error: \
+            "bad rule\ncaused by\n\
+            Internal error: Optimizer rule 'bad rule' failed due to unexpected error: \
             Error during planning: rule failed. This was likely caused by a bug in \
             DataFusion's code and we would welcome that you file an bug report in our issue tracker",
             err.to_string()
@@ -453,7 +462,8 @@ mod tests {
         });
         let err = opt.optimize(&plan, &config, &observe).unwrap_err();
         assert_eq!(
-            "Internal error: Optimizer rule 'get table_scan rule' failed, due to generate a different schema, \
+            "get table_scan rule\ncaused by\n\
+             Internal error: Optimizer rule 'get table_scan rule' failed, due to generate a different schema, \
              original schema: DFSchema { fields: [], metadata: {} }, \
              new schema: DFSchema { fields: [\
              DFField { qualifier: Some(\"test\"), field: Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
