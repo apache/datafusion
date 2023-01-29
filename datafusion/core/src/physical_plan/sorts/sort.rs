@@ -840,8 +840,7 @@ fn sort_batch(
                 )
             })
             .collect::<Result<Vec<ArrayRef>, ArrowError>>()?,
-    )
-    .map_err(Into::<DataFusionError>::into)?;
+    )?;
 
     let sort_arrays = sort_columns
         .into_iter()

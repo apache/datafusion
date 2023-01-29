@@ -245,9 +245,7 @@ fn batch_filter(
         .and_then(|array| {
             Ok(as_boolean_array(&array)?)
                 // apply filter array to record batch
-                .and_then(|filter_array| {
-                    filter_record_batch(batch, filter_array).map_err(Into::into)
-                })
+                .and_then(|filter_array| Ok(filter_record_batch(batch, filter_array)?))
         })
 }
 

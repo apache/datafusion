@@ -461,7 +461,7 @@ impl SortedPartitionByBoundedWindowStream {
         if let Some(columns_to_show) = columns_to_show {
             let n_generated = columns_to_show[0].len();
             self.prune_state(n_generated)?;
-            RecordBatch::try_new(schema, columns_to_show).map_err(Into::into)
+            Ok(RecordBatch::try_new(schema, columns_to_show)?)
         } else {
             Ok(RecordBatch::new_empty(schema))
         }

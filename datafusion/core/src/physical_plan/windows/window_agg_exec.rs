@@ -358,8 +358,7 @@ impl WindowAggStream {
             .map(|elems| concat(&elems.iter().map(|x| x.as_ref()).collect::<Vec<_>>()))
             .collect::<Vec<_>>()
             .into_iter()
-            .collect::<Result<Vec<ArrayRef>, ArrowError>>()
-            .map_err(Into::<DataFusionError>::into)?;
+            .collect::<Result<Vec<ArrayRef>, ArrowError>>()?;
 
         // combine with the original cols
         // note the setup of window aggregates is that they newly calculated window
@@ -367,7 +366,7 @@ impl WindowAggStream {
         let mut batch_columns = batch.columns().to_vec();
         // calculate window cols
         batch_columns.extend_from_slice(&columns);
-        RecordBatch::try_new(self.schema.clone(), batch_columns).map_err(Into::into)
+        Ok(RecordBatch::try_new(self.schema.clone(), batch_columns)?)
     }
 
     /// Evaluates the partition points given the sort columns. If the sort columns are

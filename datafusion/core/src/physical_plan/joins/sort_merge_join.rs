@@ -1030,8 +1030,7 @@ impl SMJStream {
                 .columns()
                 .iter()
                 .map(|column| take(column, &streamed_indices, None))
-                .collect::<Result<Vec<_>, ArrowError>>()
-                .map_err(Into::<DataFusionError>::into)?;
+                .collect::<Result<Vec<_>, ArrowError>>()?;
 
             let buffered_indices: UInt64Array = chunk.buffered_indices.finish();
 
@@ -1044,8 +1043,7 @@ impl SMJStream {
                         .columns()
                         .iter()
                         .map(|column| take(column, &buffered_indices, None))
-                        .collect::<Result<Vec<_>, ArrowError>>()
-                        .map_err(Into::<DataFusionError>::into)?
+                        .collect::<Result<Vec<_>, ArrowError>>()?
                 } else {
                     self.buffered_schema
                         .fields()

@@ -820,7 +820,7 @@ pub(crate) fn build_batch_from_indices(
         };
         columns.push(array);
     }
-    RecordBatch::try_new(Arc::new(schema.clone()), columns).map_err(Into::into)
+    Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
 }
 
 /// The input is the matched indices for left and right and
