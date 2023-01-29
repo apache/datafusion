@@ -152,7 +152,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_parquel("tests/data/example.parquet", ParquetReadOptions::new()).await?;
+    /// let df = ctx.read_parquet("tests/data/example.parquet", ParquetReadOptions::new()).await?;
     /// let df = df.unnest("a")?;
     /// # Ok(())
     /// # }
