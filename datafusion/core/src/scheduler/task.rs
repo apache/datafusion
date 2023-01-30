@@ -23,7 +23,6 @@ use crate::scheduler::{
     Spawner,
 };
 use arrow::datatypes::SchemaRef;
-use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use futures::channel::mpsc;
 use futures::task::ArcWake;
@@ -261,14 +260,14 @@ struct ExecutionResultStream {
 }
 
 impl Stream for ExecutionResultStream {
-    type Item = arrow::error::Result<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let opt = ready!(self.receiver.poll_next_unpin(cx)).flatten();
-        Poll::Ready(opt.map(|r| r.map_err(|e| ArrowError::ExternalError(Box::new(e)))))
+        Poll::Ready(opt)
     }
 }
 

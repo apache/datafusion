@@ -224,7 +224,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         let dtype = array.data_type();
         let idx = self.state.idx as i64 - self.shift_offset;
         if idx < 0 || idx as usize >= array.len() {
-            get_default_value(&self.default_value, dtype)
+            get_default_value(self.default_value.as_ref(), dtype)
         } else {
             ScalarValue::try_from_array(array, idx as usize)
         }
@@ -238,7 +238,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
 }
 
 fn get_default_value(
-    default_value: &Option<ScalarValue>,
+    default_value: Option<&ScalarValue>,
     dtype: &DataType,
 ) -> Result<ScalarValue> {
     if let Some(value) = default_value {

@@ -63,7 +63,6 @@ use futures::{Stream, StreamExt};
 use arrow::{
     array::{Int64Array, StringArray},
     datatypes::SchemaRef,
-    error::ArrowError,
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
@@ -563,7 +562,7 @@ fn accumulate_batch(
 }
 
 impl Stream for TopKReader {
-    type Item = Result<RecordBatch, ArrowError>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -590,13 +589,16 @@ impl Stream for TopKReader {
                     self.state.iter().rev().unzip();
 
                 let customer: Vec<&str> = customer.iter().map(|&s| &**s).collect();
-                Poll::Ready(Some(RecordBatch::try_new(
-                    schema,
-                    vec![
-                        Arc::new(StringArray::from(customer)),
-                        Arc::new(Int64Array::from(revenue)),
-                    ],
-                )))
+                Poll::Ready(Some(
+                    RecordBatch::try_new(
+                        schema,
+                        vec![
+                            Arc::new(StringArray::from(customer)),
+                            Arc::new(Int64Array::from(revenue)),
+                        ],
+                    )
+                    .map_err(Into::into),
+                ))
             }
             other => other,
         }

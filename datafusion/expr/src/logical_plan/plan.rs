@@ -1658,6 +1658,8 @@ pub struct Explain {
     pub stringified_plans: Vec<StringifiedPlan>,
     /// The output schema of the explain (2 columns of text)
     pub schema: DFSchemaRef,
+    /// Used by physical planner to check if should proceed with planning
+    pub logical_optimization_succeeded: bool,
 }
 
 /// Runs the actual plan, and then prints the physical plan with

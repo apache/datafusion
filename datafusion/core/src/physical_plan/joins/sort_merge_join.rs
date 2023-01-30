@@ -32,7 +32,7 @@ use std::task::{Context, Poll};
 use arrow::array::*;
 use arrow::compute::{concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
-use arrow::error::{ArrowError, Result as ArrowResult};
+use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use futures::{Stream, StreamExt};
 
@@ -574,7 +574,7 @@ impl RecordBatchStream for SMJStream {
 }
 
 impl Stream for SMJStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -712,7 +712,7 @@ impl SMJStream {
     }
 
     /// Poll next streamed row
-    fn poll_streamed_row(&mut self, cx: &mut Context) -> Poll<Option<ArrowResult<()>>> {
+    fn poll_streamed_row(&mut self, cx: &mut Context) -> Poll<Option<Result<()>>> {
         loop {
             match &self.streamed_state {
                 StreamedState::Init => {
@@ -755,10 +755,7 @@ impl SMJStream {
     }
 
     /// Poll next buffered batches
-    fn poll_buffered_batches(
-        &mut self,
-        cx: &mut Context,
-    ) -> Poll<Option<ArrowResult<()>>> {
+    fn poll_buffered_batches(&mut self, cx: &mut Context) -> Poll<Option<Result<()>>> {
         loop {
             match &self.buffered_state {
                 BufferedState::Init => {
@@ -856,7 +853,7 @@ impl SMJStream {
     }
 
     /// Get comparison result of streamed row and buffered batches
-    fn compare_streamed_buffered(&self) -> ArrowResult<Ordering> {
+    fn compare_streamed_buffered(&self) -> Result<Ordering> {
         if self.streamed_state == StreamedState::Exhausted {
             return Ok(Ordering::Greater);
         }
@@ -876,7 +873,7 @@ impl SMJStream {
 
     /// Produce join and fill output buffer until reaching target batch size
     /// or the join is finished
-    fn join_partial(&mut self) -> ArrowResult<()> {
+    fn join_partial(&mut self) -> Result<()> {
         let mut join_streamed = false;
         let mut join_buffered = false;
 
@@ -960,7 +957,7 @@ impl SMJStream {
         Ok(())
     }
 
-    fn freeze_all(&mut self) -> ArrowResult<()> {
+    fn freeze_all(&mut self) -> Result<()> {
         self.freeze_streamed()?;
         self.freeze_buffered(self.buffered_data.batches.len())?;
         Ok(())
@@ -970,7 +967,7 @@ impl SMJStream {
     // no longer needed:
     //   1. freezes all indices joined to streamed side
     //   2. freezes NULLs joined to dequeued buffered batch to "release" it
-    fn freeze_dequeuing_buffered(&mut self) -> ArrowResult<()> {
+    fn freeze_dequeuing_buffered(&mut self) -> Result<()> {
         self.freeze_streamed()?;
         self.freeze_buffered(1)?;
         Ok(())
@@ -980,7 +977,7 @@ impl SMJStream {
     // NULLs on streamed side.
     //
     // Applicable only in case of Full join.
-    fn freeze_buffered(&mut self, batch_count: usize) -> ArrowResult<()> {
+    fn freeze_buffered(&mut self, batch_count: usize) -> Result<()> {
         if !matches!(self.join_type, JoinType::Full) {
             return Ok(());
         }
@@ -998,7 +995,8 @@ impl SMJStream {
                 .columns()
                 .iter()
                 .map(|column| take(column, &buffered_indices, None))
-                .collect::<ArrowResult<Vec<_>>>()?;
+                .collect::<Result<Vec<_>, ArrowError>>()
+                .map_err(Into::<DataFusionError>::into)?;
 
             let mut streamed_columns = self
                 .streamed_schema
@@ -1018,7 +1016,7 @@ impl SMJStream {
 
     // Produces and stages record batch for all output indices found
     // for current streamed batch and clears staged output indices.
-    fn freeze_streamed(&mut self) -> ArrowResult<()> {
+    fn freeze_streamed(&mut self) -> Result<()> {
         for chunk in self.streamed_batch.output_indices.iter_mut() {
             let streamed_indices = chunk.streamed_indices.finish();
 
@@ -1032,7 +1030,7 @@ impl SMJStream {
                 .columns()
                 .iter()
                 .map(|column| take(column, &streamed_indices, None))
-                .collect::<ArrowResult<Vec<_>>>()?;
+                .collect::<Result<Vec<_>, ArrowError>>()?;
 
             let buffered_indices: UInt64Array = chunk.buffered_indices.finish();
 
@@ -1045,7 +1043,7 @@ impl SMJStream {
                         .columns()
                         .iter()
                         .map(|column| take(column, &buffered_indices, None))
-                        .collect::<ArrowResult<Vec<_>>>()?
+                        .collect::<Result<Vec<_>, ArrowError>>()?
                 } else {
                     self.buffered_schema
                         .fields()
@@ -1071,7 +1069,7 @@ impl SMJStream {
         Ok(())
     }
 
-    fn output_record_batch_and_reset(&mut self) -> ArrowResult<RecordBatch> {
+    fn output_record_batch_and_reset(&mut self) -> Result<RecordBatch> {
         let record_batch = concat_batches(&self.schema, &self.output_record_batches)?;
         self.join_metrics.output_batches.add(1);
         self.join_metrics.output_rows.add(record_batch.num_rows());
@@ -1163,7 +1161,7 @@ fn compare_join_arrays(
     right: usize,
     sort_options: &[SortOptions],
     null_equals_null: bool,
-) -> ArrowResult<Ordering> {
+) -> Result<Ordering> {
     let mut res = Ordering::Equal;
     for ((left_array, right_array), sort_options) in
         left_arrays.iter().zip(right_arrays).zip(sort_options)
@@ -1231,7 +1229,7 @@ fn compare_join_arrays(
             DataType::Date32 => compare_value!(Date32Array),
             DataType::Date64 => compare_value!(Date64Array),
             _ => {
-                return Err(ArrowError::NotYetImplemented(
+                return Err(DataFusionError::NotImplemented(
                     "Unsupported data type in sort merge join comparator".to_owned(),
                 ));
             }
@@ -1250,7 +1248,7 @@ fn is_join_arrays_equal(
     left: usize,
     right_arrays: &[ArrayRef],
     right: usize,
-) -> ArrowResult<bool> {
+) -> Result<bool> {
     let mut is_equal = true;
     for (left_array, right_array) in left_arrays.iter().zip(right_arrays) {
         macro_rules! compare_value {
@@ -1297,7 +1295,7 @@ fn is_join_arrays_equal(
             DataType::Date32 => compare_value!(Date32Array),
             DataType::Date64 => compare_value!(Date64Array),
             _ => {
-                return Err(ArrowError::NotYetImplemented(
+                return Err(DataFusionError::NotImplemented(
                     "Unsupported data type in sort merge join comparator".to_owned(),
                 ));
             }

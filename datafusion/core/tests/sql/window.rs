@@ -1474,7 +1474,7 @@ async fn window_frame_creation() -> Result<()> {
     let results = df.collect().await;
     assert_contains!(
         results.err().unwrap().to_string(),
-        "Arrow error: External error: Internal error: Operator - is not implemented for types UInt32(1) and Utf8(\"1 DAY\")"
+        "External error: Internal error: Operator - is not implemented for types UInt32(1) and Utf8(\"1 DAY\"). This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
     );
 
     Ok(())
