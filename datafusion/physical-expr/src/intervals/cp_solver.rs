@@ -18,19 +18,19 @@
 //! It solves constraint propagation problem for the custom PhysicalExpr
 //!
 use crate::expressions::{BinaryExpr, CastExpr, Literal};
-use crate::intervals::interval_aritmetics::{
-    apply_operator, negate_ops, propagate_logical_operators, Interval,
-};
+use crate::intervals::interval_aritmetics::{negate_ops, Interval};
 use crate::utils::{build_physical_expr_graph, ExprTreeNode};
 use crate::PhysicalExpr;
 use std::fmt::{Display, Formatter};
 
-use datafusion_common::Result;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::{Bfs, DfsPostOrder};
 use petgraph::Outgoing;
 
+use arrow::compute::CastOptions;
+use arrow_schema::DataType;
 use petgraph::stable_graph::StableGraph;
 use std::ops::{Index, IndexMut};
 use std::sync::Arc;
@@ -123,11 +123,119 @@ pub struct ExprIntervalGraph(
 fn calculate_node_interval(
     parent: &Interval,
     current_child_interval: &Interval,
-    negated_op: Operator,
+    negated_op: &Operator,
     other_child_interval: &Interval,
-) -> Result<Option<Interval>> {
-    let interv = apply_operator(parent, &negated_op, other_child_interval)?;
-    interv.intersect(current_child_interval)
+) -> Result<Interval> {
+    let interv = apply_operator(parent, negated_op, other_child_interval)?;
+    match interv.intersect(current_child_interval) {
+        Ok(Some(val)) => Ok(val),
+        Ok(None) => Ok(current_child_interval.clone()),
+        Err(e) => Err(e),
+    }
+}
+
+pub fn propagate_arithmetic_operators(
+    first_child_interval: &Interval,
+    op: &Operator,
+    second_child_interval: &Interval,
+    parent_node_interval: &Interval,
+) -> Result<(Interval, Interval)> {
+    let negated_op = negate_ops(*op);
+    let new_right_operator = calculate_node_interval(
+        parent_node_interval,
+        second_child_interval,
+        &negated_op,
+        first_child_interval,
+    )?;
+    let new_left_operator = calculate_node_interval(
+        parent_node_interval,
+        first_child_interval,
+        &negated_op,
+        &new_right_operator,
+    )?;
+    Ok((new_left_operator, new_right_operator))
+}
+
+/// Casting data type with arrow kernel
+pub fn cast_scalar_value(
+    value: &ScalarValue,
+    data_type: &DataType,
+    cast_options: &CastOptions,
+) -> Result<ScalarValue> {
+    let scalar_array = value.to_array();
+    let cast_array =
+        arrow::compute::cast_with_options(&scalar_array, data_type, cast_options)?;
+    ScalarValue::try_from_array(&cast_array, 0)
+}
+
+pub fn apply_operator(lhs: &Interval, op: &Operator, rhs: &Interval) -> Result<Interval> {
+    match *op {
+        Operator::Eq => Ok(lhs.equal(rhs)),
+        Operator::Gt => Ok(lhs.gt(rhs)),
+        Operator::Lt => Ok(lhs.lt(rhs)),
+        Operator::And => lhs.and(rhs),
+        Operator::Plus => lhs.add(rhs),
+        Operator::Minus => lhs.sub(rhs),
+        _ => Ok(Interval {
+            lower: ScalarValue::Null,
+            upper: ScalarValue::Null,
+        }),
+    }
+}
+/// We use this function provide a target parent interval for comparison operators.
+/// If expression > 0, that means expression must has interval of [0, ∞]
+/// If expression < 0, that means expression must has interval of [-∞, 0]
+///
+/// Currently, we only support GT and LT since we did not implemented open and closed intervals.
+pub fn comparison_operator_target(
+    datatype: &DataType,
+    op: &Operator,
+) -> Result<Interval> {
+    let unbounded = ScalarValue::try_from(datatype)?;
+    let zero = ScalarValue::try_from_string("0".to_string(), datatype)?;
+    Ok(match *op {
+        Operator::Gt => Interval {
+            lower: zero,
+            upper: unbounded,
+        },
+        Operator::Lt => Interval {
+            lower: unbounded,
+            upper: zero,
+        },
+        _ => unreachable!(),
+    })
+}
+/// We propagate the intervals for comparison operators. Main idea is that if
+/// [x1, y1] > [x2, y2], it can be rewritten as [x1, y1] + [-y2, -x2] = [0, ∞]. This is quite
+/// powerful conversion, since we now can shrink the intervals. For less than operator, it is also
+/// available that if [x1, y1] < [x2, y2], than it can be rewritten as [x1, y1] + [-y2, -x2] = [-∞, 0].
+///
+/// Let's say we have GT operator to demonstrate. We can further use this information to first
+/// calculate the right side by using the not-yet-shrunk
+/// left side by [x1_new, x2_new] = ([0, ∞] - [-y2, -x2]) ∩ [x1, y1].
+/// After calculated the new right side, than we can use the shrunk right side to shrink left side as
+/// [-y2_new, -x2_new] = ([0, ∞] - [x1_new, x2_new]) ∩ [-y2, -x2].
+///
+pub fn propagate_comparison_operators(
+    left_interval: &Interval,
+    op: &Operator,
+    right_interval: &Interval,
+) -> Result<(Interval, Interval)> {
+    let parent_interval = comparison_operator_target(&left_interval.get_datatype(), op)?;
+    let negate_right = right_interval.arithmetic_negate()?;
+    let new_left = match parent_interval
+        .sub(&negate_right)?
+        .intersect(left_interval)?
+    {
+        Some(i) => i,
+        None => left_interval.clone(),
+    };
+    let new_right = match parent_interval.sub(&new_left)?.intersect(&negate_right)? {
+        Some(i) => i,
+        None => right_interval.clone(),
+    };
+    let range = (new_left, new_right.arithmetic_negate()?);
+    Ok(range)
 }
 
 impl ExprIntervalGraph {
@@ -284,7 +392,6 @@ impl ExprIntervalGraph {
             // Get calculated interval. BinaryExpr will propagate the interval according to
             // this.
             let node_interval = input.interval().clone();
-
             if let Some((_, interval)) =
                 expr_stats.iter_mut().find(|(e, _)| *e == node.index())
             {
@@ -307,31 +414,24 @@ impl ExprIntervalGraph {
                     self.1.index(first_child_node_index).interval();
 
                 let (shrink_left_interval, shrink_right_interval) =
-                    if node_interval.is_boolean() {
-                        propagate_logical_operators(
+                    // There is no propagation process for logical operators.
+                    if binary.op().is_logic_operator(){
+                        continue
+                    } else if binary.op().is_comparison_operator() {
+                        // If comparison is strictly false, there is nothing to do for shrink.
+                        if let Interval{ lower: ScalarValue::Boolean(Some(false)), upper: ScalarValue::Boolean(Some(false))} = node_interval { continue }
+                        // Propagate the comparison operator.
+                        propagate_comparison_operators(
                             first_child_interval,
                             binary.op(),
                             second_child_interval,
                         )?
                     } else {
-                        let negated_op = negate_ops(*binary.op());
-                        let new_right_operator = calculate_node_interval(
-                            &node_interval,
-                            second_child_interval,
-                            negated_op,
-                            first_child_interval,
-                        )?
-                        // TODO: Fix this unwrap
-                        .unwrap();
-                        let new_left_operator = calculate_node_interval(
-                            &node_interval,
-                            first_child_interval,
-                            negated_op,
-                            &new_right_operator,
-                        )?
-                        // TODO: Fix this unwrap
-                        .unwrap();
-                        (new_left_operator, new_right_operator)
+                        // Propagate the arithmetic operator.
+                        propagate_arithmetic_operators(first_child_interval,
+                                                       binary.op(),
+                                                       second_child_interval,
+                                                       &node_interval)?
                     };
                 let mutable_first_child = self.1.index_mut(first_child_node_index);
                 mutable_first_child.interval = shrink_left_interval.clone();
@@ -541,6 +641,45 @@ mod tests {
         )?;
         Ok(())
     }
+
+    #[test]
+    fn particular() -> Result<()> {
+        let seed = 0;
+        let left_col = Arc::new(Column::new("left_watermark", 0));
+        let right_col = Arc::new(Column::new("right_watermark", 0));
+        // left_watermark - 1 > right_watermark + 5 AND left_watermark + 3 < right_watermark + 10
+        let expr = filter_numeric_expr_generation(
+            left_col.clone(),
+            right_col.clone(),
+            Operator::Minus,
+            Operator::Plus,
+            Operator::Plus,
+            Operator::Plus,
+            1,
+            5,
+            3,
+            10,
+        );
+        // l > r + 6 AND r > l - 7
+        let l_gt_r = 6;
+        let r_gt_l = -7;
+        generate_case::<true>(
+            expr.clone(),
+            left_col.clone(),
+            right_col.clone(),
+            seed,
+            l_gt_r,
+            r_gt_l,
+        )?;
+        // Descending tests
+        // r < l - 6 AND l < r + 7
+        let r_lt_l = -l_gt_r;
+        let l_lt_r = -r_gt_l;
+        generate_case::<false>(expr, left_col, right_col, seed, l_lt_r, r_lt_l)?;
+
+        Ok(())
+    }
+
     #[rstest]
     #[test]
     fn case_1(

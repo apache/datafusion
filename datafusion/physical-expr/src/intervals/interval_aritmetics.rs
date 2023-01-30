@@ -21,13 +21,14 @@ use std::borrow::Borrow;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
-use arrow::compute::{kernels, CastOptions};
+use arrow::compute::CastOptions;
 use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Operator;
 
 use crate::aggregate::min_max::{max, min};
+use crate::intervals::cp_solver;
 
 /// This type represents an interval, which is used to calculate reliable
 /// bounds for expressions. Currently, we only support addition and
@@ -53,18 +54,6 @@ impl Display for Interval {
     }
 }
 
-/// Casting data type with arrow kernel
-fn cast_scalar_value(
-    value: &ScalarValue,
-    data_type: &DataType,
-    cast_options: &CastOptions,
-) -> Result<ScalarValue> {
-    let scalar_array = value.to_array();
-    let cast_array =
-        kernels::cast::cast_with_options(&scalar_array, data_type, cast_options)?;
-    ScalarValue::try_from_array(&cast_array, 0)
-}
-
 impl Interval {
     pub(crate) fn cast_to(
         &self,
@@ -72,29 +61,38 @@ impl Interval {
         cast_options: &CastOptions,
     ) -> Result<Interval> {
         Ok(Interval {
-            lower: cast_scalar_value(&self.lower, data_type, cast_options)?,
-            upper: cast_scalar_value(&self.upper, data_type, cast_options)?,
+            lower: cp_solver::cast_scalar_value(&self.lower, data_type, cast_options)?,
+            upper: cp_solver::cast_scalar_value(&self.upper, data_type, cast_options)?,
         })
-    }
-
-    pub(crate) fn is_boolean(&self) -> bool {
-        matches!(
-            self,
-            Interval {
-                lower: ScalarValue::Boolean(_),
-                upper: ScalarValue::Boolean(_),
-            }
-        )
     }
 
     pub(crate) fn get_datatype(&self) -> DataType {
         self.lower.get_datatype()
     }
 
+    /// Null is treated as infinite.
+    /// [a , b] > [c, d]
+    /// where a, b, c or d can be infinite or a real value. We use None if a or c is minus infinity or
+    /// b or d is infinity. [10,20], [10, ∞], [-∞, 100] or [-∞, ∞] are all valid intervals.
+    /// While we are calculating correct comparison, we take the PartialOrd implementation of ScalarValue,
+    /// which is
+    ///     None < a true
+    ///     a < None false
+    ///     None > a false
+    ///     a > None true
+    ///     None < None false
+    ///     None > None false
     pub(crate) fn gt(&self, other: &Interval) -> Interval {
-        let flags = if self.upper < other.lower {
+        let flags = if !self.upper.is_null()
+            && !other.lower.is_null()
+            && self.upper < other.lower
+        {
             (false, false)
-        } else if self.lower > other.upper {
+            // If lhs has lower negative infinity or rhs has upper infinity, this can not be completely true.
+        } else if !other.upper.is_null()
+            && !self.lower.is_null()
+            && (self.lower > other.upper)
+        {
             (true, true)
         } else {
             (false, true)
@@ -104,7 +102,15 @@ impl Interval {
             upper: ScalarValue::Boolean(Some(flags.1)),
         }
     }
-
+    /// We define vague result as (false, true). If we "AND" a vague value with another,
+    /// result is
+    ///  vague AND false -> false
+    ///  vague AND true -> vague,
+    ///  vague AND vague -> vague
+    ///  false AND true -> true
+    ///
+    /// where "false" represented with (false, false), "true" represented with (true, true) and
+    /// vague represented with (false, true).
     pub(crate) fn and(&self, other: &Interval) -> Result<Interval> {
         let flags = match (self, other) {
             (
@@ -119,7 +125,7 @@ impl Interval {
             ) => {
                 if *lower && *lower2 {
                     (true, true)
-                } else if *upper || *upper2 {
+                } else if *upper && *upper2 {
                     (false, true)
                 } else {
                     (false, false)
@@ -153,59 +159,54 @@ impl Interval {
             upper: ScalarValue::Boolean(Some(flags.1)),
         }
     }
-
+    /// Null is treated as infinite.
+    /// [a , b] < [c, d]
+    /// where a, b, c or d can be infinite or a real value. We use None if a or c is minus infinity or
+    /// b or d is infinity. [10,20], [10, ∞], [-∞, 100] or [-∞, ∞] are all valid intervals.
+    /// Implemented as complementary of greater than.
     pub(crate) fn lt(&self, other: &Interval) -> Interval {
         other.gt(self)
     }
 
+    /// Null is treated as infinite.
+    /// [a , b] < [c, d]
+    /// where a, b, c or d can be infinite or a real value. We use None if a or c is minus infinity or
+    /// b or d is infinity. [10,20], [10, ∞], [-∞, 100] or [-∞, ∞] are all valid intervals.
     pub(crate) fn intersect(&self, other: &Interval) -> Result<Option<Interval>> {
         Ok(match (self, other) {
             (
                 Interval {
-                    lower: ScalarValue::Boolean(Some(low)),
-                    upper: ScalarValue::Boolean(Some(high)),
+                    lower: ScalarValue::Boolean(_),
+                    upper: ScalarValue::Boolean(_),
                 },
                 Interval {
-                    lower: ScalarValue::Boolean(Some(other_low)),
-                    upper: ScalarValue::Boolean(Some(other_high)),
+                    lower: ScalarValue::Boolean(_),
+                    upper: ScalarValue::Boolean(_),
                 },
-            ) => {
-                if low > other_high || high < other_low {
-                    // This None value signals an empty interval.
-                    None
-                } else if (low == high) && (other_low == other_high) && (low == other_low)
-                {
-                    Some(self.clone())
-                } else {
-                    Some(Interval {
-                        lower: ScalarValue::Boolean(Some(false)),
-                        upper: ScalarValue::Boolean(Some(true)),
-                    })
-                }
-            }
+            ) => None,
             (
                 Interval {
-                    lower: lower1,
-                    upper: upper1,
+                    lower: low,
+                    upper: high,
                 },
                 Interval {
-                    lower: lower2,
-                    upper: upper2,
+                    lower: other_low,
+                    upper: other_high,
                 },
             ) => {
-                let lower = if lower1.is_null() {
-                    lower2.clone()
-                } else if lower2.is_null() {
-                    lower1.clone()
+                let lower = if low.is_null() {
+                    other_low.clone()
+                } else if other_low.is_null() {
+                    low.clone()
                 } else {
-                    max(lower1, lower2)?
+                    max(low, other_low)?
                 };
-                let upper = if upper1.is_null() {
-                    upper2.clone()
-                } else if upper2.is_null() {
-                    upper1.clone()
+                let upper = if high.is_null() {
+                    other_high.clone()
+                } else if other_high.is_null() {
+                    high.clone()
                 } else {
-                    min(upper1, upper2)?
+                    min(high, other_high)?
                 };
                 if !upper.is_null() && lower > upper {
                     // This None value signals an empty interval.
@@ -265,86 +266,257 @@ impl Interval {
     }
 }
 
-pub fn apply_operator(lhs: &Interval, op: &Operator, rhs: &Interval) -> Result<Interval> {
-    match *op {
-        Operator::Eq => Ok(lhs.equal(rhs)),
-        Operator::Gt => Ok(lhs.gt(rhs)),
-        Operator::Lt => Ok(lhs.lt(rhs)),
-        Operator::And => lhs.and(rhs),
-        Operator::Plus => lhs.add(rhs),
-        Operator::Minus => lhs.sub(rhs),
-        _ => Ok(Interval {
-            lower: ScalarValue::Null,
-            upper: ScalarValue::Null,
-        }),
-    }
-}
-
-pub fn target_parent_interval(datatype: &DataType, op: &Operator) -> Result<Interval> {
-    let unbounded = ScalarValue::try_from(datatype)?;
-    let zero = ScalarValue::try_from_string("0".to_string(), datatype)?;
-    Ok(match *op {
-        // TODO: Tidy these comments, write a text that explains what this function does.
-        // [x1, y1] > [x2, y2] ise
-        // [x1, y1] + [-y2, -x2] = [0, inf]
-        // [x1_new, x2_new] = ([0, inf] - [-y2, -x2]) intersect [x1, y1]
-        // [-y2_new, -x2_new] = ([0, inf] - [x1_new, x2_new]) intersect [-y2, -x2]
-        Operator::Gt => Interval {
-            lower: zero,
-            upper: unbounded,
-        },
-        // TODO: Tidy these comments.
-        // [x1, y1] < [x2, y2] ise
-        // [x1, y1] + [-y2, -x2] = [-inf, 0]
-        Operator::Lt => Interval {
-            lower: unbounded,
-            upper: zero,
-        },
-        _ => unreachable!(),
-    })
-}
-
-pub fn propagate_logical_operators(
-    left_interval: &Interval,
-    op: &Operator,
-    right_interval: &Interval,
-) -> Result<(Interval, Interval)> {
-    if left_interval.is_boolean() || right_interval.is_boolean() {
-        return Ok((
-            Interval {
-                lower: ScalarValue::Boolean(Some(true)),
-                upper: ScalarValue::Boolean(Some(true)),
-            },
-            Interval {
-                lower: ScalarValue::Boolean(Some(true)),
-                upper: ScalarValue::Boolean(Some(true)),
-            },
-        ));
-    }
-    let intersection = left_interval.intersect(right_interval)?;
-    // TODO: Is this right with the new "intersect" semantics?
-    if intersection.is_none() {
-        return Ok((left_interval.clone(), right_interval.clone()));
-    }
-    let parent_interval = target_parent_interval(&left_interval.get_datatype(), op)?;
-    let negate_right = right_interval.arithmetic_negate()?;
-    // TODO: Fix the following unwraps.
-    let new_left = parent_interval
-        .sub(&negate_right)?
-        .intersect(left_interval)?
-        .unwrap();
-    let new_right = parent_interval
-        .sub(&new_left)?
-        .intersect(&negate_right)?
-        .unwrap();
-    let range = (new_left, new_right.arithmetic_negate()?);
-    Ok(range)
-}
-
 pub fn negate_ops(op: Operator) -> Operator {
     match op {
         Operator::Plus => Operator::Minus,
         Operator::Minus => Operator::Plus,
         _ => unreachable!(),
+    }
+}
+#[cfg(test)]
+mod tests {
+    use crate::intervals::interval_aritmetics::Interval;
+    use datafusion_common::Result;
+    use datafusion_common::ScalarValue;
+
+    #[test]
+    fn intersect_test() -> Result<()> {
+        let possible_cases = vec![
+            (Some(1000), None, None, None, Some(1000), None),
+            (None, Some(1000), None, None, None, Some(1000)),
+            (None, None, Some(1000), None, Some(1000), None),
+            (None, None, None, Some(1000), None, Some(1000)),
+            (Some(1000), None, Some(1000), None, Some(1000), None),
+            (
+                None,
+                Some(1000),
+                Some(999),
+                Some(1002),
+                Some(999),
+                Some(1000),
+            ),
+            (None, Some(1000), Some(1000), None, Some(1000), Some(1000)), // singleton
+            (None, None, None, None, None, None),
+        ];
+
+        for case in possible_cases {
+            assert_eq!(
+                Interval {
+                    lower: ScalarValue::Int64(case.0),
+                    upper: ScalarValue::Int64(case.1)
+                }
+                .intersect(&Interval {
+                    lower: ScalarValue::Int64(case.2),
+                    upper: ScalarValue::Int64(case.3)
+                })?
+                .unwrap(),
+                Interval {
+                    lower: ScalarValue::Int64(case.4),
+                    upper: ScalarValue::Int64(case.5)
+                }
+            )
+        }
+
+        let not_possible_cases = vec![
+            (None, Some(1000), Some(1001), None),
+            (Some(1001), None, None, Some(1000)),
+            (None, Some(1000), Some(1001), Some(1002)),
+            (Some(1001), Some(1002), None, Some(1000)),
+        ];
+        //(None, Some(1000), Some(1001), None, --),
+        // (None, Some(1000), Some(1000), None, false, true),
+        // (None, Some(1000), Some(1001), Some(1002), false, false),
+
+        for case in not_possible_cases {
+            assert_eq!(
+                Interval {
+                    lower: ScalarValue::Int64(case.0),
+                    upper: ScalarValue::Int64(case.1)
+                }
+                .intersect(&Interval {
+                    lower: ScalarValue::Int64(case.2),
+                    upper: ScalarValue::Int64(case.3)
+                })?,
+                None
+            )
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn gt_test() {
+        let cases = vec![
+            (Some(1000), None, None, None, false, true),
+            (None, Some(1000), None, None, false, true),
+            (None, None, Some(1000), None, false, true),
+            (None, None, None, Some(1000), false, true),
+            (None, Some(1000), Some(1000), None, false, true),
+            (None, Some(1000), Some(1001), None, false, false),
+            (Some(1000), None, Some(1000), None, false, true),
+            (None, Some(1000), Some(1001), Some(1002), false, false),
+            (None, Some(1000), Some(999), Some(1002), false, true),
+            (None, None, None, None, false, true),
+        ];
+
+        for case in cases {
+            assert_eq!(
+                Interval {
+                    lower: ScalarValue::Int64(case.0),
+                    upper: ScalarValue::Int64(case.1)
+                }
+                .gt(&Interval {
+                    lower: ScalarValue::Int64(case.2),
+                    upper: ScalarValue::Int64(case.3)
+                }),
+                Interval {
+                    lower: ScalarValue::Boolean(Some(case.4)),
+                    upper: ScalarValue::Boolean(Some(case.5))
+                }
+            )
+        }
+    }
+
+    #[test]
+    fn lt_test() {
+        let cases = vec![
+            (Some(1000), None, None, None, false, true),
+            (None, Some(1000), None, None, false, true),
+            (None, None, Some(1000), None, false, true),
+            (None, None, None, Some(1000), false, true),
+            (None, Some(1000), Some(1000), None, false, true),
+            (None, Some(1000), Some(1001), None, true, true),
+            (Some(1000), None, Some(1000), None, false, true),
+            (None, Some(1000), Some(1001), Some(1002), true, true),
+            (None, Some(1000), Some(999), Some(1002), false, true),
+            (None, None, None, None, false, true),
+        ];
+
+        for case in cases {
+            assert_eq!(
+                Interval {
+                    lower: ScalarValue::Int64(case.0),
+                    upper: ScalarValue::Int64(case.1)
+                }
+                .lt(&Interval {
+                    lower: ScalarValue::Int64(case.2),
+                    upper: ScalarValue::Int64(case.3)
+                }),
+                Interval {
+                    lower: ScalarValue::Boolean(Some(case.4)),
+                    upper: ScalarValue::Boolean(Some(case.5))
+                }
+            )
+        }
+    }
+
+    #[test]
+    fn and_test() -> Result<()> {
+        let cases = vec![
+            (false, true, false, false, false, false),
+            (false, false, false, true, false, false),
+            (false, true, false, true, false, true),
+            (false, true, true, true, false, true),
+            (false, false, false, false, false, false),
+            (true, true, true, true, true, true),
+        ];
+
+        for case in cases {
+            assert_eq!(
+                Interval {
+                    lower: ScalarValue::Boolean(Some(case.0)),
+                    upper: ScalarValue::Boolean(Some(case.1))
+                }
+                .and(&Interval {
+                    lower: ScalarValue::Boolean(Some(case.2)),
+                    upper: ScalarValue::Boolean(Some(case.3))
+                })?,
+                Interval {
+                    lower: ScalarValue::Boolean(Some(case.4)),
+                    upper: ScalarValue::Boolean(Some(case.5))
+                }
+            )
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn add_test() -> Result<()> {
+        let cases = vec![
+            (Some(1000), None, None, None, None, None),
+            (None, Some(1000), None, None, None, None),
+            (None, None, Some(1000), None, None, None),
+            (None, None, None, Some(1000), None, None),
+            (Some(1000), None, Some(1000), None, Some(2000), None),
+            (None, Some(1000), Some(999), Some(1002), None, Some(2002)),
+            (None, Some(1000), Some(1000), None, None, None),
+            (
+                Some(2001),
+                Some(1),
+                Some(1005),
+                Some(-999),
+                Some(3006),
+                Some(-998),
+            ),
+            (None, None, None, None, None, None),
+        ];
+
+        for case in cases {
+            assert_eq!(
+                Interval {
+                    lower: ScalarValue::Int64(case.0),
+                    upper: ScalarValue::Int64(case.1)
+                }
+                .add(&Interval {
+                    lower: ScalarValue::Int64(case.2),
+                    upper: ScalarValue::Int64(case.3)
+                })?,
+                Interval {
+                    lower: ScalarValue::Int64(case.4),
+                    upper: ScalarValue::Int64(case.5)
+                }
+            )
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sub_test() -> Result<()> {
+        let cases = vec![
+            (Some(1000), None, None, None, None, None),
+            (None, Some(1000), None, None, None, None),
+            (None, None, Some(1000), None, None, None),
+            (None, None, None, Some(1000), None, None),
+            (Some(1000), None, Some(1000), None, None, None),
+            (None, Some(1000), Some(999), Some(1002), None, Some(1)),
+            (None, Some(1000), Some(1000), None, None, Some(0)),
+            (
+                Some(2001),
+                Some(1000),
+                Some(1005),
+                Some(999),
+                Some(1002),
+                Some(-5),
+            ),
+            (None, None, None, None, None, None),
+        ];
+
+        for case in cases {
+            assert_eq!(
+                Interval {
+                    lower: ScalarValue::Int64(case.0),
+                    upper: ScalarValue::Int64(case.1)
+                }
+                .sub(&Interval {
+                    lower: ScalarValue::Int64(case.2),
+                    upper: ScalarValue::Int64(case.3)
+                })?,
+                Interval {
+                    lower: ScalarValue::Int64(case.4),
+                    upper: ScalarValue::Int64(case.5)
+                }
+            )
+        }
+        Ok(())
     }
 }
