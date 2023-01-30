@@ -22,7 +22,6 @@ use arrow::array::{
     ListArray,
 };
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use futures::Stream;
@@ -37,7 +36,10 @@ use crate::physical_plan::{
     Distribution, EquivalenceProperties, ExecutionPlan, Partitioning, PhysicalExpr,
     PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use crate::{error::Result, scalar::ScalarValue};
+use crate::{
+    error::{DataFusionError, Result},
+    scalar::ScalarValue,
+};
 
 /// Unnest the given column by joining the row with each value in the nested type.
 #[derive(Debug)]
@@ -174,7 +176,7 @@ fn build_batch(
     batch: &RecordBatch,
     schema: &SchemaRef,
     column: &Column,
-) -> ArrowResult<RecordBatch> {
+) -> Result<RecordBatch> {
     let list_array = column.evaluate(batch)?.into_array(batch.num_rows());
     match list_array.data_type() {
         arrow::datatypes::DataType::List(_) => {
@@ -196,7 +198,7 @@ fn build_batch(
             unnest_batch(batch, schema, column, list_array)
         }
         _ => {
-            return Err(ArrowError::InvalidArgumentError(format!(
+            return Err(DataFusionError::Execution(format!(
                 "Invalid unnest column {column}"
             )));
         }
@@ -208,7 +210,7 @@ fn unnest_batch<T>(
     schema: &SchemaRef,
     column: &Column,
     list_array: &T,
-) -> ArrowResult<RecordBatch>
+) -> Result<RecordBatch>
 where
     T: ArrayAccessor<Item = ArrayRef>,
 {
@@ -248,12 +250,12 @@ where
         batches.push(rb);
     }
 
-    concat_batches(schema, &batches, num_rows)
+    concat_batches(schema, &batches, num_rows).map_err(Into::into)
 }
 
 #[async_trait]
 impl Stream for UnnestStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -269,7 +271,7 @@ impl UnnestStream {
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<ArrowResult<RecordBatch>>> {
+    ) -> std::task::Poll<Option<Result<RecordBatch>>> {
         self.input
             .poll_next_unpin(cx)
             .map(|maybe_batch| match maybe_batch {
