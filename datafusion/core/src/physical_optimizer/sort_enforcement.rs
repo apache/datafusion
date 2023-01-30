@@ -37,6 +37,7 @@ use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 use arrow::datatypes::SchemaRef;
@@ -65,6 +66,27 @@ impl EnforceSorting {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ExecTree {
+    /// child index of the plan in its parent executor
+    pub idx: usize,
+    /// Children of the `plan` that needs to be updated if bottom executor is removed
+    pub children: Vec<ExecTree>,
+    /// ExecutionPlan node of the tree
+    pub plan: Arc<dyn ExecutionPlan>,
+}
+
+impl ExecTree {
+    /// Executor at the leaf of the tree
+    fn bottom_executor(&self) -> Arc<dyn ExecutionPlan> {
+        if !self.children.is_empty() {
+            self.children[0].bottom_executor()
+        } else {
+            self.plan.clone()
+        }
+    }
+}
+
 /// This is a "data class" we use within the [EnforceSorting] rule that
 /// tracks the closest `SortExec` descendant for every child of a plan.
 #[derive(Debug, Clone)]
@@ -73,7 +95,7 @@ struct PlanWithCorrespondingSort {
     // For every child, keep a vector of `ExecutionPlan`s starting from the
     // closest `SortExec` till the current plan. The first index of the tuple is
     // the child index of the plan -- we need this information as we make updates.
-    sort_onwards: Vec<Vec<(usize, Arc<dyn ExecutionPlan>)>>,
+    sort_onwards: Vec<Option<ExecTree>>,
 }
 
 impl PlanWithCorrespondingSort {
@@ -81,7 +103,7 @@ impl PlanWithCorrespondingSort {
         let length = plan.children().len();
         PlanWithCorrespondingSort {
             plan,
-            sort_onwards: vec![vec![]; length],
+            sort_onwards: vec![None; length],
         }
     }
 
@@ -109,22 +131,44 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
                 .collect::<Result<Vec<_>>>()?;
             let sort_onwards = children_requirements
                 .iter()
-                .map(|item| {
+                .enumerate()
+                .map(|(idx, item)| {
                     let flags = item.plan.maintains_input_order();
+                    let required_ordering = item.plan.required_input_ordering();
                     // The `sort_onwards` list starts from the sort-introducing operator
                     // (e.g `SortExec`, `SortPreservingMergeExec`) and collects all the
                     // intermediate executors that maintain this ordering. If we are at
                     // the beginning, both `SortExec` and `SortPreservingMergeExec` doesn't
                     // maintain ordering (as they introduce the ordering). However, we want
                     // to propagate them above anyway.
-                    for (maintains, element) in
-                        flags.into_iter().zip(item.sort_onwards.iter())
+                    let mut res = vec![];
+                    for (maintains, element, required_ordering) in
+                        izip!(flags, item.sort_onwards.clone(), required_ordering)
                     {
-                        if (maintains || is_sort(&item.plan)) && !element.is_empty() {
-                            return element.clone();
+                        if (maintains || item.plan.as_any().is::<UnionExec>())
+                            && element.is_some()
+                            && required_ordering.is_none()
+                        {
+                            // return element.clone();
+                            res.push(element.clone().unwrap());
                         }
                     }
-                    vec![]
+                    // None
+                    if !res.is_empty() {
+                        Some(ExecTree {
+                            idx,
+                            plan: item.plan.clone(),
+                            children: res,
+                        })
+                    } else if is_sort(&item.plan) {
+                        Some(ExecTree {
+                            idx,
+                            plan: item.plan.clone(),
+                            children: vec![],
+                        })
+                    } else {
+                        None
+                    }
                 })
                 .collect::<Vec<_>>();
             let children_plans = children_requirements
@@ -343,11 +387,16 @@ fn ensure_sorting(
                     update_child_to_remove_unnecessary_sort(child, sort_onwards)?;
                     let sort_expr = required_ordering.to_vec();
                     *child = add_sort_above_child(child, sort_expr)?;
-                    sort_onwards.push((idx, child.clone()))
+                    // sort_onwards.push((idx, child.clone()))
+                    *sort_onwards = Some(ExecTree {
+                        idx,
+                        plan: child.clone(),
+                        children: vec![],
+                    })
                 }
-                if let [first, ..] = sort_onwards.as_slice() {
+                if let Some(sort_onward) = sort_onwards {
                     // The ordering requirement is met, we can analyze if there is an unnecessary sort:
-                    let sort_any = first.1.clone();
+                    let sort_any = sort_onward.bottom_executor();
                     let sort_output_ordering = sort_any.output_ordering();
                     // Variable `sort_any` will either be a `SortExec` or a
                     // `SortPreservingMergeExec`, and both have single child.
@@ -371,7 +420,7 @@ fn ensure_sorting(
                             &sort_input,
                             sort_output_ordering,
                             sort_input_ordering,
-                            sort_onwards,
+                            sort_onward,
                         )? {
                             return Ok(Some(result));
                         }
@@ -386,7 +435,7 @@ fn ensure_sorting(
                             &sort_input,
                             sort_output_ordering,
                             sort_input_ordering,
-                            sort_onwards,
+                            sort_onward,
                         )? {
                             return Ok(Some(result));
                         }
@@ -401,7 +450,11 @@ fn ensure_sorting(
                 // Ordering requirement is not met, we should add a SortExec to the plan.
                 let sort_expr = required.to_vec();
                 *child = add_sort_above_child(child, sort_expr)?;
-                *sort_onwards = vec![(idx, child.clone())];
+                *sort_onwards = Some(ExecTree {
+                    idx,
+                    plan: child.clone(),
+                    children: vec![],
+                })
             }
             (None, Some(_)) => {
                 // We have a SortExec whose effect may be neutralized by a order-imposing
@@ -422,24 +475,6 @@ fn ensure_sorting(
         Ok(Some(requirements))
     } else {
         let new_plan = requirements.plan.with_new_children(new_children)?;
-        for (idx, (trace, required_ordering)) in new_onwards
-            .iter_mut()
-            .zip(new_plan.required_input_ordering())
-            .enumerate()
-            .take(new_plan.children().len())
-        {
-            if new_plan.maintains_input_order()[idx]
-                && required_ordering.is_none()
-                && !trace.is_empty()
-            {
-                trace.push((idx, new_plan.clone()));
-            } else {
-                trace.clear();
-                if is_sort(&new_plan) {
-                    trace.push((idx, new_plan.clone()));
-                }
-            }
-        }
         Ok(Some(PlanWithCorrespondingSort {
             plan: new_plan,
             sort_onwards: new_onwards,
@@ -463,8 +498,9 @@ fn analyze_immediate_sort_removal(
             // Since we know that a `SortExec` has exactly one child,
             // we can use the zero index safely:
             let mut new_onwards = requirements.sort_onwards[0].clone();
-            if !new_onwards.is_empty() {
-                new_onwards.pop();
+            let mut children = vec![];
+            if let Some(tmp) = &new_onwards {
+                children.push(tmp.clone());
             }
             let updated_plan = if !sort_exec.preserve_partitioning()
                 && sort_input.output_partitioning().partition_count() > 1
@@ -473,7 +509,12 @@ fn analyze_immediate_sort_removal(
                 let new_plan: Arc<dyn ExecutionPlan> = Arc::new(
                     SortPreservingMergeExec::new(sort_exec.expr().to_vec(), sort_input),
                 );
-                new_onwards.push((0, new_plan.clone()));
+                // new_onwards.push((0, new_plan.clone()));
+                new_onwards = Some(ExecTree {
+                    idx: 0,
+                    plan: new_plan.clone(),
+                    children,
+                });
                 new_plan
             } else {
                 // Remove the sort:
@@ -496,7 +537,7 @@ fn analyze_window_sort_removal(
     sort_input: &Arc<dyn ExecutionPlan>,
     sort_output_ordering: Option<&[PhysicalSortExpr]>,
     physical_ordering: Option<&[PhysicalSortExpr]>,
-    sort_onward: &mut Vec<(usize, Arc<dyn ExecutionPlan>)>,
+    sort_onward: &mut ExecTree,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
     let required_ordering = sort_output_ordering.ok_or_else(|| {
         DataFusionError::Plan("A SortExec should have output ordering".to_string())
@@ -554,9 +595,9 @@ fn analyze_window_sort_removal(
 /// Updates child to remove the unnecessary sorting below it.
 fn update_child_to_remove_unnecessary_sort(
     child: &mut Arc<dyn ExecutionPlan>,
-    sort_onwards: &mut Vec<(usize, Arc<dyn ExecutionPlan>)>,
+    sort_onwards: &mut Option<ExecTree>,
 ) -> Result<()> {
-    if !sort_onwards.is_empty() {
+    if let Some(sort_onwards) = sort_onwards {
         *child = remove_corresponding_sort_from_sub_plan(sort_onwards)?;
     }
     Ok(())
@@ -565,10 +606,10 @@ fn update_child_to_remove_unnecessary_sort(
 /// Updates child to modify the unnecessarily fine sorting below it.
 fn update_child_to_change_finer_sort(
     child: &mut Arc<dyn ExecutionPlan>,
-    sort_onwards: &mut Vec<(usize, Arc<dyn ExecutionPlan>)>,
+    sort_onwards: &mut Option<ExecTree>,
     n_sort_expr: usize,
 ) -> Result<()> {
-    if !sort_onwards.is_empty() {
+    if let Some(sort_onwards) = sort_onwards {
         *child = change_finer_sort_in_sub_plan(sort_onwards, n_sort_expr)?;
     }
     Ok(())
@@ -592,40 +633,41 @@ fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExp
 
 /// Removes the sort from the plan in `sort_onwards`.
 fn remove_corresponding_sort_from_sub_plan(
-    sort_onwards: &mut Vec<(usize, Arc<dyn ExecutionPlan>)>,
+    sort_onwards: &mut ExecTree,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let (_, sort_any) = &sort_onwards[0];
-    let mut prev_layer = sort_any.children()[0].clone();
-    // In the loop below, we start from one as the first entry is a
-    // `SortExec` and we are removing it from the plan.
-    for (child_idx, layer) in sort_onwards.iter().skip(1) {
-        let mut children = layer.children();
-        children[*child_idx] = prev_layer;
-        prev_layer = layer.clone().with_new_children(children)?;
-    }
-    // We have removed the sort, hence empty the sort_onwards:
-    sort_onwards.clear();
-    Ok(prev_layer)
+    let res = if is_sort(&sort_onwards.plan) {
+        sort_onwards.plan.children()[0].clone()
+    } else {
+        let res = sort_onwards.plan.clone();
+        let mut children = res.children();
+        for elem in &mut sort_onwards.children {
+            children[elem.idx] = remove_corresponding_sort_from_sub_plan(elem)?;
+        }
+        res.with_new_children(children)?
+    };
+
+    Ok(res)
 }
 
 /// Change the unnecessarily fine sort in `sort_onwards`.
 fn change_finer_sort_in_sub_plan(
-    sort_onwards: &mut [(usize, Arc<dyn ExecutionPlan>)],
+    sort_onwards: &mut ExecTree,
     n_sort_expr: usize,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let (sort_child_idx, ref sort_any) = sort_onwards[0];
-    let new_sort_expr = get_sort_exprs(sort_any)?[0..n_sort_expr].to_vec();
-    let mut prev_layer = sort_any.children()[0].clone();
-    let updated_sort = add_sort_above_child(&prev_layer, new_sort_expr)?;
-    sort_onwards[0] = (sort_child_idx, updated_sort);
-    // In the loop below, we start from one as the first entry is a
-    // `SortExec` and we are removing it from the plan.
-    for (child_idx, layer) in sort_onwards.iter() {
-        let mut children = layer.children();
-        children[*child_idx] = prev_layer;
-        prev_layer = layer.clone().with_new_children(children)?;
-    }
-    Ok(prev_layer)
+    let res = if is_sort(&sort_onwards.plan) {
+        let prev_layer = sort_onwards.plan.children()[0].clone();
+        let new_sort_expr = get_sort_exprs(&sort_onwards.plan)?[0..n_sort_expr].to_vec();
+        add_sort_above_child(&prev_layer, new_sort_expr)?
+    } else {
+        let res = sort_onwards.plan.clone();
+        let mut children = res.children();
+        for elem in &mut sort_onwards.children {
+            children[elem.idx] = remove_corresponding_sort_from_sub_plan(elem)?;
+        }
+        res.with_new_children(children)?
+    };
+
+    Ok(res)
 }
 
 #[derive(Debug)]
@@ -1165,6 +1207,49 @@ mod tests {
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
             "    SortExec: [nullable_col@0 ASC]",
+            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_union_inputs_different_sorted4() -> Result<()> {
+        let schema = create_test_schema()?;
+
+        let source1 = parquet_exec(&schema);
+        let sort_exprs1 = vec![
+            sort_expr("nullable_col", &schema),
+            sort_expr("non_nullable_col", &schema),
+        ];
+        let sort_exprs2 = vec![sort_expr("nullable_col", &schema)];
+        let sort1 = sort_exec(sort_exprs2.clone(), source1.clone());
+        let sort2 = sort_exec(sort_exprs2.clone(), source1);
+
+        let source2 = parquet_exec_sorted(&schema, sort_exprs2);
+
+        let union = union_exec(vec![sort1, source2, sort2]);
+        let physical_plan = sort_preserving_merge_exec(sort_exprs1, union);
+
+        // First input to the union is not Sorted (SortExec is finer than required ordering by the SortPreservingMergeExec above).
+        // Second input to the union is already Sorted (matches with the required ordering by the SortPreservingMergeExec above).
+        // Third input to the union is not Sorted (SortExec is matches required ordering by the SortPreservingMergeExec above).
+        let expected_input = vec![
+            "SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
+            "  UnionExec",
+            "    SortExec: [nullable_col@0 ASC]",
+            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+            "    ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
+            "    SortExec: [nullable_col@0 ASC]",
+            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        ];
+        // should adjust sorting in the first input of the union such that it is not unnecessarily fine
+        let expected_optimized = vec![
+            "SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
+            "  SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
+            "    UnionExec",
+            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
