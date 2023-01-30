@@ -187,7 +187,6 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                             protobuf::PhysicalCaseNode {
                                 expr: expr
                                     .expr()
-                                    .as_ref()
                                     .map(|exp| exp.clone().try_into().map(Box::new))
                                     .transpose()?,
                                 when_then_expr: expr
