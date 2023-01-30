@@ -287,7 +287,7 @@ impl Display for DataFusionError {
             }
             #[cfg(feature = "avro")]
             DataFusionError::AvroError(ref desc) => {
-                write!(f, "Avro error: {}", desc)
+                write!(f, "Avro error: {desc}")
             }
             DataFusionError::IoError(ref desc) => write!(f, "IO error: {desc}"),
             DataFusionError::SQL(ref desc) => {

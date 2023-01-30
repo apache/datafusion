@@ -38,11 +38,11 @@ use substrait::proto::{
     },
     extensions::simple_extension_declaration::MappingType,
     function_argument::ArgType,
-    plan_rel,
+    join_rel, plan_rel, r#type,
     read_rel::ReadType,
     rel::RelType,
     sort_field::{SortDirection, SortKind::*},
-    AggregateFunction, Expression, Plan, Rel,
+    AggregateFunction, Expression, Plan, Rel, Type,
 };
 
 use datafusion::logical_expr::expr::Sort;
@@ -78,8 +78,7 @@ pub fn name_to_op(name: &str) -> Result<Operator> {
         "bitwise_shift_right" => Ok(Operator::BitwiseShiftRight),
         "bitwise_shift_left" => Ok(Operator::BitwiseShiftLeft),
         _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported function name: {:?}",
-            name
+            "Unsupported function name: {name:?}"
         ))),
     }
 }
@@ -99,8 +98,7 @@ pub async fn from_substrait_plan(
                     Ok((ext_f.function_anchor, &ext_f.name))
                 }
                 _ => Err(DataFusionError::NotImplemented(format!(
-                    "Extension type not supported: {:?}",
-                    ext
+                    "Extension type not supported: {ext:?}"
                 ))),
             },
             None => Err(DataFusionError::NotImplemented(
@@ -317,19 +315,7 @@ pub async fn from_substrait_rel(
             let right = LogicalPlanBuilder::from(
                 from_substrait_rel(ctx, join.right.as_ref().unwrap(), extensions).await?,
             );
-            let join_type = match join.r#type {
-                1 => JoinType::Inner,
-                2 => JoinType::Left,
-                3 => JoinType::Right,
-                4 => JoinType::Full,
-                5 => JoinType::LeftAnti,
-                6 => JoinType::LeftSemi,
-                _ => {
-                    return Err(DataFusionError::Internal(
-                        "invalid join type".to_string(),
-                    ))
-                }
-            };
+            let join_type = from_substrait_jointype(join.r#type)?;
             let schema =
                 build_join_schema(left.schema(), right.schema(), &JoinType::Inner)?;
             let on = from_substrait_rex(
@@ -339,29 +325,42 @@ pub async fn from_substrait_rel(
             )
             .await?;
             let predicates = split_conjunction(&on);
-            let pairs = predicates
+            // TODO: collect only one null_eq_null
+            let join_exprs: Vec<(Column, Column, bool)> = predicates
                 .iter()
                 .map(|p| match p {
-                    Expr::BinaryExpr(BinaryExpr {
-                        left,
-                        op: Operator::Eq,
-                        right,
-                    }) => match (left.as_ref(), right.as_ref()) {
-                        (Expr::Column(l), Expr::Column(r)) => {
-                            Ok((l.flat_name(), r.flat_name()))
+                    Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                        match (left.as_ref(), right.as_ref()) {
+                            (Expr::Column(l), Expr::Column(r)) => match op {
+                                Operator::Eq => Ok((l.clone(), r.clone(), false)),
+                                Operator::IsNotDistinctFrom => {
+                                    Ok((l.clone(), r.clone(), true))
+                                }
+                                _ => Err(DataFusionError::Internal(
+                                    "invalid join condition op".to_string(),
+                                )),
+                            },
+                            _ => Err(DataFusionError::Internal(
+                                "invalid join condition expresssion".to_string(),
+                            )),
                         }
-                        _ => Err(DataFusionError::Internal(
-                            "invalid join condition".to_string(),
-                        )),
-                    },
+                    }
                     _ => Err(DataFusionError::Internal(
-                        "invalid join condition".to_string(),
+                        "Non-binary expression is not supported in join condition"
+                            .to_string(),
                     )),
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let (left_cols, right_cols): (Vec<_>, Vec<_>) = pairs.iter().cloned().unzip();
-            left.join(right.build()?, join_type, (left_cols, right_cols), None)?
-                .build()
+            let (left_cols, right_cols, null_eq_nulls): (Vec<_>, Vec<_>, Vec<_>) =
+                itertools::multiunzip(join_exprs);
+            left.join_detailed(
+                right.build()?,
+                join_type,
+                (left_cols, right_cols),
+                None,
+                null_eq_nulls[0],
+            )?
+            .build()
         }
         Some(RelType::Read(read)) => match &read.as_ref().read_type {
             Some(ReadType::NamedTable(nt)) => {
@@ -429,6 +428,28 @@ pub async fn from_substrait_rel(
             "Unsupported RelType: {:?}",
             rel.rel_type
         ))),
+    }
+}
+
+fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
+    if let Some(substrait_join_type) = join_rel::JoinType::from_i32(join_type) {
+        match substrait_join_type {
+            join_rel::JoinType::Inner => Ok(JoinType::Inner),
+            join_rel::JoinType::Left => Ok(JoinType::Left),
+            join_rel::JoinType::Right => Ok(JoinType::Right),
+            join_rel::JoinType::Outer => Ok(JoinType::Full),
+            join_rel::JoinType::Anti => Ok(JoinType::LeftAnti),
+            join_rel::JoinType::Semi => Ok(JoinType::LeftSemi),
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "unsupported join type {substrait_join_type:?}"
+                )))
+            }
+        }
+    } else {
+        return Err(DataFusionError::Internal(format!(
+            "invalid join type variant {join_type:?}"
+        )));
     }
 }
 
@@ -589,51 +610,100 @@ pub async fn from_substrait_rex(
                     })))
                 }
                 (l, r) => Err(DataFusionError::NotImplemented(format!(
-                    "Invalid arguments for binary expression: {:?} and {:?}",
-                    l, r
+                    "Invalid arguments for binary expression: {l:?} and {r:?}"
                 ))),
             }
         }
-        Some(RexType::Literal(lit)) => match &lit.literal_type {
-            Some(LiteralType::I8(n)) => {
-                Ok(Arc::new(Expr::Literal(ScalarValue::Int8(Some(*n as i8)))))
+        Some(RexType::Literal(lit)) => {
+            match &lit.literal_type {
+                Some(LiteralType::I8(n)) => {
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Int8(Some(*n as i8)))))
+                }
+                Some(LiteralType::I16(n)) => {
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Int16(Some(*n as i16)))))
+                }
+                Some(LiteralType::I32(n)) => {
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Int32(Some(*n)))))
+                }
+                Some(LiteralType::I64(n)) => {
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Int64(Some(*n)))))
+                }
+                Some(LiteralType::Boolean(b)) => {
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Boolean(Some(*b)))))
+                }
+                Some(LiteralType::Date(d)) => {
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Date32(Some(*d)))))
+                }
+                Some(LiteralType::Fp32(f)) => {
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Float32(Some(*f)))))
+                }
+                Some(LiteralType::Fp64(f)) => {
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Float64(Some(*f)))))
+                }
+                Some(LiteralType::Decimal(d)) => {
+                    let value: [u8; 16] = d.value.clone().try_into().or(Err(
+                        DataFusionError::Substrait(
+                            "Failed to parse decimal value".to_string(),
+                        ),
+                    ))?;
+                    let p = d.precision.try_into().map_err(|e| {
+                        DataFusionError::Substrait(format!(
+                            "Failed to parse decimal precision: {e}"
+                        ))
+                    })?;
+                    let s = d.scale.try_into().map_err(|e| {
+                        DataFusionError::Substrait(format!(
+                            "Failed to parse decimal scale: {e}"
+                        ))
+                    })?;
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Decimal128(
+                        Some(std::primitive::i128::from_le_bytes(value)),
+                        p,
+                        s,
+                    ))))
+                }
+                Some(LiteralType::String(s)) => {
+                    Ok(Arc::new(Expr::Literal(ScalarValue::Utf8(Some(s.clone())))))
+                }
+                Some(LiteralType::Binary(b)) => Ok(Arc::new(Expr::Literal(
+                    ScalarValue::Binary(Some(b.clone())),
+                ))),
+                Some(LiteralType::Null(ntype)) => {
+                    Ok(Arc::new(Expr::Literal(from_substrait_null(ntype)?)))
+                }
+                _ => {
+                    return Err(DataFusionError::NotImplemented(format!(
+                        "Unsupported literal_type: {:?}",
+                        lit.literal_type
+                    )))
+                }
             }
-            Some(LiteralType::I16(n)) => {
-                Ok(Arc::new(Expr::Literal(ScalarValue::Int16(Some(*n as i16)))))
-            }
-            Some(LiteralType::I32(n)) => {
-                Ok(Arc::new(Expr::Literal(ScalarValue::Int32(Some(*n)))))
-            }
-            Some(LiteralType::I64(n)) => {
-                Ok(Arc::new(Expr::Literal(ScalarValue::Int64(Some(*n)))))
-            }
-            Some(LiteralType::Boolean(b)) => {
-                Ok(Arc::new(Expr::Literal(ScalarValue::Boolean(Some(*b)))))
-            }
-            Some(LiteralType::Date(d)) => {
-                Ok(Arc::new(Expr::Literal(ScalarValue::Date32(Some(*d)))))
-            }
-            Some(LiteralType::Fp32(f)) => {
-                Ok(Arc::new(Expr::Literal(ScalarValue::Float32(Some(*f)))))
-            }
-            Some(LiteralType::Fp64(f)) => {
-                Ok(Arc::new(Expr::Literal(ScalarValue::Float64(Some(*f)))))
-            }
-            Some(LiteralType::String(s)) => {
-                Ok(Arc::new(Expr::Literal(ScalarValue::Utf8(Some(s.clone())))))
-            }
-            Some(LiteralType::Binary(b)) => Ok(Arc::new(Expr::Literal(
-                ScalarValue::Binary(Some(b.clone())),
-            ))),
-            _ => {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Unsupported literal_type: {:?}",
-                    lit.literal_type
-                )))
-            }
-        },
+        }
         _ => Err(DataFusionError::NotImplemented(
             "unsupported rex_type".to_string(),
         )),
+    }
+}
+
+fn from_substrait_null(null_type: &Type) -> Result<ScalarValue> {
+    if let Some(kind) = &null_type.kind {
+        match kind {
+            r#type::Kind::I8(_) => Ok(ScalarValue::Int8(None)),
+            r#type::Kind::I16(_) => Ok(ScalarValue::Int16(None)),
+            r#type::Kind::I32(_) => Ok(ScalarValue::Int32(None)),
+            r#type::Kind::I64(_) => Ok(ScalarValue::Int64(None)),
+            r#type::Kind::Decimal(d) => Ok(ScalarValue::Decimal128(
+                None,
+                d.precision as u8,
+                d.scale as i8,
+            )),
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "Unsupported null kind: {kind:?}"
+            ))),
+        }
+    } else {
+        Err(DataFusionError::NotImplemented(
+            "Null type without kind is not supported".to_string(),
+        ))
     }
 }

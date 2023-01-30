@@ -16,17 +16,18 @@
 // under the License.
 
 use crate::parser::{
-    CreateExternalTable, DFParser, DescribeTable, Statement as DFStatement,
+    CreateExternalTable, DFParser, DescribeTableStmt, Statement as DFStatement,
 };
 use crate::planner::{
     object_name_to_qualifier, object_name_to_table_reference, ContextProvider,
     PlannerContext, SqlToRel,
 };
+use crate::utils::normalize_ident;
 use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, DataFusionError, ExprSchema, OwnedTableReference,
-    Result, TableReference, ToDFSchema,
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ExprSchema,
+    OwnedTableReference, Result, TableReference, ToDFSchema,
 };
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::logical_plan::builder::project;
@@ -35,18 +36,43 @@ use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DmlStatement, DropTable, DropView, Explain, Filter, LogicalPlan, LogicalPlanBuilder,
-    PlanType, SetVariable, ToStringifiedPlan, WriteOp,
+    DescribeTable, DmlStatement, DropTable, DropView, Explain, ExprSchemable, Filter,
+    LogicalPlan, LogicalPlanBuilder, PlanType, SetVariable, ToStringifiedPlan, WriteOp,
 };
 use sqlparser::ast;
 use sqlparser::ast::{
-    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query, SetExpr,
-    ShowCreateObject, ShowStatementFilter, Statement, TableFactor, TableWithJoins,
-    UnaryOperator, Value,
+    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query, SchemaName,
+    SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableFactor,
+    TableWithJoins, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
+
+fn ident_to_string(ident: &Ident) -> String {
+    normalize_ident(ident.to_owned())
+}
+
+fn object_name_to_string(object_name: &ObjectName) -> String {
+    object_name
+        .0
+        .iter()
+        .map(ident_to_string)
+        .collect::<Vec<String>>()
+        .join(".")
+}
+
+fn get_schema_name(schema_name: &SchemaName) -> String {
+    match schema_name {
+        SchemaName::Simple(schema_name) => object_name_to_string(schema_name),
+        SchemaName::UnnamedAuthorization(auth) => ident_to_string(auth),
+        SchemaName::NamedAuthorization(schema_name, auth) => format!(
+            "{}.{}",
+            object_name_to_string(schema_name),
+            ident_to_string(auth)
+        ),
+    }
+}
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Generate a logical plan from an DataFusion SQL statement
@@ -54,7 +80,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match statement {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
-            DFStatement::DescribeTable(s) => self.describe_table_to_plan(s),
+            DFStatement::DescribeTableStmt(s) => self.describe_table_to_plan(s),
         }
     }
 
@@ -170,7 +196,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 schema_name,
                 if_not_exists,
             } => Ok(LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
-                schema_name: schema_name.to_string(),
+                schema_name: get_schema_name(&schema_name),
                 if_not_exists,
                 schema: Arc::new(DFSchema::empty()),
             })),
@@ -179,7 +205,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if_not_exists,
                 ..
             } => Ok(LogicalPlan::CreateCatalog(CreateCatalog {
-                catalog_name: db_name.to_string(),
+                catalog_name: object_name_to_string(&db_name),
                 if_not_exists,
                 schema: Arc::new(DFSchema::empty()),
             })),
@@ -240,7 +266,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &mut planner_context,
                 )?;
                 Ok(LogicalPlan::Prepare(Prepare {
-                    name: name.to_string(),
+                    name: ident_to_string(&name),
                     data_types,
                     input: Arc::new(plan),
                 }))
@@ -381,30 +407,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    fn describe_table_to_plan(&self, statement: DescribeTable) -> Result<LogicalPlan> {
-        let DescribeTable { table_name } = statement;
-
-        let where_clause = object_name_to_qualifier(&table_name);
+    fn describe_table_to_plan(
+        &self,
+        statement: DescribeTableStmt,
+    ) -> Result<LogicalPlan> {
+        let DescribeTableStmt { table_name } = statement;
         let table_ref = object_name_to_table_reference(table_name)?;
 
-        // check if table_name exists
-        let _ = self
+        let table_source = self
             .schema_provider
             .get_table_provider((&table_ref).into())?;
 
-        if self.has_table("information_schema", "tables") {
-            let sql = format!(
-                "SELECT column_name, data_type, is_nullable \
-                                FROM information_schema.columns WHERE {where_clause};"
-            );
-            let mut rewrite = DFParser::parse_sql(&sql)?;
-            self.statement_to_plan(rewrite.pop_front().unwrap())
-        } else {
-            Err(DataFusionError::Plan(
-                "DESCRIBE TABLE is not supported unless information_schema is enabled"
-                    .to_string(),
-            ))
-        }
+        let schema = table_source.schema();
+
+        Ok(LogicalPlan::DescribeTable(DescribeTable {
+            schema,
+            dummy_schema: DFSchemaRef::new(DFSchema::empty()),
+        }))
     }
 
     /// Generate a logical plan from a CREATE EXTERNAL TABLE statement
@@ -489,12 +508,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 plan,
                 stringified_plans,
                 schema,
+                logical_optimization_succeeded: false,
             }))
         }
     }
 
     fn show_variable_to_plan(&self, variable: &[Ident]) -> Result<LogicalPlan> {
-        let variable = ObjectName(variable.to_vec()).to_string();
+        let variable = object_name_to_string(&ObjectName(variable.to_vec()));
 
         if !self.has_table("information_schema", "df_settings") {
             return Err(DataFusionError::Plan(
@@ -544,7 +564,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ));
         }
 
-        let variable = variable.to_string();
+        let variable = object_name_to_string(variable);
         let mut variable_lower = variable.to_lowercase();
 
         if variable_lower == "timezone" || variable_lower == "time.zone" {
@@ -554,7 +574,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // parse value string from Expr
         let value_string = match &value[0] {
-            SQLExpr::Identifier(i) => i.to_string(),
+            SQLExpr::Identifier(i) => ident_to_string(i),
             SQLExpr::Value(v) => match v {
                 Value::SingleQuotedString(s) => s.to_string(),
                 Value::DollarQuotedString(s) => s.to_string(),
@@ -618,7 +638,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let schema = (*provider.schema()).clone();
         let schema = DFSchema::try_from(schema)?;
         let scan =
-            LogicalPlanBuilder::scan(table_name.to_string(), provider, None)?.build()?;
+            LogicalPlanBuilder::scan(object_name_to_string(&table_name), provider, None)?
+                .build()?;
         let mut planner_context = PlannerContext::new();
 
         let source = match predicate_expr {
@@ -668,27 +689,36 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .get_table_provider((&table_name).into())?;
         let arrow_schema = (*provider.schema()).clone();
         let table_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
-        let mut values: BTreeMap<_, _> = table_schema
-            .fields()
-            .iter()
-            .map(|f| {
-                (
-                    f.name().clone(),
-                    ast::Expr::Identifier(ast::Ident::from(f.name().as_str())),
-                )
-            })
-            .collect();
+        let values = table_schema.fields().iter().map(|f| {
+            (
+                f.name().clone(),
+                ast::Expr::Identifier(ast::Ident::from(f.name().as_str())),
+            )
+        });
 
         // Overwrite with assignment expressions
         let mut planner_context = PlannerContext::new();
-        for assign in assignments.iter() {
-            let col_name: &Ident = assign
-                .id
-                .iter()
-                .last()
-                .ok_or(DataFusionError::Plan("Empty column id".to_string()))?;
-            let _ = values.insert(col_name.value.clone(), assign.value.clone());
-        }
+        let mut assign_map = assignments
+            .iter()
+            .map(|assign| {
+                let col_name: &Ident = assign
+                    .id
+                    .iter()
+                    .last()
+                    .ok_or(DataFusionError::Plan("Empty column id".to_string()))?;
+                // Validate that the assignment target column exists
+                table_schema.field_with_unqualified_name(&col_name.value)?;
+                Ok((col_name.value.clone(), assign.value.clone()))
+            })
+            .collect::<Result<HashMap<String, Expr>>>()?;
+
+        let values = values
+            .into_iter()
+            .map(|(k, v)| {
+                let val = assign_map.remove(&k).unwrap_or(v);
+                (k, val)
+            })
+            .collect::<Vec<_>>();
 
         // Build scan
         let from = from.unwrap_or(table);
@@ -760,7 +790,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .schema_provider
             .get_table_provider((&table_name).into())?;
         let arrow_schema = (*provider.schema()).clone();
-        let table_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
+        let table_schema = DFSchema::try_from(arrow_schema)?;
+
+        let fields = if columns.is_empty() {
+            // Empty means we're inserting into all columns of the table
+            table_schema.fields().clone()
+        } else {
+            let fields = columns
+                .iter()
+                .map(|c| {
+                    Ok(table_schema
+                        .field_with_unqualified_name(&normalize_ident(c.clone()))?
+                        .clone())
+                })
+                .collect::<Result<Vec<DFField>>>()?;
+            // Validate no duplicate fields
+            let table_schema =
+                DFSchema::new_with_metadata(fields, table_schema.metadata().clone())?;
+            table_schema.fields().clone()
+        };
 
         // infer types for Values clause... other types should be resolvable the regular way
         let mut prepare_param_data_types = BTreeMap::new();
@@ -774,14 +822,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     "Can't parse placeholder: {name}"
                                 ))
                             })? - 1;
-                        let col = columns.get(idx).ok_or_else(|| {
+                        let field = fields.get(idx).ok_or_else(|| {
                             DataFusionError::Plan(format!(
                                 "Placeholder ${} refers to a non existent column",
                                 idx + 1
                             ))
                         })?;
-                        let field =
-                            table_schema.field_with_name(None, col.value.as_str())?;
                         let dt = field.field().data_type().clone();
                         let _ = prepare_param_data_types.insert(name, dt);
                     }
@@ -794,24 +840,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut planner_context =
             PlannerContext::new_with_prepare_param_data_types(prepare_param_data_types);
         let source = self.query_to_plan(*source, &mut planner_context)?;
-        if columns.len() != source.schema().fields().len() {
+        if fields.len() != source.schema().fields().len() {
             Err(DataFusionError::Plan(
                 "Column count doesn't match insert query!".to_owned(),
             ))?;
         }
-        let exprs: Vec<_> = columns
+        let exprs = fields
             .iter()
             .zip(source.schema().fields().iter())
-            .map(|(c, f)| {
-                datafusion_expr::Expr::Column(Column::from(f.name().clone()))
-                    .alias(c.value.clone())
+            .map(|(target_field, source_field)| {
+                let expr =
+                    datafusion_expr::Expr::Column(source_field.unqualified_column())
+                        .cast_to(target_field.data_type(), source.schema())?
+                        .alias(target_field.name());
+                Ok(expr)
             })
-            .collect();
+            .collect::<Result<Vec<datafusion_expr::Expr>>>()?;
         let source = project(source, exprs)?;
 
         let plan = LogicalPlan::Dml(DmlStatement {
             table_name,
-            table_schema,
+            table_schema: Arc::new(table_schema),
             op: WriteOp::Insert,
             input: Arc::new(source),
         });

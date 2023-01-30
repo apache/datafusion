@@ -34,6 +34,8 @@ use datafusion_expr::{AggregateUDF, ScalarUDF};
 use datafusion_sql::parser::DFParser;
 use datafusion_sql::planner::{ContextProvider, ParserOptions, SqlToRel};
 
+use rstest::rstest;
+
 #[test]
 fn parse_decimals() {
     let test_data = [
@@ -163,7 +165,7 @@ fn plan_insert() {
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
     let plan = r#"
 Dml: op=[Insert] table=[person]
-  Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+  Projection: CAST(column1 AS UInt32) AS id, column2 AS first_name, column3 AS last_name
     Values: (Int64(1), Utf8("Alan"), Utf8("Turing"))
     "#
     .trim();
@@ -171,16 +173,75 @@ Dml: op=[Insert] table=[person]
 }
 
 #[test]
+fn plan_insert_no_target_columns() {
+    let sql = "INSERT INTO test_decimal VALUES (1, 2), (3, 4)";
+    let plan = r#"
+Dml: op=[Insert] table=[test_decimal]
+  Projection: CAST(column1 AS Int32) AS id, CAST(column2 AS Decimal128(10, 2)) AS price
+    Values: (Int64(1), Int64(2)), (Int64(3), Int64(4))
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[rstest]
+#[case::duplicate_columns(
+    "INSERT INTO test_decimal (id, price, price) VALUES (1, 2, 3), (4, 5, 6)",
+    "Schema error: Schema contains duplicate unqualified field name 'price'"
+)]
+#[case::non_existing_column(
+    "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
+    "Schema error: No field named 'nonexistent'. Valid fields are 'id', 'price'."
+)]
+#[case::type_mismatch(
+    "INSERT INTO test_decimal SELECT '2022-01-01', to_timestamp('2022-01-01T12:00:00')",
+    "Error during planning: Cannot automatically convert Timestamp(Nanosecond, None) to Decimal128(10, 2)"
+)]
+#[case::target_column_count_mismatch(
+    "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2)",
+    "Error during planning: Column count doesn't match insert query!"
+)]
+#[case::source_column_count_mismatch(
+    "INSERT INTO person VALUES ($1, $2)",
+    "Error during planning: Column count doesn't match insert query!"
+)]
+#[case::extra_placeholder(
+    "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2, $3, $4)",
+    "Error during planning: Placeholder $4 refers to a non existent column"
+)]
+#[case::placeholder_type_unresolved(
+    "INSERT INTO person (id, first_name, last_name) VALUES ($2, $4, $6)",
+    "Error during planning: Placeholder type could not be resolved"
+)]
+#[test]
+fn test_insert_schema_errors(#[case] sql: &str, #[case] error: &str) {
+    let err = logical_plan(sql).unwrap_err();
+    assert_eq!(err.to_string(), error)
+}
+
+#[test]
 fn plan_update() {
     let sql = "update person set last_name='Kay' where id=1";
     let plan = r#"
 Dml: op=[Update] table=[person]
-  Projection: person.age AS age, person.birth_date AS birth_date, person.first_name AS first_name, person.id AS id, Utf8("Kay") AS last_name, person.salary AS salary, person.state AS state, person.😀 AS 😀
+  Projection: person.id AS id, person.first_name AS first_name, Utf8("Kay") AS last_name, person.age AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
     Filter: id = Int64(1)
       TableScan: person
       "#
     .trim();
     quick_test(sql, plan);
+}
+
+#[rstest]
+#[case::missing_assignement_target("UPDATE person SET doesnotexist = true")]
+#[case::missing_assignement_expression("UPDATE person SET age = doesnotexist + 42")]
+#[case::missing_selection_expression(
+    "UPDATE person SET age = 42 WHERE doesnotexist = true"
+)]
+#[test]
+fn update_column_does_not_exist(#[case] sql: &str) {
+    let err = logical_plan(sql).expect_err("query should have failed");
+    assert_field_not_found(err, "doesnotexist");
 }
 
 #[test]
@@ -1463,6 +1524,27 @@ fn select_7480_2() {
 fn create_external_table_csv() {
     let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'";
     let expected = "CreateExternalTable: Bare { table: \"t\" }";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn create_schema_with_quoted_name() {
+    let sql = "CREATE SCHEMA \"quoted_schema_name\"";
+    let expected = "CreateCatalogSchema: \"quoted_schema_name\"";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn create_schema_with_quoted_unnormalized_name() {
+    let sql = "CREATE SCHEMA \"Foo\"";
+    let expected = "CreateCatalogSchema: \"Foo\"";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn create_schema_with_unquoted_normalized_name() {
+    let sql = "CREATE SCHEMA Foo";
+    let expected = "CreateCatalogSchema: \"foo\"";
     quick_test(sql, expected);
 }
 
@@ -3360,7 +3442,7 @@ fn test_prepare_statement_update_infer() {
 
     let expected_plan = r#"
 Dml: op=[Update] table=[person]
-  Projection: $1 AS age, person.birth_date AS birth_date, person.first_name AS first_name, person.id AS id, person.last_name AS last_name, person.salary AS salary, person.state AS state, person.😀 AS 😀
+  Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
     Filter: id = $2
       TableScan: person
         "#
@@ -3380,7 +3462,7 @@ Dml: op=[Update] table=[person]
     let param_values = vec![ScalarValue::Int32(Some(42)), ScalarValue::UInt32(Some(1))];
     let expected_plan = r#"
 Dml: op=[Update] table=[person]
-  Projection: Int32(42) AS age, person.birth_date AS birth_date, person.first_name AS first_name, person.id AS id, person.last_name AS last_name, person.salary AS salary, person.state AS state, person.😀 AS 😀
+  Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
     Filter: id = UInt32(1)
       TableScan: person
         "#
@@ -3427,36 +3509,6 @@ Dml: op=[Insert] table=[person]
     let plan = plan.replace_params_with_values(&param_values).unwrap();
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
-}
-
-#[test]
-#[should_panic(expected = "Placeholder $4 refers to a non existent column")]
-fn test_prepare_statement_insert_infer_gt() {
-    let sql = "insert into person (id, first_name, last_name) values ($1, $2, $3, $4)";
-
-    let expected_plan = r#""#.trim();
-    let expected_dt = "[Int32]";
-    let _ = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
-}
-
-#[test]
-#[should_panic(expected = "value: Plan(\"Column count doesn't match insert query!\")")]
-fn test_prepare_statement_insert_infer_lt() {
-    let sql = "insert into person (id, first_name, last_name) values ($1, $2)";
-
-    let expected_plan = r#""#.trim();
-    let expected_dt = "[Int32]";
-    let _ = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
-}
-
-#[test]
-#[should_panic(expected = "value: Plan(\"Placeholder type could not be resolved\")")]
-fn test_prepare_statement_insert_infer_gap() {
-    let sql = "insert into person (id, first_name, last_name) values ($2, $4, $6)";
-
-    let expected_plan = r#""#.trim();
-    let expected_dt = "[Int32]";
-    let _ = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 }
 
 #[test]

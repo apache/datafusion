@@ -401,9 +401,7 @@ async fn run_window_test(
         assert_eq!(
             (i, usual_line),
             (i, running_line),
-            "Inconsistent result for window_fn: {:?}, args:{:?}",
-            window_fn,
-            args
+            "Inconsistent result for window_fn: {window_fn:?}, args:{args:?}"
         );
     }
 }

@@ -99,7 +99,7 @@ when DataFusion might be be suitable and unsuitable for your needs:
   it is written in C/C++ and does not include a SQL frontend or planning /optimization
   framework.
 
-- [DataBend](https://github.com/datafuselabs/databend) is a complete
+- [Databend](https://github.com/datafuselabs/databend) is a complete
   database system. Like DataFusion it is also written in Rust and
   utilizes the Apache Arrow memory model, but unlike DataFusion it
   targets end-users rather than developers of other database systems.
@@ -135,7 +135,7 @@ Here are some of the projects known to use DataFusion:
 - [datafusion-tui](https://github.com/datafusion-contrib/datafusion-tui) Text UI for DataFusion
 - [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
 - [Flock](https://github.com/flock-lab/flock)
-- [Greptime DB](https://github.com/GreptimeTeam/greptimedb) Open Source & Cloud Native Distributed Time Series Database
+- [GreptimeDB](https://github.com/GreptimeTeam/greptimedb) Open Source & Cloud Native Distributed Time Series Database
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
 - [Kamu](https://github.com/kamu-data/kamu-cli/) Planet-scale streaming data pipeline
 - [Parseable](https://github.com/parseablehq/parseable) Log storage and observability platform

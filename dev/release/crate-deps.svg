@@ -168,26 +168,38 @@
 <!-- datafusion_proto -->
 <g id="node9" class="node">
 <title>datafusion_proto</title>
-<ellipse fill="none" stroke="black" cx="482.34" cy="-378" rx="89.08" ry="18"/>
-<text text-anchor="middle" x="482.34" y="-374.3" font-family="Times,serif" font-size="14.00">datafusion_proto</text>
+<ellipse fill="none" stroke="black" cx="360.34" cy="-378" rx="89.08" ry="18"/>
+<text text-anchor="middle" x="360.34" y="-374.3" font-family="Times,serif" font-size="14.00">datafusion_proto</text>
 </g>
 <!-- datafusion_proto&#45;&gt;datafusion -->
 <g id="edge19" class="edge">
 <title>datafusion_proto&#45;&gt;datafusion</title>
-<path fill="none" stroke="black" d="M503.91,-360.41C515.98,-351.12 531.2,-339.42 544.3,-329.34"/>
-<polygon fill="black" stroke="black" points="546.77,-331.86 552.56,-322.99 542.5,-326.31 546.77,-331.86"/>
+<path fill="none" stroke="black" d="M404.99,-362.33C440.01,-350.82 488.67,-334.83 524.67,-322.99"/>
+<polygon fill="black" stroke="black" points="526.06,-326.22 534.47,-319.77 523.88,-319.57 526.06,-326.22"/>
+</g>
+<!-- datafusion_substrait -->
+<g id="node10" class="node">
+<title>datafusion_substrait</title>
+<ellipse fill="none" stroke="black" cx="573.34" cy="-378" rx="105.88" ry="18"/>
+<text text-anchor="middle" x="573.34" y="-374.3" font-family="Times,serif" font-size="14.00">datafusion_substrait</text>
+</g>
+<!-- datafusion_substrait&#45;&gt;datafusion -->
+<g id="edge20" class="edge">
+<title>datafusion_substrait&#45;&gt;datafusion</title>
+<path fill="none" stroke="black" d="M573.34,-359.7C573.34,-351.98 573.34,-342.71 573.34,-334.11"/>
+<polygon fill="black" stroke="black" points="576.84,-334.1 573.34,-324.1 569.84,-334.1 576.84,-334.1"/>
 </g>
 <!-- datafusion_cli -->
-<g id="node10" class="node">
+<g id="node11" class="node">
 <title>datafusion_cli</title>
-<ellipse fill="none" stroke="black" cx="664.34" cy="-378" rx="74.99" ry="18"/>
-<text text-anchor="middle" x="664.34" y="-374.3" font-family="Times,serif" font-size="14.00">datafusion_cli</text>
+<ellipse fill="none" stroke="black" cx="772.34" cy="-378" rx="74.99" ry="18"/>
+<text text-anchor="middle" x="772.34" y="-374.3" font-family="Times,serif" font-size="14.00">datafusion_cli</text>
 </g>
 <!-- datafusion_cli&#45;&gt;datafusion -->
-<g id="edge20" class="edge">
+<g id="edge21" class="edge">
 <title>datafusion_cli&#45;&gt;datafusion</title>
-<path fill="none" stroke="black" d="M642.78,-360.41C630.71,-351.12 615.49,-339.42 602.38,-329.34"/>
-<polygon fill="black" stroke="black" points="604.19,-326.31 594.13,-322.99 599.92,-331.86 604.19,-326.31"/>
+<path fill="none" stroke="black" d="M732.07,-362.83C699.82,-351.49 654.52,-335.55 620.56,-323.61"/>
+<polygon fill="black" stroke="black" points="621.46,-320.21 610.86,-320.2 619.13,-326.82 621.46,-320.21"/>
 </g>
 </g>
 </svg>

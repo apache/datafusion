@@ -738,6 +738,7 @@ pub fn from_plan(
             assert!(inputs.is_empty(), "{plan:?}  should have no inputs");
             Ok(plan.clone())
         }
+        LogicalPlan::DescribeTable(_) => Ok(plan.clone()),
     }
 }
 

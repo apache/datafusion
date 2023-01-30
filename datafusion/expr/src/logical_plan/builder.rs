@@ -745,6 +745,7 @@ impl LogicalPlanBuilder {
                 plan: Arc::new(self.plan),
                 stringified_plans,
                 schema,
+                logical_optimization_succeeded: false,
             })))
         }
     }
