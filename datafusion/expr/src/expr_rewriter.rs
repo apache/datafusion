@@ -397,7 +397,6 @@ pub fn replace_col(e: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<E
 pub fn unnormalize_col(expr: Expr) -> Expr {
     rewrite_expr(expr, |expr| {
         if let Expr::Column(col) = expr {
-            // let Column { relation: _, name } = col;
             Ok(Expr::Column(Column {
                 relation: None,
                 name: col.name,
