@@ -48,7 +48,6 @@ use crate::{
     error::Result,
     physical_plan::{expressions, metrics::BaselineMetrics},
 };
-use datafusion_physical_expr::utils::ordering_satisfy;
 use tokio::macros::support::thread_rng_n;
 
 /// `UnionExec`: `UNION ALL` execution plan.
@@ -240,14 +239,20 @@ impl ExecutionPlan for UnionExec {
         // which is the "meet" of all input orderings. In this example, this
         // function will return vec![false, true, true], indicating that we
         // preserve the orderings for the 2nd and the 3rd children.
-        self.inputs()
-            .iter()
-            .map(|child| {
-                ordering_satisfy(self.output_ordering(), child.output_ordering(), || {
-                    child.equivalence_properties()
+        if let Some(output_ordering) = self.output_ordering() {
+            self.inputs()
+                .iter()
+                .map(|child| {
+                    if let Some(child_ordering) = child.output_ordering() {
+                        output_ordering.len() == child_ordering.len()
+                    } else {
+                        false
+                    }
                 })
-            })
-            .collect()
+                .collect()
+        } else {
+            vec![false; self.inputs().len()]
+        }
     }
 
     fn with_new_children(
