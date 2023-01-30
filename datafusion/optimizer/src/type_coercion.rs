@@ -553,8 +553,20 @@ fn coerce_arguments_for_signature(
     expressions
         .iter()
         .enumerate()
-        .map(|(i, expr)| expr.clone().cast_to(&new_types[i], schema))
+        .map(|(i, expr)| cast_expr(expr, &new_types[i], schema))
         .collect::<Result<Vec<_>>>()
+}
+
+/// Cast `expr` to the specified type, if possible
+fn cast_expr(expr: &Expr, to_type: &DataType, schema: &DFSchema) -> Result<Expr> {
+    // Special case until Interval coercion is handled in arrow-rs
+    // https://github.com/apache/arrow-rs/issues/3643
+    match (expr, to_type) {
+        (Expr::Literal(ScalarValue::Utf8(Some(s))), DataType::Interval(_)) => {
+            parse_interval("millisecond", s.as_str()).map(Expr::Literal)
+        }
+        _ => expr.clone().cast_to(to_type, schema),
+    }
 }
 
 /// Returns the coerced exprs for each `input_exprs`.
