@@ -43,7 +43,6 @@ use futures::{ready, Stream, StreamExt, TryStreamExt};
 use arrow::array::Array;
 use arrow::datatypes::{ArrowNativeType, DataType};
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 
 use arrow::array::{
@@ -1146,7 +1145,7 @@ impl HashJoinStream {
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<ArrowResult<RecordBatch>>> {
+    ) -> Poll<Option<Result<RecordBatch>>> {
         let build_timer = self.join_metrics.build_time.timer();
         let left_data = match ready!(self.left_fut.get(cx)) {
             Ok(left_data) => left_data,
@@ -1220,12 +1219,9 @@ impl HashJoinStream {
                             self.join_metrics.output_rows.add(batch.num_rows());
                             Some(result)
                         }
-                        Err(_) => {
-                            // TODO why the type of result stream is `Result<T, ArrowError>`, and not the `DataFusionError`
-                            Some(Err(ArrowError::ComputeError(
-                                "Build left right indices error".to_string(),
-                            )))
-                        }
+                        Err(_) => Some(Err(DataFusionError::Execution(
+                            "Build left right indices error".to_string(),
+                        ))),
                     };
                     timer.done();
                     result
@@ -1272,7 +1268,7 @@ impl HashJoinStream {
 }
 
 impl Stream for HashJoinStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -1296,7 +1292,6 @@ mod tests {
     use arrow::array::UInt32Builder;
     use arrow::array::UInt64Builder;
     use arrow::datatypes::Field;
-    use arrow::error::ArrowError;
     use datafusion_expr::Operator;
 
     use super::*;
@@ -2964,7 +2959,7 @@ mod tests {
 
         // right input stream returns one good batch and then one error.
         // The error should be returned.
-        let err = Err(ArrowError::ComputeError("bad data error".to_string()));
+        let err = Err(DataFusionError::Execution("bad data error".to_string()));
         let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
 
         let on = vec![(

@@ -25,7 +25,6 @@ use crate::physical_plan::aggregates::{
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
-use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
@@ -38,7 +37,7 @@ use futures::stream::{Stream, StreamExt};
 
 /// stream struct for aggregation without grouping columns
 pub(crate) struct AggregateStream {
-    stream: BoxStream<'static, ArrowResult<RecordBatch>>,
+    stream: BoxStream<'static, Result<RecordBatch>>,
     schema: SchemaRef,
 }
 
@@ -112,7 +111,7 @@ impl AggregateStream {
                             .and_then(|allocated| this.reservation.try_grow(allocated))
                         {
                             Ok(_) => continue,
-                            Err(e) => Err(ArrowError::ExternalError(Box::new(e))),
+                            Err(e) => Err(e),
                         }
                     }
                     Some(Err(e)) => Err(e),
@@ -120,9 +119,9 @@ impl AggregateStream {
                         this.finished = true;
                         let timer = this.baseline_metrics.elapsed_compute().timer();
                         let result = finalize_aggregation(&this.accumulators, &this.mode)
-                            .map_err(|e| ArrowError::ExternalError(Box::new(e)))
                             .and_then(|columns| {
                                 RecordBatch::try_new(this.schema.clone(), columns)
+                                    .map_err(Into::into)
                             })
                             .record_output(&this.baseline_metrics);
 
@@ -146,7 +145,7 @@ impl AggregateStream {
 }
 
 impl Stream for AggregateStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
