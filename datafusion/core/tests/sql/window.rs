@@ -18,6 +18,7 @@
 use super::*;
 use ::parquet::arrow::arrow_writer::ArrowWriter;
 use ::parquet::file::properties::WriterProperties;
+use datafusion::execution::options::ReadOptions;
 
 /// for window functions without order by the first, last, and nth function call does not make sense
 #[tokio::test]
@@ -2459,7 +2460,7 @@ fn write_test_data_to_parquet(tmpdir: &TempDir, n_file: usize) -> Result<()> {
     )?;
     let n_chunk = batch.num_rows() / n_file;
     for i in 0..n_file {
-        let target_file = tmpdir.path().join(format!("{}.parquet", i));
+        let target_file = tmpdir.path().join(format!("{i}.parquet"));
         let file = File::create(target_file).unwrap();
         // Default writer properties
         let props = WriterProperties::builder().build();
@@ -2549,7 +2550,7 @@ mod tests {
             LIMIT 5
             ";
 
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2570,8 +2571,7 @@ mod tests {
         let actual_trim_last = &actual[..actual_len - 1];
         assert_eq!(
             expected, actual_trim_last,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
 
         let actual = execute_to_batches(&ctx, sql).await;
@@ -2625,7 +2625,7 @@ mod tests {
             LIMIT 5
             ";
 
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2645,8 +2645,7 @@ mod tests {
         let actual_trim_last = &actual[..actual_len - 1];
         assert_eq!(
             expected, actual_trim_last,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
 
         let actual = execute_to_batches(&ctx, sql).await;
@@ -2685,7 +2684,7 @@ mod tests {
             ORDER BY inc_col ASC
             LIMIT 5";
 
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2705,8 +2704,7 @@ mod tests {
         let actual_trim_last = &actual[..actual_len - 1];
         assert_eq!(
             expected, actual_trim_last,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
 
         let actual = execute_to_batches(&ctx, sql).await;
@@ -2740,7 +2738,7 @@ mod tests {
            ORDER BY inc_col ASC
            LIMIT 5";
 
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2760,8 +2758,7 @@ mod tests {
         let actual_trim_last = &actual[..actual_len - 1];
         assert_eq!(
             expected, actual_trim_last,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
 
         let actual = execute_to_batches(&ctx, sql).await;

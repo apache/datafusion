@@ -323,7 +323,7 @@ pub struct ConfigOptions {
     pub catalog: CatalogOptions,
     /// Execution options
     pub execution: ExecutionOptions,
-    /// Explain options
+    /// Optimizer options
     pub optimizer: OptimizerOptions,
     /// Explain options
     pub explain: ExplainOptions,
@@ -341,8 +341,7 @@ impl ConfigField for ConfigOptions {
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
             _ => Err(DataFusionError::Internal(format!(
-                "Config value \"{}\" not found on ConfigOptions",
-                key
+                "Config value \"{key}\" not found on ConfigOptions"
             ))),
         }
     }

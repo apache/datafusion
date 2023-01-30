@@ -39,8 +39,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Self::create_placeholder_expr(param, param_data_types)
             }
             _ => Err(DataFusionError::Plan(format!(
-                "Unsupported Value '{:?}'",
-                value,
+                "Unsupported Value '{value:?}'",
             ))),
         }
     }

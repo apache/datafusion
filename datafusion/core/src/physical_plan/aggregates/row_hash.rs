@@ -191,7 +191,7 @@ impl GroupedHashAggregateStream {
         let row_aggr_layout =
             Arc::new(RowLayout::new(&row_aggr_schema, RowType::WordAligned));
 
-        let name = format!("GroupedHashAggregateStream[{}]", partition);
+        let name = format!("GroupedHashAggregateStream[{partition}]");
         let row_aggr_state = RowAggregationState {
             reservation: MemoryConsumer::new(name).register(context.memory_pool()),
             map: RawTable::with_capacity(0),
