@@ -77,23 +77,23 @@ pub(crate) fn parse_physical_expr(
         ExprType::Literal(scalar) => Arc::new(Literal::new(scalar.try_into()?)),
         ExprType::BinaryExpr(binary_expr) => Arc::new(BinaryExpr::new(
             parse_required_physical_box_expr(
-                &binary_expr.l,
+                binary_expr.l.as_ref(),
                 registry,
                 "left",
                 input_schema,
             )?,
             logical_plan::from_proto::from_proto_binary_op(&binary_expr.op)?,
             parse_required_physical_box_expr(
-                &binary_expr.r,
+                binary_expr.r.as_ref(),
                 registry,
                 "right",
                 input_schema,
             )?,
         )),
         ExprType::DateTimeIntervalExpr(expr) => Arc::new(DateTimeIntervalExpr::try_new(
-            parse_required_physical_box_expr(&expr.l, registry, "left", input_schema)?,
+            parse_required_physical_box_expr(expr.l.as_ref(), registry, "left", input_schema)?,
             logical_plan::from_proto::from_proto_binary_op(&expr.op)?,
-            parse_required_physical_box_expr(&expr.r, registry, "right", input_schema)?,
+            parse_required_physical_box_expr(expr.r.as_ref(), registry, "right", input_schema)?,
             input_schema,
         )?),
         ExprType::AggregateExpr(_) => {
@@ -112,22 +112,22 @@ pub(crate) fn parse_physical_expr(
             ));
         }
         ExprType::IsNullExpr(e) => Arc::new(IsNullExpr::new(
-            parse_required_physical_box_expr(&e.expr, registry, "expr", input_schema)?,
+            parse_required_physical_box_expr(e.expr.as_ref(), registry, "expr", input_schema)?,
         )),
         ExprType::IsNotNullExpr(e) => Arc::new(IsNotNullExpr::new(
-            parse_required_physical_box_expr(&e.expr, registry, "expr", input_schema)?,
+            parse_required_physical_box_expr(e.expr.as_ref(), registry, "expr", input_schema)?,
         )),
         ExprType::NotExpr(e) => Arc::new(NotExpr::new(parse_required_physical_box_expr(
-            &e.expr,
+            e.expr.as_ref(),
             registry,
             "expr",
             input_schema,
         )?)),
         ExprType::Negative(e) => Arc::new(NegativeExpr::new(
-            parse_required_physical_box_expr(&e.expr, registry, "expr", input_schema)?,
+            parse_required_physical_box_expr(e.expr.as_ref(), registry, "expr", input_schema)?,
         )),
         ExprType::InList(e) => Arc::new(InListExpr::new(
-            parse_required_physical_box_expr(&e.expr, registry, "expr", input_schema)?,
+            parse_required_physical_box_expr(e.expr.as_ref(), registry, "expr", input_schema)?,
             e.list
                 .iter()
                 .map(|x| parse_physical_expr(x, registry, input_schema))
@@ -165,12 +165,12 @@ pub(crate) fn parse_physical_expr(
                 .transpose()?,
         )?),
         ExprType::Cast(e) => Arc::new(CastExpr::new(
-            parse_required_physical_box_expr(&e.expr, registry, "expr", input_schema)?,
+            parse_required_physical_box_expr(e.expr.as_ref(), registry, "expr", input_schema)?,
             convert_required!(e.arrow_type)?,
             DEFAULT_DATAFUSION_CAST_OPTIONS,
         )),
         ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
-            parse_required_physical_box_expr(&e.expr, registry, "expr", input_schema)?,
+            parse_required_physical_box_expr(e.expr.as_ref(), registry, "expr", input_schema)?,
             convert_required!(e.arrow_type)?,
         )),
         ExprType::ScalarFunction(e) => {
@@ -222,13 +222,13 @@ pub(crate) fn parse_physical_expr(
             like_expr.negated,
             like_expr.case_insensitive,
             parse_required_physical_box_expr(
-                &like_expr.expr,
+                like_expr.expr.as_ref(),
                 registry,
                 "expr",
                 input_schema,
             )?,
             parse_required_physical_box_expr(
-                &like_expr.pattern,
+                like_expr.pattern.as_ref(),
                 registry,
                 "pattern",
                 input_schema,
@@ -240,13 +240,12 @@ pub(crate) fn parse_physical_expr(
 }
 
 fn parse_required_physical_box_expr(
-    expr: &Option<Box<protobuf::PhysicalExprNode>>,
+    expr: Option<&Box<protobuf::PhysicalExprNode>>,
     registry: &dyn FunctionRegistry,
     field: &str,
     input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
-    expr.as_ref()
-        .map(|e| parse_physical_expr(e.as_ref(), registry, input_schema))
+    expr.map(|e| parse_physical_expr(e.as_ref(), registry, input_schema))
         .transpose()?
         .ok_or_else(|| {
             DataFusionError::Internal(format!("Missing required field {field:?}"))

@@ -876,7 +876,7 @@ pub fn parse_expr(
                 .ok_or_else(|| Error::required("value"))?
                 .try_into()?;
 
-            let expr = parse_required_expr(&field.expr, registry, "expr")?;
+            let expr = parse_required_expr(field.expr.as_ref(), registry, "expr")?;
 
             Ok(Expr::GetIndexedField(GetIndexedField::new(
                 Box::new(expr),
@@ -926,7 +926,7 @@ pub fn parse_expr(
                         datafusion_expr::window_function::WindowFunction::AggregateFunction(
                             aggr_function,
                         ),
-                        vec![parse_required_expr(&expr.expr, registry, "expr")?],
+                        vec![parse_required_expr(expr.expr.as_ref(), registry, "expr")?],
                         partition_by,
                         order_by,
                         window_frame,
@@ -937,7 +937,7 @@ pub fn parse_expr(
                         .ok_or_else(|| Error::unknown("BuiltInWindowFunction", *i))?
                         .into();
 
-                    let args = parse_optional_expr(&expr.expr, registry)?
+                    let args = parse_optional_expr(expr.expr.as_ref(), registry)?
                         .map(|e| vec![e])
                         .unwrap_or_else(Vec::new);
 
@@ -963,64 +963,64 @@ pub fn parse_expr(
                     .map(|e| parse_expr(e, registry))
                     .collect::<Result<Vec<_>, _>>()?,
                 expr.distinct,
-                parse_optional_expr(&expr.filter, registry)?.map(Box::new),
+                parse_optional_expr(expr.filter.as_ref(), registry)?.map(Box::new),
             )))
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(
-            Box::new(parse_required_expr(&alias.expr, registry, "expr")?),
+            Box::new(parse_required_expr(alias.expr.as_ref(), registry, "expr")?),
             alias.alias.clone(),
         )),
         ExprType::IsNullExpr(is_null) => Ok(Expr::IsNull(Box::new(parse_required_expr(
-            &is_null.expr,
+            is_null.expr.as_ref(),
             registry,
             "expr",
         )?))),
         ExprType::IsNotNullExpr(is_not_null) => Ok(Expr::IsNotNull(Box::new(
-            parse_required_expr(&is_not_null.expr, registry, "expr")?,
+            parse_required_expr(is_not_null.expr.as_ref(), registry, "expr")?,
         ))),
         ExprType::NotExpr(not) => Ok(Expr::Not(Box::new(parse_required_expr(
-            &not.expr, registry, "expr",
+            not.expr.as_ref(), registry, "expr",
         )?))),
         ExprType::IsTrue(msg) => Ok(Expr::IsTrue(Box::new(parse_required_expr(
-            &msg.expr, registry, "expr",
+            msg.expr.as_ref(), registry, "expr",
         )?))),
         ExprType::IsFalse(msg) => Ok(Expr::IsFalse(Box::new(parse_required_expr(
-            &msg.expr, registry, "expr",
+            msg.expr.as_ref(), registry, "expr",
         )?))),
         ExprType::IsUnknown(msg) => Ok(Expr::IsUnknown(Box::new(parse_required_expr(
-            &msg.expr, registry, "expr",
+            msg.expr.as_ref(), registry, "expr",
         )?))),
         ExprType::IsNotTrue(msg) => Ok(Expr::IsNotTrue(Box::new(parse_required_expr(
-            &msg.expr, registry, "expr",
+            msg.expr.as_ref(), registry, "expr",
         )?))),
         ExprType::IsNotFalse(msg) => Ok(Expr::IsNotFalse(Box::new(parse_required_expr(
-            &msg.expr, registry, "expr",
+            msg.expr.as_ref(), registry, "expr",
         )?))),
         ExprType::IsNotUnknown(msg) => Ok(Expr::IsNotUnknown(Box::new(
-            parse_required_expr(&msg.expr, registry, "expr")?,
+            parse_required_expr(msg.expr.as_ref(), registry, "expr")?,
         ))),
         ExprType::Between(between) => Ok(Expr::Between(Between::new(
-            Box::new(parse_required_expr(&between.expr, registry, "expr")?),
+            Box::new(parse_required_expr(between.expr.as_ref(), registry, "expr")?),
             between.negated,
-            Box::new(parse_required_expr(&between.low, registry, "expr")?),
-            Box::new(parse_required_expr(&between.high, registry, "expr")?),
+            Box::new(parse_required_expr(between.low.as_ref(), registry, "expr")?),
+            Box::new(parse_required_expr(between.high.as_ref(), registry, "expr")?),
         ))),
         ExprType::Like(like) => Ok(Expr::Like(Like::new(
             like.negated,
-            Box::new(parse_required_expr(&like.expr, registry, "expr")?),
-            Box::new(parse_required_expr(&like.pattern, registry, "pattern")?),
+            Box::new(parse_required_expr(like.expr.as_ref(), registry, "expr")?),
+            Box::new(parse_required_expr(like.pattern.as_ref(), registry, "pattern")?),
             parse_escape_char(&like.escape_char)?,
         ))),
         ExprType::Ilike(like) => Ok(Expr::ILike(Like::new(
             like.negated,
-            Box::new(parse_required_expr(&like.expr, registry, "expr")?),
-            Box::new(parse_required_expr(&like.pattern, registry, "pattern")?),
+            Box::new(parse_required_expr(like.expr.as_ref(), registry, "expr")?),
+            Box::new(parse_required_expr(like.pattern.as_ref(), registry, "pattern")?),
             parse_escape_char(&like.escape_char)?,
         ))),
         ExprType::SimilarTo(like) => Ok(Expr::SimilarTo(Like::new(
             like.negated,
-            Box::new(parse_required_expr(&like.expr, registry, "expr")?),
-            Box::new(parse_required_expr(&like.pattern, registry, "pattern")?),
+            Box::new(parse_required_expr(like.expr.as_ref(), registry, "expr")?),
+            Box::new(parse_required_expr(like.pattern.as_ref(), registry, "pattern")?),
             parse_escape_char(&like.escape_char)?,
         ))),
         ExprType::Case(case) => {
@@ -1042,31 +1042,31 @@ pub fn parse_expr(
                 })
                 .collect::<Result<Vec<(Box<Expr>, Box<Expr>)>, Error>>()?;
             Ok(Expr::Case(Case::new(
-                parse_optional_expr(&case.expr, registry)?.map(Box::new),
+                parse_optional_expr(case.expr.as_ref(), registry)?.map(Box::new),
                 when_then_expr,
-                parse_optional_expr(&case.else_expr, registry)?.map(Box::new),
+                parse_optional_expr(case.else_expr.as_ref(), registry)?.map(Box::new),
             )))
         }
         ExprType::Cast(cast) => {
-            let expr = Box::new(parse_required_expr(&cast.expr, registry, "expr")?);
+            let expr = Box::new(parse_required_expr(cast.expr.as_ref(), registry, "expr")?);
             let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
             Ok(Expr::Cast(Cast::new(expr, data_type)))
         }
         ExprType::TryCast(cast) => {
-            let expr = Box::new(parse_required_expr(&cast.expr, registry, "expr")?);
+            let expr = Box::new(parse_required_expr(cast.expr.as_ref(), registry, "expr")?);
             let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
             Ok(Expr::TryCast(TryCast::new(expr, data_type)))
         }
         ExprType::Sort(sort) => Ok(Expr::Sort(Sort::new(
-            Box::new(parse_required_expr(&sort.expr, registry, "expr")?),
+            Box::new(parse_required_expr(sort.expr.as_ref(), registry, "expr")?),
             sort.asc,
             sort.nulls_first,
         ))),
         ExprType::Negative(negative) => Ok(Expr::Negative(Box::new(
-            parse_required_expr(&negative.expr, registry, "expr")?,
+            parse_required_expr(negative.expr.as_ref(), registry, "expr")?,
         ))),
         ExprType::InList(in_list) => Ok(Expr::InList {
-            expr: Box::new(parse_required_expr(&in_list.expr, registry, "expr")?),
+            expr: Box::new(parse_required_expr(in_list.expr.as_ref(), registry, "expr")?),
             list: in_list
                 .list
                 .iter()
@@ -1295,7 +1295,7 @@ pub fn parse_expr(
                     .iter()
                     .map(|expr| parse_expr(expr, registry))
                     .collect::<Result<Vec<_>, Error>>()?,
-                filter: parse_optional_expr(&pb.filter, registry)?.map(Box::new),
+                filter: parse_optional_expr(pb.filter.as_ref(), registry)?.map(Box::new),
             })
         }
 
@@ -1389,7 +1389,7 @@ pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
 }
 
 fn parse_optional_expr(
-    p: &Option<Box<protobuf::LogicalExprNode>>,
+    p: Option<&Box<protobuf::LogicalExprNode>>,
     registry: &dyn FunctionRegistry,
 ) -> Result<Option<Expr>, Error> {
     match p {
@@ -1399,7 +1399,7 @@ fn parse_optional_expr(
 }
 
 fn parse_required_expr(
-    p: &Option<Box<protobuf::LogicalExprNode>>,
+    p: Option<&Box<protobuf::LogicalExprNode>>,
     registry: &dyn FunctionRegistry,
     field: impl Into<String>,
 ) -> Result<Expr, Error> {
