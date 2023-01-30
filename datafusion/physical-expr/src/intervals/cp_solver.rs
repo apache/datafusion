@@ -125,13 +125,9 @@ fn calculate_node_interval(
     current_child_interval: &Interval,
     negated_op: Operator,
     other_child_interval: &Interval,
-) -> Result<Interval> {
-    Ok(if current_child_interval.is_singleton() {
-        current_child_interval.clone()
-    } else {
-        apply_operator(parent, &negated_op, other_child_interval)?
-            .intersect(current_child_interval)?
-    })
+) -> Result<Option<Interval>> {
+    let interv = apply_operator(parent, &negated_op, other_child_interval)?;
+    interv.intersect(current_child_interval)
 }
 
 impl ExprIntervalGraph {
@@ -324,13 +320,17 @@ impl ExprIntervalGraph {
                             second_child_interval,
                             negated_op,
                             first_child_interval,
-                        )?;
+                        )?
+                        // TODO: Fix this unwrap
+                        .unwrap();
                         let new_left_operator = calculate_node_interval(
                             &node_interval,
                             first_child_interval,
                             negated_op,
                             &new_right_operator,
-                        )?;
+                        )?
+                        // TODO: Fix this unwrap
+                        .unwrap();
                         (new_left_operator, new_right_operator)
                     };
                 let mutable_first_child = self.1.index_mut(first_child_node_index);
@@ -388,12 +388,17 @@ impl ExprIntervalGraphNode {
     pub fn expr_node_builder(input: Arc<ExprTreeNode>) -> ExprIntervalGraphNode {
         let binding = input.expr();
         let plan_any = binding.as_any();
+        let clone_expr = input.expr().clone();
         if let Some(literal) = plan_any.downcast_ref::<Literal>() {
             // Create interval
-            let interval = Interval::Singleton(literal.value().clone());
-            ExprIntervalGraphNode::new_with_interval(input.expr().clone(), interval)
+            let value = literal.value();
+            let interval = Interval {
+                lower: value.clone(),
+                upper: value.clone(),
+            };
+            ExprIntervalGraphNode::new_with_interval(clone_expr, interval)
         } else {
-            ExprIntervalGraphNode::new(input.expr().clone())
+            ExprIntervalGraphNode::new(clone_expr)
         }
     }
 }
@@ -411,7 +416,6 @@ mod tests {
     use itertools::Itertools;
 
     use crate::expressions::Column;
-    use crate::intervals::interval_aritmetics::Range;
     use datafusion_common::ScalarValue;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
@@ -428,33 +432,33 @@ mod tests {
         let col_stats = vec![
             (
                 exprs.0.clone(),
-                Interval::Range(Range {
+                Interval {
                     lower: ScalarValue::Int32(left_interval.0),
                     upper: ScalarValue::Int32(left_interval.1),
-                }),
+                },
             ),
             (
                 exprs.1.clone(),
-                Interval::Range(Range {
+                Interval {
                     lower: ScalarValue::Int32(right_interval.0),
                     upper: ScalarValue::Int32(right_interval.1),
-                }),
+                },
             ),
         ];
         let expected = vec![
             (
                 exprs.0.clone(),
-                Interval::Range(Range {
+                Interval {
                     lower: ScalarValue::Int32(left_waited.0),
                     upper: ScalarValue::Int32(left_waited.1),
-                }),
+                },
             ),
             (
                 exprs.1.clone(),
-                Interval::Range(Range {
+                Interval {
                     lower: ScalarValue::Int32(right_waited.0),
                     upper: ScalarValue::Int32(right_waited.1),
-                }),
+                },
             ),
         ];
         let mut graph = ExprIntervalGraph::try_new(

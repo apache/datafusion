@@ -41,7 +41,7 @@ use itertools::Itertools;
 
 use datafusion_common::utils::bisect;
 use datafusion_common::ScalarValue;
-use datafusion_physical_expr::intervals::interval_aritmetics::{Interval, Range};
+use datafusion_physical_expr::intervals::interval_aritmetics::Interval;
 use datafusion_physical_expr::intervals::ExprIntervalGraph;
 
 use crate::arrow::array::BooleanBufferBuilder;
@@ -610,15 +610,15 @@ fn column_stats_two_side(
         let value = ScalarValue::try_from_array(&array, 0)?;
         let infinite = ScalarValue::try_from(value.get_datatype())?;
         *interval = if sort_option.descending {
-            Interval::Range(Range {
+            Interval {
                 lower: infinite,
                 upper: value,
-            })
+            }
         } else {
-            Interval::Range(Range {
+            Interval {
                 lower: value,
                 upper: infinite,
-            })
+            }
         };
     }
     Ok(())
@@ -645,9 +645,9 @@ fn determine_prune_length(
                     .unwrap()
                     .into_array(buffer.num_rows());
                 let target = if sort_option.descending {
-                    interval.upper_value()
+                    interval.upper.clone()
                 } else {
-                    interval.lower_value()
+                    interval.lower.clone()
                 };
                 Some(bisect::<true>(&[batch_arr], &[target], &[*sort_option]))
             } else {

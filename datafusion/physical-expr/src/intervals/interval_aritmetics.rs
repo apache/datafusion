@@ -15,90 +15,41 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Interval arithmetics library
+//! Interval arithmetic library
 //!
 use std::borrow::Borrow;
-
-use arrow::datatypes::DataType;
-
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
-
-use datafusion_expr::Operator;
-
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
+use arrow::compute::{kernels, CastOptions};
+use arrow::datatypes::DataType;
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::Operator;
+
 use crate::aggregate::min_max::{max, min};
 
-use arrow::compute::{kernels, CastOptions};
-use std::ops::{Add, Sub};
-
-///
-/// At the moment, it only supports addition and subtraction,
-/// but we are constantly expanding its features to provide more capabilities in the future.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Interval {
-    Singleton(ScalarValue),
-    Range(Range),
-}
-
-impl Default for Interval {
-    fn default() -> Self {
-        Interval::Range(Range::default())
-    }
-}
+/// This type represents an interval, which is used to calculate reliable
+/// bounds for expressions. Currently, we only support addition and
+/// subtraction, but more capabilities will be added in the future.
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
-pub struct Range {
+pub struct Interval {
     pub lower: ScalarValue,
     pub upper: ScalarValue,
 }
 
-impl Range {
-    fn new(lower: ScalarValue, upper: ScalarValue) -> Range {
-        Range { lower, upper }
-    }
-}
-
-impl Default for Range {
+impl Default for Interval {
     fn default() -> Self {
-        Range {
+        Interval {
             lower: ScalarValue::Null,
             upper: ScalarValue::Null,
         }
     }
 }
 
-impl Add for Range {
-    type Output = Range;
-
-    fn add(self, other: Range) -> Range {
-        Range::new(
-            self.lower.add(&other.lower).unwrap(),
-            self.upper.add(&other.upper).unwrap(),
-        )
-    }
-}
-
-impl Sub for Range {
-    type Output = Range;
-
-    fn sub(self, other: Range) -> Range {
-        Range::new(
-            self.lower.add(&other.lower).unwrap(),
-            self.upper.sub(&other.lower).unwrap(),
-        )
-    }
-}
-
 impl Display for Interval {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Interval::Singleton(value) => write!(f, "Singleton [{}]", value),
-            Interval::Range(Range { lower, upper }) => {
-                write!(f, "Range [{}, {}]", lower, upper)
-            }
-        }
+        write!(f, "Interval [{}, {}]", self.lower, self.upper)
     }
 }
 
@@ -120,151 +71,55 @@ impl Interval {
         data_type: &DataType,
         cast_options: &CastOptions,
     ) -> Result<Interval> {
-        Ok(match self {
-            Interval::Range(Range { lower, upper }) => Interval::Range(Range {
-                lower: cast_scalar_value(lower, data_type, cast_options)?,
-                upper: cast_scalar_value(upper, data_type, cast_options)?,
-            }),
-            Interval::Singleton(value) => {
-                Interval::Singleton(cast_scalar_value(value, data_type, cast_options)?)
-            }
+        Ok(Interval {
+            lower: cast_scalar_value(&self.lower, data_type, cast_options)?,
+            upper: cast_scalar_value(&self.upper, data_type, cast_options)?,
         })
     }
+
     pub(crate) fn is_boolean(&self) -> bool {
         matches!(
             self,
-            &Interval::Range(Range {
+            Interval {
                 lower: ScalarValue::Boolean(_),
                 upper: ScalarValue::Boolean(_),
-            })
+            }
         )
-    }
-
-    pub fn lower_value(&self) -> ScalarValue {
-        match self {
-            Interval::Range(Range { lower, .. }) => lower.clone(),
-            Interval::Singleton(val) => val.clone(),
-        }
-    }
-
-    pub fn upper_value(&self) -> ScalarValue {
-        match self {
-            Interval::Range(Range { upper, .. }) => upper.clone(),
-            Interval::Singleton(val) => val.clone(),
-        }
     }
 
     pub(crate) fn get_datatype(&self) -> DataType {
-        match self {
-            Interval::Range(Range { lower, .. }) => lower.get_datatype(),
-            Interval::Singleton(val) => val.get_datatype(),
-        }
+        self.lower.get_datatype()
     }
-    pub(crate) fn is_singleton(&self) -> bool {
-        match self {
-            Interval::Range(_) => false,
-            Interval::Singleton(_) => true,
-        }
-    }
-    pub(crate) fn is_strict_false(&self) -> bool {
-        matches!(
-            self,
-            &Interval::Range(Range {
-                lower: ScalarValue::Boolean(Some(false)),
-                upper: ScalarValue::Boolean(Some(false)),
-            })
-        )
-    }
+
     pub(crate) fn gt(&self, other: &Interval) -> Interval {
-        let bools = match (self, other) {
-            (Interval::Singleton(val), Interval::Singleton(val2)) => {
-                let equal = val > val2;
-                (equal, equal)
-            }
-            (Interval::Singleton(val), Interval::Range(Range { lower, upper })) => {
-                if val < lower {
-                    (false, false)
-                } else if val > upper {
-                    (true, true)
-                } else {
-                    (false, true)
-                }
-            }
-            (Interval::Range(Range { lower, upper }), Interval::Singleton(val)) => {
-                if val > upper {
-                    (false, false)
-                } else if lower > val {
-                    (true, true)
-                } else {
-                    (false, true)
-                }
-            }
-            (
-                Interval::Range(Range { lower, upper }),
-                Interval::Range(Range {
-                    lower: lower2,
-                    upper: upper2,
-                }),
-            ) => {
-                if upper < lower2 {
-                    (false, false)
-                } else if lower > upper2 {
-                    (true, true)
-                } else {
-                    (false, true)
-                }
-            }
+        let flags = if self.upper < other.lower {
+            (false, false)
+        } else if self.lower > other.upper {
+            (true, true)
+        } else {
+            (false, true)
         };
-        Interval::Range(Range {
-            lower: ScalarValue::Boolean(Some(bools.0)),
-            upper: ScalarValue::Boolean(Some(bools.1)),
-        })
+        Interval {
+            lower: ScalarValue::Boolean(Some(flags.0)),
+            upper: ScalarValue::Boolean(Some(flags.1)),
+        }
     }
 
     pub(crate) fn and(&self, other: &Interval) -> Result<Interval> {
-        let bools = match (self, other) {
+        let flags = match (self, other) {
             (
-                Interval::Singleton(ScalarValue::Boolean(Some(val))),
-                Interval::Singleton(ScalarValue::Boolean(Some(val2))),
-            ) => {
-                let equal = *val && *val2;
-                (equal, equal)
-            }
-            (
-                Interval::Singleton(ScalarValue::Boolean(Some(val))),
-                Interval::Range(Range {
+                Interval {
                     lower: ScalarValue::Boolean(Some(lower)),
                     upper: ScalarValue::Boolean(Some(upper)),
-                }),
-            )
-            | (
-                Interval::Range(Range {
-                    lower: ScalarValue::Boolean(Some(lower)),
-                    upper: ScalarValue::Boolean(Some(upper)),
-                }),
-                Interval::Singleton(ScalarValue::Boolean(Some(val))),
-            ) => {
-                if (*val && *lower) && *upper {
-                    (true, true)
-                } else if !(*val && *lower) && *upper {
-                    (false, false)
-                } else {
-                    (false, true)
-                }
-            }
-            (
-                Interval::Range(Range {
-                    lower: ScalarValue::Boolean(Some(lower)),
-                    upper: ScalarValue::Boolean(Some(upper)),
-                }),
-                Interval::Range(Range {
+                },
+                Interval {
                     lower: ScalarValue::Boolean(Some(lower2)),
                     upper: ScalarValue::Boolean(Some(upper2)),
-                }),
+                },
             ) => {
-                if (*lower && *lower2) && (*upper && *upper2) {
+                if *lower && *lower2 {
                     (true, true)
-                } else if (*lower || *lower2) || (*upper || *upper2) {
+                } else if *upper || *upper2 {
                     (false, true)
                 } else {
                     (false, false)
@@ -272,164 +127,71 @@ impl Interval {
             }
             _ => {
                 return Err(DataFusionError::Internal(
-                    "Booleans cannot be None.".to_string(),
+                    "Incompatible types for logical conjunction".to_string(),
                 ))
             }
         };
-        Ok(Interval::Range(Range {
-            lower: ScalarValue::Boolean(Some(bools.0)),
-            upper: ScalarValue::Boolean(Some(bools.1)),
-        }))
+        Ok(Interval {
+            lower: ScalarValue::Boolean(Some(flags.0)),
+            upper: ScalarValue::Boolean(Some(flags.1)),
+        })
     }
 
     pub(crate) fn equal(&self, other: &Interval) -> Interval {
-        let bool = match (self, other) {
-            (Interval::Singleton(val), Interval::Singleton(val2)) => {
-                let equal = val == val2;
-                (equal, equal)
-            }
-            (Interval::Singleton(val), Interval::Range(Range { lower, upper })) => {
-                let equal = lower >= val && val <= upper;
-                (equal, equal)
-            }
-            (Interval::Range(Range { lower, upper }), Interval::Singleton(val)) => {
-                let equal = lower >= val && val <= upper;
-                (equal, equal)
-            }
-            (
-                Interval::Range(Range { lower, upper }),
-                Interval::Range(Range {
-                    lower: lower2,
-                    upper: upper2,
-                }),
-            ) => {
-                if lower == lower2 && upper == upper2 {
-                    (true, true)
-                } else if (lower < lower2 && upper < upper2)
-                    || (lower > lower2 && upper > upper2)
-                {
-                    (false, false)
-                } else {
-                    (false, true)
-                }
-            }
+        let flags = if (self.lower == self.upper)
+            && (other.lower == other.upper)
+            && (self.lower == other.lower)
+        {
+            (true, true)
+        } else if (self.lower > other.upper) || (self.upper < other.lower) {
+            (false, false)
+        } else {
+            (false, true)
         };
-        Interval::Range(Range {
-            lower: ScalarValue::Boolean(Some(bool.0)),
-            upper: ScalarValue::Boolean(Some(bool.1)),
-        })
+        Interval {
+            lower: ScalarValue::Boolean(Some(flags.0)),
+            upper: ScalarValue::Boolean(Some(flags.1)),
+        }
     }
 
     pub(crate) fn lt(&self, other: &Interval) -> Interval {
-        let bool = match (self, other) {
-            (Interval::Singleton(val), Interval::Singleton(val2)) => {
-                let result = val < val2;
-                (result, result)
-            }
-            (Interval::Singleton(ref val), Interval::Range(Range { lower, upper })) => {
-                if val > upper {
-                    (false, false)
-                } else if val < lower {
-                    (true, true)
-                } else {
-                    (true, false)
-                }
-            }
-            (
-                Interval::Range(Range {
-                    ref lower,
-                    ref upper,
-                }),
-                Interval::Singleton(val),
-            ) => {
-                if val < upper {
-                    (false, false)
-                } else if lower > val {
-                    (true, true)
-                } else {
-                    (true, false)
-                }
-            }
-            (
-                Interval::Range(Range {
-                    ref lower,
-                    ref upper,
-                }),
-                Interval::Range(Range {
-                    lower: lower2,
-                    upper: upper2,
-                }),
-            ) => {
-                if upper < lower2 {
-                    (true, true)
-                } else if lower >= upper2 {
-                    (false, false)
-                } else {
-                    (true, false)
-                }
-            }
-        };
-        Interval::Range(Range {
-            lower: ScalarValue::Boolean(Some(bool.0)),
-            upper: ScalarValue::Boolean(Some(bool.1)),
-        })
+        other.gt(self)
     }
 
-    pub(crate) fn intersect(&self, other: &Interval) -> Result<Interval> {
-        let result = match (self, other) {
-            (Interval::Singleton(val1), Interval::Singleton(val2)) => {
-                if val1 == val2 {
-                    Interval::Singleton(val1.clone())
-                } else {
-                    Interval::Range(Range {
-                        lower: ScalarValue::Boolean(Some(false)),
-                        upper: ScalarValue::Boolean(Some(false)),
-                    })
-                }
-            }
-            (Interval::Singleton(val), Interval::Range(range)) => {
-                if val >= &range.lower && val <= &range.upper {
-                    Interval::Singleton(val.clone())
-                } else {
-                    Interval::Range(Range {
-                        lower: ScalarValue::Boolean(Some(false)),
-                        upper: ScalarValue::Boolean(Some(false)),
-                    })
-                }
-            }
-            (Interval::Range(Range { lower, upper }), Interval::Singleton(val)) => {
-                if (lower.is_null() && upper.is_null()) || (val >= lower && val <= upper)
+    pub(crate) fn intersect(&self, other: &Interval) -> Result<Option<Interval>> {
+        Ok(match (self, other) {
+            (
+                Interval {
+                    lower: ScalarValue::Boolean(Some(low)),
+                    upper: ScalarValue::Boolean(Some(high)),
+                },
+                Interval {
+                    lower: ScalarValue::Boolean(Some(other_low)),
+                    upper: ScalarValue::Boolean(Some(other_high)),
+                },
+            ) => {
+                if low > other_high || high < other_low {
+                    // This None value signals an empty interval.
+                    None
+                } else if (low == high) && (other_low == other_high) && (low == other_low)
                 {
-                    Interval::Singleton(val.clone())
+                    Some(self.clone())
                 } else {
-                    Interval::Range(Range {
+                    Some(Interval {
                         lower: ScalarValue::Boolean(Some(false)),
-                        upper: ScalarValue::Boolean(Some(false)),
+                        upper: ScalarValue::Boolean(Some(true)),
                     })
                 }
             }
             (
-                Interval::Range(Range {
-                    lower: ScalarValue::Boolean(Some(val)),
-                    upper: ScalarValue::Boolean(Some(val2)),
-                }),
-                Interval::Range(Range {
-                    lower: ScalarValue::Boolean(Some(val3)),
-                    upper: ScalarValue::Boolean(Some(val4)),
-                }),
-            ) => Interval::Range(Range {
-                lower: ScalarValue::Boolean(Some(*val || *val3)),
-                upper: ScalarValue::Boolean(Some(*val2 || *val4)),
-            }),
-            (
-                Interval::Range(Range {
+                Interval {
                     lower: lower1,
                     upper: upper1,
-                }),
-                Interval::Range(Range {
+                },
+                Interval {
                     lower: lower2,
                     upper: upper2,
-                }),
+                },
             ) => {
                 let lower = if lower1.is_null() {
                     lower2.clone()
@@ -446,25 +208,19 @@ impl Interval {
                     min(upper1, upper2)?
                 };
                 if !upper.is_null() && lower > upper {
-                    Interval::Range(Range {
-                        lower: ScalarValue::Boolean(Some(false)),
-                        upper: ScalarValue::Boolean(Some(false)),
-                    })
+                    // This None value signals an empty interval.
+                    None
                 } else {
-                    Interval::Range(Range { lower, upper })
+                    Some(Interval { lower, upper })
                 }
             }
-        };
-        Ok(result)
+        })
     }
 
     pub(crate) fn arithmetic_negate(&self) -> Result<Interval> {
-        Ok(match self {
-            Interval::Singleton(value) => Interval::Singleton(value.arithmetic_negate()?),
-            Interval::Range(Range { lower, upper }) => Interval::Range(Range {
-                lower: upper.arithmetic_negate()?,
-                upper: lower.arithmetic_negate()?,
-            }),
+        Ok(Interval {
+            lower: self.upper.arithmetic_negate()?,
+            upper: self.lower.arithmetic_negate()?,
         })
     }
 
@@ -476,53 +232,17 @@ impl Interval {
     /// operation would return the interval [4, 6].
     pub fn add<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
-        let result = match (self, rhs) {
-            (Interval::Singleton(val), Interval::Singleton(val2)) => {
-                Interval::Singleton(val.add(val2).unwrap())
-            }
-            (Interval::Singleton(val), Interval::Range(Range { lower, upper }))
-            | (Interval::Range(Range { lower, upper }), Interval::Singleton(val)) => {
-                let new_lower = if lower.is_null() {
-                    lower.clone()
-                } else {
-                    lower.add(val).unwrap()
-                };
-                let new_upper = if upper.is_null() {
-                    upper.clone()
-                } else {
-                    upper.add(val).unwrap()
-                };
-                Interval::Range(Range {
-                    lower: new_lower,
-                    upper: new_upper,
-                })
-            }
-
-            (
-                Interval::Range(Range { lower, upper }),
-                Interval::Range(Range {
-                    lower: lower2,
-                    upper: upper2,
-                }),
-            ) => {
-                let new_lower = if lower.is_null() || lower2.is_null() {
-                    ScalarValue::try_from(lower.get_datatype()).unwrap()
-                } else {
-                    lower.add(lower2).unwrap()
-                };
-
-                let new_upper = if upper.is_null() || upper2.is_null() {
-                    ScalarValue::try_from(upper.get_datatype()).unwrap()
-                } else {
-                    upper.add(upper2).unwrap()
-                };
-                Interval::Range(Range {
-                    lower: new_lower,
-                    upper: new_upper,
-                })
-            }
-        };
-        Ok(result)
+        let lower = if self.lower.is_null() || rhs.lower.is_null() {
+            ScalarValue::try_from(self.lower.get_datatype())
+        } else {
+            self.lower.add(&rhs.lower)
+        }?;
+        let upper = if self.upper.is_null() || rhs.upper.is_null() {
+            ScalarValue::try_from(self.upper.get_datatype())
+        } else {
+            self.upper.add(&rhs.upper)
+        }?;
+        Ok(Interval { lower, upper })
     }
 
     /// The interval subtraction operation is similar to the addition operation,
@@ -531,68 +251,17 @@ impl Interval {
     /// would return the interval [-3, -1].
     pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
-        let result = match (self, rhs) {
-            (Interval::Singleton(val), Interval::Singleton(val2)) => {
-                Interval::Singleton(val.sub(val2).unwrap())
-            }
-            (Interval::Singleton(val), Interval::Range(Range { lower, upper })) => {
-                let new_lower = if lower.is_null() {
-                    lower.clone()
-                } else {
-                    lower.add(val)?.arithmetic_negate()?
-                };
-                let new_upper = if upper.is_null() {
-                    upper.clone()
-                } else {
-                    upper.add(val)?.arithmetic_negate()?
-                };
-                Interval::Range(Range {
-                    lower: new_lower,
-                    upper: new_upper,
-                })
-            }
-            (Interval::Range(Range { lower, upper }), Interval::Singleton(val)) => {
-                let new_lower = if lower.is_null() {
-                    lower.clone()
-                } else {
-                    lower.sub(val)?
-                };
-                let new_upper = if upper.is_null() {
-                    upper.clone()
-                } else {
-                    upper.sub(val)?
-                };
-                Interval::Range(Range {
-                    lower: new_lower,
-                    upper: new_upper,
-                })
-            }
-            (
-                Interval::Range(Range { lower, upper }),
-                Interval::Range(Range {
-                    lower: lower2,
-                    upper: upper2,
-                }),
-            ) => {
-                let new_lower = if lower.is_null() || upper2.is_null() {
-                    ScalarValue::try_from(&lower.get_datatype())?
-                } else {
-                    lower.sub(upper2)?
-                };
-
-                let new_upper = if upper.is_null() || lower2.is_null() {
-                    ScalarValue::try_from(&upper.get_datatype())?
-                } else {
-                    upper.sub(lower2)?
-                };
-
-                Interval::Range(Range {
-                    lower: new_lower,
-                    upper: new_upper,
-                })
-            }
-        };
-        Ok(result)
+        let lower = if self.lower.is_null() || rhs.upper.is_null() {
+            ScalarValue::try_from(self.lower.get_datatype())
+        } else {
+            self.lower.sub(&rhs.upper)
+        }?;
+        let upper = if self.upper.is_null() || rhs.lower.is_null() {
+            ScalarValue::try_from(self.upper.get_datatype())
+        } else {
+            self.upper.sub(&rhs.lower)
+        }?;
+        Ok(Interval { lower, upper })
     }
 }
 
@@ -604,37 +273,35 @@ pub fn apply_operator(lhs: &Interval, op: &Operator, rhs: &Interval) -> Result<I
         Operator::And => lhs.and(rhs),
         Operator::Plus => lhs.add(rhs),
         Operator::Minus => lhs.sub(rhs),
-        _ => Ok(Interval::Singleton(ScalarValue::Null)),
+        _ => Ok(Interval {
+            lower: ScalarValue::Null,
+            upper: ScalarValue::Null,
+        }),
     }
 }
 
 pub fn target_parent_interval(datatype: &DataType, op: &Operator) -> Result<Interval> {
-    let inf = ScalarValue::try_from(datatype)?;
+    let unbounded = ScalarValue::try_from(datatype)?;
     let zero = ScalarValue::try_from_string("0".to_string(), datatype)?;
-    let parent_interval = match *op {
+    Ok(match *op {
+        // TODO: Tidy these comments, write a text that explains what this function does.
         // [x1, y1] > [x2, y2] ise
         // [x1, y1] + [-y2, -x2] = [0, inf]
         // [x1_new, x2_new] = ([0, inf] - [-y2, -x2]) intersect [x1, y1]
         // [-y2_new, -x2_new] = ([0, inf] - [x1_new, x2_new]) intersect [-y2, -x2]
-        Operator::Gt => {
-            // [0, inf]
-            Interval::Range(Range {
-                lower: zero,
-                upper: inf,
-            })
-        }
+        Operator::Gt => Interval {
+            lower: zero,
+            upper: unbounded,
+        },
+        // TODO: Tidy these comments.
         // [x1, y1] < [x2, y2] ise
         // [x1, y1] + [-y2, -x2] = [-inf, 0]
-        Operator::Lt => {
-            // [-inf, 0]
-            Interval::Range(Range {
-                lower: inf,
-                upper: zero,
-            })
-        }
+        Operator::Lt => Interval {
+            lower: unbounded,
+            upper: zero,
+        },
         _ => unreachable!(),
-    };
-    Ok(parent_interval)
+    })
 }
 
 pub fn propagate_logical_operators(
@@ -644,27 +311,32 @@ pub fn propagate_logical_operators(
 ) -> Result<(Interval, Interval)> {
     if left_interval.is_boolean() || right_interval.is_boolean() {
         return Ok((
-            Interval::Range(Range {
+            Interval {
                 lower: ScalarValue::Boolean(Some(true)),
                 upper: ScalarValue::Boolean(Some(true)),
-            }),
-            Interval::Range(Range {
+            },
+            Interval {
                 lower: ScalarValue::Boolean(Some(true)),
                 upper: ScalarValue::Boolean(Some(true)),
-            }),
+            },
         ));
     }
-
-    let intersection = left_interval.clone().intersect(right_interval)?;
-    if intersection.is_strict_false() {
+    let intersection = left_interval.intersect(right_interval)?;
+    // TODO: Is this right with the new "intersect" semantics?
+    if intersection.is_none() {
         return Ok((left_interval.clone(), right_interval.clone()));
     }
     let parent_interval = target_parent_interval(&left_interval.get_datatype(), op)?;
     let negate_right = right_interval.arithmetic_negate()?;
+    // TODO: Fix the following unwraps.
     let new_left = parent_interval
         .sub(&negate_right)?
-        .intersect(left_interval)?;
-    let new_right = parent_interval.sub(&new_left)?.intersect(&negate_right)?;
+        .intersect(left_interval)?
+        .unwrap();
+    let new_right = parent_interval
+        .sub(&new_left)?
+        .intersect(&negate_right)?
+        .unwrap();
     let range = (new_left, new_right.arithmetic_negate()?);
     Ok(range)
 }
