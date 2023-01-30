@@ -244,7 +244,7 @@ impl FileOpener for CsvOpener {
                 }
                 GetResult::Stream(s) => {
                     let mut decoder = config.builder().build_decoder();
-                    let s = s.map_err(Into::<DataFusionError>::into);
+                    let s = s.map_err(DataFusionError::from);
                     let mut input = file_compression_type.convert_stream(s)?.fuse();
                     let mut buffered = Bytes::new();
 

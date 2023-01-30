@@ -185,7 +185,7 @@ impl FileOpener for JsonOpener {
                         .with_batch_size(batch_size)
                         .build_decoder()?;
 
-                    let s = s.map_err(Into::into);
+                    let s = s.map_err(DataFusionError::from);
                     let mut input = file_compression_type.convert_stream(s)?.fuse();
                     let mut buffered = Bytes::new();
 
