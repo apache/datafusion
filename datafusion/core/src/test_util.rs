@@ -24,6 +24,7 @@ use std::{env, error::Error, path::PathBuf, sync::Arc};
 use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::{empty::EmptyTable, provider_as_source, TableProvider};
 use crate::execution::context::SessionState;
+use crate::execution::options::ReadOptions;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{CsvReadOptions, SessionContext};
@@ -414,7 +415,7 @@ pub async fn test_create_unbounded_sorted_file(
         .mark_infinite(true);
     // Get listing options
     let options_sort = fifo_options
-        .to_listing_options(ctx.copied_config().target_partitions())
+        .to_listing_options(&ctx.copied_config())
         .with_file_sort_order(Some(file_sort_order));
     // Register table
     ctx.register_listing_table(

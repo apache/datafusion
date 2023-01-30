@@ -21,9 +21,9 @@ use crate::expressions::UnKnownColumn;
 use crate::expressions::{BinaryExpr, Literal};
 use crate::rewrite::TreeNodeRewritable;
 use crate::PhysicalSortExpr;
+use crate::{EquivalenceProperties, PhysicalExpr};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Result, ScalarValue};
-use crate::{EquivalenceProperties, PhysicalExpr};
 use datafusion_expr::Operator;
 
 use petgraph::graph::NodeIndex;
@@ -237,6 +237,9 @@ impl ExprTreeNode {
                     })
                 })
                 .collect()
+        }
+    }
+}
 /// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
 pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
     provided: Option<&[PhysicalSortExpr]>,

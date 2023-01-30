@@ -280,7 +280,7 @@ mod unix_test {
                         while *waiting_thread.lock().unwrap() && TEST_BATCH_SIZE < cnt {
                             thread::sleep(Duration::from_millis(200));
                         }
-                        let line = format!("{},{}\n", a1, a2).to_owned();
+                        let line = format!("{a1},{a2}\n").to_owned();
                         write_to_fifo(&file, &line, execution_start, broken_pipe_timeout)
                             .unwrap();
                     }
