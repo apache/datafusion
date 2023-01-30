@@ -1251,6 +1251,18 @@ impl SessionConfig {
         self
     }
 
+    /// Sets minimum file range size for repartitioning scans
+    pub fn with_repartition_file_min_size(mut self, size: usize) -> Self {
+        self.options.optimizer.repartition_file_min_size = size;
+        self
+    }
+
+    /// Enables or disables the use of repartitioning for file scans
+    pub fn with_repartition_file_scans(mut self, enabled: bool) -> Self {
+        self.options.optimizer.repartition_file_scans = enabled;
+        self
+    }
+
     /// Enables or disables the use of repartitioning for window functions to improve parallelism
     pub fn with_repartition_windows(mut self, enabled: bool) -> Self {
         self.options.optimizer.repartition_windows = enabled;
