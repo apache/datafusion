@@ -1012,18 +1012,10 @@ pub fn parse_expr(
             parse_required_expr(msg.expr.clone(), registry, "expr")?,
         ))),
         ExprType::Between(between) => Ok(Expr::Between(Between::new(
-            Box::new(parse_required_expr(
-                between.expr.clone(),
-                registry,
-                "expr",
-            )?),
+            Box::new(parse_required_expr(between.expr.clone(), registry, "expr")?),
             between.negated,
             Box::new(parse_required_expr(between.low.clone(), registry, "expr")?),
-            Box::new(parse_required_expr(
-                between.high.clone(),
-                registry,
-                "expr",
-            )?),
+            Box::new(parse_required_expr(between.high.clone(), registry, "expr")?),
         ))),
         ExprType::Like(like) => Ok(Expr::Like(Like::new(
             like.negated,
@@ -1100,11 +1092,7 @@ pub fn parse_expr(
             parse_required_expr(negative.expr.clone(), registry, "expr")?,
         ))),
         ExprType::InList(in_list) => Ok(Expr::InList {
-            expr: Box::new(parse_required_expr(
-                in_list.expr.clone(),
-                registry,
-                "expr",
-            )?),
+            expr: Box::new(parse_required_expr(in_list.expr.clone(), registry, "expr")?),
             list: in_list
                 .list
                 .iter()
