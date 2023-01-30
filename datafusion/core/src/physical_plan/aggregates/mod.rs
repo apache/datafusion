@@ -722,7 +722,6 @@ mod tests {
     use crate::{assert_batches_sorted_eq, physical_plan::common};
     use arrow::array::{Float64Array, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use arrow::error::Result as ArrowResult;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_physical_expr::expressions::{lit, ApproxDistinct, Count, Median};
@@ -1038,7 +1037,7 @@ mod tests {
     }
 
     impl Stream for TestYieldingStream {
-        type Item = ArrowResult<RecordBatch>;
+        type Item = Result<RecordBatch>;
 
         fn poll_next(
             mut self: std::pin::Pin<&mut Self>,
