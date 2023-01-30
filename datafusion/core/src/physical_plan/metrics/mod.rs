@@ -162,7 +162,7 @@ impl Metric {
 
     /// return a reference to the partition
     pub fn partition(&self) -> Option<usize> {
-        self.partition.clone()
+        self.partition
     }
 }
 
