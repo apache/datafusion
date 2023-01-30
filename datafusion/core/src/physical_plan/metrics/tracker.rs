@@ -23,8 +23,9 @@ use crate::physical_plan::metrics::{
 use std::sync::Arc;
 use std::task::Poll;
 
+use crate::error::Result;
 use crate::execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
-use arrow::{error::ArrowError, record_batch::RecordBatch};
+use arrow::record_batch::RecordBatch;
 
 /// Wraps a [`BaselineMetrics`] and records memory usage on a [`MemoryReservation`]
 #[derive(Debug)]
@@ -96,8 +97,8 @@ impl MemTrackingMetrics {
     /// returning the same poll result
     pub fn record_poll(
         &self,
-        poll: Poll<Option<Result<RecordBatch, ArrowError>>>,
-    ) -> Poll<Option<Result<RecordBatch, ArrowError>>> {
+        poll: Poll<Option<Result<RecordBatch>>>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
         self.metrics.record_poll(poll)
     }
 }

@@ -104,7 +104,6 @@ pub mod union;
 pub mod wildcard;
 pub mod window;
 
-pub mod decimal;
 pub mod explain;
 pub mod idenfifers;
 pub mod information_schema;
@@ -1193,30 +1192,6 @@ fn result_vec(results: &[RecordBatch]) -> Vec<Vec<String>> {
         }
     }
     result
-}
-
-async fn register_decimal_csv_table_by_sql(ctx: &SessionContext) {
-    let df = ctx
-        .sql(
-            "CREATE EXTERNAL TABLE decimal_simple (
-            c1  DECIMAL(10,6) NOT NULL,
-            c2  DOUBLE NOT NULL,
-            c3  BIGINT NOT NULL,
-            c4  BOOLEAN NOT NULL,
-            c5  DECIMAL(12,7) NOT NULL
-            )
-            STORED AS CSV
-            WITH HEADER ROW
-            LOCATION 'tests/data/decimal_data.csv'",
-        )
-        .await
-        .expect("Creating dataframe for CREATE EXTERNAL TABLE with decimal data type");
-
-    let results = df.collect().await.expect("Executing CREATE EXTERNAL TABLE");
-    assert!(
-        results.is_empty(),
-        "Expected no rows from executing CREATE EXTERNAL TABLE"
-    );
 }
 
 async fn register_alltypes_parquet(ctx: &SessionContext) {

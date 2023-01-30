@@ -165,11 +165,58 @@ fn plan_insert() {
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
     let plan = r#"
 Dml: op=[Insert] table=[person]
-  Projection: CAST(column1 AS id AS UInt32), column2 AS first_name, column3 AS last_name
+  Projection: CAST(column1 AS UInt32) AS id, column2 AS first_name, column3 AS last_name
     Values: (Int64(1), Utf8("Alan"), Utf8("Turing"))
     "#
     .trim();
     quick_test(sql, plan);
+}
+
+#[test]
+fn plan_insert_no_target_columns() {
+    let sql = "INSERT INTO test_decimal VALUES (1, 2), (3, 4)";
+    let plan = r#"
+Dml: op=[Insert] table=[test_decimal]
+  Projection: CAST(column1 AS Int32) AS id, CAST(column2 AS Decimal128(10, 2)) AS price
+    Values: (Int64(1), Int64(2)), (Int64(3), Int64(4))
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[rstest]
+#[case::duplicate_columns(
+    "INSERT INTO test_decimal (id, price, price) VALUES (1, 2, 3), (4, 5, 6)",
+    "Schema error: Schema contains duplicate unqualified field name 'price'"
+)]
+#[case::non_existing_column(
+    "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
+    "Schema error: No field named 'nonexistent'. Valid fields are 'id', 'price'."
+)]
+#[case::type_mismatch(
+    "INSERT INTO test_decimal SELECT '2022-01-01', to_timestamp('2022-01-01T12:00:00')",
+    "Error during planning: Cannot automatically convert Timestamp(Nanosecond, None) to Decimal128(10, 2)"
+)]
+#[case::target_column_count_mismatch(
+    "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2)",
+    "Error during planning: Column count doesn't match insert query!"
+)]
+#[case::source_column_count_mismatch(
+    "INSERT INTO person VALUES ($1, $2)",
+    "Error during planning: Column count doesn't match insert query!"
+)]
+#[case::extra_placeholder(
+    "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2, $3, $4)",
+    "Error during planning: Placeholder $4 refers to a non existent column"
+)]
+#[case::placeholder_type_unresolved(
+    "INSERT INTO person (id, first_name, last_name) VALUES ($2, $4, $6)",
+    "Error during planning: Placeholder type could not be resolved"
+)]
+#[test]
+fn test_insert_schema_errors(#[case] sql: &str, #[case] error: &str) {
+    let err = logical_plan(sql).unwrap_err();
+    assert_eq!(err.to_string(), error)
 }
 
 #[test]
@@ -3462,36 +3509,6 @@ Dml: op=[Insert] table=[person]
     let plan = plan.replace_params_with_values(&param_values).unwrap();
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
-}
-
-#[test]
-#[should_panic(expected = "Placeholder $4 refers to a non existent column")]
-fn test_prepare_statement_insert_infer_gt() {
-    let sql = "insert into person (id, first_name, last_name) values ($1, $2, $3, $4)";
-
-    let expected_plan = r#""#.trim();
-    let expected_dt = "[Int32]";
-    let _ = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
-}
-
-#[test]
-#[should_panic(expected = "value: Plan(\"Column count doesn't match insert query!\")")]
-fn test_prepare_statement_insert_infer_lt() {
-    let sql = "insert into person (id, first_name, last_name) values ($1, $2)";
-
-    let expected_plan = r#""#.trim();
-    let expected_dt = "[Int32]";
-    let _ = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
-}
-
-#[test]
-#[should_panic(expected = "value: Plan(\"Placeholder type could not be resolved\")")]
-fn test_prepare_statement_insert_infer_gap() {
-    let sql = "insert into person (id, first_name, last_name) values ($2, $4, $6)";
-
-    let expected_plan = r#""#.trim();
-    let expected_dt = "[Int32]";
-    let _ = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 }
 
 #[test]

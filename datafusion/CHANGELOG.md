@@ -19,9 +19,37 @@
 
 # Changelog
 
-## [17.0.0](https://github.com/apache/arrow-datafusion/tree/17.0.0) (2023-01-26)
+## [17.0.0](https://github.com/apache/arrow-datafusion/tree/17.0.0) (2023-01-27)
 
-[Full Changelog](https://github.com/apache/arrow-datafusion/compare/16.1.0...17.0.0)
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/17.0.0-rc1...17.0.0)
+
+**Breaking changes:**
+
+- Implemented a ReadOptions trait for cleaner code. [\#5025](https://github.com/apache/arrow-datafusion/pull/5025) ([saikrishna1-bidgely](https://github.com/saikrishna1-bidgely))
+
+**Implemented enhancements:**
+
+- Add null-equals-null JOIN support in Substrait producer/consumer [\#5084](https://github.com/apache/arrow-datafusion/issues/5084)
+- Cleaner code for Read Options in reader methdos. [\#5024](https://github.com/apache/arrow-datafusion/issues/5024)
+- Substrait donation follow-on work [\#4897](https://github.com/apache/arrow-datafusion/issues/4897)
+- Add `len` method to `DataFrame` [\#1926](https://github.com/apache/arrow-datafusion/issues/1926)
+
+**Fixed bugs:**
+
+- Clippy failures in master branch and in PRs \(due to new nightly Rust\) [\#5080](https://github.com/apache/arrow-datafusion/issues/5080)
+
+**Merged pull requests:**
+
+- Add null-equals-null join support [\#5085](https://github.com/apache/arrow-datafusion/pull/5085) ([nseekhao](https://github.com/nseekhao))
+- Optimize returned plan in roundtrip\_fill\_na function [\#5083](https://github.com/apache/arrow-datafusion/pull/5083) ([nseekhao](https://github.com/nseekhao))
+- fix clippy failures [\#5081](https://github.com/apache/arrow-datafusion/pull/5081) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([andygrove](https://github.com/andygrove))
+- Add NULL literal support for decimal and integers [\#5077](https://github.com/apache/arrow-datafusion/pull/5077) ([nseekhao](https://github.com/nseekhao))
+- DataFrame count method [\#5071](https://github.com/apache/arrow-datafusion/pull/5071) ([Jefffrey](https://github.com/Jefffrey))
+- \[sqllogictests\] Port orderby.rs to sqllogictests [\#5062](https://github.com/apache/arrow-datafusion/pull/5062) ([alamb](https://github.com/alamb))
+
+## [17.0.0-rc1](https://github.com/apache/arrow-datafusion/tree/17.0.0-rc1) (2023-01-26)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/16.1.0...17.0.0-rc1)
 
 **Breaking changes:**
 
@@ -53,8 +81,10 @@
 
 **Fixed bugs:**
 
+- UPDATE statment for non existent column doesn't error out [\#5068](https://github.com/apache/arrow-datafusion/issues/5068)
 - Limit doesn't drop on first batch when limit size == fetch size. [\#5064](https://github.com/apache/arrow-datafusion/issues/5064)
 - Performance regressions since DataFusion 15.x [\#5060](https://github.com/apache/arrow-datafusion/issues/5060)
+- Quoted schema and table names result in double-quoted names in logical plan. [\#5058](https://github.com/apache/arrow-datafusion/issues/5058)
 - Homebrew release script has the amount of arguments being incorrect [\#5043](https://github.com/apache/arrow-datafusion/issues/5043)
 - CI Failing with Out of Disk [\#5040](https://github.com/apache/arrow-datafusion/issues/5040)
 - Doc links to LogicalPlan in the core package need updating. [\#5036](https://github.com/apache/arrow-datafusion/issues/5036)
@@ -78,7 +108,12 @@
 
 **Merged pull requests:**
 
+- Add `release-crates.sh` script [\#5070](https://github.com/apache/arrow-datafusion/pull/5070) ([iajoiner](https://github.com/iajoiner))
+- Validate assignment target column existence for UPDATE statements [\#5069](https://github.com/apache/arrow-datafusion/pull/5069) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([gruuya](https://github.com/gruuya))
 - Fix limit when size of batch to poll == skip/fetch value [\#5066](https://github.com/apache/arrow-datafusion/pull/5066) ([Dandandan](https://github.com/Dandandan))
+- Fix CREATE SCHEMA schema name double quoting issue. [\#5059](https://github.com/apache/arrow-datafusion/pull/5059) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([neumark](https://github.com/neumark))
+- Minor: Move some aggregate error tests to sqllogictests [\#5055](https://github.com/apache/arrow-datafusion/pull/5055) ([alamb](https://github.com/alamb))
+- Add decimal support to substrait serde [\#5054](https://github.com/apache/arrow-datafusion/pull/5054) ([andygrove](https://github.com/andygrove))
 - Retain schema order in projection [\#5053](https://github.com/apache/arrow-datafusion/pull/5053) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([avantgardnerio](https://github.com/avantgardnerio))
 - Improve join type support in substrait [\#5051](https://github.com/apache/arrow-datafusion/pull/5051) ([andygrove](https://github.com/andygrove))
 - \[Substrait\] ReadRel. Get column names from TableScan source [\#5050](https://github.com/apache/arrow-datafusion/pull/5050) ([andygrove](https://github.com/andygrove))
