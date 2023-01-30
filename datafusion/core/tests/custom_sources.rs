@@ -18,7 +18,6 @@
 use arrow::array::{Int32Array, Int64Array};
 use arrow::compute::kernels::aggregate;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
-use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::from_slice::FromSlice;
@@ -85,7 +84,7 @@ impl RecordBatchStream for TestCustomRecordBatchStream {
 }
 
 impl Stream for TestCustomRecordBatchStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         self: Pin<&mut Self>,
@@ -93,7 +92,7 @@ impl Stream for TestCustomRecordBatchStream {
     ) -> Poll<Option<Self::Item>> {
         if self.nb_batch > 0 {
             self.get_mut().nb_batch -= 1;
-            Poll::Ready(Some(TEST_CUSTOM_RECORD_BATCH!()))
+            Poll::Ready(Some(TEST_CUSTOM_RECORD_BATCH!().map_err(Into::into)))
         } else {
             Poll::Ready(None)
         }

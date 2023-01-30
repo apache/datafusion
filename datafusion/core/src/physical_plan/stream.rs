@@ -17,9 +17,8 @@
 
 //! Stream wrappers for physical operators
 
-use arrow::{
-    datatypes::SchemaRef, error::Result as ArrowResult, record_batch::RecordBatch,
-};
+use crate::error::Result;
+use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use futures::{Stream, StreamExt};
 use pin_project_lite::pin_project;
 use tokio::task::JoinHandle;
@@ -34,7 +33,7 @@ use super::{RecordBatchStream, SendableRecordBatchStream};
 pub struct RecordBatchReceiverStream {
     schema: SchemaRef,
 
-    inner: ReceiverStream<ArrowResult<RecordBatch>>,
+    inner: ReceiverStream<Result<RecordBatch>>,
 
     #[allow(dead_code)]
     drop_helper: AbortOnDropSingle<()>,
@@ -45,7 +44,7 @@ impl RecordBatchReceiverStream {
     /// batches of the specified schema from `inner`
     pub fn create(
         schema: &SchemaRef,
-        rx: tokio::sync::mpsc::Receiver<ArrowResult<RecordBatch>>,
+        rx: tokio::sync::mpsc::Receiver<Result<RecordBatch>>,
         join_handle: JoinHandle<()>,
     ) -> SendableRecordBatchStream {
         let schema = schema.clone();
@@ -59,7 +58,7 @@ impl RecordBatchReceiverStream {
 }
 
 impl Stream for RecordBatchReceiverStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -103,9 +102,9 @@ impl<S> std::fmt::Debug for RecordBatchStreamAdapter<S> {
 
 impl<S> Stream for RecordBatchStreamAdapter<S>
 where
-    S: Stream<Item = ArrowResult<RecordBatch>>,
+    S: Stream<Item = Result<RecordBatch>>,
 {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         self: std::pin::Pin<&mut Self>,
@@ -121,7 +120,7 @@ where
 
 impl<S> RecordBatchStream for RecordBatchStreamAdapter<S>
 where
-    S: Stream<Item = ArrowResult<RecordBatch>>,
+    S: Stream<Item = Result<RecordBatch>>,
 {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()

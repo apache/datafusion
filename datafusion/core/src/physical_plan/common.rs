@@ -25,7 +25,6 @@ use crate::physical_plan::{displayable, ColumnStatistics, ExecutionPlan, Statist
 use arrow::compute::concat;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
-use arrow::error::Result as ArrowResult;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
 use datafusion_physical_expr::utils::ordering_satisfy;
@@ -68,7 +67,7 @@ impl SizedRecordBatchStream {
 }
 
 impl Stream for SizedRecordBatchStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -92,10 +91,7 @@ impl RecordBatchStream for SizedRecordBatchStream {
 
 /// Create a vector of record batches from a stream
 pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatch>> {
-    stream
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(DataFusionError::from)
+    stream.try_collect::<Vec<_>>().await
 }
 
 /// Merge two record batch references into a single record batch.
@@ -104,15 +100,16 @@ pub fn merge_batches(
     first: &RecordBatch,
     second: &RecordBatch,
     schema: SchemaRef,
-) -> ArrowResult<RecordBatch> {
+) -> Result<RecordBatch> {
     let columns = (0..schema.fields.len())
         .map(|index| {
             let first_column = first.column(index).as_ref();
             let second_column = second.column(index).as_ref();
             concat(&[first_column, second_column])
         })
-        .collect::<ArrowResult<Vec<_>>>()?;
-    RecordBatch::try_new(schema, columns)
+        .collect::<Result<Vec<_>, ArrowError>>()
+        .map_err(Into::<DataFusionError>::into)?;
+    RecordBatch::try_new(schema, columns).map_err(Into::into)
 }
 
 /// Merge a slice of record batch references into a single record batch, or
@@ -121,7 +118,7 @@ pub fn merge_batches(
 pub fn merge_multiple_batches(
     batches: &[&RecordBatch],
     schema: SchemaRef,
-) -> ArrowResult<Option<RecordBatch>> {
+) -> Result<Option<RecordBatch>> {
     Ok(if batches.is_empty() {
         None
     } else {
@@ -134,7 +131,8 @@ pub fn merge_multiple_batches(
                         .collect::<Vec<_>>(),
                 )
             })
-            .collect::<ArrowResult<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, ArrowError>>()
+            .map_err(Into::<DataFusionError>::into)?;
         Some(RecordBatch::try_new(schema, columns)?)
     })
 }
@@ -190,7 +188,7 @@ fn build_file_list_recurse(
 /// Spawns a task to the tokio threadpool and writes its outputs to the provided mpsc sender
 pub(crate) fn spawn_execution(
     input: Arc<dyn ExecutionPlan>,
-    output: mpsc::Sender<ArrowResult<RecordBatch>>,
+    output: mpsc::Sender<Result<RecordBatch>>,
     partition: usize,
     context: Arc<TaskContext>,
 ) -> JoinHandle<()> {
@@ -199,8 +197,7 @@ pub(crate) fn spawn_execution(
             Err(e) => {
                 // If send fails, plan being torn down,
                 // there is no place to send the error.
-                let arrow_error = ArrowError::ExternalError(Box::new(e));
-                output.send(Err(arrow_error)).await.ok();
+                output.send(Err(e)).await.ok();
                 debug!(
                     "Stopping execution: error executing input: {}",
                     displayable(input.as_ref()).one_line()
@@ -524,7 +521,7 @@ impl IPCWriter {
 
     /// Finish the writer
     pub fn finish(&mut self) -> Result<()> {
-        self.writer.finish().map_err(DataFusionError::ArrowError)
+        self.writer.finish().map_err(Into::into)
     }
 
     /// Path write to
