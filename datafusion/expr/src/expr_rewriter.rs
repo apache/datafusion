@@ -432,7 +432,7 @@ where
 /// Recursively rewrite an [`Expr`] via a function.
 ///
 /// Rewrites the expression bottom up by recursively calling `f(expr)`
-/// on `expr`'s children and then on expr. See [`ExprRewriter`]
+/// on `expr`'s children and then on `expr`. See [`ExprRewriter`]
 /// for more details and more options to control the walk.
 ///
 /// # Example:
