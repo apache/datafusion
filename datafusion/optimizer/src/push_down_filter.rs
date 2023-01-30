@@ -17,9 +17,10 @@
 use crate::utils::{conjunction, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result};
+use datafusion_expr::expr_rewriter::rewrite_expr;
 use datafusion_expr::{
     and,
-    expr_rewriter::{replace_col, ExprRewritable, ExprRewriter},
+    expr_rewriter::replace_col,
     logical_plan::{CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union},
     or,
     utils::from_plan,
@@ -763,24 +764,16 @@ pub fn replace_cols_by_name(
     e: Expr,
     replace_map: &HashMap<String, Expr>,
 ) -> Result<Expr> {
-    struct ColumnReplacer<'a> {
-        replace_map: &'a HashMap<String, Expr>,
-    }
-
-    impl<'a> ExprRewriter for ColumnReplacer<'a> {
-        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-            if let Expr::Column(c) = &expr {
-                match self.replace_map.get(&c.flat_name()) {
-                    Some(new_c) => Ok(new_c.clone()),
-                    None => Ok(expr),
-                }
-            } else {
-                Ok(expr)
+    rewrite_expr(e, |expr| {
+        if let Expr::Column(c) = &expr {
+            match replace_map.get(&c.flat_name()) {
+                Some(new_c) => Ok(new_c.clone()),
+                None => Ok(expr),
             }
+        } else {
+            Ok(expr)
         }
-    }
-
-    e.rewrite(&mut ColumnReplacer { replace_map })
+    })
 }
 
 #[cfg(test)]
