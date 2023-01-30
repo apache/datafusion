@@ -414,6 +414,8 @@ pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
     exprs.into_iter().map(unnormalize_col).collect()
 }
 
+/// Implementation of [`ExprRewriter`] that calls a function, for use
+/// with [`rewrite_expr`]
 struct RewriterAdapter<F> {
     f: F,
 }
