@@ -68,7 +68,9 @@ select * from foo where ts != '2000-02-01T00:00:00';
 statement ok
 drop table foo;
 
+###
 ## test date_bin function
+###
 query T
 SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:00:00Z') AS res
 ----
