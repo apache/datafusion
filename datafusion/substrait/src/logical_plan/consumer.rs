@@ -16,12 +16,13 @@
 // under the License.
 
 use async_recursion::async_recursion;
+use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DFField, DFSchema, DFSchemaRef};
-use datafusion::logical_expr::expr;
 use datafusion::logical_expr::{
     aggregate_function, BinaryExpr, Case, Expr, LogicalPlan, Operator,
 };
 use datafusion::logical_expr::{build_join_schema, LogicalPlanBuilder};
+use datafusion::logical_expr::{expr, Cast};
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
 use datafusion::{
@@ -721,8 +722,47 @@ pub async fn from_substrait_rex(
                 ))),
             }
         }
+        Some(RexType::Cast(cast)) => match cast.as_ref().r#type.as_ref() {
+            Some(output_type) => Ok(Arc::new(Expr::Cast(Cast::new(
+                Box::new(
+                    from_substrait_rex(
+                        cast.as_ref().input.as_ref().unwrap().as_ref(),
+                        input_schema,
+                        extensions,
+                    )
+                    .await?
+                    .as_ref()
+                    .clone(),
+                ),
+                from_substrait_type(output_type)?,
+            )))),
+            None => Err(DataFusionError::Substrait(
+                "Cast experssion without output type is not allowed".to_string(),
+            )),
+        },
         _ => Err(DataFusionError::NotImplemented(
             "unsupported rex_type".to_string(),
+        )),
+    }
+}
+
+fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
+    match &dt.kind {
+        Some(s_kind) => match s_kind {
+            r#type::Kind::Bool(_) => Ok(DataType::Boolean),
+            r#type::Kind::I8(_) => Ok(DataType::Int8),
+            r#type::Kind::I16(_) => Ok(DataType::Int16),
+            r#type::Kind::I32(_) => Ok(DataType::Int32),
+            r#type::Kind::I64(_) => Ok(DataType::Int64),
+            r#type::Kind::Decimal(d) => {
+                Ok(DataType::Decimal128(d.precision as u8, d.scale as i8))
+            }
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "Unsupported Substrait type: {s_kind:?}"
+            ))),
+        },
+        _ => Err(DataFusionError::NotImplemented(
+            "`None` Substrait kind is not supported".to_string(),
         )),
     }
 }
