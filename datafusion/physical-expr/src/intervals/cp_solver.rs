@@ -115,11 +115,7 @@ use crate::PhysicalExpr;
 /// This object implements a directed acyclic expression graph (DAEG) that
 /// is used to compute ranges for expressions through interval arithmetic.
 #[derive(Clone)]
-pub struct ExprIntervalGraph(
-    NodeIndex,
-    StableGraph<ExprIntervalGraphNode, usize>,
-    pub Vec<(Arc<dyn PhysicalExpr>, usize)>,
-);
+pub struct ExprIntervalGraph(NodeIndex, StableGraph<ExprIntervalGraphNode, usize>);
 
 /// This is a node in the DAEG; it encapsulates a reference to the actual
 /// [PhysicalExpr] as well as an interval containing expression bounds.
@@ -278,50 +274,134 @@ pub fn propagate_comparison_operators(
 }
 
 impl ExprIntervalGraph {
-    /// Constructs a new ExprIntervalGraph.
-    pub fn try_new(
-        expr: Arc<dyn PhysicalExpr>,
-        provided_expr: &[Arc<dyn PhysicalExpr>],
-    ) -> Result<Self> {
+    pub fn try_new(expr: Arc<dyn PhysicalExpr>) -> Result<Self> {
         // Build the full graph:
-        let (root_node, mut graph) =
+        let (root_node, graph) =
             build_physical_expr_graph(expr, &ExprIntervalGraphNode::make_node)?;
-        let mut bfs = Bfs::new(&graph, root_node);
-        // TODO: I don't understand what this comment means. Write a clearer
-        //       comment and you should probably find a better name for `provided_expr`
-        //       too.
-        // We preserve the order with Vec<SortedFilterExpr> in SymmetricHashJoin.
-        let mut expr_node_indices: Vec<(Arc<dyn PhysicalExpr>, usize)> = provided_expr
-            .iter()
-            .map(|e| (e.clone(), usize::MAX))
-            .collect();
+        Ok(Self(root_node, graph))
+    }
+
+    ///
+    /// ``` text
+    ///
+    ///
+    /// If we want to calculate intervals starting from and propagate up to BinaryExpr('a', +, 'b')
+    /// instead of col('a') and col('b'), we prune under BinaryExpr('a', +, 'b') since we will
+    /// never visit there.
+    /// We do not change the Arc<dyn PhysicalExpr> inside Arc<dyn PhysicalExpr>, just remove the nodes
+    /// corresponding that Arc<dyn PhysicalExpr>.
+    ///
+    ///
+    ///                                  +-----+                                          +-----+
+    ///                                  | GT  |                                          | GT  |
+    ///                         +--------|     |-------+                         +--------|     |-------+
+    ///                         |        +-----+       |                         |        +-----+       |
+    ///                         |                      |                         |                      |
+    ///                      +-----+                   |                      +-----+                   |
+    ///                      |Cast |                   |                      |Cast |                   |
+    ///                      |     |                   |             --\      |     |                   |
+    ///                      +-----+                   |       ----------     +-----+                   |
+    ///                         |                      |             --/         |                      |
+    ///                         |                      |                         |                      |
+    ///                      +-----+                +-----+                   +-----+                +-----+
+    ///                   +--|Plus |--+          +--|Plus |--+                |Plus |             +--|Plus |--+
+    ///                   |  |     |  |          |  |     |  |                |     |             |  |     |  |
+    ///  Prune from here  |  +-----+  |          |  +-----+  |                +-----+             |  +-----+  |
+    ///  ------------------------------------    |           |                                    |           |
+    ///                   |           |          |           |                                    |           |
+    ///                +-----+     +-----+    +-----+     +-----+                              +-----+     +-----+
+    ///                | a   |     |  b  |    |  c  |     |  2  |                              |  c  |     |  2  |
+    ///                |     |     |     |    |     |     |     |                              |     |     |     |
+    ///                +-----+     +-----+    +-----+     +-----+                              +-----+     +-----+
+    ///
+    /// This operation mutates the underline graph, so use it after constructor.
+    /// ```
+    ///
+    /// Since graph is stable, the NodeIndex will stay same even if we delete a node. We exploit
+    /// this stability by matching Arc<dyn PhysicalExpr> and NodeIndex for membership tests.
+    pub fn pair_node_indices_with_interval_providers(
+        &mut self,
+        exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Vec<(Arc<dyn PhysicalExpr>, usize)>> {
+        let mut bfs = Bfs::new(&self.1, self.0);
+        // We collect the node indexes  (usize) of the PhysicalExprs, with the same order
+        // with `exprs`. To preserve order, we initiate each expr's node index with usize::MAX,
+        // then find the corresponding node indexes by traversing the graph.
         let mut removals = vec![];
-        while let Some(node) = bfs.next(&graph) {
+        let mut expr_node_indices: Vec<(Arc<dyn PhysicalExpr>, usize)> =
+            exprs.iter().map(|e| (e.clone(), usize::MAX)).collect();
+        while let Some(node) = bfs.next(&self.1) {
             // Get the plan corresponding to this node:
-            let input = graph.index(node);
+            let input = self.1.index(node);
             let expr = input.expr.clone();
-            // If the current expression is among `provided_exprs`, slate its
+            // If the current expression is among `exprs`, slate its
             // children for removal.
-            // TODO: Complete the following comment with a clear explanation:
-            // We remove the children because ...............................
-            if let Some(value) = provided_expr.iter().position(|e| expr.eq(e)) {
+            if let Some(value) = exprs.iter().position(|e| expr.eq(e)) {
+                // Update NodeIndex of the PhysicalExpr
                 expr_node_indices[value].1 = node.index();
-                let mut edges = graph.neighbors_directed(node, Outgoing).detach();
-                while let Some(n_index) = edges.next_node(&graph) {
+                let mut edges = self.1.neighbors_directed(node, Outgoing).detach();
+                while let Some(n_index) = edges.next_node(&self.1) {
                     // Slate the child for removal, do not remove immediately.
                     removals.push(n_index);
                 }
             }
         }
         for node in removals {
-            graph.remove_node(node);
+            self.1.remove_node(node);
         }
-        Ok(Self(root_node, graph, expr_node_indices))
+        Ok(expr_node_indices)
     }
 
     /// Computes bounds for an expression using interval arithmetic via a
     /// bottom-up traversal.
-    fn evaluate_bounds(&mut self, expr_stats: &[(usize, Interval)]) -> Result<()> {
+    /// It returns root node's interval.
+    ///
+    /// # Arguments
+    /// * `expr_stats` - &[(usize, Interval)]. Provide NodeIndex, Interval tuples for bound evaluation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    ///  use std::sync::Arc;
+    ///  use datafusion_common::ScalarValue;
+    ///  use datafusion_expr::Operator;
+    ///  use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+    ///  use datafusion_physical_expr::intervals::ExprIntervalGraph;
+    ///  use datafusion_physical_expr::intervals::interval_aritmetics::Interval;
+    ///  use datafusion_physical_expr::PhysicalExpr;
+    ///  let expr = Arc::new(BinaryExpr::new(
+    ///             Arc::new(Column::new("gnz", 0)),
+    ///             Operator::Plus,
+    ///             Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+    ///         ));
+    ///  let mut graph = ExprIntervalGraph::try_new(expr).unwrap();
+    ///  // Do it once, while constructing.
+    ///  let node_indices = graph
+    ///     .pair_node_indices_with_interval_providers(&[Arc::new(Column::new("gnz", 0))])
+    ///     .unwrap();
+    ///  let left_index = node_indices.get(0).unwrap().1;
+    ///  // Provide intervals
+    ///  let intervals = vec![(
+    ///     left_index,
+    ///     Interval {
+    ///         lower: ScalarValue::Int32(Some(10)),
+    ///         upper: ScalarValue::Int32(Some(20)),
+    ///         },
+    ///     )];
+    ///  // Evaluate bounds
+    ///  assert_eq!(
+    ///     graph.evaluate_bounds(&intervals).unwrap(),
+    ///     Interval {
+    ///         lower: ScalarValue::Int32(Some(20)),
+    ///         upper: ScalarValue::Int32(Some(30))
+    ///     }
+    ///  )
+    ///
+    /// ```
+    pub fn evaluate_bounds(
+        &mut self,
+        expr_stats: &[(usize, Interval)],
+    ) -> Result<Interval> {
         let mut dfs = DfsPostOrder::new(&self.1, self.0);
         while let Some(node) = dfs.next(&self.1) {
             // Outgoing (Children) edges
@@ -337,7 +417,6 @@ impl ExprIntervalGraph {
                 input.interval = interval.clone();
                 continue;
             }
-
             let expr_any = expr.as_any();
             if let Some(binary) = expr_any.downcast_ref::<BinaryExpr>() {
                 // Access left child immutable
@@ -370,12 +449,13 @@ impl ExprIntervalGraph {
                 input.interval = new_interval;
             }
         }
-        Ok(())
+        let root_interval = self.1.index(self.0).interval.clone();
+        Ok(root_interval)
     }
 
     /// Updates/shrinks bounds for leaf expressions using interval arithmetic
     /// via a top-down traversal.
-    pub fn propagate_constraints(
+    fn propagate_constraints(
         &mut self,
         expr_stats: &mut [(usize, Interval)],
     ) -> Result<()> {
@@ -455,7 +535,13 @@ impl ExprIntervalGraph {
         expr_stats: &mut [(usize, Interval)],
     ) -> Result<()> {
         self.evaluate_bounds(expr_stats)
-            .and(self.propagate_constraints(expr_stats))
+            .and_then(|interval| match interval {
+                Interval {
+                    upper: ScalarValue::Boolean(Some(true)),
+                    ..
+                } => self.propagate_constraints(expr_stats),
+                _ => Ok(()),
+            })
     }
 }
 
@@ -473,7 +559,7 @@ mod tests {
 
     fn experiment(
         expr: Arc<dyn PhysicalExpr>,
-        exprs: (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>),
+        exprs_with_interval: (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>),
         left_interval: (Option<i32>, Option<i32>),
         right_interval: (Option<i32>, Option<i32>),
         left_waited: (Option<i32>, Option<i32>),
@@ -481,14 +567,14 @@ mod tests {
     ) -> Result<()> {
         let col_stats = vec![
             (
-                exprs.0.clone(),
+                exprs_with_interval.0.clone(),
                 Interval {
                     lower: ScalarValue::Int32(left_interval.0),
                     upper: ScalarValue::Int32(left_interval.1),
                 },
             ),
             (
-                exprs.1.clone(),
+                exprs_with_interval.1.clone(),
                 Interval {
                     lower: ScalarValue::Int32(right_interval.0),
                     upper: ScalarValue::Int32(right_interval.1),
@@ -497,32 +583,33 @@ mod tests {
         ];
         let expected = vec![
             (
-                exprs.0.clone(),
+                exprs_with_interval.0.clone(),
                 Interval {
                     lower: ScalarValue::Int32(left_waited.0),
                     upper: ScalarValue::Int32(left_waited.1),
                 },
             ),
             (
-                exprs.1.clone(),
+                exprs_with_interval.1.clone(),
                 Interval {
                     lower: ScalarValue::Int32(right_waited.0),
                     upper: ScalarValue::Int32(right_waited.1),
                 },
             ),
         ];
-        let mut graph = ExprIntervalGraph::try_new(
-            expr,
+        let mut graph = ExprIntervalGraph::try_new(expr)?;
+        let expr_indexes = graph.pair_node_indices_with_interval_providers(
             &col_stats.iter().map(|(e, _)| e.clone()).collect_vec(),
         )?;
+
         let mut col_stat_nodes = col_stats
             .iter()
-            .zip(graph.2.iter())
+            .zip(expr_indexes.iter())
             .map(|((_, interval), (_, index))| (*index, interval.clone()))
             .collect_vec();
         let expected_nodes = expected
             .iter()
-            .zip(graph.2.iter())
+            .zip(expr_indexes.iter())
             .map(|((_, interval), (_, index))| (*index, interval.clone()))
             .collect_vec();
 
@@ -593,40 +680,25 @@ mod tests {
     }
 
     #[test]
-    fn particular() -> Result<()> {
-        let seed = 0;
+    fn testing_not_possible() -> Result<()> {
         let left_col = Arc::new(Column::new("left_watermark", 0));
         let right_col = Arc::new(Column::new("right_watermark", 0));
-        // left_watermark - 1 > right_watermark + 5 AND left_watermark + 3 < right_watermark + 10
-        let expr = filter_numeric_expr_generation(
-            left_col.clone(),
-            right_col.clone(),
-            Operator::Minus,
-            Operator::Plus,
-            Operator::Plus,
-            Operator::Plus,
-            1,
-            5,
-            3,
-            10,
-        );
-        // l > r + 6 AND r > l - 7
-        let l_gt_r = 6;
-        let r_gt_l = -7;
-        generate_case::<true>(
-            expr.clone(),
-            left_col.clone(),
-            right_col.clone(),
-            seed,
-            l_gt_r,
-            r_gt_l,
-        )?;
-        // Descending tests
-        // r < l - 6 AND l < r + 7
-        let r_lt_l = -l_gt_r;
-        let l_lt_r = -r_gt_l;
-        generate_case::<false>(expr, left_col, right_col, seed, l_lt_r, r_lt_l)?;
+        // left_watermark > right_watermark + 5
 
+        let left_and_1 = Arc::new(BinaryExpr::new(
+            left_col.clone(),
+            Operator::Plus,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        ));
+        let expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, right_col.clone()));
+        experiment(
+            expr,
+            (left_col, right_col),
+            (Some(10), Some(20)),
+            (Some(100), None),
+            (Some(10), Some(20)),
+            (Some(100), None),
+        )?;
         Ok(())
     }
 
