@@ -2387,8 +2387,7 @@ async fn test_window_agg_sort_orderby_reversed_partitionby_reversed_plan() -> Re
 
 #[tokio::test]
 async fn test_window_agg_low_cardinality() -> Result<()> {
-    let config = SessionConfig::new()
-        .with_target_partitions(32);
+    let config = SessionConfig::new().with_target_partitions(32);
     let ctx = SessionContext::with_config(config);
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT
