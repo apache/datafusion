@@ -233,36 +233,36 @@ impl TreeNodeRewritable for PlanWithCorrespondingCoalescePartitions {
                 .collect::<Result<Vec<_>>>()?;
             let mut coalesce_onwards = vec![];
             for (idx, item) in children_requirements.iter().enumerate() {
+                let mut coalesce_onward = None;
+                // coalesce_onwards starts from CoalescePartitionsExec. Hence reset child when
+                // CoalescePartitionsExec is encountered
                 if item.plan.as_any().is::<CoalescePartitionsExec>() {
-                    coalesce_onwards.push(Some(ExecTree {
+                    coalesce_onward = Some(ExecTree {
                         idx,
                         children: vec![],
                         plan: item.plan.clone(),
-                    }))
+                    });
                 } else if !item.plan.children().is_empty() {
                     let requires_single_partition = matches!(
                         item.plan.required_input_distribution()[0],
                         Distribution::SinglePartition
                     );
-                    // The Executor above(not necessarily immediately above) CoalescePartitionExec doesn't require SinglePartition
-                    // hence CoalescePartitionExec is not a requirement of this executor.
-                    // We can propagate it upwards.
                     let mut res = vec![];
                     for elem in item.coalesce_onwards.iter().flatten() {
                         res.push(elem.clone());
                     }
+                    // The Executor above(not necessarily immediately above) CoalescePartitionExec doesn't require SinglePartition
+                    // hence CoalescePartitionExec is not a requirement of this executor.
+                    // We can propagate it upwards.
                     if !requires_single_partition && !res.is_empty() {
-                        coalesce_onwards.push(Some(ExecTree {
+                        coalesce_onward = Some(ExecTree {
                             idx,
                             children: res,
                             plan: item.plan.clone(),
-                        }));
-                    } else {
-                        coalesce_onwards.push(None);
+                        });
                     }
-                } else {
-                    coalesce_onwards.push(None);
                 }
+                coalesce_onwards.push(coalesce_onward);
             }
             let children_plans = children_requirements
                 .iter()
@@ -335,7 +335,7 @@ fn parallelize_sorts(
             update_child_to_change_coalesce(
                 &mut prev_layer,
                 &mut coalesce_onwards[0],
-                sort_exec,
+                Some(sort_exec),
             )?;
 
             let spm = SortPreservingMergeExec::new(sort_expr.to_vec(), prev_layer);
@@ -347,11 +347,9 @@ fn parallelize_sorts(
     } else if plan.as_any().is::<CoalescePartitionsExec>()
         && coalesce_onwards[0].is_some()
     {
+        // There is a redundant CoalescePartitionExec in the plan
         let mut prev_layer = plan.clone();
-        update_child_to_remove_unnecessary_coalesce(
-            &mut prev_layer,
-            &mut coalesce_onwards[0],
-        )?;
+        update_child_to_change_coalesce(&mut prev_layer, &mut coalesce_onwards[0], None)?;
         let new_plan = plan.with_new_children(vec![prev_layer])?;
         return Ok(Some(PlanWithCorrespondingCoalescePartitions {
             plan: new_plan,
@@ -506,7 +504,6 @@ fn analyze_immediate_sort_removal(
                 let new_plan: Arc<dyn ExecutionPlan> = Arc::new(
                     SortPreservingMergeExec::new(sort_exec.expr().to_vec(), sort_input),
                 );
-                // new_onwards.push((0, new_plan.clone()));
                 new_onwards = Some(ExecTree {
                     idx: 0,
                     plan: new_plan.clone(),
@@ -611,27 +608,52 @@ fn analyze_window_sort_removal(
     Ok(None)
 }
 
-/// Updates child to remove the unnecessary sorting below it.
+/// Updates child to remove the unnecessary coalesce partitions below it.
 fn update_child_to_change_coalesce(
     child: &mut Arc<dyn ExecutionPlan>,
-    sort_onwards: &mut Option<ExecTree>,
-    sort_exec: &SortExec,
+    coalesce_onwards: &mut Option<ExecTree>,
+    sort_exec: Option<&SortExec>,
 ) -> Result<()> {
-    if let Some(sort_onwards) = sort_onwards {
-        *child = change_corresponding_coalesce_in_sub_plan(sort_onwards, sort_exec)?;
+    if let Some(coalesce_onwards) = coalesce_onwards {
+        *child = change_corresponding_coalesce_in_sub_plan(coalesce_onwards, sort_exec)?;
     }
     Ok(())
 }
 
-/// Updates child to remove the unnecessary sorting below it.
-fn update_child_to_remove_unnecessary_coalesce(
-    child: &mut Arc<dyn ExecutionPlan>,
-    sort_onwards: &mut Option<ExecTree>,
-) -> Result<()> {
-    if let Some(sort_onwards) = sort_onwards {
-        *child = remove_corresponding_coalesce_in_sub_plan(sort_onwards)?;
-    }
-    Ok(())
+/// Removes the coalesce from the plan in `coalesce_onwards`.
+fn change_corresponding_coalesce_in_sub_plan(
+    coalesce_onwards: &mut ExecTree,
+    sort_exec: Option<&SortExec>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let res = if coalesce_onwards
+        .plan
+        .as_any()
+        .is::<CoalescePartitionsExec>()
+    {
+        let mut coalesce_input = coalesce_onwards.plan.children()[0].clone();
+        if let Some(sort_exec) = sort_exec {
+            let sort_expr = sort_exec.expr();
+            if !ordering_satisfy(
+                coalesce_input.output_ordering(),
+                Some(sort_expr),
+                || sort_exec.equivalence_properties(),
+            ) {
+                coalesce_input =
+                    add_sort_above_child(&coalesce_input, sort_expr.to_vec())?;
+            }
+        }
+        coalesce_input
+    } else {
+        let res = coalesce_onwards.plan.clone();
+        let mut children = res.children();
+        for elem in &mut coalesce_onwards.children {
+            children[elem.idx] =
+                change_corresponding_coalesce_in_sub_plan(elem, sort_exec)?;
+        }
+        res.with_new_children(children)?
+    };
+
+    Ok(res)
 }
 
 /// Updates child to remove the unnecessary sorting below it.
@@ -643,80 +665,6 @@ fn update_child_to_remove_unnecessary_sort(
         *child = remove_corresponding_sort_from_sub_plan(sort_onwards)?;
     }
     Ok(())
-}
-
-/// Updates child to modify the unnecessarily fine sorting below it.
-fn update_child_to_change_finer_sort(
-    child: &mut Arc<dyn ExecutionPlan>,
-    sort_onwards: &mut Option<ExecTree>,
-    n_sort_expr: usize,
-) -> Result<()> {
-    if let Some(sort_onwards) = sort_onwards {
-        *child = change_finer_sort_in_sub_plan(sort_onwards, n_sort_expr)?;
-    }
-    Ok(())
-}
-
-/// Converts an [ExecutionPlan] trait object to a [PhysicalSortExpr] slice when possible.
-fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExpr]> {
-    if let Some(sort_exec) = sort_any.as_any().downcast_ref::<SortExec>() {
-        Ok(sort_exec.expr())
-    } else if let Some(sort_preserving_merge_exec) =
-        sort_any.as_any().downcast_ref::<SortPreservingMergeExec>()
-    {
-        Ok(sort_preserving_merge_exec.expr())
-    } else {
-        Err(DataFusionError::Plan(
-            "Given ExecutionPlan is not a SortExec or a SortPreservingMergeExec"
-                .to_string(),
-        ))
-    }
-}
-
-/// Removes the sort from the plan in `sort_onwards`.
-fn change_corresponding_coalesce_in_sub_plan(
-    sort_onwards: &mut ExecTree,
-    sort_exec: &SortExec,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let res = if sort_onwards.plan.as_any().is::<CoalescePartitionsExec>() {
-        let coalesce_input = sort_onwards.plan.children()[0].clone();
-        let sort_expr = sort_exec.expr();
-        if !ordering_satisfy(coalesce_input.output_ordering(), Some(sort_expr), || {
-            sort_exec.equivalence_properties()
-        }) {
-            add_sort_above_child(&coalesce_input, sort_expr.to_vec())?
-        } else {
-            coalesce_input
-        }
-    } else {
-        let res = sort_onwards.plan.clone();
-        let mut children = res.children();
-        for elem in &mut sort_onwards.children {
-            children[elem.idx] =
-                change_corresponding_coalesce_in_sub_plan(elem, sort_exec)?;
-        }
-        res.with_new_children(children)?
-    };
-
-    Ok(res)
-}
-
-/// Removes the sort from the plan in `sort_onwards`.
-fn remove_corresponding_coalesce_in_sub_plan(
-    sort_onwards: &mut ExecTree,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let res = if sort_onwards.plan.as_any().is::<CoalescePartitionsExec>() {
-        sort_onwards.plan.children()[0].clone()
-    } else {
-        let res = sort_onwards.plan.clone();
-        let mut children = res.children();
-        for elem in &mut sort_onwards.children {
-            children[elem.idx] = remove_corresponding_coalesce_in_sub_plan(elem)?;
-        }
-        res.with_new_children(children)?
-    };
-
-    Ok(res)
 }
 
 /// Removes the sort from the plan in `sort_onwards`.
@@ -737,6 +685,18 @@ fn remove_corresponding_sort_from_sub_plan(
     Ok(res)
 }
 
+/// Updates child to modify the unnecessarily fine sorting below it.
+fn update_child_to_change_finer_sort(
+    child: &mut Arc<dyn ExecutionPlan>,
+    sort_onwards: &mut Option<ExecTree>,
+    n_sort_expr: usize,
+) -> Result<()> {
+    if let Some(sort_onwards) = sort_onwards {
+        *child = change_finer_sort_in_sub_plan(sort_onwards, n_sort_expr)?;
+    }
+    Ok(())
+}
+
 /// Change the unnecessarily fine sort in `sort_onwards`.
 fn change_finer_sort_in_sub_plan(
     sort_onwards: &mut ExecTree,
@@ -750,12 +710,28 @@ fn change_finer_sort_in_sub_plan(
         let res = sort_onwards.plan.clone();
         let mut children = res.children();
         for elem in &mut sort_onwards.children {
-            children[elem.idx] = remove_corresponding_sort_from_sub_plan(elem)?;
+            children[elem.idx] = change_finer_sort_in_sub_plan(elem, n_sort_expr)?;
         }
         res.with_new_children(children)?
     };
 
     Ok(res)
+}
+
+/// Converts an [ExecutionPlan] trait object to a [PhysicalSortExpr] slice when possible.
+fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExpr]> {
+    if let Some(sort_exec) = sort_any.as_any().downcast_ref::<SortExec>() {
+        Ok(sort_exec.expr())
+    } else if let Some(sort_preserving_merge_exec) =
+        sort_any.as_any().downcast_ref::<SortPreservingMergeExec>()
+    {
+        Ok(sort_preserving_merge_exec.expr())
+    } else {
+        Err(DataFusionError::Plan(
+            "Given ExecutionPlan is not a SortExec or a SortPreservingMergeExec"
+                .to_string(),
+        ))
+    }
 }
 
 #[derive(Debug)]
