@@ -158,6 +158,7 @@ impl FileScanConfig {
         (table_schema, table_stats)
     }
 
+    #[allow(unused)] // Only used by avro
     fn projected_file_column_names(&self) -> Option<Vec<String>> {
         self.projection.as_ref().map(|p| {
             p.iter()
