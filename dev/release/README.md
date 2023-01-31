@@ -286,8 +286,12 @@ of the following crates:
 Download and unpack the official release tarball
 
 Verify that the Cargo.toml in the tarball contains the correct version
-(e.g. `version = "5.1.0"`) and then publish the crates with the
-following commands. Crates need to be published in the correct order as shown in this diagram.
+(e.g. `version = "5.1.0"`) and then publish the crates by running the script `release-crates.sh`
+in a directory extracted from the source tarball that was voted on. Note that this script doesn't
+work if run in a Git repo.
+
+Alternatively the crates can be published one at a time with the following commands. Crates need to be
+published in the correct order as shown in this diagram.
 
 ![](crate-deps.svg)
 
@@ -307,6 +311,7 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion/optimizer && cargo publish)
 (cd datafusion/core && cargo publish)
 (cd datafusion/proto && cargo publish)
+(cd datafusion/substrait && cargo publish)
 ```
 
 The CLI needs a `--no-verify` argument because `build.rs` generates source into the `src` directory.

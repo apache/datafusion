@@ -42,13 +42,10 @@ use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 
 use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use arrow::array::{new_null_array, PrimitiveArray};
+use arrow::array::{Array, UInt32Builder};
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Schema, UInt32Type};
 use arrow::{array::ArrayRef, compute};
-use arrow::{
-    array::{Array, UInt32Builder},
-    error::{ArrowError, Result as ArrowResult},
-};
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::Accumulator;
@@ -191,7 +188,7 @@ impl GroupedHashAggregateStream {
         let row_aggr_layout =
             Arc::new(RowLayout::new(&row_aggr_schema, RowType::WordAligned));
 
-        let name = format!("GroupedHashAggregateStream[{}]", partition);
+        let name = format!("GroupedHashAggregateStream[{partition}]");
         let row_aggr_state = RowAggregationState {
             reservation: MemoryConsumer::new(name).register(context.memory_pool()),
             map: RawTable::with_capacity(0),
@@ -226,7 +223,7 @@ impl GroupedHashAggregateStream {
 }
 
 impl Stream for GroupedHashAggregateStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -252,9 +249,7 @@ impl Stream for GroupedHashAggregateStream {
                             });
 
                             if let Err(e) = result {
-                                return Poll::Ready(Some(Err(
-                                    ArrowError::ExternalError(Box::new(e)),
-                                )));
+                                return Poll::Ready(Some(Err(e)));
                             }
                         }
                         // inner had error, return to caller
@@ -569,7 +564,7 @@ impl std::fmt::Debug for RowAggregationState {
 
 impl GroupedHashAggregateStream {
     /// Create a RecordBatch with all group keys and accumulator' states or values.
-    fn create_batch_from_map(&mut self) -> ArrowResult<Option<RecordBatch>> {
+    fn create_batch_from_map(&mut self) -> Result<Option<RecordBatch>> {
         let skip_items = self.row_group_skip_position;
         if skip_items > self.row_aggr_state.group_states.len() {
             return Ok(None);
@@ -624,7 +619,6 @@ impl GroupedHashAggregateStream {
                         // the intermediate GroupByScalar type was not the same as the
                         // output
                         cast(&item, field.data_type())
-                            .map_err(DataFusionError::ArrowError)
                     }?;
                     results.push(result);
                 }

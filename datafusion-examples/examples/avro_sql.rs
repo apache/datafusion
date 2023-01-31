@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
     let testdata = datafusion::test_util::arrow_test_data();
 
     // register avro file with the execution context
-    let avro_file = &format!("{}/avro/alltypes_plain.avro", testdata);
+    let avro_file = &format!("{testdata}/avro/alltypes_plain.avro");
     ctx.register_avro("alltypes_plain", avro_file, AvroReadOptions::default())
         .await?;
 

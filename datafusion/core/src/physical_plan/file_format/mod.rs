@@ -35,7 +35,6 @@ use arrow::{
     array::{ArrayData, ArrayRef, DictionaryArray},
     buffer::Buffer,
     datatypes::{DataType, Field, Schema, SchemaRef, UInt16Type},
-    error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
 pub use avro::AvroExec;
@@ -159,6 +158,7 @@ impl FileScanConfig {
         (table_schema, table_stats)
     }
 
+    #[allow(unused)] // Only used by avro
     fn projected_file_column_names(&self) -> Option<Vec<String>> {
         self.projection.as_ref().map(|p| {
             p.iter()
@@ -208,6 +208,10 @@ impl<'a> Display for FileGroupsDisplay<'a> {
                 first_file = false;
 
                 write!(f, "{}", pf.object_meta.location.as_ref())?;
+
+                if let Some(range) = pf.range.as_ref() {
+                    write!(f, ":{}..{}", range.start, range.end)?;
+                }
             }
             write!(f, "]")?;
         }
@@ -379,12 +383,12 @@ impl PartitionColumnProjector {
         &mut self,
         file_batch: RecordBatch,
         partition_values: &[ScalarValue],
-    ) -> ArrowResult<RecordBatch> {
+    ) -> Result<RecordBatch> {
         let expected_cols =
             self.projected_schema.fields().len() - self.projected_partition_indexes.len();
 
         if file_batch.columns().len() != expected_cols {
-            return Err(ArrowError::SchemaError(format!(
+            return Err(DataFusionError::Execution(format!(
                 "Unexpected batch schema from file, expected {} cols but got {}",
                 expected_cols,
                 file_batch.columns().len()
@@ -401,7 +405,7 @@ impl PartitionColumnProjector {
                 ),
             )
         }
-        RecordBatch::try_new(Arc::clone(&self.projected_schema), cols)
+        RecordBatch::try_new(Arc::clone(&self.projected_schema), cols).map_err(Into::into)
     }
 }
 

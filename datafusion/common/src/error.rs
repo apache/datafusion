@@ -287,7 +287,7 @@ impl Display for DataFusionError {
             }
             #[cfg(feature = "avro")]
             DataFusionError::AvroError(ref desc) => {
-                write!(f, "Avro error: {}", desc)
+                write!(f, "Avro error: {desc}")
             }
             DataFusionError::IoError(ref desc) => write!(f, "IO error: {desc}"),
             DataFusionError::SQL(ref desc) => {
@@ -388,44 +388,21 @@ impl DataFusionError {
 
         let mut last_datafusion_error = self;
         let mut root_error: &dyn Error = self;
-        while let Some(source) = find_source(root_error) {
+        while let Some(source) = root_error.source() {
             // walk the next level
             root_error = source;
             // remember the lowest datafusion error so far
             if let Some(e) = root_error.downcast_ref::<DataFusionError>() {
                 last_datafusion_error = e;
+            } else if let Some(e) = root_error.downcast_ref::<Arc<DataFusionError>>() {
+                // As `Arc<T>::source()` calls through to `T::source()` we need to
+                // explicitly match `Arc<DataFusionError>` to capture it
+                last_datafusion_error = e.as_ref();
             }
         }
         // return last checkpoint (which may be the original error)
         last_datafusion_error
     }
-}
-
-fn find_source<'a>(e: &'a (dyn Error + 'static)) -> Option<&'a (dyn Error + 'static)> {
-    // workaround until https://github.com/apache/arrow-rs/issues/3566 is released
-    if let Some(e) = e.downcast_ref::<ArrowError>() {
-        return if let ArrowError::ExternalError(e) = e {
-            Some(e.as_ref())
-        } else {
-            None
-        };
-    }
-    // some errors are wrapped into `Arc`s to share them with multiple
-    // receivers, so handle that specially here
-    if let Some(e) = e.downcast_ref::<Arc<dyn Error + 'static>>() {
-        return Some(e.as_ref());
-    }
-
-    // For some reason the above doesn't capture works for
-    // Arc<DataFusionError> or Arc<ArrowError>
-    if let Some(e) = e.downcast_ref::<Arc<ArrowError>>() {
-        return Some(e.as_ref());
-    }
-    if let Some(e) = e.downcast_ref::<Arc<DataFusionError>>() {
-        return Some(e.as_ref());
-    }
-
-    e.source()
 }
 
 #[cfg(test)]

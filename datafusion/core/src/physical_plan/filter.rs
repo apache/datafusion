@@ -33,7 +33,6 @@ use crate::physical_plan::{
 };
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
-use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_expr::Operator;
@@ -118,9 +117,9 @@ impl ExecutionPlan for FilterExec {
         self.input.output_ordering()
     }
 
-    fn maintains_input_order(&self) -> bool {
+    fn maintains_input_order(&self) -> Vec<bool> {
         // tell optimizer this operator doesn't reorder its input
-        true
+        vec![true]
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
@@ -239,20 +238,19 @@ struct FilterExecStream {
 fn batch_filter(
     batch: &RecordBatch,
     predicate: &Arc<dyn PhysicalExpr>,
-) -> ArrowResult<RecordBatch> {
+) -> Result<RecordBatch> {
     predicate
         .evaluate(batch)
         .map(|v| v.into_array(batch.num_rows()))
-        .map_err(DataFusionError::into)
         .and_then(|array| {
             Ok(as_boolean_array(&array)?)
                 // apply filter array to record batch
-                .and_then(|filter_array| filter_record_batch(batch, filter_array))
+                .and_then(|filter_array| Ok(filter_record_batch(batch, filter_array)?))
         })
 }
 
 impl Stream for FilterExecStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,

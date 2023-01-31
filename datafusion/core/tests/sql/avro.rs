@@ -21,7 +21,7 @@ async fn register_alltypes_avro(ctx: &SessionContext) {
     let testdata = datafusion::test_util::arrow_test_data();
     ctx.register_avro(
         "alltypes_plain",
-        &format!("{}/avro/alltypes_plain.avro", testdata),
+        &format!("{testdata}/avro/alltypes_plain.avro"),
         AvroReadOptions::default(),
     )
     .await
@@ -59,7 +59,7 @@ async fn avro_query_multiple_files() {
     let tempdir = tempfile::tempdir().unwrap();
     let table_path = tempdir.path();
     let testdata = datafusion::test_util::arrow_test_data();
-    let alltypes_plain_file = format!("{}/avro/alltypes_plain.avro", testdata);
+    let alltypes_plain_file = format!("{testdata}/avro/alltypes_plain.avro");
     std::fs::copy(
         &alltypes_plain_file,
         format!("{}/alltypes_plain1.avro", table_path.display()),
@@ -115,7 +115,7 @@ async fn avro_single_nan_schema() {
     let testdata = datafusion::test_util::arrow_test_data();
     ctx.register_avro(
         "single_nan",
-        &format!("{}/avro/single_nan.avro", testdata),
+        &format!("{testdata}/avro/single_nan.avro"),
         AvroReadOptions::default(),
     )
     .await

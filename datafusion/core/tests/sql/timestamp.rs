@@ -1350,7 +1350,7 @@ async fn date_bin() {
     let result = try_execute_to_batches(&ctx, sql).await;
     assert_eq!(
         result.err().unwrap().to_string(),
-        "Arrow error: External error: This feature is not implemented: DATE_BIN only supports literal values for the origin argument, not arrays"
+        "This feature is not implemented: DATE_BIN only supports literal values for the origin argument, not arrays"
     );
 }
 
