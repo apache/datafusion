@@ -59,7 +59,15 @@ impl From<&protobuf::PhysicalColumn> for Column {
     }
 }
 
-pub(crate) fn parse_physical_expr(
+/// Parses a physical expression from a protobuf.
+///
+/// # Arguments
+///
+/// * `proto` - Input proto with physical expression node
+/// * `registry` - A registry knows how to build logical expressions out of user-defined function' names
+/// * `input_schema` - The Arrow schema for the input, used for determining expression data types
+///                    when performing type coercion.
+pub fn parse_physical_expr(
     proto: &protobuf::PhysicalExprNode,
     registry: &dyn FunctionRegistry,
     input_schema: &Schema,
