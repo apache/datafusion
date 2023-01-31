@@ -948,7 +948,7 @@ impl OneSideHashJoiner {
             .map(|sorted_expr| (sorted_expr.node_index(), sorted_expr.interval().clone()))
             .collect_vec();
         // Use this vector to seed the child PhysicalExpr interval.
-        physical_expr_graph.calculate_new_intervals(&mut filter_intervals)?;
+        physical_expr_graph.update_intervals(&mut filter_intervals)?;
         // Mutate the Vec<SortedFilterExpr> for
         for (sorted_expr, (_, interval)) in
             filter_columns.iter_mut().zip(filter_intervals.into_iter())
