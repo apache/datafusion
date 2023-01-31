@@ -316,7 +316,7 @@ ORDER BY c5 ASC, c4 DESC, c10;
 2143473091 -14704 4602675983996931623
 
 
-query IRII
+query IRII rowsort
 SELECT * FROM
 (VALUES (1,2.0,-3,1+1),(10,20.0,-30,2+2))
 AS tbl(int_col, float_col, negative_col, summation);
