@@ -1321,6 +1321,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_multilayer_coalesce_partitions() -> Result<()> {
+        let schema = create_test_schema()?;
+
+        let source1 = parquet_exec(&schema);
+        let repartition = Arc::new(RepartitionExec::try_new(
+            source1,
+            Partitioning::RoundRobinBatch(2),
+        )?) as Arc<dyn ExecutionPlan>;
+        let coalesce = Arc::new(CoalescePartitionsExec::new(repartition)) as _;
+        // Add dummy layer propagating Sort above, to test whether sort can be removed from multi layer before
+        let filter = filter_exec(
+            Arc::new(NotExpr::new(
+                col("non_nullable_col", schema.as_ref()).unwrap(),
+            )),
+            coalesce,
+        );
+        let sort_exprs = vec![sort_expr("nullable_col", &schema)];
+        let physical_plan = sort_exec(sort_exprs, filter);
+
+        // CoalescePartitionsExec and SortExec are not directly consecutive. In this case
+        // we should be able to parallelize Sorting also (given that executors in between don't require)
+        // single partition.
+        let expected_input = vec![
+            "SortExec: [nullable_col@0 ASC]",
+            "  FilterExec: NOT non_nullable_col@1",
+            "    CoalescePartitionsExec",
+            "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "        ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        ];
+        let expected_optimized = vec![
+            "SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "  FilterExec: NOT non_nullable_col@1",
+            "    SortExec: [nullable_col@0 ASC]",
+            "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "        ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
     // With new change in SortEnforcement EnforceSorting->EnforceDistribution->EnforceSorting
     // should produce same result with EnforceDistribution+EnforceSorting
     // This enables us to use EnforceSorting possibly before EnforceDistribution
