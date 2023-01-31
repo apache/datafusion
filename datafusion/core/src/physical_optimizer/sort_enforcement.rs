@@ -197,14 +197,15 @@ struct PlanWithCorrespondingCoalescePartitions {
     // `CoalescePartitionsExec` till the current plan. Since we are sure
     // that a `CoalescePartitionsExec` can only be propagated on executors
     // with a single child, we use a single vector (not one for each child).
-    coalesce_onwards: Vec<Arc<dyn ExecutionPlan>>,
+    coalesce_onwards: Vec<Option<ExecTree>>,
 }
 
 impl PlanWithCorrespondingCoalescePartitions {
     pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
+        let length = plan.children().len();
         PlanWithCorrespondingCoalescePartitions {
             plan,
-            coalesce_onwards: vec![],
+            coalesce_onwards: vec![None; length],
         }
     }
 
@@ -230,11 +231,39 @@ impl TreeNodeRewritable for PlanWithCorrespondingCoalescePartitions {
                 .into_iter()
                 .map(transform)
                 .collect::<Result<Vec<_>>>()?;
-            let coalesce_onwards = children_requirements
-                .iter()
-                .map(|item| item.coalesce_onwards.clone())
-                .next()
-                .unwrap();
+            let mut coalesce_onwards = vec![];
+            for (idx, item) in children_requirements.iter().enumerate() {
+                if item.plan.as_any().is::<CoalescePartitionsExec>() {
+                    coalesce_onwards.push(Some(ExecTree {
+                        idx,
+                        children: vec![],
+                        plan: item.plan.clone(),
+                    }))
+                } else if !item.plan.children().is_empty() {
+                    let requires_single_partition = matches!(
+                        item.plan.required_input_distribution()[0],
+                        Distribution::SinglePartition
+                    );
+                    // The Executor above(not necessarily immediately above) CoalescePartitionExec doesn't require SinglePartition
+                    // hence CoalescePartitionExec is not a requirement of this executor.
+                    // We can propagate it upwards.
+                    let mut res = vec![];
+                    for elem in item.coalesce_onwards.iter().flatten() {
+                        res.push(elem.clone());
+                    }
+                    if !requires_single_partition && !res.is_empty() {
+                        coalesce_onwards.push(Some(ExecTree {
+                            idx,
+                            children: res,
+                            plan: item.plan.clone(),
+                        }));
+                    } else {
+                        coalesce_onwards.push(None);
+                    }
+                } else {
+                    coalesce_onwards.push(None);
+                }
+            }
             let children_plans = children_requirements
                 .iter()
                 .map(|item| item.plan.clone())
@@ -294,10 +323,6 @@ fn parallelize_sorts(
     if plan.children().is_empty() {
         return Ok(None);
     }
-    let requires_single_partition = matches!(
-        plan.required_input_distribution()[0],
-        Distribution::SinglePartition
-    );
     let mut coalesce_onwards = requirements.coalesce_onwards;
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         let sort_expr = sort_exec.expr();
@@ -305,51 +330,33 @@ fn parallelize_sorts(
         // (e.g all Executors in between doesn't require to work on SinglePartition).
         // We can replace CoalescePartitionsExec with SortExec and SortExec with SortPreservingMergeExec
         // respectively to parallelize sorting.
-        if let [first, ..] = coalesce_onwards.as_slice() {
-            let mut prev_layer = first.children()[0].clone();
-            if !ordering_satisfy(prev_layer.output_ordering(), Some(sort_expr), || {
-                sort_exec.equivalence_properties()
-            }) {
-                prev_layer = add_sort_above_child(&prev_layer, sort_expr.to_vec())?;
-            };
-            // In the loop below, we start from one as the first entry is a
-            // `CoalescePartitionsExec` and we are removing it from the plan.
-            for layer in coalesce_onwards.iter().skip(1) {
-                let mut children = layer.children();
-                children[0] = prev_layer;
-                prev_layer = layer.clone().with_new_children(children)?;
-            }
+        if coalesce_onwards[0].is_some() {
+            let mut prev_layer = plan.clone();
+            update_child_to_change_coalesce(
+                &mut prev_layer,
+                &mut coalesce_onwards[0],
+                sort_exec,
+            )?;
+
             let spm = SortPreservingMergeExec::new(sort_expr.to_vec(), prev_layer);
             return Ok(Some(PlanWithCorrespondingCoalescePartitions {
                 plan: Arc::new(spm),
-                coalesce_onwards: vec![],
+                coalesce_onwards: vec![None],
             }));
         }
-    } else if plan.as_any().is::<CoalescePartitionsExec>() {
-        // There is a CoalescePartitions that is unnecesary, remove it.
-        if let [first, ..] = coalesce_onwards.as_slice() {
-            let mut prev_layer = first.children()[0].clone();
-            for layer in coalesce_onwards.iter().skip(1) {
-                let mut children = layer.children();
-                children[0] = prev_layer;
-                prev_layer = layer.clone().with_new_children(children)?;
-            }
-            let new_plan = plan.clone().with_new_children(vec![prev_layer])?;
-            return Ok(Some(PlanWithCorrespondingCoalescePartitions {
-                plan: new_plan.clone(),
-                coalesce_onwards: vec![new_plan],
-            }));
-        } else {
-            // starting of coalesce partition
-            coalesce_onwards = vec![plan.clone()];
-        }
-    } else if !requires_single_partition && !coalesce_onwards.is_empty() {
-        // The Executor above(not necessarily immediately above) CoalescePartitionExec doesn't require SinglePartition
-        // hence CoalescePartitionExec is not a requirement of this executor.
-        // We can propagate it upwards.
-        coalesce_onwards.push(plan.clone());
-    } else {
-        coalesce_onwards.clear();
+    } else if plan.as_any().is::<CoalescePartitionsExec>()
+        && coalesce_onwards[0].is_some()
+    {
+        let mut prev_layer = plan.clone();
+        update_child_to_remove_unnecessary_coalesce(
+            &mut prev_layer,
+            &mut coalesce_onwards[0],
+        )?;
+        let new_plan = plan.with_new_children(vec![prev_layer])?;
+        return Ok(Some(PlanWithCorrespondingCoalescePartitions {
+            plan: new_plan,
+            coalesce_onwards: vec![None],
+        }));
     }
 
     Ok(Some(PlanWithCorrespondingCoalescePartitions {
@@ -605,6 +612,29 @@ fn analyze_window_sort_removal(
 }
 
 /// Updates child to remove the unnecessary sorting below it.
+fn update_child_to_change_coalesce(
+    child: &mut Arc<dyn ExecutionPlan>,
+    sort_onwards: &mut Option<ExecTree>,
+    sort_exec: &SortExec,
+) -> Result<()> {
+    if let Some(sort_onwards) = sort_onwards {
+        *child = change_corresponding_coalesce_in_sub_plan(sort_onwards, sort_exec)?;
+    }
+    Ok(())
+}
+
+/// Updates child to remove the unnecessary sorting below it.
+fn update_child_to_remove_unnecessary_coalesce(
+    child: &mut Arc<dyn ExecutionPlan>,
+    sort_onwards: &mut Option<ExecTree>,
+) -> Result<()> {
+    if let Some(sort_onwards) = sort_onwards {
+        *child = remove_corresponding_coalesce_in_sub_plan(sort_onwards)?;
+    }
+    Ok(())
+}
+
+/// Updates child to remove the unnecessary sorting below it.
 fn update_child_to_remove_unnecessary_sort(
     child: &mut Arc<dyn ExecutionPlan>,
     sort_onwards: &mut Option<ExecTree>,
@@ -641,6 +671,52 @@ fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExp
                 .to_string(),
         ))
     }
+}
+
+/// Removes the sort from the plan in `sort_onwards`.
+fn change_corresponding_coalesce_in_sub_plan(
+    sort_onwards: &mut ExecTree,
+    sort_exec: &SortExec,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let res = if sort_onwards.plan.as_any().is::<CoalescePartitionsExec>() {
+        let coalesce_input = sort_onwards.plan.children()[0].clone();
+        let sort_expr = sort_exec.expr();
+        if !ordering_satisfy(coalesce_input.output_ordering(), Some(sort_expr), || {
+            sort_exec.equivalence_properties()
+        }) {
+            add_sort_above_child(&coalesce_input, sort_expr.to_vec())?
+        } else {
+            coalesce_input
+        }
+    } else {
+        let res = sort_onwards.plan.clone();
+        let mut children = res.children();
+        for elem in &mut sort_onwards.children {
+            children[elem.idx] =
+                change_corresponding_coalesce_in_sub_plan(elem, sort_exec)?;
+        }
+        res.with_new_children(children)?
+    };
+
+    Ok(res)
+}
+
+/// Removes the sort from the plan in `sort_onwards`.
+fn remove_corresponding_coalesce_in_sub_plan(
+    sort_onwards: &mut ExecTree,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let res = if sort_onwards.plan.as_any().is::<CoalescePartitionsExec>() {
+        sort_onwards.plan.children()[0].clone()
+    } else {
+        let res = sort_onwards.plan.clone();
+        let mut children = res.children();
+        for elem in &mut sort_onwards.children {
+            children[elem.idx] = remove_corresponding_coalesce_in_sub_plan(elem)?;
+        }
+        res.with_new_children(children)?
+    };
+
+    Ok(res)
 }
 
 /// Removes the sort from the plan in `sort_onwards`.
