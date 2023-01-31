@@ -33,7 +33,8 @@ pub async fn create_table(
     if_not_exists: bool,
     or_replace: bool,
 ) -> Result<DBOutput> {
-    let table_reference = object_name_to_table_reference(name)?;
+    let table_reference =
+        object_name_to_table_reference(name, ctx.enable_ident_normalization())?;
     let existing_table = ctx.table(&table_reference).await;
     match (if_not_exists, or_replace, existing_table) {
         (true, false, Ok(_)) => Ok(DBOutput::StatementComplete(0)),

@@ -179,6 +179,18 @@ config_namespace! {
 }
 
 config_namespace! {
+    /// Options related to SQL parser
+    pub struct SqlParserOptions {
+        /// Whether to parse float as decimal
+        pub parse_float_as_decimal:bool, default = false
+
+        /// Whether to normalize ident
+        pub enable_ident_normalization: bool, default = true
+
+    }
+}
+
+config_namespace! {
     /// Options related to query execution
     pub struct ExecutionOptions {
         /// Default batch size while creating new batches, it's especially useful for
@@ -334,6 +346,8 @@ pub struct ConfigOptions {
     pub execution: ExecutionOptions,
     /// Optimizer options
     pub optimizer: OptimizerOptions,
+    /// Catalog options
+    pub sql_parser: SqlParserOptions,
     /// Explain options
     pub explain: ExplainOptions,
     /// Optional extensions registered using [`Extensions::insert`]

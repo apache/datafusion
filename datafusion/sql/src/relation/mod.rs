@@ -33,7 +33,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let (plan, alias) = match relation {
             TableFactor::Table { name, alias, .. } => {
                 // normalize name and alias
-                let table_ref = object_name_to_table_reference(name)?;
+                let table_ref = object_name_to_table_reference(
+                    name,
+                    self.options.enable_ident_normalization,
+                )?;
                 let table_name = table_ref.to_string();
                 let cte = planner_context.ctes.get(&table_name);
                 (
