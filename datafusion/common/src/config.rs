@@ -182,7 +182,7 @@ config_namespace! {
     /// Options related to SQL parser
     pub struct SqlParserOptions {
         /// Whether to parse float as decimal
-        pub parse_float_as_decimal:bool, default = false
+        pub parse_float_as_decimal: bool, default = false
 
         /// Whether to normalize ident
         pub enable_ident_normalization: bool, default = true
