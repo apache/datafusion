@@ -44,4 +44,4 @@ log = "^0.4"
 sqlparser = "0.30"
 
 [dev-dependencies]
-rstest = "*"
+rstest = "0.16"
