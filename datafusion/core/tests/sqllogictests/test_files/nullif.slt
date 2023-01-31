@@ -31,55 +31,60 @@ CREATE TABLE test(
 ;
 
 # Arrays tests
-query T
+query T rowsort
 SELECT NULLIF(int_field, 2) FROM test;
 ----
 1
-NULL
 3
-NULL
 4
 NULL
+NULL
+NULL
 
-query T
+
+query T rowsort
 SELECT NULLIF(bool_field, false) FROM test;
 ----
+NULL
+NULL
+NULL
+NULL
 true
-NULL
-NULL
-NULL
-NULL
 true
 
-query T
+
+query T rowsort
 SELECT NULLIF(text_field, 'zxc') FROM test;
 ----
+NULL
+NULL
+NULL
 abc
 def
 ghij
-NULL
-NULL
-NULL
 
-query T
+
+query T rowsort
 SELECT NULLIF(int_field, more_ints) FROM test;
 ----
 1
-NULL
-NULL
-NULL
 4
 NULL
+NULL
+NULL
+NULL
 
-query T
+
+query T rowsort
 SELECT NULLIF(3, int_field) FROM test;
 ----
 3
 3
+3
+3
+3
 NULL
-3
-3
-3
+
 
 # Scalar values tests
 query T
