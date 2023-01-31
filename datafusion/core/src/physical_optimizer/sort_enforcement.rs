@@ -97,9 +97,9 @@ impl ExecTree {
 #[derive(Debug, Clone)]
 struct PlanWithCorrespondingSort {
     plan: Arc<dyn ExecutionPlan>,
-    // For every child, keep a vector of `ExecutionPlan`s starting from the
-    // closest `SortExec` till the current plan. The first index of the tuple is
-    // the child index of the plan -- we need this information as we make updates.
+    // For every child, keep a tree of `ExecutionPlan`s starting from the
+    // child till SortExecs that determine ordering of child. If child has linkage to nay Sort
+    // do not keep a tree for that child (e.g use None).
     sort_onwards: Vec<Option<ExecTree>>,
 }
 
@@ -140,40 +140,40 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
                 .map(|(idx, item)| {
                     let flags = item.plan.maintains_input_order();
                     let required_ordering = item.plan.required_input_ordering();
-                    // The `sort_onwards` list starts from the sort-introducing operator
-                    // (e.g `SortExec`, `SortPreservingMergeExec`) and collects all the
-                    // intermediate executors that maintain this ordering. If we are at
-                    // the beginning, both `SortExec` and `SortPreservingMergeExec` doesn't
-                    // maintain ordering (as they introduce the ordering). However, we want
-                    // to propagate them above anyway.
                     let mut res = vec![];
                     for (maintains, element, required_ordering) in
                         izip!(flags, item.sort_onwards.clone(), required_ordering)
                     {
-                        if (maintains || item.plan.as_any().is::<UnionExec>())
+                        if (maintains
+                              // partially maintains ordering
+                              || (item.plan.as_any().is::<UnionExec>() && item.plan.output_ordering().is_some()))
                             && element.is_some()
                             && required_ordering.is_none()
                             // Sorts under limit are not removable.
                             && !is_limit(&item.plan)
                         {
-                            // return element.clone();
                             res.push(element.clone().unwrap());
                         }
                     }
-                    // None
-                    if !res.is_empty() {
-                        Some(ExecTree {
-                            idx,
-                            plan: item.plan.clone(),
-                            children: res,
-                        })
-                    } else if is_sort(&item.plan) {
+                    // The `sort_onwards` list starts from the sort-introducing operator
+                    // (e.g `SortExec`, `SortPreservingMergeExec`) and collects all the
+                    // intermediate executors that maintain this ordering. If we are at
+                    // the beginning, we reset tree, and start from bottom.
+                    if is_sort(&item.plan) {
                         Some(ExecTree {
                             idx,
                             plan: item.plan.clone(),
                             children: vec![],
                         })
+                    } // Add parent node to the tree
+                    else if !res.is_empty() {
+                        Some(ExecTree {
+                            idx,
+                            plan: item.plan.clone(),
+                            children: res,
+                        })
                     } else {
+                        // There is no sort linkage for this child
                         None
                     }
                 })
