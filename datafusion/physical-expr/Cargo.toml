@@ -45,7 +45,7 @@ unicode_expressions = ["unicode-segmentation"]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 arrow = { version = "31.0.0", features = ["prettyprint"] }
 arrow-buffer = "31.0.0"
-arrow-schema = "31.0.0"
+arrow-schema = "32.0.0"
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
 chrono = { version = "0.4.23", default-features = false }
