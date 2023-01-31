@@ -99,8 +99,7 @@ impl FlightSqlServiceImpl {
             Ok(context.clone())
         } else {
             Err(Status::internal(format!(
-                "Context handle not found: {}",
-                handle
+                "Context handle not found: {handle}"
             )))?
         }
     }
@@ -110,8 +109,7 @@ impl FlightSqlServiceImpl {
             Ok(plan.clone())
         } else {
             Err(Status::internal(format!(
-                "Statement handle not found: {}",
-                handle
+                "Statement handle not found: {handle}"
             )))?
         }
     }
@@ -121,8 +119,7 @@ impl FlightSqlServiceImpl {
             Ok(result.clone())
         } else {
             Err(Status::internal(format!(
-                "Request handle not found: {}",
-                handle
+                "Request handle not found: {handle}"
             )))?
         }
     }
@@ -477,7 +474,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("do_action_create_prepared_statement: {user_query}");
         let uuid = Uuid::new_v4().hyphenated().to_string();
         let session_config = SessionConfig::from_env()
-            .map_err(|e| Status::internal(format!("Error building plan: {}", e)))?
+            .map_err(|e| Status::internal(format!("Error building plan: {e}")))?
             .with_information_schema(true);
         let ctx = Arc::new(SessionContext::with_config(session_config));
         let testdata = datafusion::test_util::parquet_test_data();
@@ -497,7 +494,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .sql(user_query)
             .await
             .and_then(|df| df.into_optimized_plan())
-            .map_err(|e| Status::internal(format!("Error building plan: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Error building plan: {e}")))?;
 
         // store a copy of the plan,  it will be used for execution
         self.statements.insert(uuid.clone(), plan.clone());
