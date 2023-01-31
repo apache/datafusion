@@ -251,12 +251,12 @@ impl FileOpener for CsvOpener {
                     let s = futures::stream::poll_fn(move |cx| {
                         loop {
                             if buffered.is_empty() {
-                                buffered = match ready!(input.poll_next_unpin(cx)) {
-                                    Some(Ok(b)) => b,
+                                match ready!(input.poll_next_unpin(cx)) {
+                                    Some(Ok(b)) => buffered = b,
                                     Some(Err(e)) => {
                                         return Poll::Ready(Some(Err(e.into())))
                                     }
-                                    None => break,
+                                    None => {}
                                 };
                             }
                             let decoded = match decoder.decode(buffered.as_ref()) {
@@ -646,6 +646,38 @@ mod tests {
             )),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn test_no_trailing_delimiter() {
+        let session_ctx = SessionContext::new();
+        let store = object_store::memory::InMemory::new();
+
+        let data = bytes::Bytes::from("a,b\n1,2\n3,4");
+        let path = object_store::path::Path::from("a.csv");
+        store.put(&path, data).await.unwrap();
+
+        session_ctx
+            .runtime_env()
+            .register_object_store("memory", "", Arc::new(store));
+
+        let df = session_ctx
+            .read_csv("memory:///", CsvReadOptions::new())
+            .await
+            .unwrap();
+
+        let result = df.collect().await.unwrap();
+
+        let expected = vec![
+            "+---+---+",
+            "| a | b |",
+            "+---+---+",
+            "| 1 | 2 |",
+            "| 3 | 4 |",
+            "+---+---+",
+        ];
+
+        crate::assert_batches_eq!(expected, &result);
     }
 
     #[tokio::test]
