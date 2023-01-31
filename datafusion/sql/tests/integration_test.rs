@@ -92,7 +92,7 @@ fn parse_ident_normalization() {
                 enable_ident_normalization,
             },
         );
-        assert_eq!(expected, format!("{:?}", plan));
+        assert_eq!(expected, format!("{plan:?}"));
     }
 }
 
