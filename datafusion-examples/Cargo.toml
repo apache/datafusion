@@ -35,7 +35,7 @@ required-features = ["datafusion/avro"]
 
 [dev-dependencies]
 arrow = "31.0.0"
-arrow-flight = "31.0.0"
+arrow-flight = "32.0.0"
 async-trait = "0.1.41"
 datafusion = { path = "../datafusion/core" }
 datafusion-common = { path = "../datafusion/common" }
