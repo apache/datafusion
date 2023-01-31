@@ -34,6 +34,7 @@ use crate::error::Result;
 use crate::physical_optimizer::utils::add_sort_above_child;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -78,11 +79,15 @@ struct ExecTree {
 
 impl ExecTree {
     /// Executor at the leaf of the tree
-    fn bottom_executor(&self) -> Arc<dyn ExecutionPlan> {
+    fn bottom_executors(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         if !self.children.is_empty() {
-            self.children[0].bottom_executor()
+            let mut res = vec![];
+            for child in &self.children {
+                res.extend(child.bottom_executors())
+            }
+            res
         } else {
-            self.plan.clone()
+            vec![self.plan.clone()]
         }
     }
 }
@@ -148,6 +153,8 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
                         if (maintains || item.plan.as_any().is::<UnionExec>())
                             && element.is_some()
                             && required_ordering.is_none()
+                            // Sorts under limit are not removable.
+                            && !is_limit(&item.plan)
                         {
                             // return element.clone();
                             res.push(element.clone().unwrap());
@@ -351,6 +358,11 @@ fn parallelize_sorts(
     }))
 }
 
+// Checks whether executor is limit executor (e.g either LocalLimitExec or GlobalLimitExec)
+fn is_limit(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<GlobalLimitExec>() || plan.as_any().is::<LocalLimitExec>()
+}
+
 // Checks whether executor is Sort
 // TODO: Add support for SortPreservingMergeExec also.
 fn is_sort(plan: &Arc<dyn ExecutionPlan>) -> bool {
@@ -395,31 +407,12 @@ fn ensure_sorting(
                     })
                 }
                 if let Some(sort_onward) = sort_onwards {
-                    // The ordering requirement is met, we can analyze if there is an unnecessary sort:
-                    let sort_any = sort_onward.bottom_executor();
-                    let sort_output_ordering = sort_any.output_ordering();
-                    // Variable `sort_any` will either be a `SortExec` or a
-                    // `SortPreservingMergeExec`, and both have single child.
-                    // Therefore, we can use the 0th index without loss of generality.
-                    let sort_input = sort_any.children()[0].clone();
-                    let sort_input_ordering = sort_input.output_ordering();
-                    // Simple analysis: Does the input of the sort in question already satisfy the ordering requirements?
-                    if ordering_satisfy(sort_input_ordering, sort_output_ordering, || {
-                        sort_input.equivalence_properties()
-                    }) {
-                        update_child_to_remove_unnecessary_sort(child, sort_onwards)?;
-                    }
                     // For window expressions, we can remove some sorts when we can
                     // calculate the result in reverse:
-                    else if let Some(exec) =
-                        plan.as_any().downcast_ref::<WindowAggExec>()
-                    {
+                    if let Some(exec) = plan.as_any().downcast_ref::<WindowAggExec>() {
                         if let Some(result) = analyze_window_sort_removal(
                             exec.window_expr(),
                             &exec.partition_keys,
-                            &sort_input,
-                            sort_output_ordering,
-                            sort_input_ordering,
                             sort_onward,
                         )? {
                             return Ok(Some(result));
@@ -432,9 +425,6 @@ fn ensure_sorting(
                         if let Some(result) = analyze_window_sort_removal(
                             exec.window_expr(),
                             &exec.partition_keys,
-                            &sort_input,
-                            sort_output_ordering,
-                            sort_input_ordering,
                             sort_onward,
                         )? {
                             return Ok(Some(result));
@@ -534,26 +524,48 @@ fn analyze_immediate_sort_removal(
 fn analyze_window_sort_removal(
     window_expr: &[Arc<dyn WindowExpr>],
     partition_keys: &[Arc<dyn PhysicalExpr>],
-    sort_input: &Arc<dyn ExecutionPlan>,
-    sort_output_ordering: Option<&[PhysicalSortExpr]>,
-    physical_ordering: Option<&[PhysicalSortExpr]>,
     sort_onward: &mut ExecTree,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
-    let required_ordering = sort_output_ordering.ok_or_else(|| {
-        DataFusionError::Plan("A SortExec should have output ordering".to_string())
-    })?;
-    let physical_ordering = if let Some(physical_ordering) = physical_ordering {
-        physical_ordering
-    } else {
-        // If there is no physical ordering, there is no way to remove a sort -- immediately return:
-        return Ok(None);
-    };
-    let (can_skip_sorting, should_reverse) = can_skip_sort(
-        window_expr[0].partition_by(),
-        required_ordering,
-        &sort_input.schema(),
-        physical_ordering,
-    )?;
+    let bottom_sorts = sort_onward.bottom_executors();
+    let mut can_skip_sortings = vec![];
+    let mut should_reverses = vec![];
+    let mut physical_ordering_common = vec![];
+    for sort_any in bottom_sorts {
+        let sort_output_ordering = sort_any.output_ordering();
+        // Variable `sort_any` will either be a `SortExec` or a
+        // `SortPreservingMergeExec`, and both have single child.
+        // Therefore, we can use the 0th index without loss of generality.
+        let sort_input = sort_any.children()[0].clone();
+        let physical_ordering = sort_input.output_ordering();
+        let required_ordering = sort_output_ordering.ok_or_else(|| {
+            DataFusionError::Plan("A SortExec should have output ordering".to_string())
+        })?;
+        let physical_ordering = if let Some(physical_ordering) = physical_ordering {
+            physical_ordering
+        } else {
+            // If there is no physical ordering, there is no way to remove a sort -- immediately return:
+            return Ok(None);
+        };
+        if physical_ordering.len() < physical_ordering_common.len()
+            || physical_ordering_common.is_empty()
+        {
+            physical_ordering_common = physical_ordering.to_vec();
+        }
+        let (can_skip_sorting, should_reverse) = can_skip_sort(
+            window_expr[0].partition_by(),
+            required_ordering,
+            &sort_input.schema(),
+            physical_ordering,
+        )?;
+        can_skip_sortings.push(can_skip_sorting);
+        should_reverses.push(should_reverse);
+    }
+    let can_skip_sorting = can_skip_sortings.iter().all(|elem| *elem);
+    let can_skip_sorting = can_skip_sorting
+        && should_reverses
+            .iter()
+            .all(|elem| *elem == should_reverses[0]);
+    let should_reverse = should_reverses[0];
     if can_skip_sorting {
         let new_window_expr = if should_reverse {
             window_expr
@@ -575,7 +587,7 @@ fn analyze_window_sort_removal(
                     new_child,
                     new_schema,
                     partition_keys.to_vec(),
-                    Some(physical_ordering.to_vec()),
+                    Some(physical_ordering_common),
                 )?) as _
             } else {
                 Arc::new(WindowAggExec::try_new(
@@ -583,7 +595,7 @@ fn analyze_window_sort_removal(
                     new_child,
                     new_schema,
                     partition_keys.to_vec(),
-                    Some(physical_ordering.to_vec()),
+                    Some(physical_ordering_common),
                 )?) as _
             };
             return Ok(Some(PlanWithCorrespondingSort::new(new_plan)));
