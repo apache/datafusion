@@ -345,6 +345,7 @@ fn parallelize_sorts(
             }));
         }
     } else if plan.as_any().is::<CoalescePartitionsExec>()
+        // CoalescePartitionsExec have single child, we can use 0th index safely.
         && coalesce_onwards[0].is_some()
     {
         // There is a redundant CoalescePartitionExec in the plan
@@ -378,6 +379,9 @@ fn ensure_sorting(
     requirements: PlanWithCorrespondingSort,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
     // Perform naive analysis at the beginning -- remove already-satisfied sorts:
+    if requirements.plan.children().is_empty() {
+        return Ok(None);
+    }
     if let Some(result) = analyze_immediate_sort_removal(&requirements)? {
         return Ok(Some(result));
     }
@@ -466,15 +470,11 @@ fn ensure_sorting(
             (None, None) => {}
         }
     }
-    if plan.children().is_empty() {
-        Ok(Some(requirements))
-    } else {
-        let new_plan = requirements.plan.with_new_children(new_children)?;
-        Ok(Some(PlanWithCorrespondingSort {
-            plan: new_plan,
-            sort_onwards: new_onwards,
-        }))
-    }
+    let new_plan = requirements.plan.with_new_children(new_children)?;
+    Ok(Some(PlanWithCorrespondingSort {
+        plan: new_plan,
+        sort_onwards: new_onwards,
+    }))
 }
 
 /// Analyzes a given `SortExec` to determine whether its input already has
