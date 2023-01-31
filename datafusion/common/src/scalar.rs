@@ -1592,7 +1592,8 @@ impl ScalarValue {
             | DataType::Interval(_)
             | DataType::LargeList(_)
             | DataType::Union(_, _, _)
-            | DataType::Map(_, _) => {
+            | DataType::Map(_, _)
+            | DataType::RunEndEncoded(_, _) => {
                 return Err(DataFusionError::Internal(format!(
                     "Unsupported creation of {:?} array from ScalarValue {:?}",
                     data_type,

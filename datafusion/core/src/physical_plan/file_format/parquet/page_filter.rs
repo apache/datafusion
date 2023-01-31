@@ -385,7 +385,10 @@ macro_rules! get_min_max_values_for_page_index {
                     let vec = &index.indexes;
                     Decimal128Array::from(
                         vec.iter()
-                            .map(|x| x.$func().and_then(|x| Some(from_bytes_to_i128(x))))
+                            .map(|x| {
+                                x.$func()
+                                    .and_then(|x| Some(from_bytes_to_i128(x.as_ref())))
+                            })
                             .collect::<Vec<Option<i128>>>(),
                     )
                     .with_precision_and_scale(*precision, *scale)
@@ -397,7 +400,7 @@ macro_rules! get_min_max_values_for_page_index {
                     let array: StringArray = vec
                         .iter()
                         .map(|x| x.$func())
-                        .map(|x| x.and_then(|x| std::str::from_utf8(x).ok()))
+                        .map(|x| x.and_then(|x| std::str::from_utf8(x.as_ref()).ok()))
                         .collect();
                     Some(Arc::new(array))
                 }
@@ -411,7 +414,10 @@ macro_rules! get_min_max_values_for_page_index {
                     let vec = &index.indexes;
                     Decimal128Array::from(
                         vec.iter()
-                            .map(|x| x.$func().and_then(|x| Some(from_bytes_to_i128(x))))
+                            .map(|x| {
+                                x.$func()
+                                    .and_then(|x| Some(from_bytes_to_i128(x.as_ref())))
+                            })
                             .collect::<Vec<Option<i128>>>(),
                     )
                     .with_precision_and_scale(*precision, *scale)
