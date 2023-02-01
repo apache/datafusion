@@ -200,7 +200,8 @@ impl ExecutionPlan for AnalyzeExec {
                     Arc::new(type_builder.finish()),
                     Arc::new(plan_builder.finish()),
                 ],
-            );
+            )
+            .map_err(Into::into);
             // again ignore error
             tx.send(maybe_batch).await.ok();
         });

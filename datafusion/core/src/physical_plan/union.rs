@@ -25,7 +25,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
 
-use arrow::error::Result as ArrowResult;
 use arrow::{
     datatypes::{Field, Schema, SchemaRef},
     record_batch::RecordBatch,
@@ -48,7 +47,6 @@ use crate::{
     error::Result,
     physical_plan::{expressions, metrics::BaselineMetrics},
 };
-use datafusion_physical_expr::utils::ordering_satisfy;
 use tokio::macros::support::thread_rng_n;
 
 /// `UnionExec`: `UNION ALL` execution plan.
@@ -240,14 +238,20 @@ impl ExecutionPlan for UnionExec {
         // which is the "meet" of all input orderings. In this example, this
         // function will return vec![false, true, true], indicating that we
         // preserve the orderings for the 2nd and the 3rd children.
-        self.inputs()
-            .iter()
-            .map(|child| {
-                ordering_satisfy(self.output_ordering(), child.output_ordering(), || {
-                    child.equivalence_properties()
+        if let Some(output_ordering) = self.output_ordering() {
+            self.inputs()
+                .iter()
+                .map(|child| {
+                    if let Some(child_ordering) = child.output_ordering() {
+                        output_ordering.len() == child_ordering.len()
+                    } else {
+                        false
+                    }
                 })
-            })
-            .collect()
+                .collect()
+        } else {
+            vec![false; self.inputs().len()]
+        }
     }
 
     fn with_new_children(
@@ -358,7 +362,7 @@ impl RecordBatchStream for CombinedRecordBatchStream {
 }
 
 impl Stream for CombinedRecordBatchStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -426,7 +430,7 @@ impl RecordBatchStream for ObservedStream {
 }
 
 impl futures::Stream for ObservedStream {
-    type Item = arrow::error::Result<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,

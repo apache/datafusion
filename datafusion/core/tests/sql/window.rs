@@ -1474,7 +1474,7 @@ async fn window_frame_creation() -> Result<()> {
     let results = df.collect().await;
     assert_contains!(
         results.err().unwrap().to_string(),
-        "Arrow error: External error: Internal error: Operator - is not implemented for types UInt32(1) and Utf8(\"1 DAY\")"
+        "External error: Internal error: Operator - is not implemented for types UInt32(1) and Utf8(\"1 DAY\"). This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
     );
 
     Ok(())
@@ -2459,6 +2459,34 @@ async fn test_window_agg_with_global_limit() -> Result<()> {
         "+----------------------------------+",
         "| [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm] |",
         "+----------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+async fn test_window_agg_low_cardinality() -> Result<()> {
+    let config = SessionConfig::new().with_target_partitions(32);
+    let ctx = SessionContext::with_config(config);
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT
+        SUM(c4) OVER(PARTITION BY c4 ORDER BY c3 GROUPS BETWEEN 1 PRECEDING AND 3 FOLLOWING) as summation1,
+        SUM(c5) OVER(PARTITION BY c4 ORDER BY c4 GROUPS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as summation2
+    FROM aggregate_test_100
+    ORDER BY c9
+    LIMIT 5";
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------------+-------------+",
+        "| summation1 | summation2  |",
+        "+------------+-------------+",
+        "| -16110     | 61035129    |",
+        "| 3917       | -108973366  |",
+        "| -16974     | 623103518   |",
+        "| -1114      | -1927628110 |",
+        "| 15673      | -1899175111 |",
+        "+------------+-------------+",
     ];
     assert_batches_eq!(expected, &actual);
 

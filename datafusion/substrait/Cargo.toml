@@ -17,6 +17,8 @@
 
 [package]
 name = "datafusion-substrait"
+description = "DataFusion Substrait Producer and Consumer"
+license = "Apache-2.0"
 version = "17.0.0"
 edition = "2021"
 rust-version = "1.62"

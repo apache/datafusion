@@ -46,8 +46,44 @@ pub enum RewriteRecursion {
 
 /// Trait for potentially recursively rewriting an [`Expr`] expression
 /// tree. When passed to `Expr::rewrite`, `ExpressionVisitor::mutate` is
-/// invoked recursively on all nodes of an expression tree. See the
-/// comments on `Expr::rewrite` for details on its use
+/// invoked recursively on all nodes of an expression tree.
+///
+/// Performs a depth first walk of an expression and its children
+/// to rewrite an expression, consuming `self` producing a new
+/// [`Expr`].
+///
+/// Implements a modified version of the [visitor
+/// pattern](https://en.wikipedia.org/wiki/Visitor_pattern) to
+/// separate algorithms from the structure of the `Expr` tree and
+/// make it easier to write new, efficient expression
+/// transformation algorithms.
+///
+/// For an expression tree such as
+/// ```text
+/// BinaryExpr (GT)
+///    left: Column("foo")
+///    right: Column("bar")
+/// ```
+///
+/// The nodes are visited using the following order
+/// ```text
+/// pre_visit(BinaryExpr(GT))
+/// pre_visit(Column("foo"))
+/// mutate(Column("foo"))
+/// pre_visit(Column("bar"))
+/// mutate(Column("bar"))
+/// mutate(BinaryExpr(GT))
+/// ```
+///
+/// If an Err result is returned, recursion is stopped immediately
+///
+/// If [`false`] is returned on a call to pre_visit, no
+/// children of that expression are visited, nor is mutate
+/// called on that expression
+///
+/// # See Also:
+/// * [`Expr::accept`] to drive a rewriter through an [`Expr`]
+/// * [`rewrite_expr`]: For rewriting an [`Expr`] using functions
 pub trait ExprRewriter<E: ExprRewritable = Expr>: Sized {
     /// Invoked before any children of `expr` are rewritten /
     /// visited. Default implementation returns `Ok(RewriteRecursion::Continue)`
@@ -67,39 +103,7 @@ pub trait ExprRewritable: Sized {
 }
 
 impl ExprRewritable for Expr {
-    /// Performs a depth first walk of an expression and its children
-    /// to rewrite an expression, consuming `self` producing a new
-    /// [`Expr`].
-    ///
-    /// Implements a modified version of the [visitor
-    /// pattern](https://en.wikipedia.org/wiki/Visitor_pattern) to
-    /// separate algorithms from the structure of the `Expr` tree and
-    /// make it easier to write new, efficient expression
-    /// transformation algorithms.
-    ///
-    /// For an expression tree such as
-    /// ```text
-    /// BinaryExpr (GT)
-    ///    left: Column("foo")
-    ///    right: Column("bar")
-    /// ```
-    ///
-    /// The nodes are visited using the following order
-    /// ```text
-    /// pre_visit(BinaryExpr(GT))
-    /// pre_visit(Column("foo"))
-    /// mutate(Column("foo"))
-    /// pre_visit(Column("bar"))
-    /// mutate(Column("bar"))
-    /// mutate(BinaryExpr(GT))
-    /// ```
-    ///
-    /// If an Err result is returned, recursion is stopped immediately
-    ///
-    /// If [`false`] is returned on a call to pre_visit, no
-    /// children of that expression are visited, nor is mutate
-    /// called on that expression
-    ///
+    /// see comments on [`ExprRewritable`] for details
     fn rewrite<R>(self, rewriter: &mut R) -> Result<Self>
     where
         R: ExprRewriter<Self>,
@@ -348,27 +352,14 @@ pub fn normalize_col_with_schemas(
     schemas: &[&Arc<DFSchema>],
     using_columns: &[HashSet<Column>],
 ) -> Result<Expr> {
-    struct ColumnNormalizer<'a> {
-        schemas: &'a [&'a Arc<DFSchema>],
-        using_columns: &'a [HashSet<Column>],
-    }
-
-    impl<'a> ExprRewriter for ColumnNormalizer<'a> {
-        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-            if let Expr::Column(c) = expr {
-                Ok(Expr::Column(c.normalize_with_schemas(
-                    self.schemas,
-                    self.using_columns,
-                )?))
-            } else {
-                Ok(expr)
-            }
+    rewrite_expr(expr, |expr| {
+        if let Expr::Column(c) = expr {
+            Ok(Expr::Column(
+                c.normalize_with_schemas(schemas, using_columns)?,
+            ))
+        } else {
+            Ok(expr)
         }
-    }
-
-    expr.rewrite(&mut ColumnNormalizer {
-        schemas,
-        using_columns,
     })
 }
 
@@ -386,24 +377,16 @@ pub fn normalize_cols(
 /// Recursively replace all Column expressions in a given expression tree with Column expressions
 /// provided by the hash map argument.
 pub fn replace_col(e: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<Expr> {
-    struct ColumnReplacer<'a> {
-        replace_map: &'a HashMap<&'a Column, &'a Column>,
-    }
-
-    impl<'a> ExprRewriter for ColumnReplacer<'a> {
-        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-            if let Expr::Column(c) = &expr {
-                match self.replace_map.get(c) {
-                    Some(new_c) => Ok(Expr::Column((*new_c).to_owned())),
-                    None => Ok(expr),
-                }
-            } else {
-                Ok(expr)
+    rewrite_expr(e, |expr| {
+        if let Expr::Column(c) = &expr {
+            match replace_map.get(c) {
+                Some(new_c) => Ok(Expr::Column((*new_c).to_owned())),
+                None => Ok(expr),
             }
+        } else {
+            Ok(expr)
         }
-    }
-
-    e.rewrite(&mut ColumnReplacer { replace_map })
+    })
 }
 
 /// Recursively 'unnormalize' (remove all qualifiers) from an
@@ -412,30 +395,68 @@ pub fn replace_col(e: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<E
 /// For example, if there were expressions like `foo.bar` this would
 /// rewrite it to just `bar`.
 pub fn unnormalize_col(expr: Expr) -> Expr {
-    struct RemoveQualifier {}
-
-    impl ExprRewriter for RemoveQualifier {
-        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-            if let Expr::Column(col) = expr {
-                // let Column { relation: _, name } = col;
-                Ok(Expr::Column(Column {
-                    relation: None,
-                    name: col.name,
-                }))
-            } else {
-                Ok(expr)
-            }
+    rewrite_expr(expr, |expr| {
+        if let Expr::Column(col) = expr {
+            Ok(Expr::Column(Column {
+                relation: None,
+                name: col.name,
+            }))
+        } else {
+            Ok(expr)
         }
-    }
-
-    expr.rewrite(&mut RemoveQualifier {})
-        .expect("Unnormalize is infallable")
+    })
+    .expect("Unnormalize is infallable")
 }
 
 /// Recursively un-normalize all Column expressions in a list of expression trees
 #[inline]
 pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
     exprs.into_iter().map(unnormalize_col).collect()
+}
+
+/// Implementation of [`ExprRewriter`] that calls a function, for use
+/// with [`rewrite_expr`]
+struct RewriterAdapter<F> {
+    f: F,
+}
+
+impl<F> ExprRewriter for RewriterAdapter<F>
+where
+    F: FnMut(Expr) -> Result<Expr>,
+{
+    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+        (self.f)(expr)
+    }
+}
+
+/// Recursively rewrite an [`Expr`] via a function.
+///
+/// Rewrites the expression bottom up by recursively calling `f(expr)`
+/// on `expr`'s children and then on `expr`. See [`ExprRewriter`]
+/// for more details and more options to control the walk.
+///
+/// # Example:
+/// ```
+/// # use datafusion_expr::*;
+/// # use datafusion_expr::expr_rewriter::rewrite_expr;
+/// let expr = col("a") + lit(1);
+///
+/// // rewrite all literals to 42
+/// let rewritten = rewrite_expr(expr, |e| {
+///   if let Expr::Literal(_) = e {
+///     Ok(lit(42))
+///   } else {
+///     Ok(e)
+///   }
+/// }).unwrap();
+///
+/// assert_eq!(rewritten, col("a") + lit(42));
+/// ```
+pub fn rewrite_expr<F>(expr: Expr, f: F) -> Result<Expr>
+where
+    F: FnMut(Expr) -> Result<Expr>,
+{
+    expr.rewrite(&mut RewriterAdapter { f })
 }
 
 /// Returns plan with expressions coerced to types compatible with

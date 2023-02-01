@@ -32,10 +32,10 @@ use crate::physical_plan::{
 use arrow::compute::{
     concat, concat_batches, lexicographical_partition_ranges, SortColumn,
 };
+use arrow::error::ArrowError;
 use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
-    error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
 use datafusion_common::DataFusionError;
@@ -326,15 +326,13 @@ impl WindowAggStream {
         }
     }
 
-    fn compute_aggregates(&self) -> ArrowResult<RecordBatch> {
+    fn compute_aggregates(&self) -> Result<RecordBatch> {
         // record compute time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
-
-        if self.batches.is_empty() {
+        let batch = concat_batches(&self.input.schema(), &self.batches)?;
+        if batch.num_rows() == 0 {
             return Ok(RecordBatch::new_empty(self.schema.clone()));
         }
-
-        let batch = concat_batches(&self.input.schema(), &self.batches)?;
 
         let partition_by_sort_keys = self
             .partition_by_sort_keys
@@ -348,20 +346,17 @@ impl WindowAggStream {
         // Calculate window cols
         for partition_point in partition_points {
             let length = partition_point.end - partition_point.start;
-            partition_results.push(
-                compute_window_aggregates(
-                    &self.window_expr,
-                    &batch.slice(partition_point.start, length),
-                )
-                .map_err(|e| ArrowError::ExternalError(Box::new(e)))?,
-            )
+            partition_results.push(compute_window_aggregates(
+                &self.window_expr,
+                &batch.slice(partition_point.start, length),
+            )?)
         }
         let columns = transpose(partition_results)
             .iter()
             .map(|elems| concat(&elems.iter().map(|x| x.as_ref()).collect::<Vec<_>>()))
             .collect::<Vec<_>>()
             .into_iter()
-            .collect::<ArrowResult<Vec<ArrayRef>>>()?;
+            .collect::<Result<Vec<ArrayRef>, ArrowError>>()?;
 
         // combine with the original cols
         // note the setup of window aggregates is that they newly calculated window
@@ -369,7 +364,7 @@ impl WindowAggStream {
         let mut batch_columns = batch.columns().to_vec();
         // calculate window cols
         batch_columns.extend_from_slice(&columns);
-        RecordBatch::try_new(self.schema.clone(), batch_columns)
+        Ok(RecordBatch::try_new(self.schema.clone(), batch_columns)?)
     }
 
     /// Evaluates the partition points given the sort columns. If the sort columns are
@@ -393,7 +388,7 @@ impl WindowAggStream {
 }
 
 impl Stream for WindowAggStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -409,7 +404,7 @@ impl WindowAggStream {
     fn poll_next_inner(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<ArrowResult<RecordBatch>>> {
+    ) -> Poll<Option<Result<RecordBatch>>> {
         if self.finished {
             return Poll::Ready(None);
         }
