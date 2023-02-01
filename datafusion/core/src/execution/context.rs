@@ -1486,10 +1486,9 @@ impl SessionState {
             // The EnforceSorting rule is for adding essential local sorting to satisfy the required
             // ordering. Please make sure that the whole plan tree is determined before this rule.
             // Note that one should always run this rule after running the EnforceDistribution rule
-            // as the latter may break local sorting requirements. The EnforceSorting rule takes a
-            // boolean flag indicating whether we elect to transform CoalescePartitionsExec + SortExec
-            // cascades into SortExec + SortPreservingMergeExec cascades, which enables us to perform
-            // sorting parallel.
+            // as the latter may break local sorting requirements. The rule takes a boolean flag
+            // indicating whether we elect to transform CoalescePartitionsExec + SortExec cascades
+            // into SortExec + SortPreservingMergeExec cascades, enabling parallel sorting.
             Arc::new(EnforceSorting::new(true)),
             // The CoalesceBatches rule will not influence the distribution and ordering of the
             // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
