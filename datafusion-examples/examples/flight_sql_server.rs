@@ -531,9 +531,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _request: Request<Streaming<FlightData>>,
     ) -> Result<i64, Status> {
         info!("do_put_prepared_statement_update");
-        Err(Status::unimplemented(
-            "Implement do_put_prepared_statement_update",
-        ))
+        // statements like "CREATE TABLE.." or "SET datafusion.nnn.." call this function
+        // and we are required to return some row count here
+        Ok(-1)
     }
 
     async fn do_action_create_prepared_statement(
