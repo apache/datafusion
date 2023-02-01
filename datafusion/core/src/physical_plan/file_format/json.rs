@@ -21,7 +21,6 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::SessionState;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::file_format::delimited_stream::newline_delimited_stream;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -30,17 +29,19 @@ use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
-use arrow::json::reader::DecoderOptions;
 use arrow::{datatypes::SchemaRef, json};
 
-use bytes::Buf;
+use bytes::{Buf, Bytes};
 
-use futures::{StreamExt, TryStreamExt};
+use arrow::json::RawReaderBuilder;
+use futures::{ready, stream, StreamExt, TryStreamExt};
 use object_store::{GetResult, ObjectStore};
 use std::any::Any;
 use std::fs;
+use std::io::BufReader;
 use std::path::Path;
 use std::sync::Arc;
+use std::task::Poll;
 use tokio::task::{self, JoinHandle};
 
 use super::{get_output_ordering, FileScanConfig};
@@ -111,24 +112,15 @@ impl ExecutionPlan for NdJsonExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let proj = self.base_config.projected_file_column_names();
-
         let batch_size = context.session_config().batch_size();
-        let file_schema = Arc::clone(&self.base_config.file_schema);
-
-        let options = DecoderOptions::new().with_batch_size(batch_size);
-        let options = if let Some(proj) = proj {
-            options.with_projection(proj)
-        } else {
-            options
-        };
+        let (projected_schema, _) = self.base_config.project();
 
         let object_store = context
             .runtime_env()
             .object_store(&self.base_config.object_store_url)?;
         let opener = JsonOpener {
-            file_schema,
-            options,
+            batch_size,
+            projected_schema,
             file_compression_type: self.file_compression_type.to_owned(),
             object_store,
         };
@@ -166,40 +158,64 @@ impl ExecutionPlan for NdJsonExec {
 }
 
 struct JsonOpener {
-    options: DecoderOptions,
-    file_schema: SchemaRef,
+    batch_size: usize,
+    projected_schema: SchemaRef,
     file_compression_type: FileCompressionType,
     object_store: Arc<dyn ObjectStore>,
 }
 
 impl FileOpener for JsonOpener {
     fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
-        let options = self.options.clone();
-        let schema = self.file_schema.clone();
         let store = self.object_store.clone();
+        let schema = self.projected_schema.clone();
+        let batch_size = self.batch_size;
+
         let file_compression_type = self.file_compression_type.to_owned();
         Ok(Box::pin(async move {
             match store.get(file_meta.location()).await? {
                 GetResult::File(file, _) => {
-                    let decoder = file_compression_type.convert_read(file)?;
-                    let reader = json::Reader::new(decoder, schema.clone(), options);
+                    let bytes = file_compression_type.convert_read(file)?;
+                    let reader = RawReaderBuilder::new(schema)
+                        .with_batch_size(batch_size)
+                        .build(BufReader::new(bytes))?;
                     Ok(futures::stream::iter(reader).boxed())
                 }
                 GetResult::Stream(s) => {
-                    let s = s.map_err(Into::into);
-                    let decoder = file_compression_type.convert_stream(s)?;
+                    let mut decoder = RawReaderBuilder::new(schema)
+                        .with_batch_size(batch_size)
+                        .build_decoder()?;
 
-                    Ok(newline_delimited_stream(decoder)
-                        .map_ok(move |bytes| {
-                            let reader = json::Reader::new(
-                                bytes.reader(),
-                                schema.clone(),
-                                options.clone(),
-                            );
-                            futures::stream::iter(reader)
-                        })
-                        .try_flatten()
-                        .boxed())
+                    let s = s.map_err(DataFusionError::from);
+                    let mut input = file_compression_type.convert_stream(s)?.fuse();
+                    let mut buffered = Bytes::new();
+
+                    let s = stream::poll_fn(move |cx| {
+                        loop {
+                            if buffered.is_empty() {
+                                buffered = match ready!(input.poll_next_unpin(cx)) {
+                                    Some(Ok(b)) => b,
+                                    Some(Err(e)) => {
+                                        return Poll::Ready(Some(Err(e.into())))
+                                    }
+                                    None => break,
+                                };
+                            }
+                            let read = buffered.len();
+
+                            let decoded = match decoder.decode(buffered.as_ref()) {
+                                Ok(decoded) => decoded,
+                                Err(e) => return Poll::Ready(Some(Err(e))),
+                            };
+
+                            buffered.advance(decoded);
+                            if decoded != read {
+                                break;
+                            }
+                        }
+
+                        Poll::Ready(decoder.flush().transpose())
+                    });
+                    Ok(s.boxed())
                 }
             }
         }))

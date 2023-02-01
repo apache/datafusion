@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expr_rewriter::{ExprRewritable, ExprRewriter};
+use crate::expr_rewriter::rewrite_expr;
 use crate::expr_visitor::inspect_expr_pre;
 use crate::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 ///! Logical plan types
@@ -702,44 +702,36 @@ impl LogicalPlan {
     /// corresponding values provided in the params_values
     fn replace_placeholders_with_values(
         expr: Expr,
-        param_values: &Vec<ScalarValue>,
+        param_values: &[ScalarValue],
     ) -> Result<Expr, DataFusionError> {
-        struct PlaceholderReplacer<'a> {
-            param_values: &'a Vec<ScalarValue>,
-        }
-
-        impl<'a> ExprRewriter for PlaceholderReplacer<'a> {
-            fn mutate(&mut self, expr: Expr) -> Result<Expr, DataFusionError> {
-                if let Expr::Placeholder { id, data_type } = &expr {
-                    // convert id (in format $1, $2, ..) to idx (0, 1, ..)
-                    let idx = id[1..].parse::<usize>().map_err(|e| {
-                        DataFusionError::Internal(format!(
-                            "Failed to parse placeholder id: {e}"
-                        ))
-                    })? - 1;
-                    // value at the idx-th position in param_values should be the value for the placeholder
-                    let value = self.param_values.get(idx).ok_or_else(|| {
-                        DataFusionError::Internal(format!(
-                            "No value found for placeholder with id {id}"
-                        ))
-                    })?;
-                    // check if the data type of the value matches the data type of the placeholder
-                    if Some(value.get_datatype()) != *data_type {
-                        return Err(DataFusionError::Internal(format!(
-                            "Placeholder value type mismatch: expected {:?}, got {:?}",
-                            data_type,
-                            value.get_datatype()
-                        )));
-                    }
-                    // Replace the placeholder with the value
-                    Ok(Expr::Literal(value.clone()))
-                } else {
-                    Ok(expr)
+        rewrite_expr(expr, |expr| {
+            if let Expr::Placeholder { id, data_type } = &expr {
+                // convert id (in format $1, $2, ..) to idx (0, 1, ..)
+                let idx = id[1..].parse::<usize>().map_err(|e| {
+                    DataFusionError::Internal(format!(
+                        "Failed to parse placeholder id: {e}"
+                    ))
+                })? - 1;
+                // value at the idx-th position in param_values should be the value for the placeholder
+                let value = param_values.get(idx).ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "No value found for placeholder with id {id}"
+                    ))
+                })?;
+                // check if the data type of the value matches the data type of the placeholder
+                if Some(value.get_datatype()) != *data_type {
+                    return Err(DataFusionError::Internal(format!(
+                        "Placeholder value type mismatch: expected {:?}, got {:?}",
+                        data_type,
+                        value.get_datatype()
+                    )));
                 }
+                // Replace the placeholder with the value
+                Ok(Expr::Literal(value.clone()))
+            } else {
+                Ok(expr)
             }
-        }
-
-        expr.rewrite(&mut PlaceholderReplacer { param_values })
+        })
     }
 }
 

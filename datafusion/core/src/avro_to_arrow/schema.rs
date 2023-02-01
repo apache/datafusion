@@ -217,6 +217,9 @@ fn default_field_name(dt: &DataType) -> &str {
         DataType::Union(_, _, _) => "union",
         DataType::Dictionary(_, _) => "map",
         DataType::Map(_, _) => unimplemented!("Map support not implemented"),
+        DataType::RunEndEncoded(_, _) => {
+            unimplemented!("RunEndEncoded support not implemented")
+        }
         DataType::Decimal128(_, _) => "decimal",
         DataType::Decimal256(_, _) => "decimal",
     }
