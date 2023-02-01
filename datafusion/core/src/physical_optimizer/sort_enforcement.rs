@@ -152,8 +152,6 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
                             plan: item.plan,
                             children: vec![],
                         });
-                    // TODO: I moved this check here, I think you can exit early like this.
-                    //       Please double check.
                     } else if is_limit(&item.plan) {
                         // There is no sort linkage for this path, it starts at a limit.
                         return None;
@@ -461,12 +459,6 @@ fn ensure_sorting(
                             return Ok(Some(result));
                         }
                     }
-                    // TODO: The following is an old note. Is it still true? Please double check
-                    //       and we can discuss at our next meeting.
-                    // TODO: Once we can ensure that required ordering information propagates with
-                    //       necessary lineage information, compare `sort_input_ordering` and `required_ordering`.
-                    //       This will enable us to handle cases such as (a,b) -> Sort -> (a,b,c) -> Required(a,b).
-                    //       Currently, we can not remove such sorts.
                 }
             }
             (Some(required), None) => {
@@ -563,6 +555,11 @@ fn analyze_window_sort_removal(
         // Therefore, we can use the 0th index without loss of generality.
         let sort_input = sort_any.children()[0].clone();
         let physical_ordering = sort_input.output_ordering();
+        // TODO: Once we can ensure that required ordering information propagates with
+        //       necessary lineage information, compare `physical_ordering` and required ordering by
+        //       Window executor instead of `sort_output_ordering`.
+        //       This will enable us to handle cases such as (a,b) -> Sort -> (a,b,c) -> Required(a,b).
+        //       Currently, we can not remove such sorts.
         let required_ordering = sort_output_ordering.ok_or_else(|| {
             DataFusionError::Plan("A SortExec should have output ordering".to_string())
         })?;
@@ -580,10 +577,6 @@ fn analyze_window_sort_removal(
                 &sort_input.schema(),
                 physical_ordering,
             )?;
-            // TODO: It seems like we exit early if even one path says we can
-            //       not skip sorting. Therefore, I added an early return here
-            //       instead of collecting these in a vector and calling "all".
-            //       Please verify whether this is correct.
             if !can_skip_sorting {
                 return Ok(None);
             }
