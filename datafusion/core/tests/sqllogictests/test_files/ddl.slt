@@ -511,6 +511,11 @@ select 10000000000000000000.01
 ----
 10000000000000000000
 
+query C
+select arrow_typeof(10000000000000000000.01)
+----
+Float64
+
 statement ok
 set datafusion.sql_parser.parse_float_as_decimal = true;
 
@@ -518,6 +523,11 @@ query R
 select 10000000000000000000.01
 ----
 10000000000000000000.01
+
+query C
+select arrow_typeof(10000000000000000000.01)
+----
+Decimal128(22, 2)
 
 # Restore those to default value again
 statement ok
