@@ -110,7 +110,7 @@ SELECT DATE_BIN(INTERVAL '7 days', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '
 
 
 # demonstrates array values (rather than scalar) for the source argument
-query T
+query T rowsort
 SELECT
   DATE_BIN(INTERVAL '15' minute, time, TIMESTAMP '2001-01-01T00:00:00Z') AS time,
   val
