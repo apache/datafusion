@@ -158,17 +158,17 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
                     }
                     let plan = &item.plan;
                     let union = plan.as_any().is::<UnionExec>();
+                    // if executor is UnionExec and it has an output ordering its children
+                    // maintains or partially maintains ordering. In either case propagate Sort linkage
+                    // above
+                    let partially_maintains = union && plan.output_ordering().is_some();
                     let flags = plan.maintains_input_order();
                     let required_orderings = plan.required_input_ordering();
                     let children = izip!(flags, item.sort_onwards, required_orderings)
                         .filter_map(|(maintains, element, required_ordering)| {
-                            // TODO: Why would we check if the plan is a Union every time in the closure?
-                            //       I moved it outside. Also, unless I am missing something, if the plan
-                            //       is a union, it maintains ordering (for any input) *if and only if* it
-                            //       has some output ordering. Assuming that this is indeed true, I removed
-                            //       the "plan.output_ordering.is_some()" predicate. Please double check if
-                            //       this is correct.
-                            if required_ordering.is_none() && (maintains || union) {
+                            if required_ordering.is_none()
+                                && (maintains || partially_maintains)
+                            {
                                 element
                             } else {
                                 None
@@ -564,8 +564,6 @@ fn analyze_window_sort_removal(
             DataFusionError::Plan("A SortExec should have output ordering".to_string())
         })?;
         if let Some(physical_ordering) = physical_ordering {
-            // TODO: Do we need a longest common prefix approach here too?
-            //       Please double check this logic is indeed correct.
             if physical_ordering_common.is_empty()
                 || physical_ordering.len() < physical_ordering_common.len()
             {
@@ -1373,7 +1371,8 @@ mod tests {
         let union = union_exec(vec![sort1, sort2]);
         let physical_plan = sort_preserving_merge_exec(sort_exprs3, union);
 
-        // Union doesn't preserve any of the inputs ordering. However, we should be able to change unnecessarily fine
+        // Union doesn't preserve any of the inputs ordering in the example below.
+        // However, we should be able to change unnecessarily fine
         // SortExecs under UnionExec with required SortExecs that are absolutely necessary.
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
@@ -1390,6 +1389,53 @@ mod tests {
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    SortExec: [nullable_col@0 ASC]",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_window_multi_path_sort() -> Result<()> {
+        let schema = create_test_schema()?;
+
+        let sort_exprs1 = vec![
+            sort_expr("nullable_col", &schema),
+            sort_expr("non_nullable_col", &schema),
+        ];
+        let sort_exprs2 = vec![sort_expr("nullable_col", &schema)];
+        // reverse sorting of sort_exprs2
+        let sort_exprs3 = vec![sort_expr_options(
+            "nullable_col",
+            &schema,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        )];
+        let source1 = parquet_exec_sorted(&schema, sort_exprs1);
+        let source2 = parquet_exec_sorted(&schema, sort_exprs2);
+        let sort1 = sort_exec(sort_exprs3.clone(), source1);
+        let sort2 = sort_exec(sort_exprs3.clone(), source2);
+
+        let union = union_exec(vec![sort1, sort2]);
+        let physical_plan = window_exec("nullable_col", sort_exprs3, union);
+
+        // WindowAggExec gets its Sorting from multiple children
+        // During removal of SortExecs it should be able to remove corresponding SortExecs
+        // Also inputs of the SortExecs are not necessarily same to be able to remove them.
+        let expected_input = vec![
+            "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
+            "  UnionExec",
+            "    SortExec: [nullable_col@0 DESC NULLS LAST]",
+            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC], projection=[nullable_col, non_nullable_col]",
+            "    SortExec: [nullable_col@0 DESC NULLS LAST]",
+            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
+        ];
+        let expected_optimized = vec![
+            "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(NULL) }]",
+            "  UnionExec",
+            "    ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC], projection=[nullable_col, non_nullable_col]",
+            "    ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())
