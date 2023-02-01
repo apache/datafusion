@@ -544,22 +544,27 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         (Date64, Date32) | (Date32, Date64) => Some(Date64),
         (Utf8, Date32) | (Date32, Utf8) => Some(Date32),
         (Utf8, Date64) | (Date64, Utf8) => Some(Date64),
-        (Utf8, Time32(unit)) | (Time32(unit), Utf8) => match is_time_with_valid_unit(Time32(unit.clone())) {
-            false => None,
-            true => Some(Time32(unit.clone())),
-        },
-        (Utf8, Time64(unit)) | (Time64(unit), Utf8) => match is_time_with_valid_unit(Time64(unit.clone())) {
-            false => None,
-            true => Some(Time64(unit.clone())),
-        },
-        (Timestamp(_, tz), Utf8) | (Utf8, Timestamp(_, tz)) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
-        // TODO: need to investigate the result type for the comparison between timestamp and date
-        //(Date32, Timestamp(tu, tz)) => Some(Timestamp(tu.clo, tz.clone())),
-        //(Timestamp(tu, tz), Date32) => Some(Timestamp(tu.clone(), tz.clone())),
-        //(Date32, Timestamp(tu, tz)) => Some(Timestamp(tu.clone(), tz.clone())),
-        (Timestamp(_, None), Date32) | (Date32, Timestamp(_, None))  => Some(Timestamp(TimeUnit::Nanosecond, None)),
-        //(Timestamp(tu, tz), Date32) | (Date32, Timestamp(tu, tz))  => Some(Date32),
-        //(Timestamp(_, _), Date64) => Some(Date64),
+        (Utf8, Time32(unit)) | (Time32(unit), Utf8) => {
+            match is_time_with_valid_unit(Time32(unit.clone())) {
+                false => None,
+                true => Some(Time32(unit.clone())),
+            }
+        }
+        (Utf8, Time64(unit)) | (Time64(unit), Utf8) => {
+            match is_time_with_valid_unit(Time64(unit.clone())) {
+                false => None,
+                true => Some(Time64(unit.clone())),
+            }
+        }
+        (Timestamp(_, tz), Utf8) | (Utf8, Timestamp(_, tz)) => {
+            Some(Timestamp(TimeUnit::Nanosecond, tz.clone()))
+        }
+        (Timestamp(_, None), Date32) | (Date32, Timestamp(_, None)) => {
+            Some(Timestamp(TimeUnit::Nanosecond, None))
+        }
+        (Timestamp(_, _tz), Date32) | (Date32, Timestamp(_, _tz)) => {
+            Some(Timestamp(TimeUnit::Nanosecond, None))
+        }
         (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
             let tz = match (lhs_tz, rhs_tz) {
                 // can't cast across timezones

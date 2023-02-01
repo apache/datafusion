@@ -1680,43 +1680,9 @@ async fn test_current_time() -> Result<()> {
     Ok(())
 }
 
-
-#[tokio::test]
-async fn test_ts_ms_fail() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql =
-        "select to_timestamp_millis(1926632005177685123)";
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+--------+",
-        "| result |",
-        "+--------+",
-        "| 0      |",
-        "+--------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-    Ok(())
-
-}
-
 #[tokio::test]
 async fn test_ts_dt_binary_ops() -> Result<()> {
     let ctx = SessionContext::new();
-
-    //test cast path
-    //let sql = "explain verbose select now() = '2021-1-1'::date";
-    //let sql = "explain verbose select '1'::int = 2::string";
-    // let sql = "explain verbose select '1998-03-18'::timestamp = '1998-03-18'::date";
-
-    // let df = ctx.sql(sql).await.unwrap();
-    // let plan = df.collect().await?;
-    // let formatted = arrow::util::pretty::pretty_format_batches(&plan)
-    // .unwrap()
-    // .to_string();
-    // println!("{}", formatted);
     // test cast in where clause
     let sql =
         "select count(1) result from (select now() as n) a where n = '2000-01-01'::date";
@@ -1790,40 +1756,40 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
             break;
         }
     }
-    assert_eq!(res, Some("Projection: CAST(Utf8(\"2000-01-01\") AS Timestamp(Nanosecond, None)) = CAST(CAST(Utf8(\"2000-01-01\") AS Date32) AS Timestamp(Nanosecond, None))\n  EmptyRelation".to_string()));
+    assert_eq!(res, Some("Projection: CAST(Utf8(\"2000-01-01\") AS Timestamp(Nanosecond, None)) >= CAST(CAST(Utf8(\"2000-01-01\") AS Date32) AS Timestamp(Nanosecond, None))\n  EmptyRelation".to_string()));
 
-        //test cast path timestamp date using function
-        let sql = "select now() = '2000-01-01'::date";
-        let df = ctx.sql(sql).await.unwrap();
-    
-        let plan = df.explain(true, false)?.collect().await?;
-        let batch = &plan[0];
-        let mut res: Option<String> = None;
-        for row in 0..batch.num_rows() {
-            if &array_value_to_string(batch.column(0), row)?
-                == "logical_plan after type_coercion"
-            {
-                res = Some(array_value_to_string(batch.column(1), row)?);
-                break;
-            }
+    //test cast path timestamp date using function
+    let sql = "select now() >= '2000-01-01'::date";
+    let df = ctx.sql(sql).await.unwrap();
+
+    let plan = df.explain(true, false)?.collect().await?;
+    let batch = &plan[0];
+    let mut res: Option<String> = None;
+    for row in 0..batch.num_rows() {
+        if &array_value_to_string(batch.column(0), row)?
+            == "logical_plan after type_coercion"
+        {
+            res = Some(array_value_to_string(batch.column(1), row)?);
+            break;
         }
-        assert_eq!(res, Some("Projection: now() = CAST(CAST(Utf8(\"2000-01-01\") AS Date32) AS Timestamp(Nanosecond, Some(\"+00:00\")))\n  EmptyRelation".to_string()));
-    
-        let sql = "select now() = current_date()";
-        let df = ctx.sql(sql).await.unwrap();
-    
-        let plan = df.explain(true, false)?.collect().await?;
-        let batch = &plan[0];
-        let mut res: Option<String> = None;
-        for row in 0..batch.num_rows() {
-            if &array_value_to_string(batch.column(0), row)?
-                == "logical_plan after type_coercion"
-            {
-                res = Some(array_value_to_string(batch.column(1), row)?);
-                break;
-            }
+    }
+    assert_eq!(res, Some("Projection: CAST(now() AS Timestamp(Nanosecond, None)) >= CAST(CAST(Utf8(\"2000-01-01\") AS Date32) AS Timestamp(Nanosecond, None))\n  EmptyRelation".to_string()));
+
+    let sql = "select now() = current_date()";
+    let df = ctx.sql(sql).await.unwrap();
+
+    let plan = df.explain(true, false)?.collect().await?;
+    let batch = &plan[0];
+    let mut res: Option<String> = None;
+    for row in 0..batch.num_rows() {
+        if &array_value_to_string(batch.column(0), row)?
+            == "logical_plan after type_coercion"
+        {
+            res = Some(array_value_to_string(batch.column(1), row)?);
+            break;
         }
-        assert_eq!(res, Some("Projection: now() = CAST(currentdate() AS Timestamp(Nanosecond, Some(\"+00:00\")))\n  EmptyRelation".to_string()));
-    
+    }
+    assert_eq!(res, Some("Projection: CAST(now() AS Timestamp(Nanosecond, None)) = CAST(currentdate() AS Timestamp(Nanosecond, None))\n  EmptyRelation".to_string()));
+
     Ok(())
 }

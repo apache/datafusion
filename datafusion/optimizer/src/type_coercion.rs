@@ -1041,8 +1041,11 @@ mod test {
 
     #[test]
     fn binary_op_date32_eq_ts() -> Result<()> {
-        let expr = cast(lit("1998-03-18"), DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None)).eq(
-            cast(lit("1998-03-18"), DataType::Date32));
+        let expr = cast(
+            lit("1998-03-18"),
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+        )
+        .eq(cast(lit("1998-03-18"), DataType::Date32));
         let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
