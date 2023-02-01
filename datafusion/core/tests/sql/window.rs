@@ -2465,6 +2465,7 @@ async fn test_window_agg_with_global_limit() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
 async fn test_window_agg_low_cardinality() -> Result<()> {
     let config = SessionConfig::new().with_target_partitions(32);
     let ctx = SessionContext::with_config(config);
