@@ -61,7 +61,20 @@ fn create_new_table(
     table_reference: OwnedTableReference,
     columns: Vec<ColumnDef>,
 ) -> Result<DBOutput> {
-    let sql_to_rel = SqlToRel::new(&LogicTestContextProvider {});
+    let config = ctx.copied_config();
+    let sql_to_rel = SqlToRel::new_with_options(
+        &LogicTestContextProvider {},
+        datafusion_sql::planner::ParserOptions {
+            parse_float_as_decimal: config
+                .config_options()
+                .sql_parser
+                .parse_float_as_decimal,
+            enable_ident_normalization: config
+                .config_options()
+                .sql_parser
+                .enable_ident_normalization,
+        },
+    );
     let schema = Arc::new(sql_to_rel.build_schema(columns)?);
     let table_provider = Arc::new(MemTable::try_new(schema, vec![])?);
     ctx.register_table(&table_reference, table_provider)?;

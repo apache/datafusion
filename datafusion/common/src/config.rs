@@ -346,7 +346,7 @@ pub struct ConfigOptions {
     pub execution: ExecutionOptions,
     /// Optimizer options
     pub optimizer: OptimizerOptions,
-    /// Catalog options
+    /// SQL parser options
     pub sql_parser: SqlParserOptions,
     /// Explain options
     pub explain: ExplainOptions,
@@ -363,6 +363,7 @@ impl ConfigField for ConfigOptions {
             "execution" => self.execution.set(rem, value),
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
+            "sql_parser" => self.sql_parser.set(rem, value),
             _ => Err(DataFusionError::Internal(format!(
                 "Config value \"{key}\" not found on ConfigOptions"
             ))),
