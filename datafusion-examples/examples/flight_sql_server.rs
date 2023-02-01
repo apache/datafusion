@@ -98,7 +98,7 @@ impl FlightSqlServiceImpl {
     async fn create_ctx(&self) -> Result<String, Status> {
         let uuid = Uuid::new_v4().hyphenated().to_string();
         let session_config = SessionConfig::from_env()
-            .map_err(|e| Status::internal(format!("Error building plan: {}", e)))?
+            .map_err(|e| Status::internal(format!("Error building plan: {e}")))?
             .with_information_schema(true);
         let ctx = Arc::new(SessionContext::with_config(session_config));
 
@@ -560,7 +560,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .sql(user_query)
             .await
             .and_then(|df| df.into_optimized_plan())
-            .map_err(|e| Status::internal(format!("Error building plan: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Error building plan: {e}")))?;
 
         // store a copy of the plan,  it will be used for execution
         let plan_uuid = Uuid::new_v4().hyphenated().to_string();
