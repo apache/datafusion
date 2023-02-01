@@ -31,8 +31,8 @@ use arrow_flight::sql::{
 };
 use arrow_flight::utils::batches_to_flight_data;
 use arrow_flight::{
-    Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, IpcMessage,
-    Location, SchemaAsIpc, Ticket,
+    Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
+    HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket,
 };
 use arrow_schema::Schema;
 use dashmap::DashMap;
@@ -44,6 +44,7 @@ use mimalloc::MiMalloc;
 use prost::Message;
 use std::pin::Pin;
 use std::sync::Arc;
+use tonic::metadata::MetadataValue;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
@@ -94,12 +95,46 @@ pub struct FlightSqlServiceImpl {
 }
 
 impl FlightSqlServiceImpl {
-    fn get_ctx(&self, handle: &str) -> Result<Arc<SessionContext>, Status> {
-        if let Some(context) = self.contexts.get(handle) {
+    async fn create_ctx(&self) -> Result<String, Status> {
+        let uuid = Uuid::new_v4().hyphenated().to_string();
+        let session_config = SessionConfig::from_env()
+            .map_err(|e| Status::internal(format!("Error building plan: {}", e)))?
+            .with_information_schema(true);
+        let ctx = Arc::new(SessionContext::with_config(session_config));
+
+        ctx.register_parquet(
+            "nadt_pq",
+            "/home/kmitchener/dev/convert/test-parquet/part-0.parquet",
+            ParquetReadOptions::default(),
+        )
+        .await
+        .map_err(|e| status!("Error registering table", e))?;
+
+        self.contexts.insert(uuid.clone(), ctx);
+        Ok(uuid)
+    }
+
+    fn get_ctx<T>(&self, req: &Request<T>) -> Result<Arc<SessionContext>, Status> {
+        // get the token from the authorization header on Request
+        let auth = req
+            .metadata()
+            .get("authorization")
+            .ok_or_else(|| Status::internal("No authorization header!"))?;
+        let str = auth
+            .to_str()
+            .map_err(|e| Status::internal(format!("Error parsing header: {e}")))?;
+        let authorization = str.to_string();
+        let bearer = "Bearer ";
+        if !authorization.starts_with(bearer) {
+            Err(Status::internal("Invalid auth header!"))?;
+        }
+        let auth = authorization[bearer.len()..].to_string();
+
+        if let Some(context) = self.contexts.get(&auth) {
             Ok(context.clone())
         } else {
             Err(Status::internal(format!(
-                "Context handle not found: {handle}"
+                "Context handle not found: {auth}"
             )))?
         }
     }
@@ -108,9 +143,7 @@ impl FlightSqlServiceImpl {
         if let Some(plan) = self.statements.get(handle) {
             Ok(plan.clone())
         } else {
-            Err(Status::internal(format!(
-                "Statement handle not found: {handle}"
-            )))?
+            Err(Status::internal(format!("Plan handle not found: {handle}")))?
         }
     }
 
@@ -138,6 +171,35 @@ impl FlightSqlServiceImpl {
 #[tonic::async_trait]
 impl FlightSqlService for FlightSqlServiceImpl {
     type FlightService = FlightSqlServiceImpl;
+
+    async fn do_handshake(
+        &self,
+        _request: Request<Streaming<HandshakeRequest>>,
+    ) -> Result<
+        Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>,
+        Status,
+    > {
+        info!("do_handshake");
+        // no authentication actually takes place here
+        // see Ballista implementation for example of basic auth
+        // in this case, we simply accept the connection and create a new SessionContext
+        // the SessionContext will be re-used within this same connection/session
+        let token = self.create_ctx().await?;
+
+        let result = HandshakeResponse {
+            protocol_version: 0,
+            payload: token.as_bytes().to_vec().into(),
+        };
+        let result = Ok(result);
+        let output = futures::stream::iter(vec![result]);
+        let str = format!("Bearer {token}");
+        let mut resp: Response<Pin<Box<dyn Stream<Item = Result<_, _>> + Send>>> =
+            Response::new(Box::pin(output));
+        let md = MetadataValue::try_from(str)
+            .map_err(|_| Status::invalid_argument("authorization not parsable"))?;
+        resp.metadata_mut().insert("authorization", md);
+        Ok(resp)
+    }
 
     async fn do_get_fallback(
         &self,
@@ -190,13 +252,13 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn get_flight_info_prepared_statement(
         &self,
         cmd: CommandPreparedStatementQuery,
-        _request: Request<FlightDescriptor>,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         info!("get_flight_info_prepared_statement");
         let handle = std::str::from_utf8(&cmd.prepared_statement_handle)
             .map_err(|e| status!("Unable to parse uuid", e))?;
 
-        let ctx = self.get_ctx(handle)?;
+        let ctx = self.get_ctx(&request)?;
         let plan = self.get_plan(handle)?;
 
         let state = ctx.state();
@@ -214,9 +276,11 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
         self.results.insert(handle.to_string(), result);
 
-        let loc = Location {
-            uri: "grpc+tcp://127.0.0.1:50051".to_string(),
-        };
+        // if we had multiple endpoints to connect to, we could use this Location
+        // but in the case of standalone DataFusion, we don't
+        // let loc = Location {
+        //     uri: "grpc+tcp://127.0.0.1:50051".to_string(),
+        // };
         let fetch = FetchResults {
             handle: handle.to_string(),
         };
@@ -224,7 +288,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let ticket = Ticket { ticket: buf };
         let endpoint = FlightEndpoint {
             ticket: Some(ticket),
-            location: vec![loc],
+            location: vec![],
         };
         let endpoints = vec![endpoint];
 
@@ -259,6 +323,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("get_flight_info_catalogs");
         Err(Status::unimplemented("Implement get_flight_info_catalogs"))
     }
+
     async fn get_flight_info_schemas(
         &self,
         _query: CommandGetDbSchemas,
@@ -296,6 +361,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("get_flight_info_sql_info");
         Err(Status::unimplemented("Implement CommandGetSqlInfo"))
     }
+
     async fn get_flight_info_primary_keys(
         &self,
         _query: CommandGetPrimaryKeys,
@@ -306,6 +372,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             "Implement get_flight_info_primary_keys",
         ))
     }
+
     async fn get_flight_info_exported_keys(
         &self,
         _query: CommandGetExportedKeys,
@@ -316,6 +383,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             "Implement get_flight_info_exported_keys",
         ))
     }
+
     async fn get_flight_info_imported_keys(
         &self,
         _query: CommandGetImportedKeys,
@@ -326,6 +394,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             "Implement get_flight_info_imported_keys",
         ))
     }
+
     async fn get_flight_info_cross_reference(
         &self,
         _query: CommandGetCrossReference,
@@ -354,6 +423,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("do_get_prepared_statement");
         Err(Status::unimplemented("Implement do_get_prepared_statement"))
     }
+
     async fn do_get_catalogs(
         &self,
         _query: CommandGetCatalogs,
@@ -362,6 +432,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("do_get_catalogs");
         Err(Status::unimplemented("Implement do_get_catalogs"))
     }
+
     async fn do_get_schemas(
         &self,
         _query: CommandGetDbSchemas,
@@ -370,6 +441,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("do_get_schemas");
         Err(Status::unimplemented("Implement do_get_schemas"))
     }
+
     async fn do_get_tables(
         &self,
         _query: CommandGetTables,
@@ -378,6 +450,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("do_get_tables");
         Err(Status::unimplemented("Implement do_get_tables"))
     }
+
     async fn do_get_table_types(
         &self,
         _query: CommandGetTableTypes,
@@ -386,6 +459,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("do_get_table_types");
         Err(Status::unimplemented("Implement do_get_table_types"))
     }
+
     async fn do_get_sql_info(
         &self,
         _query: CommandGetSqlInfo,
@@ -394,6 +468,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("do_get_sql_info");
         Err(Status::unimplemented("Implement do_get_sql_info"))
     }
+
     async fn do_get_primary_keys(
         &self,
         _query: CommandGetPrimaryKeys,
@@ -402,6 +477,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("do_get_primary_keys");
         Err(Status::unimplemented("Implement do_get_primary_keys"))
     }
+
     async fn do_get_exported_keys(
         &self,
         _query: CommandGetExportedKeys,
@@ -410,6 +486,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("do_get_exported_keys");
         Err(Status::unimplemented("Implement do_get_exported_keys"))
     }
+
     async fn do_get_imported_keys(
         &self,
         _query: CommandGetImportedKeys,
@@ -418,6 +495,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("do_get_imported_keys");
         Err(Status::unimplemented("Implement do_get_imported_keys"))
     }
+
     async fn do_get_cross_reference(
         &self,
         _query: CommandGetCrossReference,
@@ -426,7 +504,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("do_get_cross_reference");
         Err(Status::unimplemented("Implement do_get_cross_reference"))
     }
-    // do_put
+
     async fn do_put_statement_update(
         &self,
         _ticket: CommandStatementUpdate,
@@ -435,6 +513,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("do_put_statement_update");
         Err(Status::unimplemented("Implement do_put_statement_update"))
     }
+
     async fn do_put_prepared_statement_query(
         &self,
         _query: CommandPreparedStatementQuery,
@@ -445,38 +524,27 @@ impl FlightSqlService for FlightSqlServiceImpl {
             "Implement do_put_prepared_statement_query",
         ))
     }
+
     async fn do_put_prepared_statement_update(
         &self,
-        handle: CommandPreparedStatementUpdate,
+        _handle: CommandPreparedStatementUpdate,
         _request: Request<Streaming<FlightData>>,
     ) -> Result<i64, Status> {
         info!("do_put_prepared_statement_update");
-        let handle = std::str::from_utf8(&handle.prepared_statement_handle)
-            .map_err(|e| status!("Unable to parse uuid", e))?;
-        let ctx = self.get_ctx(handle)?;
-        let plan = self.get_plan(handle)?;
-
-        let state = ctx.state();
-        let df = DataFrame::new(state, plan);
-        let _result = df
-            .collect()
-            .await
-            .map_err(|e| status!("Error executing query", e))?;
-        Ok(-1)
+        Err(Status::unimplemented(
+            "Implement do_put_prepared_statement_update",
+        ))
     }
 
     async fn do_action_create_prepared_statement(
         &self,
         query: ActionCreatePreparedStatementRequest,
-        _request: Request<Action>,
+        request: Request<Action>,
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
         let user_query = query.query.as_str();
         info!("do_action_create_prepared_statement: {user_query}");
-        let uuid = Uuid::new_v4().hyphenated().to_string();
-        let session_config = SessionConfig::from_env()
-            .map_err(|e| Status::internal(format!("Error building plan: {e}")))?
-            .with_information_schema(true);
-        let ctx = Arc::new(SessionContext::with_config(session_config));
+
+        let ctx = self.get_ctx(&request)?;
         let testdata = datafusion::test_util::parquet_test_data();
 
         // register parquet file with the execution context
@@ -488,16 +556,15 @@ impl FlightSqlService for FlightSqlServiceImpl {
         .await
         .map_err(|e| status!("Error registering table", e))?;
 
-        self.contexts.insert(uuid.clone(), ctx.clone());
-
         let plan = ctx
             .sql(user_query)
             .await
             .and_then(|df| df.into_optimized_plan())
-            .map_err(|e| Status::internal(format!("Error building plan: {e}")))?;
+            .map_err(|e| Status::internal(format!("Error building plan: {}", e)))?;
 
         // store a copy of the plan,  it will be used for execution
-        self.statements.insert(uuid.clone(), plan.clone());
+        let plan_uuid = Uuid::new_v4().hyphenated().to_string();
+        self.statements.insert(plan_uuid.clone(), plan.clone());
 
         let plan_schema = plan.schema();
 
@@ -508,7 +575,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let IpcMessage(schema_bytes) = message;
 
         let res = ActionCreatePreparedStatementResult {
-            prepared_statement_handle: uuid.into(),
+            prepared_statement_handle: plan_uuid.into(),
             dataset_schema: schema_bytes,
             parameter_schema: Default::default(),
         };
