@@ -3298,3 +3298,106 @@ async fn two_in_subquery_to_join_with_outer_filter() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn right_as_inner_table_nested_loop_join() -> Result<()> {
+    let ctx = create_nested_loop_join_context()?;
+
+    let sql = "SELECT t1.t1_id, t2.t2_id 
+                     FROM t1 INNER JOIN t2 ON t1.t1_id > t2.t2_id 
+                     WHERE t1.t1_id > 10 AND t2.t2_int > 1";
+
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+
+    // right is single partition side, so it will be visited many times. 
+    let expected = vec![
+        "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@1 as t2_id]",
+        "  NestedLoopJoinExec: join_type=Inner, filter=BinaryExpr { left: Column { name: \"t1_id\", index: 0 }, op: Gt, right: Column { name: \"t2_id\", index: 1 } }",
+        "    CoalesceBatchesExec: target_batch_size=4096",
+        "      FilterExec: t1_id@0 > 10",
+        "        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+        "          MemoryExec: partitions=1, partition_sizes=[1]",
+        "    CoalescePartitionsExec",
+        "      CoalesceBatchesExec: target_batch_size=4096",
+        "        FilterExec: t2_int@1 > 1",
+        "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+        "            MemoryExec: partitions=1, partition_sizes=[1]",
+    ];
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+-------+",
+        "| t1_id | t2_id |",
+        "+-------+-------+",
+        "| 22    | 11    |",
+        "| 33    | 11    |",
+        "| 44    | 11    |",
+        "+-------+-------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_as_inner_table_nested_loop_join1() -> Result<()> {
+    let ctx = create_nested_loop_join_context()?;
+
+    let sql = "SELECT t1.t1_id,t2.t2_id FROM (select t1_id from t1 where t1.t1_id > 22) as t1 
+                                                 RIGHT JOIN (select t2_id from t2 where t2.t2_id > 11) as t2 
+                                                 ON t1.t1_id < t2.t2_id";
+
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+
+    // left is single partition side, so it will be visited many times. 
+    let expected = vec![
+        "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@1 as t2_id]",
+        "  NestedLoopJoinExec: join_type=Right, filter=BinaryExpr { left: Column { name: \"t1_id\", index: 0 }, op: Lt, right: Column { name: \"t2_id\", index: 1 } }",
+        "    CoalescePartitionsExec",
+        "      ProjectionExec: expr=[t1_id@0 as t1_id]",
+        "        CoalesceBatchesExec: target_batch_size=4096",
+        "          FilterExec: t1_id@0 > 22",
+        "            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+        "              MemoryExec: partitions=1, partition_sizes=[1]",
+        "    ProjectionExec: expr=[t2_id@0 as t2_id]",
+        "      CoalesceBatchesExec: target_batch_size=4096",
+        "        FilterExec: t2_id@0 > 11",
+        "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+        "            MemoryExec: partitions=1, partition_sizes=[1]",
+    ];
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+-------+",
+        "| t1_id | t2_id |",
+        "+-------+-------+",
+        "|       | 22    |",
+        "| 33    | 44    |",
+        "| 33    | 55    |",
+        "| 44    | 55    |",
+        "+-------+-------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
