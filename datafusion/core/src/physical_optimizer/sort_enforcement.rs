@@ -258,22 +258,22 @@ impl TreeNodeRewritable for PlanWithCorrespondingCoalescePartitions {
                             plan,
                             children: vec![],
                         })
-                    } else if plan.children().is_empty()
-                        || matches!(
-                            // TODO: Please double check if using the first element here is a
-                            //       problem or not. Can `plan` not have multiple children?
-                            plan.required_input_distribution()[0],
-                            Distribution::SinglePartition
-                        )
-                    {
-                        // If the plan has no children, or it doesn't require a
-                        // single partition, there is no linkage.
+                    } else if plan.children().is_empty() {
+                        // plan has no children, there is nothing
+                        // to propagate
                         None
                     } else {
                         let children = item
                             .coalesce_onwards
                             .into_iter()
                             .flatten()
+                            .filter(|elem| {
+                                // doesn't require single partition
+                                !matches!(
+                                    plan.required_input_distribution()[elem.idx],
+                                    Distribution::SinglePartition
+                                )
+                            })
                             .collect::<Vec<_>>();
                         if children.is_empty() {
                             None
