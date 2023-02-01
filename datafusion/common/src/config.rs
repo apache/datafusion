@@ -261,9 +261,18 @@ config_namespace! {
         /// in parallel using the provided `target_partitions` level"
         pub repartition_aggregations: bool, default = true
 
+        /// Minimum total files size in bytes to perform file scan repartitioning.
+        pub repartition_file_min_size: usize, default = 10 * 1024 * 1024
+
         /// Should DataFusion repartition data using the join keys to execute joins in parallel
         /// using the provided `target_partitions` level"
         pub repartition_joins: bool, default = true
+
+        /// When set to true, file groups will be repartitioned to achieve maximum parallelism.
+        /// Currently supported only for Parquet format in which case
+        /// multiple row groups from the same file may be read concurrently. If false then each
+        /// row group is read serially, though different files may be read in parallel.
+        pub repartition_file_scans: bool, default = false
 
         /// Should DataFusion repartition data using the partitions keys to execute window
         /// functions in parallel using the provided `target_partitions` level"
@@ -323,7 +332,7 @@ pub struct ConfigOptions {
     pub catalog: CatalogOptions,
     /// Execution options
     pub execution: ExecutionOptions,
-    /// Explain options
+    /// Optimizer options
     pub optimizer: OptimizerOptions,
     /// Explain options
     pub explain: ExplainOptions,

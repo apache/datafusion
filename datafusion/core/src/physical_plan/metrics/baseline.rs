@@ -19,9 +19,10 @@
 
 use std::task::Poll;
 
-use arrow::{error::ArrowError, record_batch::RecordBatch};
+use arrow::record_batch::RecordBatch;
 
 use super::{Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, Time, Timestamp};
+use crate::error::Result;
 
 /// Helper for creating and tracking common "baseline" metrics for
 /// each operator
@@ -141,8 +142,8 @@ impl BaselineMetrics {
     /// returning the same poll result
     pub fn record_poll(
         &self,
-        poll: Poll<Option<Result<RecordBatch, ArrowError>>>,
-    ) -> Poll<Option<Result<RecordBatch, ArrowError>>> {
+        poll: Poll<Option<Result<RecordBatch>>>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
         if let Poll::Ready(maybe_batch) = &poll {
             match maybe_batch {
                 Some(Ok(batch)) => {
@@ -210,7 +211,7 @@ impl RecordOutput for Option<RecordBatch> {
     }
 }
 
-impl RecordOutput for arrow::error::Result<RecordBatch> {
+impl RecordOutput for Result<RecordBatch> {
     fn record_output(self, bm: &BaselineMetrics) -> Self {
         if let Ok(record_batch) = &self {
             record_batch.record_output(bm);
