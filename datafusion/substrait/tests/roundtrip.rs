@@ -187,6 +187,11 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn roundtrip_inlist() -> Result<()> {
+        roundtrip("SELECT * FROM data WHERE a IN (1, 2, 3)").await
+    }
+
+    #[tokio::test]
     async fn roundtrip_inner_join() -> Result<()> {
         roundtrip("SELECT data.a FROM data JOIN data2 ON data.a = data2.a").await
     }
