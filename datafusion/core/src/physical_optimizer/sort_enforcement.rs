@@ -687,6 +687,7 @@ fn update_child_to_remove_unnecessary_sort(
     if let Some(sort_onwards) = sort_onwards {
         *child = remove_corresponding_sort_from_sub_plan(sort_onwards)?;
     }
+    *sort_onwards = None;
     Ok(())
 }
 
@@ -727,7 +728,13 @@ fn change_finer_sort_in_sub_plan(
     if is_sort(plan) {
         let prev_layer = plan.children()[0].clone();
         let new_sort_expr = get_sort_exprs(plan)?[0..n_sort_expr].to_vec();
-        add_sort_above_child(&prev_layer, new_sort_expr)
+        let updated_plan = add_sort_above_child(&prev_layer, new_sort_expr)?;
+        *sort_onwards = ExecTree {
+            idx: sort_onwards.idx,
+            children: vec![],
+            plan: updated_plan.clone(),
+        };
+        Ok(updated_plan)
     } else {
         let mut children = plan.children();
         for item in &mut sort_onwards.children {
@@ -1333,6 +1340,55 @@ mod tests {
             "    UnionExec",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
+            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_union_inputs_different_sorted5() -> Result<()> {
+        let schema = create_test_schema()?;
+
+        let source1 = parquet_exec(&schema);
+        let sort_exprs1 = vec![
+            sort_expr("nullable_col", &schema),
+            sort_expr("non_nullable_col", &schema),
+        ];
+        let sort_exprs2 = vec![
+            sort_expr("nullable_col", &schema),
+            sort_expr_options(
+                "non_nullable_col",
+                &schema,
+                SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            ),
+        ];
+        let sort_exprs3 = vec![sort_expr("nullable_col", &schema)];
+        let sort1 = sort_exec(sort_exprs1, source1.clone());
+        let sort2 = sort_exec(sort_exprs2, source1);
+
+        let union = union_exec(vec![sort1, sort2]);
+        let physical_plan = sort_preserving_merge_exec(sort_exprs3, union);
+
+        // Union doesn't preserve any of the inputs ordering. However, we should be able to change unnecessarily fine
+        // SortExecs under UnionExec with required SortExecs that are absolutely necessary.
+        let expected_input = vec![
+            "SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "  UnionExec",
+            "    SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
+            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+            "    SortExec: [nullable_col@0 ASC,non_nullable_col@1 DESC NULLS LAST]",
+            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        ];
+        let expected_optimized = vec![
+            "SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "  UnionExec",
+            "    SortExec: [nullable_col@0 ASC]",
+            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+            "    SortExec: [nullable_col@0 ASC]",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
