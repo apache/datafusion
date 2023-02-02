@@ -538,6 +538,11 @@ async fn unnest_columns() -> Result<()> {
     ];
     assert_batches_sorted_eq!(expected, &results);
 
+    // Test aggregate results for tags.
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let count = df.unnest_column("tags")?.count().await?;
+    assert_eq!(count, results.iter().map(|r| r.num_rows()).sum::<usize>());
+
     // Unnest points
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df.unnest_column("points")?.collect().await?;
@@ -556,6 +561,11 @@ async fn unnest_columns() -> Result<()> {
         r#"+----------+---------------------+--------------------+"#,
     ];
     assert_batches_sorted_eq!(expected, &results);
+
+    // Test aggregate results for points.
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let count = df.unnest_column("points")?.count().await?;
+    assert_eq!(count, results.iter().map(|r| r.num_rows()).sum::<usize>());
 
     // Unnest both points and tags.
     let df = table_with_nested_types(NUM_ROWS).await?;
@@ -584,6 +594,15 @@ async fn unnest_columns() -> Result<()> {
         r#"+----------+---------------------+------+"#,
     ];
     assert_batches_sorted_eq!(expected, &results);
+
+    // Test aggregate results for points and tags.
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let count = df
+        .unnest_column("points")?
+        .unnest_column("tags")?
+        .count()
+        .await?;
+    assert_eq!(count, results.iter().map(|r| r.num_rows()).sum::<usize>());
 
     Ok(())
 }
