@@ -2349,6 +2349,8 @@ fn select_multibyte_column() {
 
 #[test]
 fn select_groupby_orderby() {
+    // ensure that references are correctly resolved in the order by clause
+    // see https://github.com/apache/arrow-datafusion/issues/4854
     let sql = r#"SELECT
   avg(age) AS "value",
   date_trunc('month', birth_date) AS "birth_date"
@@ -2360,6 +2362,30 @@ fn select_groupby_orderby() {
          \n  Projection: AVG(person.age) AS value, datetrunc(Utf8(\"month\"), person.birth_date) AS birth_date\
          \n    Aggregate: groupBy=[[person.birth_date]], aggr=[[AVG(person.age)]]\
          \n      TableScan: person";
+    quick_test(sql, expected);
+
+    // Use fully qualified `person.birth_date` as argument to date_trunc, plan should be the same
+    let sql = r#"SELECT
+  avg(age) AS "value",
+  date_trunc('month', person.birth_date) AS "birth_date"
+  FROM person GROUP BY birth_date ORDER BY birth_date;
+"#;
+    quick_test(sql, expected);
+
+    // Use fully qualified `person.birth_date` as group by, plan should be the same
+    let sql = r#"SELECT
+  avg(age) AS "value",
+  date_trunc('month', birth_date) AS "birth_date"
+  FROM person GROUP BY person.birth_date ORDER BY birth_date;
+"#;
+    quick_test(sql, expected);
+
+    // Use fully qualified `person.birth_date` in both group and date_trunc, plan should be the same
+    let sql = r#"SELECT
+  avg(age) AS "value",
+  date_trunc('month', person.birth_date) AS "birth_date"
+  FROM person GROUP BY person.birth_date ORDER BY birth_date;
+"#;
     quick_test(sql, expected);
 }
 
