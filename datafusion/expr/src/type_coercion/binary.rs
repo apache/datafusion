@@ -448,6 +448,10 @@ fn both_numeric_or_null_and_numeric(lhs_type: &DataType, rhs_type: &DataType) ->
     match (lhs_type, rhs_type) {
         (_, DataType::Null) => is_numeric(lhs_type),
         (DataType::Null, _) => is_numeric(rhs_type),
+        (
+            DataType::Dictionary(_, lhs_value_type),
+            DataType::Dictionary(_, rhs_value_type),
+        ) => is_numeric(lhs_value_type) && is_numeric(rhs_value_type),
         (DataType::Dictionary(_, value_type), _) => {
             is_numeric(value_type) && is_numeric(rhs_type)
         }

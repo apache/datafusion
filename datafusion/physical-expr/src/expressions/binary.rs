@@ -423,22 +423,23 @@ macro_rules! binary_primitive_array_op {
 /// The binary_primitive_array_op_dyn_scalar macro only evaluates for primitive
 /// types like integers and floats.
 macro_rules! binary_primitive_array_op_dyn_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
+    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         // unwrap underlying (non dictionary) value
         let right = unwrap_dict_value($RIGHT);
+        let op_type = $LEFT.data_type();
 
         let result: Result<Arc<dyn Array>> = match right {
-            ScalarValue::Decimal128(v, _, _) => compute_primitive_decimal_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
-            ScalarValue::Int8(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE, Int8Type),
-            ScalarValue::Int16(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE, Int16Type),
-            ScalarValue::Int32(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE, Int32Type),
-            ScalarValue::Int64(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE, Int64Type),
-            ScalarValue::UInt8(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE, UInt8Type),
-            ScalarValue::UInt16(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE, UInt16Type),
-            ScalarValue::UInt32(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE, UInt32Type),
-            ScalarValue::UInt64(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE, UInt64Type),
-            ScalarValue::Float32(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE, Float32Type),
-            ScalarValue::Float64(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE, Float64Type),
+            ScalarValue::Decimal128(v, _, _) => compute_primitive_decimal_op_dyn_scalar!($LEFT, v, $OP, op_type),
+            ScalarValue::Int8(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int8Type),
+            ScalarValue::Int16(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int16Type),
+            ScalarValue::Int32(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int32Type),
+            ScalarValue::Int64(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int64Type),
+            ScalarValue::UInt8(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, UInt8Type),
+            ScalarValue::UInt16(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, UInt16Type),
+            ScalarValue::UInt32(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, UInt32Type),
+            ScalarValue::UInt64(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, UInt64Type),
+            ScalarValue::Float32(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Float32Type),
+            ScalarValue::Float64(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Float64Type),
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for scalar operation '{}' on dyn array",
                 other, stringify!($OP)))
@@ -977,7 +978,6 @@ impl BinaryExpr {
         scalar: &ScalarValue,
     ) -> Result<Option<Result<ArrayRef>>> {
         let bool_type = &DataType::Boolean;
-        let left_type = array.data_type();
         let scalar_result = match &self.op {
             Operator::Lt => {
                 binary_array_op_dyn_scalar!(array, scalar.clone(), lt, bool_type)
@@ -998,36 +998,16 @@ impl BinaryExpr {
                 binary_array_op_dyn_scalar!(array, scalar.clone(), neq, bool_type)
             }
             Operator::Plus => {
-                binary_primitive_array_op_dyn_scalar!(
-                    array,
-                    scalar.clone(),
-                    add,
-                    left_type
-                )
+                binary_primitive_array_op_dyn_scalar!(array, scalar.clone(), add)
             }
             Operator::Minus => {
-                binary_primitive_array_op_dyn_scalar!(
-                    array,
-                    scalar.clone(),
-                    subtract,
-                    left_type
-                )
+                binary_primitive_array_op_dyn_scalar!(array, scalar.clone(), subtract)
             }
             Operator::Multiply => {
-                binary_primitive_array_op_dyn_scalar!(
-                    array,
-                    scalar.clone(),
-                    multiply,
-                    left_type
-                )
+                binary_primitive_array_op_dyn_scalar!(array, scalar.clone(), multiply)
             }
             Operator::Divide => {
-                binary_primitive_array_op_dyn_scalar!(
-                    array,
-                    scalar.clone(),
-                    divide,
-                    left_type
-                )
+                binary_primitive_array_op_dyn_scalar!(array, scalar.clone(), divide)
             }
             Operator::Modulo => {
                 // todo: change to binary_primitive_array_op_dyn_scalar! once modulo is implemented
