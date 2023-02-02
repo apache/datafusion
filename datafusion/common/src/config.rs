@@ -179,6 +179,18 @@ config_namespace! {
 }
 
 config_namespace! {
+    /// Options related to SQL parser
+    pub struct SqlParserOptions {
+        /// Whether to parse float as decimal
+        pub parse_float_as_decimal: bool, default = false
+
+        /// Whether to normalize ident
+        pub enable_ident_normalization: bool, default = true
+
+    }
+}
+
+config_namespace! {
     /// Options related to query execution
     pub struct ExecutionOptions {
         /// Default batch size while creating new batches, it's especially useful for
@@ -334,6 +346,8 @@ pub struct ConfigOptions {
     pub execution: ExecutionOptions,
     /// Optimizer options
     pub optimizer: OptimizerOptions,
+    /// SQL parser options
+    pub sql_parser: SqlParserOptions,
     /// Explain options
     pub explain: ExplainOptions,
     /// Optional extensions registered using [`Extensions::insert`]
@@ -349,6 +363,7 @@ impl ConfigField for ConfigOptions {
             "execution" => self.execution.set(rem, value),
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
+            "sql_parser" => self.sql_parser.set(rem, value),
             _ => Err(DataFusionError::Internal(format!(
                 "Config value \"{key}\" not found on ConfigOptions"
             ))),

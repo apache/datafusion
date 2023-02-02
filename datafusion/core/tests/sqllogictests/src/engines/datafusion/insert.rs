@@ -35,7 +35,10 @@ pub async fn insert(ctx: &SessionContext, insert_stmt: SQLStatement) -> Result<D
         SQLStatement::Insert {
             table_name, source, ..
         } => {
-            table_reference = object_name_to_table_reference(table_name)?;
+            table_reference = object_name_to_table_reference(
+                table_name,
+                ctx.enable_ident_normalization(),
+            )?;
 
             // Todo: check columns match table schema
             match *source.body {
