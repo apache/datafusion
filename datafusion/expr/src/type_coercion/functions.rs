@@ -176,11 +176,11 @@ pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
                 | Float64
                 | Decimal128(_, _)
         ),
-        Timestamp(TimeUnit::Nanosecond, None) => {
-            matches!(type_from, Null | Timestamp(_, None) | Utf8 | LargeUtf8)
-        }
         Timestamp(TimeUnit::Nanosecond, _) => {
-            matches!(type_from, Null | Timestamp(_, _) | Date32  | Utf8 | LargeUtf8)
+            matches!(
+                type_from,
+                Null | Timestamp(_, _) | Date32 | Utf8 | LargeUtf8
+            )
         }
         Interval(_) => {
             matches!(type_from, Utf8 | LargeUtf8)
