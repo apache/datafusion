@@ -181,10 +181,10 @@ config_namespace! {
 config_namespace! {
     /// Options related to SQL parser
     pub struct SqlParserOptions {
-        /// Whether to parse float as decimal
+        /// When set to true, sql parser will parse float as decimal type
         pub parse_float_as_decimal: bool, default = false
 
-        /// Whether to normalize ident
+        /// When set to true, sql parser will normalize ident(convert ident to lowercase when not quoted)
         pub enable_ident_normalization: bool, default = true
 
     }
@@ -375,6 +375,7 @@ impl ConfigField for ConfigOptions {
         self.execution.visit(v, "datafusion.execution", "");
         self.optimizer.visit(v, "datafusion.optimizer", "");
         self.explain.visit(v, "datafusion.explain", "");
+        self.sql_parser.visit(v, "datafusion.sql_parser", "");
     }
 }
 
