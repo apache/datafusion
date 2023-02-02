@@ -69,19 +69,16 @@ impl DateTimeIntervalExpr {
                             input_schema: input_schema.clone(),
                         }),
                         _ => Err(DataFusionError::Execution(format!(
-                            "Invalid operator '{}' for DateIntervalExpr",
-                            op
+                            "Invalid operator '{op}' for DateIntervalExpr"
                         ))),
                     },
                     other => Err(DataFusionError::Execution(format!(
-                        "Operation '{}' not support for type {}",
-                        op, other
+                        "Operation '{op}' not support for type {other}"
                     ))),
                 }
             }
             other => Err(DataFusionError::Execution(format!(
-                "Invalid lhs type '{}' for DateIntervalExpr",
-                other
+                "Invalid lhs type '{other}' for DateIntervalExpr"
             ))),
         }
     }
@@ -268,42 +265,42 @@ mod tests {
 
     #[test]
     fn add_11_months() {
-        let prior = NaiveDate::from_ymd(2000, 1, 1);
+        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let actual = shift_months(prior, 11);
         assert_eq!(format!("{:?}", actual).as_str(), "2000-12-01");
     }
 
     #[test]
     fn add_12_months() {
-        let prior = NaiveDate::from_ymd(2000, 1, 1);
+        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let actual = shift_months(prior, 12);
         assert_eq!(format!("{:?}", actual).as_str(), "2001-01-01");
     }
 
     #[test]
     fn add_13_months() {
-        let prior = NaiveDate::from_ymd(2000, 1, 1);
+        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let actual = shift_months(prior, 13);
         assert_eq!(format!("{:?}", actual).as_str(), "2001-02-01");
     }
 
     #[test]
     fn sub_11_months() {
-        let prior = NaiveDate::from_ymd(2000, 1, 1);
+        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let actual = shift_months(prior, -11);
         assert_eq!(format!("{:?}", actual).as_str(), "1999-02-01");
     }
 
     #[test]
     fn sub_12_months() {
-        let prior = NaiveDate::from_ymd(2000, 1, 1);
+        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let actual = shift_months(prior, -12);
         assert_eq!(format!("{:?}", actual).as_str(), "1999-01-01");
     }
 
     #[test]
     fn sub_13_months() {
-        let prior = NaiveDate::from_ymd(2000, 1, 1);
+        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let actual = shift_months(prior, -13);
         assert_eq!(format!("{:?}", actual).as_str(), "1998-12-01");
     }
@@ -321,7 +318,7 @@ mod tests {
         // assert
         match res {
             ColumnarValue::Scalar(ScalarValue::Date32(Some(d))) => {
-                let epoch = NaiveDate::from_ymd(1970, 1, 1);
+                let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
                 let res = epoch.add(Duration::days(d as i64));
                 assert_eq!(format!("{:?}", res).as_str(), "1970-01-02");
             }
@@ -346,7 +343,7 @@ mod tests {
         // assert
         match res {
             ColumnarValue::Scalar(ScalarValue::Date32(Some(d))) => {
-                let epoch = NaiveDate::from_ymd(1970, 1, 1);
+                let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
                 let res = epoch.add(Duration::days(d as i64));
                 assert_eq!(format!("{:?}", res).as_str(), "1968-12-01");
             }
@@ -372,7 +369,7 @@ mod tests {
         // assert
         match res {
             ColumnarValue::Scalar(ScalarValue::Date64(Some(d))) => {
-                let epoch = NaiveDate::from_ymd(1970, 1, 1);
+                let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
                 let res = epoch.add(Duration::milliseconds(d as i64));
                 assert_eq!(format!("{:?}", res).as_str(), "1969-12-16");
             }
@@ -397,7 +394,7 @@ mod tests {
         // assert
         match res {
             ColumnarValue::Scalar(ScalarValue::Date32(Some(d))) => {
-                let epoch = NaiveDate::from_ymd(1970, 1, 1);
+                let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
                 let res = epoch.add(Duration::days(d as i64));
                 assert_eq!(format!("{:?}", res).as_str(), "1970-02-01");
             }
@@ -422,7 +419,7 @@ mod tests {
         // assert
         match res {
             ColumnarValue::Scalar(ScalarValue::Date32(Some(d))) => {
-                let epoch = NaiveDate::from_ymd(1970, 1, 1);
+                let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
                 let res = epoch.add(Duration::days(d as i64));
                 assert_eq!(format!("{:?}", res).as_str(), "1968-12-17");
             }

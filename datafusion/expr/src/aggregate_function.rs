@@ -68,7 +68,7 @@ pub enum AggregateFunction {
 impl fmt::Display for AggregateFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // uppercase of the debug.
-        write!(f, "{}", format!("{:?}", self).to_uppercase())
+        write!(f, "{}", format!("{self:?}").to_uppercase())
     }
 }
 
@@ -103,8 +103,7 @@ impl FromStr for AggregateFunction {
             "grouping" => AggregateFunction::Grouping,
             _ => {
                 return Err(DataFusionError::Plan(format!(
-                    "There is no built-in function named {}",
-                    name
+                    "There is no built-in function named {name}"
                 )));
             }
         })

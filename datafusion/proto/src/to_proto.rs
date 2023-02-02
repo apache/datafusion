@@ -68,36 +68,33 @@ impl std::error::Error for Error {}
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Self::General(desc) => write!(f, "General error: {}", desc),
+            Self::General(desc) => write!(f, "General error: {desc}"),
             Self::InconsistentListTyping(type1, type2) => {
                 write!(
                     f,
-                    "Lists with inconsistent typing; {:?} and {:?} found within list",
-                    type1, type2,
+                    "Lists with inconsistent typing; {type1:?} and {type2:?} found within list",
                 )
             }
             Self::InconsistentListDesignated { value, designated } => {
                 write!(
                     f,
-                    "Value {:?} was inconsistent with designated type {:?}",
-                    value, designated
+                    "Value {value:?} was inconsistent with designated type {designated:?}"
                 )
             }
             Self::InvalidScalarValue(value) => {
-                write!(f, "{:?} is invalid as a DataFusion scalar value", value)
+                write!(f, "{value:?} is invalid as a DataFusion scalar value")
             }
             Self::InvalidScalarType(data_type) => {
-                write!(f, "{:?} is invalid as a DataFusion scalar type", data_type)
+                write!(f, "{data_type:?} is invalid as a DataFusion scalar type")
             }
             Self::InvalidTimeUnit(time_unit) => {
                 write!(
                     f,
-                    "Only TimeUnit::Microsecond and TimeUnit::Nanosecond are valid time units, found: {:?}",
-                    time_unit
+                    "Only TimeUnit::Microsecond and TimeUnit::Nanosecond are valid time units, found: {time_unit:?}"
                 )
             }
             Self::UnsupportedScalarFunction(function) => {
-                write!(f, "Unsupported scalar function {:?}", function)
+                write!(f, "Unsupported scalar function {function:?}")
             }
         }
     }
@@ -458,7 +455,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 let binary_expr = Box::new(protobuf::BinaryExprNode {
                     l: Some(Box::new(left.as_ref().try_into()?)),
                     r: Some(Box::new(right.as_ref().try_into()?)),
-                    op: format!("{:?}", op),
+                    op: format!("{op:?}"),
                 });
                 Self {
                     expr_type: Some(ExprType::BinaryExpr(binary_expr)),

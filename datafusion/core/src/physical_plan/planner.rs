@@ -90,7 +90,7 @@ fn create_function_physical_name(
         true => "DISTINCT ",
         false => "",
     };
-    Ok(format!("{}({}{})", fun, distinct_str, names.join(",")))
+    Ok(format!("{fun}({distinct_str}{})", names.join(",")))
 }
 
 fn physical_name(e: &Expr) -> Result<String> {
@@ -108,22 +108,22 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         }
         Expr::Alias(_, name) => Ok(name.clone()),
         Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
-        Expr::Literal(value) => Ok(format!("{:?}", value)),
+        Expr::Literal(value) => Ok(format!("{value:?}")),
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
             let left = create_physical_name(left, false)?;
             let right = create_physical_name(right, false)?;
-            Ok(format!("{} {} {}", left, op, right))
+            Ok(format!("{left} {op} {right}"))
         }
         Expr::Case(case) => {
             let mut name = "CASE ".to_string();
             if let Some(e) = &case.expr {
-                let _ = write!(name, "{:?} ", e);
+                let _ = write!(name, "{e:?} ");
             }
             for (w, t) in &case.when_then_expr {
-                let _ = write!(name, "WHEN {:?} THEN {:?} ", w, t);
+                let _ = write!(name, "WHEN {w:?} THEN {t:?} ");
             }
             if let Some(e) = &case.else_expr {
-                let _ = write!(name, "ELSE {:?} ", e);
+                let _ = write!(name, "ELSE {e:?} ");
             }
             name += "END";
             Ok(name)
@@ -138,47 +138,47 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         }
         Expr::Not(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("NOT {}", expr))
+            Ok(format!("NOT {expr}"))
         }
         Expr::Negative(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("(- {})", expr))
+            Ok(format!("(- {expr})"))
         }
         Expr::IsNull(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{} IS NULL", expr))
+            Ok(format!("{expr} IS NULL"))
         }
         Expr::IsNotNull(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{} IS NOT NULL", expr))
+            Ok(format!("{expr} IS NOT NULL"))
         }
         Expr::IsTrue(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{} IS TRUE", expr))
+            Ok(format!("{expr} IS TRUE"))
         }
         Expr::IsFalse(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{} IS FALSE", expr))
+            Ok(format!("{expr} IS FALSE"))
         }
         Expr::IsUnknown(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{} IS UNKNOWN", expr))
+            Ok(format!("{expr} IS UNKNOWN"))
         }
         Expr::IsNotTrue(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{} IS NOT TRUE", expr))
+            Ok(format!("{expr} IS NOT TRUE"))
         }
         Expr::IsNotFalse(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{} IS NOT FALSE", expr))
+            Ok(format!("{expr} IS NOT FALSE"))
         }
         Expr::IsNotUnknown(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{} IS NOT UNKNOWN", expr))
+            Ok(format!("{expr} IS NOT UNKNOWN"))
         }
         Expr::GetIndexedField(GetIndexedField { key, expr }) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{}[{}]", expr, key))
+            Ok(format!("{expr}[{key}]"))
         }
         Expr::ScalarFunction { fun, args, .. } => {
             create_function_physical_name(&fun.to_string(), false, args)
@@ -232,7 +232,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                         .map(|e| create_physical_name(e, false))
                         .collect::<Result<Vec<_>>>()?
                         .join(", ");
-                    strings.push(format!("({})", exprs_str));
+                    strings.push(format!("({exprs_str})"));
                 }
                 Ok(format!("GROUPING SETS ({})", strings.join(", ")))
             }
@@ -246,9 +246,9 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             let list = list.iter().map(|expr| create_physical_name(expr, false));
             if *negated {
-                Ok(format!("{} NOT IN ({:?})", expr, list))
+                Ok(format!("{expr} NOT IN ({list:?})"))
             } else {
-                Ok(format!("{} IN ({:?})", expr, list))
+                Ok(format!("{expr} IN ({list:?})"))
             }
         }
         Expr::Exists { .. } => Err(DataFusionError::NotImplemented(
@@ -270,9 +270,9 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let low = create_physical_name(low, false)?;
             let high = create_physical_name(high, false)?;
             if *negated {
-                Ok(format!("{} NOT BETWEEN {} AND {}", expr, low, high))
+                Ok(format!("{expr} NOT BETWEEN {low} AND {high}"))
             } else {
-                Ok(format!("{} BETWEEN {} AND {}", expr, low, high))
+                Ok(format!("{expr} BETWEEN {low} AND {high}"))
             }
         }
         Expr::Like(Like {
@@ -284,14 +284,14 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             let pattern = create_physical_name(pattern, false)?;
             let escape = if let Some(char) = escape_char {
-                format!("CHAR '{}'", char)
+                format!("CHAR '{char}'")
             } else {
                 "".to_string()
             };
             if *negated {
-                Ok(format!("{} NOT LIKE {}{}", expr, pattern, escape))
+                Ok(format!("{expr} NOT LIKE {pattern}{escape}"))
             } else {
-                Ok(format!("{} LIKE {}{}", expr, pattern, escape))
+                Ok(format!("{expr} LIKE {pattern}{escape}"))
             }
         }
         Expr::ILike(Like {
@@ -303,14 +303,14 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             let pattern = create_physical_name(pattern, false)?;
             let escape = if let Some(char) = escape_char {
-                format!("CHAR '{}'", char)
+                format!("CHAR '{char}'")
             } else {
                 "".to_string()
             };
             if *negated {
-                Ok(format!("{} NOT ILIKE {}{}", expr, pattern, escape))
+                Ok(format!("{expr} NOT ILIKE {pattern}{escape}"))
             } else {
-                Ok(format!("{} ILIKE {}{}", expr, pattern, escape))
+                Ok(format!("{expr} ILIKE {pattern}{escape}"))
             }
         }
         Expr::SimilarTo(Like {
@@ -322,14 +322,14 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             let pattern = create_physical_name(pattern, false)?;
             let escape = if let Some(char) = escape_char {
-                format!("CHAR '{}'", char)
+                format!("CHAR '{char}'")
             } else {
                 "".to_string()
             };
             if *negated {
-                Ok(format!("{} NOT SIMILAR TO {}{}", expr, pattern, escape))
+                Ok(format!("{expr} NOT SIMILAR TO {pattern}{escape}"))
             } else {
-                Ok(format!("{} SIMILAR TO {}{}", expr, pattern, escape))
+                Ok(format!("{expr} SIMILAR TO {pattern}{escape}"))
             }
         }
         Expr::Sort { .. } => Err(DataFusionError::Internal(
@@ -1522,8 +1522,7 @@ pub fn create_window_expr_with_name(
             )
         }
         other => Err(DataFusionError::Internal(format!(
-            "Invalid window expression '{:?}'",
-            other
+            "Invalid window expression '{other:?}'"
         ))),
     }
 }
@@ -1599,8 +1598,7 @@ pub fn create_aggregate_expr_with_name(
             udaf::create_aggregate_expr(fun, &args, physical_input_schema, name)
         }
         other => Err(DataFusionError::Internal(format!(
-            "Invalid aggregate expression '{:?}'",
-            other
+            "Invalid aggregate expression '{other:?}'"
         ))),
     }
 }

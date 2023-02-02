@@ -69,7 +69,7 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                     .iter()
                     .enumerate()
                     .map(|(i, group_expr)| {
-                        let alias_str = format!("group_alias_{}", i);
+                        let alias_str = format!("group_alias_{i}");
                         let alias_expr = group_expr.clone().alias(&alias_str);
                         group_expr_alias.push((alias_str, schema.fields()[i].clone()));
                         alias_expr

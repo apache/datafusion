@@ -61,6 +61,7 @@ impl BuiltInWindowFunctionExpr for RowNumber {
         &self.name
     }
 
+    #[allow(clippy::box_default)]
     fn create_evaluator(
         &self,
         _batch: &RecordBatch,

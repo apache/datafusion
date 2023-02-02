@@ -99,7 +99,7 @@ impl JIT {
         flag_builder.set("opt_level", "speed").unwrap();
         flag_builder.set("enable_simd", "true").unwrap();
         let isa_builder = cranelift_native::builder().unwrap_or_else(|msg| {
-            panic!("host machine is not supported: {}", msg);
+            panic!("host machine is not supported: {msg}");
         });
         let isa = isa_builder
             .finish(settings::Flags::new(flag_builder))

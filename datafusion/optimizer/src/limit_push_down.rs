@@ -320,8 +320,7 @@ fn generate_push_down_join(
         }))
     } else {
         Err(DataFusionError::Internal(format!(
-            "{:?} must be join type",
-            join
+            "{join:?} must be join type"
         )))
     }
 }

@@ -118,8 +118,7 @@ impl<'a> SimplifyInfo for SimplifyContext<'a> {
                 // This means we weren't able to compute `Expr::nullable` with
                 // *any* input schemas, signalling a problem
                 DataFusionError::Internal(format!(
-                    "Could not find columns in '{}' during simplify",
-                    expr
+                    "Could not find columns in '{expr}' during simplify"
                 ))
             })
     }

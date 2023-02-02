@@ -42,7 +42,7 @@ pub fn build_calc_fn(
     // Each input takes one position, following by a pointer to place result,
     // and the last is the length of inputs/output arrays.
     for (name, _) in &inputs {
-        builder = builder.param(format!("{}_array", name), PTR_TYPE);
+        builder = builder.param(format!("{name}_array"), PTR_TYPE);
     }
     let mut builder = builder.param("result", ret_type).param("len", I64);
 
@@ -56,10 +56,10 @@ pub fn build_calc_fn(
             w.declare_as("offset", w.mul(w.id("index")?, w.lit_i(PTR_SIZE as i64))?)?;
             for (name, ty) in &inputs {
                 w.declare_as(
-                    format!("{}_ptr", name),
-                    w.add(w.id(format!("{}_array", name))?, w.id("offset")?)?,
+                    format!("{name}_ptr"),
+                    w.add(w.id(format!("{name}_array"))?, w.id("offset")?)?,
                 )?;
-                w.declare_as(name, w.load(w.id(format!("{}_ptr", name))?, *ty)?)?;
+                w.declare_as(name, w.load(w.id(format!("{name}_ptr"))?, *ty)?)?;
             }
             w.declare_as("res_ptr", w.add(w.id("result")?, w.id("offset")?)?)?;
             w.declare_as("res", jit_expr.clone())?;

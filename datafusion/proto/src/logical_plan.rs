@@ -286,7 +286,7 @@ impl AsLogicalPlan for LogicalPlanNode {
         Self: Sized,
     {
         LogicalPlanNode::decode(buf).map_err(|e| {
-            DataFusionError::Internal(format!("failed to decode logical plan: {:?}", e))
+            DataFusionError::Internal(format!("failed to decode logical plan: {e:?}"))
         })
     }
 
@@ -296,7 +296,7 @@ impl AsLogicalPlan for LogicalPlanNode {
         Self: Sized,
     {
         self.encode(buf).map_err(|e| {
-            DataFusionError::Internal(format!("failed to encode logical plan: {:?}", e))
+            DataFusionError::Internal(format!("failed to encode logical plan: {e:?}"))
         })
     }
 
@@ -307,8 +307,7 @@ impl AsLogicalPlan for LogicalPlanNode {
     ) -> Result<LogicalPlan, DataFusionError> {
         let plan = self.logical_plan_type.as_ref().ok_or_else(|| {
             proto_error(format!(
-                "logical_plan::from_proto() Unsupported logical plan '{:?}'",
-                self
+                "logical_plan::from_proto() Unsupported logical plan '{self:?}'"
             ))
         })?;
         match plan {
@@ -419,8 +418,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let file_format: Arc<dyn FileFormat> =
                     match scan.file_format_type.as_ref().ok_or_else(|| {
                         proto_error(format!(
-                            "logical_plan::from_proto() Unsupported file format '{:?}'",
-                            self
+                            "logical_plan::from_proto() Unsupported file format '{self:?}'"
                         ))
                     })? {
                         &FileFormatType::Parquet(protobuf::ParquetFormat {
@@ -563,8 +561,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         let env = &ctx.state.as_ref().read().runtime_env;
                         if !env.table_factories.contains_key(it) {
                             Err(DataFusionError::Internal(format!(
-                                "No TableProvider for file type: {}",
-                                it
+                                "No TableProvider for file type: {it}"
                             )))?
                         }
                     }

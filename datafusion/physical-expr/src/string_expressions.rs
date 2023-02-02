@@ -146,8 +146,7 @@ where
                 )?)))
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function {}",
-                other, name,
+                "Unsupported data type {other:?} for function {name}"
             ))),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
@@ -160,8 +159,7 @@ where
                 Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function {}",
-                other, name,
+                "Unsupported data type {other:?} for function {name}"
             ))),
         },
     }
@@ -227,8 +225,7 @@ pub fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => Err(DataFusionError::Internal(format!(
-            "btrim was called with {} arguments. It requires at least 1 and at most 2.",
-            other
+            "btrim was called with {other} arguments. It requires at least 1 and at most 2."            
         ))),
     }
 }
@@ -432,8 +429,7 @@ pub fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => Err(DataFusionError::Internal(format!(
-            "ltrim was called with {} arguments. It requires at least 1 and at most 2.",
-            other
+            "ltrim was called with {other} arguments. It requires at least 1 and at most 2."
         ))),
     }
 }
@@ -509,8 +505,7 @@ pub fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => Err(DataFusionError::Internal(format!(
-            "rtrim was called with {} arguments. It requires at least 1 and at most 2.",
-            other
+            "rtrim was called with {other} arguments. It requires at least 1 and at most 2."
         ))),
     }
 }

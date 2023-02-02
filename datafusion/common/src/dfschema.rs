@@ -174,9 +174,8 @@ impl DFSchema {
                     Some(qualifier) => {
                         if (qualifier.to_owned() + "." + self.fields[i].name()) == name {
                             return Err(DataFusionError::Plan(format!(
-                                "Fully qualified field name '{}' was supplied to `index_of` \
-                                which is deprecated. Please use `index_of_column_by_name` instead",
-                                name
+                                "Fully qualified field name '{name}' was supplied to `index_of` \
+                                which is deprecated. Please use `index_of_column_by_name` instead"
                             )));
                         }
                     }

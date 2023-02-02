@@ -292,8 +292,7 @@ fn try_cast_literal_to_type(
         DataType::Decimal128(_, scale) => 10_i128.pow(*scale as u32),
         other_type => {
             return Err(DataFusionError::Internal(format!(
-                "Error target data type {:?}",
-                other_type
+                "Error target data type {other_type:?}"
             )));
         }
     };
@@ -311,8 +310,7 @@ fn try_cast_literal_to_type(
         ),
         other_type => {
             return Err(DataFusionError::Internal(format!(
-                "Error target data type {:?}",
-                other_type
+                "Error target data type {other_type:?}"
             )));
         }
     };
@@ -342,8 +340,7 @@ fn try_cast_literal_to_type(
         }
         other_value => {
             return Err(DataFusionError::Internal(format!(
-                "Invalid literal value {:?}",
-                other_value
+                "Invalid literal value {other_value:?}"
             )));
         }
     };
@@ -364,8 +361,7 @@ fn try_cast_literal_to_type(
                     }
                     other_type => {
                         return Err(DataFusionError::Internal(format!(
-                            "Error target data type {:?}",
-                            other_type
+                            "Error target data type {other_type:?}"
                         )));
                     }
                 };

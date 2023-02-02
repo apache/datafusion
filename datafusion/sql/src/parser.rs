@@ -158,7 +158,7 @@ impl<'a> DFParser<'a> {
 
     /// Report unexpected token
     fn expected<T>(&self, expected: &str, found: Token) -> Result<T, ParserError> {
-        parser_err!(format!("Expected {}, found: {}", expected, found))
+        parser_err!(format!("Expected {expected}, found: {found}"))
     }
 
     /// Parse a new expression

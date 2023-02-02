@@ -64,13 +64,13 @@ impl std::fmt::Display for CaseExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "CASE ")?;
         if let Some(e) = &self.expr {
-            write!(f, "{} ", e)?;
+            write!(f, "{e} ")?;
         }
         for (w, t) in &self.when_then_expr {
-            write!(f, "WHEN {} THEN {} ", w, t)?;
+            write!(f, "WHEN {w} THEN {t} ")?;
         }
         if let Some(e) = &self.else_expr {
-            write!(f, "ELSE {} ", e)?;
+            write!(f, "ELSE {e} ")?;
         }
         write!(f, "END")
     }

@@ -195,8 +195,7 @@ pub(crate) fn sum_batch(values: &ArrayRef, sum_type: &DataType) -> Result<Scalar
         DataType::UInt8 => typed_sum_delta_batch!(values, UInt8Array, UInt8),
         e => {
             return Err(DataFusionError::Internal(format!(
-                "Sum is not expected to receive the type {:?}",
-                e
+                "Sum is not expected to receive the type {e:?}"
             )));
         }
     })
@@ -232,8 +231,7 @@ pub(crate) fn add_to_row(
         }
         _ => {
             let msg = format!(
-                "Row sum updater is not expected to receive a scalar {:?}",
-                s
+                "Row sum updater is not expected to receive a scalar {s:?}"
             );
             return Err(DataFusionError::Internal(msg));
         }

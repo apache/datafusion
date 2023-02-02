@@ -86,7 +86,7 @@ impl TryIntoOrderedF64 for ScalarValue {
     fn try_as_f64(&self) -> Result<Option<OrderedFloat<f64>>> {
         match self {
             ScalarValue::Float32(v) => Ok(v.map(|v| OrderedFloat::from(v as f64))),
-            ScalarValue::Float64(v) => Ok(v.map(|v| OrderedFloat::from(v as f64))),
+            ScalarValue::Float64(v) => Ok(v.map(OrderedFloat::from)),
             ScalarValue::Int8(v) => Ok(v.map(|v| OrderedFloat::from(v as f64))),
             ScalarValue::Int16(v) => Ok(v.map(|v| OrderedFloat::from(v as f64))),
             ScalarValue::Int32(v) => Ok(v.map(|v| OrderedFloat::from(v as f64))),
@@ -97,8 +97,7 @@ impl TryIntoOrderedF64 for ScalarValue {
             ScalarValue::UInt64(v) => Ok(v.map(|v| OrderedFloat::from(v as f64))),
 
             got => Err(DataFusionError::NotImplemented(format!(
-                "Support for 'TryIntoOrderedF64' for data type {} is not implemented",
-                got
+                "Support for 'TryIntoOrderedF64' for data type {got} is not implemented"
             ))),
         }
     }
@@ -467,7 +466,7 @@ impl TDigest {
 
         let mut k_limit: f64 = 1.0;
         let mut q_limit_times_count =
-            Self::k_to_q(k_limit, max_size as f64) * (count as f64);
+            Self::k_to_q(k_limit, max_size as f64) * count;
 
         let mut iter_centroids = centroids.iter_mut();
         let mut curr = iter_centroids.next().unwrap();
@@ -489,7 +488,7 @@ impl TDigest {
                 weights_to_merge = OrderedFloat::from(0.0);
                 compressed.push(curr.clone());
                 q_limit_times_count =
-                    Self::k_to_q(k_limit, max_size as f64) * (count as f64);
+                    Self::k_to_q(k_limit, max_size as f64) * count;
                 k_limit += 1.0;
                 curr = centroid;
             }
@@ -502,7 +501,7 @@ impl TDigest {
         compressed.shrink_to_fit();
         compressed.sort();
 
-        result.count = OrderedFloat::from(count as f64);
+        result.count = OrderedFloat::from(count);
         result.min = min;
         result.max = max;
         result.centroids = compressed;
@@ -645,7 +644,7 @@ impl TDigest {
 
         let max_size = match &state[0] {
             ScalarValue::UInt64(Some(v)) => *v as usize,
-            v => panic!("invalid max_size type {:?}", v),
+            v => panic!("invalid max_size type {v:?}"),
         };
 
         let centroids: Vec<_> = match &state[5] {
@@ -653,7 +652,7 @@ impl TDigest {
                 .chunks(2)
                 .map(|v| Centroid::new(cast_scalar_f64!(v[0]), cast_scalar_f64!(v[1])))
                 .collect(),
-            v => panic!("invalid centroids type {:?}", v),
+            v => panic!("invalid centroids type {v:?}"),
         };
 
         let max = cast_scalar_f64!(&state[3]);

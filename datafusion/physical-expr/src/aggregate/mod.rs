@@ -97,8 +97,7 @@ pub trait AggregateExpr: Send + Sync + Debug {
         _start_index: usize,
     ) -> Result<Box<dyn RowAccumulator>> {
         Err(DataFusionError::NotImplemented(format!(
-            "RowAccumulator hasn't been implemented for {:?} yet",
-            self
+            "RowAccumulator hasn't been implemented for {self:?} yet"
         )))
     }
 }

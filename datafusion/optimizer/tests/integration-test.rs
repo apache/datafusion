@@ -270,7 +270,7 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
 
     // hard code the return value of now()
     let now_time =
-        DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(1666615693, 0), Utc);
+        DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp_opt(1666615693, 0).unwrap(), Utc);
     let mut config = OptimizerConfig::new()
         .with_skip_failing_rules(false)
         .with_query_execution_start_time(now_time);

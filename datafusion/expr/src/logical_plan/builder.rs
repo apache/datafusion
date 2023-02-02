@@ -158,7 +158,7 @@ impl LogicalPlanBuilder {
                         let data_type = expr.get_type(&empty_schema)?;
                         if let Some(prev_data_type) = &field_types[j] {
                             if prev_data_type != &data_type {
-                                let err = format!("Inconsistent data type across values list at row {} column {}", i, j);
+                                let err = format!("Inconsistent data type across values list at row {i} column {j}");
                                 return Err(DataFusionError::Plan(err));
                             }
                         }
@@ -773,8 +773,7 @@ impl LogicalPlanBuilder {
 
         if left_len != right_len {
             return Err(DataFusionError::Plan(format!(
-                "INTERSECT/EXCEPT query must have the same number of columns. Left is {} and right is {}.",
-                left_len, right_len
+                "INTERSECT/EXCEPT query must have the same number of columns. Left is {left_len} and right is {right_len}."
             )));
         }
 
@@ -852,10 +851,9 @@ pub(crate) fn validate_unique_names<'a>(
             },
             Some((existing_position, existing_expr)) => {
                 Err(DataFusionError::Plan(
-                    format!("{} require unique expression names \
-                             but the expression \"{:?}\" at position {} and \"{:?}\" \
-                             at position {} have the same name. Consider aliasing (\"AS\") one of them.",
-                             node_name, existing_expr, existing_position, expr, position,
+                    format!("{node_name} require unique expression names \
+                             but the expression \"{existing_expr:?}\" at position {existing_position} and \"{expr:?}\" \
+                             at position {position} have the same name. Consider aliasing (\"AS\") one of them."
                             )
                 ))
             }
@@ -896,8 +894,7 @@ pub fn union_with_alias(
         let right_col_num = right_plan.schema().fields().len();
         if right_col_num != left_col_num {
             return Err(DataFusionError::Plan(format!(
-                "Union queries must have the same number of columns, (left is {}, right is {})",
-                left_col_num, right_col_num)
+                "Union queries must have the same number of columns, (left is {left_col_num}, right is {right_col_num})")
             ));
         }
     }

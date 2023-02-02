@@ -144,8 +144,7 @@ impl ArrowPredicate for DatafusionArrowPredicate {
                 }
             }
             Err(e) => Err(ArrowError::ComputeError(format!(
-                "Error evaluating filter predicate: {:?}",
-                e
+                "Error evaluating filter predicate: {e:?}"
             ))),
         }
     }

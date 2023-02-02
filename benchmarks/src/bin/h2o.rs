@@ -55,7 +55,7 @@ struct GroupBy {
 #[tokio::main]
 async fn main() -> Result<()> {
     let opt = Opt::from_args();
-    println!("Running benchmarks with the following options: {:?}", opt);
+    println!("Running benchmarks with the following options: {opt:?}");
     match opt {
         Opt::GroupBy(config) => group_by(&config).await,
     }
@@ -107,7 +107,7 @@ async fn group_by(opt: &GroupBy) -> Result<()> {
         _ => unimplemented!(),
     };
 
-    println!("Executing {}", sql);
+    println!("Executing {sql}");
     let start = Instant::now();
     let df = ctx.sql(sql).await?;
     let batches = df.collect().await?;

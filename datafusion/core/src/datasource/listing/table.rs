@@ -105,7 +105,7 @@ impl ListingTableConfig {
     }
 
     fn infer_format(path: &str) -> Result<(Arc<dyn FileFormat>, String)> {
-        let err_msg = format!("Unable to infer file type from path: {}", path);
+        let err_msg = format!("Unable to infer file type from path: {path}");
 
         let mut exts = path.rsplit('.');
 

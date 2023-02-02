@@ -50,16 +50,14 @@ pub fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarValue> {
                 Ok(n) => n,
                 Err(_) => {
                     return Err(DataFusionError::NotImplemented(format!(
-                        "Unsupported Interval Expression with value {:?}",
-                        value
+                        "Unsupported Interval Expression with value {value:?}"
                     )));
                 }
             };
 
             if interval_period > (i32::MAX as f32) {
                 return Err(DataFusionError::NotImplemented(format!(
-                    "Interval field value out of range: {:?}",
-                    value
+                    "Interval field value out of range: {value:?}"
                 )));
             }
 
@@ -87,8 +85,7 @@ pub fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarValue> {
                 "second" | "seconds" => Ok((0, 0, interval_period * MILLIS_PER_SECOND)),
                 "millisecond" | "milliseconds" => Ok((0, 0, interval_period)),
                 _ => Err(DataFusionError::NotImplemented(format!(
-                    "Invalid input syntax for type interval: {:?}",
-                    value
+                    "Invalid input syntax for type interval: {value:?}"
                 ))),
             }
         };
@@ -114,8 +111,7 @@ pub fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarValue> {
 
         if result_month > (i32::MAX as i64) {
             return Err(DataFusionError::NotImplemented(format!(
-                "Interval field value out of range: {:?}",
-                value
+                "Interval field value out of range: {value:?}"
             )));
         }
 
@@ -123,8 +119,7 @@ pub fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarValue> {
 
         if result_days > (i32::MAX as i64) {
             return Err(DataFusionError::NotImplemented(format!(
-                "Interval field value out of range: {:?}",
-                value
+                "Interval field value out of range: {value:?}"
             )));
         }
 
@@ -132,8 +127,7 @@ pub fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarValue> {
 
         if result_millis > (i32::MAX as i64) {
             return Err(DataFusionError::NotImplemented(format!(
-                "Interval field value out of range: {:?}",
-                value
+                "Interval field value out of range: {value:?}"
             )));
         }
     }

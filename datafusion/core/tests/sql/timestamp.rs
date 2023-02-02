@@ -890,7 +890,11 @@ async fn group_by_timestamp_millis() -> Result<()> {
         ),
         Field::new("count", DataType::Int32, false),
     ]));
-    let base_dt = Utc.ymd(2018, 7, 1).and_hms(6, 0, 0); // 2018-Jul-01 06:00
+    let base_dt = match Utc.with_ymd_and_hms(2018, 7, 1, 6, 0, 0){
+        chrono::LocalResult::None => panic!(),
+        chrono::LocalResult::Single(date_time) => date_time,
+        chrono::LocalResult::Ambiguous(date_time1, _date_time2) => date_time1,
+    }; // 2018-Jul-01 06:00
     let hour1 = Duration::hours(1);
     let timestamps = vec![
         base_dt.timestamp_millis(),

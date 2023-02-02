@@ -164,7 +164,7 @@ impl PartialEq for Time {
 impl Display for Time {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let duration = std::time::Duration::from_nanos(self.value() as u64);
-        write!(f, "{:?}", duration)
+        write!(f, "{duration:?}")
     }
 }
 
@@ -294,7 +294,7 @@ impl Display for Timestamp {
         match self.value() {
             None => write!(f, "NONE"),
             Some(v) => {
-                write!(f, "{}", v)
+                write!(f, "{v}")
             }
         }
     }
@@ -542,22 +542,22 @@ impl std::fmt::Display for MetricValue {
             | Self::SpillCount(count)
             | Self::SpilledBytes(count)
             | Self::Count { count, .. } => {
-                write!(f, "{}", count)
+                write!(f, "{count}")
             }
             Self::CurrentMemoryUsage(gauge) | Self::Gauge { gauge, .. } => {
-                write!(f, "{}", gauge)
+                write!(f, "{gauge}")
             }
             Self::ElapsedCompute(time) | Self::Time { time, .. } => {
                 // distinguish between no time recorded and very small
                 // amount of time recorded
                 if time.value() > 0 {
-                    write!(f, "{}", time)
+                    write!(f, "{time}")
                 } else {
                     write!(f, "NOT RECORDED")
                 }
             }
             Self::StartTimestamp(timestamp) | Self::EndTimestamp(timestamp) => {
-                write!(f, "{}", timestamp)
+                write!(f, "{timestamp}")
             }
         }
     }

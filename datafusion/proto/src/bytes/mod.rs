@@ -79,11 +79,11 @@ impl Serializeable for Expr {
     fn to_bytes(&self) -> Result<Bytes> {
         let mut buffer = BytesMut::new();
         let protobuf: protobuf::LogicalExprNode = self.try_into().map_err(|e| {
-            DataFusionError::Plan(format!("Error encoding expr as protobuf: {}", e))
+            DataFusionError::Plan(format!("Error encoding expr as protobuf: {e}"))
         })?;
 
         protobuf.encode(&mut buffer).map_err(|e| {
-            DataFusionError::Plan(format!("Error encoding protobuf as bytes: {}", e))
+            DataFusionError::Plan(format!("Error encoding protobuf as bytes: {e}"))
         })?;
 
         let bytes: Bytes = buffer.into();
@@ -132,11 +132,11 @@ impl Serializeable for Expr {
         registry: &dyn FunctionRegistry,
     ) -> Result<Self> {
         let protobuf = protobuf::LogicalExprNode::decode(bytes).map_err(|e| {
-            DataFusionError::Plan(format!("Error decoding expr as protobuf: {}", e))
+            DataFusionError::Plan(format!("Error decoding expr as protobuf: {e}"))
         })?;
 
         parse_expr(&protobuf, registry).map_err(|e| {
-            DataFusionError::Plan(format!("Error parsing protobuf into Expr: {}", e))
+            DataFusionError::Plan(format!("Error parsing protobuf into Expr: {e}"))
         })
     }
 }
@@ -154,10 +154,10 @@ pub fn logical_plan_to_json(plan: &LogicalPlan) -> Result<String> {
     let protobuf =
         protobuf::LogicalPlanNode::try_from_logical_plan(plan, &extension_codec)
             .map_err(|e| {
-                DataFusionError::Plan(format!("Error serializing plan: {}", e))
+                DataFusionError::Plan(format!("Error serializing plan: {e}"))
             })?;
     serde_json::to_string(&protobuf)
-        .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {}", e)))
+        .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {e}")))
 }
 
 /// Serialize a LogicalPlan as bytes, using the provided extension codec
@@ -169,7 +169,7 @@ pub fn logical_plan_to_bytes_with_extension_codec(
         protobuf::LogicalPlanNode::try_from_logical_plan(plan, extension_codec)?;
     let mut buffer = BytesMut::new();
     protobuf.encode(&mut buffer).map_err(|e| {
-        DataFusionError::Plan(format!("Error encoding protobuf as bytes: {}", e))
+        DataFusionError::Plan(format!("Error encoding protobuf as bytes: {e}"))
     })?;
     Ok(buffer.into())
 }
@@ -199,7 +199,7 @@ pub fn logical_plan_from_bytes_with_extension_codec(
     extension_codec: &dyn LogicalExtensionCodec,
 ) -> Result<LogicalPlan> {
     let protobuf = protobuf::LogicalPlanNode::decode(bytes).map_err(|e| {
-        DataFusionError::Plan(format!("Error decoding expr as protobuf: {}", e))
+        DataFusionError::Plan(format!("Error decoding expr as protobuf: {e}"))
     })?;
     protobuf.try_into_logical_plan(ctx, extension_codec)
 }

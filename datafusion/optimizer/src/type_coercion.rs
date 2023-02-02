@@ -243,24 +243,21 @@ impl ExprRewriter for TypeCoercionRewriter {
                 let low_coerced_type = comparison_coercion(&expr_type, &low_type)
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
-                            "Failed to coerce types {} and {} in BETWEEN expression",
-                            expr_type, low_type
+                            "Failed to coerce types {expr_type} and {low_type} in BETWEEN expression"
                         ))
                     })?;
                 let high_type = high.get_type(&self.schema)?;
                 let high_coerced_type = comparison_coercion(&expr_type, &low_type)
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
-                            "Failed to coerce types {} and {} in BETWEEN expression",
-                            expr_type, high_type
+                            "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
                         ))
                     })?;
                 let coercion_type =
                     comparison_coercion(&low_coerced_type, &high_coerced_type)
                         .ok_or_else(|| {
                             DataFusionError::Internal(format!(
-                                "Failed to coerce types {} and {} in BETWEEN expression",
-                                expr_type, high_type
+                                "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
                             ))
                         })?;
                 let expr = Expr::Between(Between::new(
@@ -285,8 +282,7 @@ impl ExprRewriter for TypeCoercionRewriter {
                     get_coerce_type_for_list(&expr_data_type, &list_data_types);
                 match result_type {
                     None => Err(DataFusionError::Plan(format!(
-                        "Can not find compatible types to compare {:?} with {:?}",
-                        expr_data_type, list_data_types
+                        "Can not find compatible types to compare {expr_data_type:?} with {list_data_types:?}"
                     ))),
                     Some(coerced_type) => {
                         // find the coerced type
@@ -322,8 +318,7 @@ impl ExprRewriter for TypeCoercionRewriter {
                     get_coerce_type_for_case_when(&then_types, &else_type);
                 match case_when_coerce_type {
                     None => Err(DataFusionError::Internal(format!(
-                        "Failed to coerce then ({:?}) and else ({:?}) to common types in CASE WHEN expression",
-                        then_types, else_type
+                        "Failed to coerce then ({then_types:?}) and else ({else_type:?}) to common types in CASE WHEN expression"
                     ))),
                     Some(data_type) => {
                         let left = case.when_then_expr
@@ -476,8 +471,7 @@ fn get_coerced_window_frame(
             Ok(DataType::Interval(IntervalUnit::MonthDayNano))
         } else {
             Err(DataFusionError::Internal(format!(
-                "Cannot run range queries on datatype: {:?}",
-                column_type
+                "Cannot run range queries on datatype: {column_type:?}"
             )))
         }
     }

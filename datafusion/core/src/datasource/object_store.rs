@@ -42,8 +42,7 @@ impl ObjectStoreUrl {
         let remaining = &parsed[url::Position::BeforePath..];
         if !remaining.is_empty() && remaining != "/" {
             return Err(DataFusionError::Execution(format!(
-                "ObjectStoreUrl must only contain scheme and authority, got: {}",
-                remaining
+                "ObjectStoreUrl must only contain scheme and authority, got: {remaining}"
             )));
         }
 
@@ -210,8 +209,7 @@ impl ObjectStoreRegistry {
                     Ok(store)
                 }
                 None => Err(DataFusionError::Internal(format!(
-                    "No suitable object store found for {}",
-                    url
+                    "No suitable object store found for {url}"
                 ))),
             },
         }

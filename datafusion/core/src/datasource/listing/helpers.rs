@@ -320,7 +320,11 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Result<Vec<PartitionedFile>> {
                     object_meta: ObjectMeta {
                         location: Path::parse(key_array.value(row))
                             .map_err(|e| DataFusionError::External(Box::new(e)))?,
-                        last_modified: Utc.timestamp_millis(modified_array.value(row)),
+                        last_modified: match Utc.timestamp_millis_opt(modified_array.value(row)) {
+                            chrono::LocalResult::None => return Err(DataFusionError::Internal("Couldn't convert timestamp combination to DateTime".to_string())),
+                            chrono::LocalResult::Single(date_time) => date_time,
+                            chrono::LocalResult::Ambiguous(date_time1, _date_time2) => date_time1,
+                        },
                         size: length_array.value(row) as usize,
                     },
                     partition_values: (3..batch.columns().len())
@@ -594,12 +598,20 @@ mod tests {
         let files = vec![
             ObjectMeta {
                 location: Path::from("mybucket/tablepath/part1=val1/file.parquet"),
-                last_modified: Utc.timestamp_millis(1634722979123),
+                last_modified: match Utc.timestamp_millis_opt(1634722979123) {
+                    chrono::LocalResult::None => panic!(),
+                    chrono::LocalResult::Single(date_time) => date_time,
+                    chrono::LocalResult::Ambiguous(date_time1, _date_time2) => date_time1,
+                },
                 size: 100,
             },
             ObjectMeta {
                 location: Path::from("mybucket/tablepath/part1=val2/file.parquet"),
-                last_modified: Utc.timestamp_millis(0),
+                last_modified: match Utc.timestamp_millis_opt(0){
+                    chrono::LocalResult::None => panic!(),
+                    chrono::LocalResult::Single(date_time) => date_time,
+                    chrono::LocalResult::Ambiguous(date_time1, _date_time2) => date_time1,
+                },
                 size: 100,
             },
         ];
@@ -625,12 +637,20 @@ mod tests {
         let files = vec![
             ObjectMeta {
                 location: Path::from("mybucket/tablepath/part1=val1/file.parquet"),
-                last_modified: Utc.timestamp_millis(1634722979123),
+                last_modified: match Utc.timestamp_millis_opt(1634722979123){
+                    chrono::LocalResult::None => panic!(),
+                    chrono::LocalResult::Single(date_time) => date_time,
+                    chrono::LocalResult::Ambiguous(date_time1, _date_time2) => date_time1,
+                },
                 size: 100,
             },
             ObjectMeta {
                 location: Path::from("mybucket/tablepath/part1=val2/file.parquet"),
-                last_modified: Utc.timestamp_millis(0),
+                last_modified: match Utc.timestamp_millis_opt(0){
+                    chrono::LocalResult::None => panic!(),
+                    chrono::LocalResult::Single(date_time) => date_time,
+                    chrono::LocalResult::Ambiguous(date_time1, _date_time2) => date_time1,
+                },
                 size: 100,
             },
         ];

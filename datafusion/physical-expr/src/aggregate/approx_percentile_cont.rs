@@ -107,8 +107,7 @@ impl ApproxPercentileCont {
             }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
-                    "Support for 'APPROX_PERCENTILE_CONT' for data type {} is not implemented",
-                    other
+                    "Support for 'APPROX_PERCENTILE_CONT' for data type {other} is not implemented"
                 )))
             }
         };
@@ -129,7 +128,7 @@ fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
         .value();
     let percentile = match lit {
         ScalarValue::Float32(Some(q)) => *q as f64,
-        ScalarValue::Float64(Some(q)) => *q as f64,
+        ScalarValue::Float64(Some(q)) => *q,
         got => return Err(DataFusionError::NotImplemented(format!(
             "Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal (got data type {})",
             got.get_datatype()
@@ -139,8 +138,7 @@ fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
     // Ensure the percentile is between 0 and 1.
     if !(0.0..=1.0).contains(&percentile) {
         return Err(DataFusionError::Plan(format!(
-            "Percentile value must be between 0.0 and 1.0 inclusive, {} is invalid",
-            percentile
+            "Percentile value must be between 0.0 and 1.0 inclusive, {percentile} is invalid"
         )));
     }
     Ok(percentile)
@@ -352,8 +350,7 @@ impl ApproxPercentileAccumulator {
                     .collect::<Result<Vec<_>>>()?)
             }
             e => Err(DataFusionError::Internal(format!(
-                "APPROX_PERCENTILE_CONT is not expected to receive the type {:?}",
-                e
+                "APPROX_PERCENTILE_CONT is not expected to receive the type {e:?}"
             ))),
         }
     }
@@ -392,8 +389,8 @@ impl Accumulator for ApproxPercentileAccumulator {
             DataType::UInt32 => ScalarValue::UInt32(Some(q as u32)),
             DataType::UInt64 => ScalarValue::UInt64(Some(q as u64)),
             DataType::Float32 => ScalarValue::Float32(Some(q as f32)),
-            DataType::Float64 => ScalarValue::Float64(Some(q as f64)),
-            v => unreachable!("unexpected return type {:?}", v),
+            DataType::Float64 => ScalarValue::Float64(Some(q)),
+            v => unreachable!("unexpected return type {v:?}"),
         })
     }
 

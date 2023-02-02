@@ -160,8 +160,7 @@ impl ExecutionPlan for UnionExec {
         debug!("Error in Union: Partition {} not found", partition);
 
         Err(crate::error::DataFusionError::Execution(format!(
-            "Partition {} not found in Union",
-            partition
+            "Partition {partition} not found in Union"
         )))
     }
 

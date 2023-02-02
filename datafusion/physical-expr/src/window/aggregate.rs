@@ -267,8 +267,7 @@ fn calculate_current_window(
                 // UNBOUNDED FOLLOWING
                 WindowFrameBound::Following(ScalarValue::UInt64(None)) => {
                     Err(DataFusionError::Internal(format!(
-                        "Frame start cannot be UNBOUNDED FOLLOWING '{:?}'",
-                        window_frame
+                        "Frame start cannot be UNBOUNDED FOLLOWING '{window_frame:?}'"
                     )))
                 }
                 WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
@@ -282,8 +281,7 @@ fn calculate_current_window(
                 // UNBOUNDED PRECEDING
                 WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => {
                     Err(DataFusionError::Internal(format!(
-                        "Frame end cannot be UNBOUNDED PRECEDING '{:?}'",
-                        window_frame
+                        "Frame end cannot be UNBOUNDED PRECEDING '{window_frame:?}'"
                     )))
                 }
                 WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {

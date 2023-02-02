@@ -160,8 +160,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         );
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
-                "SortPreservingMergeExec invalid partition {}",
-                partition
+                "SortPreservingMergeExec invalid partition {partition}"
             )));
         }
 

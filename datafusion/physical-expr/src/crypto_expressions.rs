@@ -67,8 +67,7 @@ fn digest_process(
                 digest_algorithm.digest_binary_array::<i64>(a.as_ref())
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function {}",
-                other, digest_algorithm,
+                "Unsupported data type {other:?} for function {digest_algorithm}"
             ))),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
@@ -77,8 +76,7 @@ fn digest_process(
             ScalarValue::Binary(a) | ScalarValue::LargeBinary(a) => Ok(digest_algorithm
                 .digest_scalar(&a.as_ref().map(|v: &Vec<u8>| v.as_slice()))),
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function {}",
-                other, digest_algorithm,
+                "Unsupported data type {other:?} for function {digest_algorithm}"
             ))),
         },
     }
@@ -210,7 +208,7 @@ impl DigestAlgorithm {
 
 impl fmt::Display for DigestAlgorithm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", format!("{:?}", self).to_lowercase())
+        write!(f, "{}", format!("{self:?}").to_lowercase())
     }
 }
 
@@ -242,9 +240,7 @@ impl FromStr for DigestAlgorithm {
                 .collect::<Vec<_>>()
                 .join(", ");
                 return Err(DataFusionError::Plan(format!(
-                    "There is no built-in digest algorithm named '{}', currently supported algorithms are: {}",
-                    name,
-                    options,
+                    "There is no built-in digest algorithm named '{name}', currently supported algorithms are: {options}"
                 )));
             }
         })
@@ -274,7 +270,7 @@ fn hex_encode<T: AsRef<[u8]>>(data: T) -> String {
     let mut s = String::with_capacity(data.as_ref().len() * 2);
     for b in data.as_ref() {
         // Writing to a string never errors, so we can unwrap here.
-        write!(&mut s, "{:02x}", b).unwrap();
+        write!(&mut s, "{b:02x}").unwrap();
     }
     s
 }
@@ -370,8 +366,7 @@ pub fn digest(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 method.parse::<DigestAlgorithm>()
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function digest",
-                other,
+                "Unsupported data type {other:?} for function digest"
             ))),
         },
         ColumnarValue::Array(_) => Err(DataFusionError::Internal(

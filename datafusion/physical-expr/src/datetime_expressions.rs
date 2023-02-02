@@ -105,8 +105,7 @@ where
                 unary_string_to_primitive_function::<i64, O, _>(&[a.as_ref()], op, name)?,
             ))),
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function {}",
-                other, name,
+                "Unsupported data type {other:?} for function {name}"
             ))),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
@@ -119,8 +118,7 @@ where
                 Ok(ColumnarValue::Scalar(S::scalar(result)))
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function {}",
-                other, name
+                "Unsupported data type {other:?} for function {name}"
             ))),
         },
     }
@@ -195,7 +193,7 @@ pub fn make_current_date(
     now_ts: DateTime<Utc>,
 ) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue> {
     let days = Some(
-        now_ts.num_days_from_ce() - NaiveDate::from_ymd(1970, 1, 1).num_days_from_ce(),
+        now_ts.num_days_from_ce() - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap().num_days_from_ce(),
     );
     move |_arg| Ok(ColumnarValue::Scalar(ScalarValue::Date32(days)))
 }
@@ -220,7 +218,7 @@ fn quarter_month(date: &NaiveDateTime) -> u32 {
 fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
     let value = timestamp_ns_to_datetime(value)
         .ok_or_else(|| {
-            DataFusionError::Execution(format!("Timestamp {} out of range", value))
+            DataFusionError::Execution(format!("Timestamp {value} out of range"))
         })?
         .with_nanosecond(0);
     let value = match granularity {
@@ -257,8 +255,7 @@ fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
             .and_then(|d| d.with_month0(0)),
         unsupported => {
             return Err(DataFusionError::Execution(format!(
-                "Unsupported date_trunc granularity: {}",
-                unsupported
+                "Unsupported date_trunc granularity: {unsupported}"
             )));
         }
     };
@@ -492,8 +489,7 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         "minute" => extract_date_part!(&array, temporal::minute),
         "second" => extract_date_part!(&array, temporal::second),
         _ => Err(DataFusionError::Execution(format!(
-            "Date part '{}' not supported",
-            date_part
+            "Date part '{date_part}' not supported"
         ))),
     }?;
 

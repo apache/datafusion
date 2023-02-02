@@ -106,8 +106,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         // CoalescePartitionsExec produces a single partition
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
-                "CoalescePartitionsExec invalid partition {}",
-                partition
+                "CoalescePartitionsExec invalid partition {partition}"
             )));
         }
 

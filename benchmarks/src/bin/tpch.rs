@@ -164,8 +164,7 @@ async fn main() -> Result<()> {
                 "zstd" => Compression::ZSTD,
                 other => {
                     return Err(DataFusionError::NotImplemented(format!(
-                        "Invalid compression format: {}",
-                        other
+                        "Invalid compression format: {other}"
                     )));
                 }
             };
@@ -183,7 +182,7 @@ async fn main() -> Result<()> {
 }
 
 async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordBatch>> {
-    println!("Running benchmarks with the following options: {:?}", opt);
+    println!("Running benchmarks with the following options: {opt:?}");
     let mut benchmark_run = BenchmarkRun::new(opt.query);
     let config = SessionConfig::new()
         .with_target_partitions(opt.partitions)
@@ -219,7 +218,7 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
         }
 
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
-        millis.push(elapsed as f64);
+        millis.push(elapsed);
         let row_count = result.iter().map(|b| b.num_rows()).sum();
         println!(
             "Query {} iteration {} took {:.1} ms and returned {} rows",
@@ -257,7 +256,7 @@ async fn register_tables(
         };
 
         if opt.mem_table {
-            println!("Loading table '{}' into memory", table);
+            println!("Loading table '{table}' into memory");
             let start = Instant::now();
             let memtable =
                 MemTable::load(table_provider, Some(opt.partitions), &ctx.state())
@@ -301,12 +300,12 @@ async fn execute_query(
     let plan = plan.to_unoptimized_plan();
 
     if debug {
-        println!("=== Logical plan ===\n{:?}\n", plan);
+        println!("=== Logical plan ===\n{plan:?}\n");
     }
 
     let plan = ctx.optimize(&plan)?;
     if debug {
-        println!("=== Optimized logical plan ===\n{:?}\n", plan);
+        println!("=== Optimized logical plan ===\n{plan:?}\n");
     }
     let physical_plan = ctx.create_physical_plan(&plan).await?;
     if debug {
@@ -342,7 +341,7 @@ async fn get_table(
         match table_format {
             // dbgen creates .tbl ('|' delimited) files without header
             "tbl" => {
-                let path = format!("{}/{}.tbl", path, table);
+                let path = format!("{path}/{table}.tbl");
 
                 let format = CsvFormat::default()
                     .with_delimiter(b'|')
@@ -351,7 +350,7 @@ async fn get_table(
                 (Arc::new(format), path, ".tbl")
             }
             "csv" => {
-                let path = format!("{}/{}", path, table);
+                let path = format!("{path}/{table}");
                 let format = CsvFormat::default()
                     .with_delimiter(b',')
                     .with_has_header(true);
@@ -359,7 +358,7 @@ async fn get_table(
                 (Arc::new(format), path, DEFAULT_CSV_EXTENSION)
             }
             "parquet" => {
-                let path = format!("{}/{}", path, table);
+                let path = format!("{path}/{table}");
                 let format = ParquetFormat::default().with_enable_pruning(true);
 
                 (Arc::new(format), path, DEFAULT_PARQUET_EXTENSION)

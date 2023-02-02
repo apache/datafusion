@@ -79,14 +79,12 @@ impl MemoryManagerConfig {
     pub fn try_new_limit(max_memory: usize, memory_fraction: f64) -> Result<Self> {
         if max_memory == 0 {
             return Err(DataFusionError::Plan(format!(
-                "invalid max_memory. Expected greater than 0, got {}",
-                max_memory
+                "invalid max_memory. Expected greater than 0, got {max_memory}"
             )));
         }
         if !(memory_fraction > 0f64 && memory_fraction <= 1f64) {
             return Err(DataFusionError::Plan(format!(
-                "invalid fraction. Expected greater than 0 and less than 1.0, got {}",
-                memory_fraction
+                "invalid fraction. Expected greater than 0 and less than 1.0, got {memory_fraction}"
             )));
         }
 
@@ -312,8 +310,7 @@ impl MemoryManager {
                 });
         update.unwrap_or_else(|_| {
             panic!(
-                "Tracker total memory shrink by {} underflow, current value is ",
-                delta
+                "Tracker total memory shrink by {delta} underflow, current value is "                
             )
         });
     }
@@ -454,7 +451,7 @@ pub fn human_readable_size(size: usize) -> String {
             (size as f64, "B")
         }
     };
-    format!("{:.1} {}", value, unit)
+    format!("{value:.1} {unit}")
 }
 
 #[cfg(test)]

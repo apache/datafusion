@@ -218,7 +218,7 @@ pub async fn plan_to_json(
             let mut tasks = vec![];
             for i in 0..plan.output_partitioning().partition_count() {
                 let plan = plan.clone();
-                let filename = format!("part-{}.json", i);
+                let filename = format!("part-{i}.json");
                 let path = fs_path.join(&filename);
                 let file = fs::File::create(path)?;
                 let mut writer = json::LineDelimitedWriter::new(file);
@@ -237,13 +237,12 @@ pub async fn plan_to_json(
                 .await
                 .into_iter()
                 .try_for_each(|result| {
-                    result.map_err(|e| DataFusionError::Execution(format!("{}", e)))?
+                    result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
                 })?;
             Ok(())
         }
         Err(e) => Err(DataFusionError::Execution(format!(
-            "Could not create directory {}: {:?}",
-            path, e
+            "Could not create directory {path}: {e:?}"
         ))),
     }
 }

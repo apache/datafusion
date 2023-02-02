@@ -66,7 +66,7 @@ struct Opt {
 #[tokio::main]
 async fn main() -> Result<()> {
     let opt: Opt = Opt::from_args();
-    println!("Running benchmarks with the following options: {:?}", opt);
+    println!("Running benchmarks with the following options: {opt:?}");
 
     let config = SessionConfig::new().with_target_partitions(opt.partitions);
     let mut ctx = SessionContext::with_config(config);
@@ -132,9 +132,9 @@ async fn run_benchmarks(
     ];
 
     for filter_expr in &filter_matrix {
-        println!("Executing with filter '{}'", filter_expr);
+        println!("Executing with filter '{filter_expr}'");
         for scan_options in &scan_options_matrix {
-            println!("Using scan options {:?}", scan_options);
+            println!("Using scan options {scan_options:?}");
             for i in 0..iterations {
                 let start = Instant::now();
                 let rows = exec_scan(

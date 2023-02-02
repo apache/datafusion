@@ -101,8 +101,7 @@ impl BatchPartitioner {
             },
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
-                    "Unsupported repartitioning scheme {:?}",
-                    other
+                    "Unsupported repartitioning scheme {other:?}"
                 )))
             }
         };
@@ -481,7 +480,7 @@ impl RepartitionExec {
             // Error in joining task
             Err(e) => {
                 for (_, tx) in txs {
-                    let err = DataFusionError::Execution(format!("Join Error: {}", e));
+                    let err = DataFusionError::Execution(format!("Join Error: {e}"));
                     let err = Err(err.into());
                     tx.send(Some(err)).ok();
                 }

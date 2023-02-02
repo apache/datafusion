@@ -144,8 +144,7 @@ pub fn coerce_types(
     match result {
         None => Err(DataFusionError::Plan(
             format!(
-                "'{:?} {} {:?}' can't be evaluated because there isn't a common type to coerce the types to",
-                lhs_type, op, rhs_type
+                "'{lhs_type:?} {op} {rhs_type:?}' can't be evaluated because there isn't a common type to coerce the types to"
             ),
         )),
         Some(t) => Ok(t)

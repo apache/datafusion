@@ -136,8 +136,7 @@ impl DistinctCountAccumulator {
             .map(|state| match state {
                 ScalarValue::List(Some(values), _) => Ok(values),
                 _ => Err(DataFusionError::Internal(format!(
-                    "Unexpected accumulator state {:?}",
-                    state
+                    "Unexpected accumulator state {state:?}"
                 ))),
             })
             .collect::<Result<Vec<_>>>()?;
@@ -182,7 +181,7 @@ impl Accumulator for DistinctCountAccumulator {
             .state_data_types
             .iter()
             .map(|state_data_type| {
-                let values = Box::new(Vec::new());
+                let values = Box::<Vec<ScalarValue>>::default();
                 ScalarValue::new_list(Some(*values), state_data_type.clone())
             })
             .collect::<Vec<_>>();
@@ -192,8 +191,7 @@ impl Accumulator for DistinctCountAccumulator {
             .map(|c| match c {
                 ScalarValue::List(Some(ref mut v), _) => Ok(v),
                 t => Err(DataFusionError::Internal(format!(
-                    "cols_out should only consist of ScalarValue::List. {:?} is found",
-                    t
+                    "cols_out should only consist of ScalarValue::List. {t:?} is found"
                 ))),
             })
             .into_iter()
@@ -214,8 +212,7 @@ impl Accumulator for DistinctCountAccumulator {
         match &self.count_data_type {
             DataType::Int64 => Ok(ScalarValue::Int64(Some(self.values.len() as i64))),
             t => Err(DataFusionError::Internal(format!(
-                "Invalid data type {:?} for count distinct aggregation",
-                t
+                "Invalid data type {t:?} for count distinct aggregation"
             ))),
         }
     }

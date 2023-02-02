@@ -124,7 +124,7 @@ fn check_column_satisfies_expr(
             expr,
             columns
                 .iter()
-                .map(|e| format!("{}", e))
+                .map(|e| format!("{e}"))
                 .collect::<Vec<String>>()
                 .join(", ")
         )));
@@ -483,14 +483,12 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
                 match &**expr {
                     Expr::WindowFunction { partition_by, .. } => Ok(partition_by),
                     expr => Err(DataFusionError::Execution(format!(
-                        "Impossibly got non-window expr {:?}",
-                        expr
+                        "Impossibly got non-window expr {expr:?}"
                     ))),
                 }
             }
             expr => Err(DataFusionError::Execution(format!(
-                "Impossibly got non-window expr {:?}",
-                expr
+                "Impossibly got non-window expr {expr:?}"
             ))),
         })
         .collect::<Result<Vec<_>>>()?;
@@ -524,8 +522,7 @@ pub(crate) fn make_decimal_type(
     // Arrow decimal is i128 meaning 38 maximum decimal digits
     if precision == 0 || precision > DECIMAL128_MAX_PRECISION || scale > precision {
         Err(DataFusionError::Internal(format!(
-            "Decimal(precision = {}, scale = {}) should satisty `0 < precision <= 38`, and `scale <= precision`.",
-            precision, scale
+            "Decimal(precision = {precision}, scale = {scale}) should satisty `0 < precision <= 38`, and `scale <= precision`."
         )))
     } else {
         Ok(DataType::Decimal128(precision, scale))

@@ -35,7 +35,7 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
         .iter()
         .enumerate()
         .map(|(i, arg)| -> Result<(Field, ArrayRef)> {
-            let field_name = format!("c{}", i);
+            let field_name = format!("c{i}");
             match arg.data_type() {
                 DataType::Utf8
                 | DataType::LargeUtf8
@@ -54,8 +54,7 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
                     arg.clone(),
                 )),
                 data_type => Err(DataFusionError::NotImplemented(format!(
-                    "Struct is not implemented for type '{:?}'.",
-                    data_type
+                    "Struct is not implemented for type '{data_type:?}'."
                 ))),
             }
         })

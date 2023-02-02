@@ -72,8 +72,7 @@ impl FromStr for FileCompressionType {
             "BZIP2" | "BZ2" => Ok(FileCompressionType::BZIP2),
             "" => Ok(FileCompressionType::UNCOMPRESSED),
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Unknown FileCompressionType: {}",
-                s
+                "Unknown FileCompressionType: {s}"
             ))),
         }
     }
@@ -160,8 +159,7 @@ impl FromStr for FileType {
             "CSV" => Ok(FileType::CSV),
             "JSON" => Ok(FileType::JSON),
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Unknown FileType: {}",
-                s
+                "Unknown FileType: {s}"
             ))),
         }
     }

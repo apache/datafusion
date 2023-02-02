@@ -352,7 +352,7 @@ impl ExecutionPlan for AggregateExec {
                         .map(|(e, alias)| {
                             let e = e.to_string();
                             if &e != alias {
-                                format!("{} as {}", e, alias)
+                                format!("{e} as {alias}")
                             } else {
                                 e
                             }
@@ -371,7 +371,7 @@ impl ExecutionPlan for AggregateExec {
                                         let (e, alias) = &self.group_by.null_expr[idx];
                                         let e = e.to_string();
                                         if &e != alias {
-                                            format!("{} as {}", e, alias)
+                                            format!("{e} as {alias}")
                                         } else {
                                             e
                                         }
@@ -379,7 +379,7 @@ impl ExecutionPlan for AggregateExec {
                                         let (e, alias) = &self.group_by.expr[idx];
                                         let e = e.to_string();
                                         if &e != alias {
-                                            format!("{} as {}", e, alias)
+                                            format!("{e} as {alias}")
                                         } else {
                                             e
                                         }
@@ -387,7 +387,7 @@ impl ExecutionPlan for AggregateExec {
                                 })
                                 .collect::<Vec<String>>()
                                 .join(", ");
-                            format!("({})", terms)
+                            format!("({terms})")
                         })
                         .collect()
                 };

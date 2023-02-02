@@ -580,7 +580,7 @@ async fn register_tpch_csv_data(
                 DataType::Date32 => {
                     let sb = col.as_any_mut().downcast_mut::<Date32Builder>().unwrap();
                     let dt = NaiveDate::parse_from_str(val.trim(), "%Y-%m-%d").unwrap();
-                    let dt = dt.sub(NaiveDate::from_ymd(1970, 1, 1)).num_days() as i32;
+                    let dt = dt.sub(NaiveDate::from_ymd_opt(1970, 1, 1).ok_or(DataFusionError::Internal("Couldn't convert date combination to NaiveDate".to_string()))?).num_days() as i32;
                     sb.append_value(dt);
                 }
                 DataType::Int32 => {

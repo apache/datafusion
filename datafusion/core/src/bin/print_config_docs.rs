@@ -19,5 +19,5 @@ use datafusion::config::BuiltInConfigs;
 
 fn main() {
     let docs = BuiltInConfigs::generate_config_markdown();
-    println!("{}", docs);
+    println!("{docs}");
 }

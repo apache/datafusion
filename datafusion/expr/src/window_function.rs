@@ -49,8 +49,7 @@ impl FromStr for WindowFunction {
             Ok(WindowFunction::BuiltInWindowFunction(built_in_function))
         } else {
             Err(DataFusionError::Plan(format!(
-                "There is no window function named {}",
-                name
+                "There is no window function named {name}"
             )))
         }
     }
@@ -133,8 +132,7 @@ impl FromStr for BuiltInWindowFunction {
             "NTH_VALUE" => BuiltInWindowFunction::NthValue,
             _ => {
                 return Err(DataFusionError::Plan(format!(
-                    "There is no built-in window function named {}",
-                    name
+                    "There is no built-in window function named {name}"
                 )))
             }
         })

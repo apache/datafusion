@@ -163,18 +163,18 @@ pub fn convert_frame_bound_to_scalar_value(v: ast::Expr) -> Result<ScalarValue> 
             let result = match *value {
                 ast::Expr::Value(ast::Value::SingleQuotedString(item)) => item,
                 e => {
-                    let msg = format!("INTERVAL expression cannot be {:?}", e);
+                    let msg = format!("INTERVAL expression cannot be {e:?}");
                     return Err(DataFusionError::SQL(ParserError(msg)));
                 }
             };
             if let Some(leading_field) = leading_field {
-                format!("{} {}", result, leading_field)
+                format!("{result} {leading_field}")
             } else {
                 result
             }
         }
         e => {
-            let msg = format!("Window frame bound cannot be {:?}", e);
+            let msg = format!("Window frame bound cannot be {e:?}");
             return Err(DataFusionError::Internal(msg));
         }
     })))
@@ -186,12 +186,12 @@ impl fmt::Display for WindowFrameBound {
             WindowFrameBound::Preceding(ScalarValue::Utf8(None)) => {
                 f.write_str("UNBOUNDED PRECEDING")
             }
-            WindowFrameBound::Preceding(n) => write!(f, "{} PRECEDING", n),
+            WindowFrameBound::Preceding(n) => write!(f, "{n} PRECEDING"),
             WindowFrameBound::CurrentRow => f.write_str("CURRENT ROW"),
             WindowFrameBound::Following(ScalarValue::Utf8(None)) => {
                 f.write_str("UNBOUNDED FOLLOWING")
             }
-            WindowFrameBound::Following(n) => write!(f, "{} FOLLOWING", n),
+            WindowFrameBound::Following(n) => write!(f, "{n} FOLLOWING"),
         }
     }
 }

@@ -386,7 +386,7 @@ enum VisitRecord {
 
 impl ExprIdentifierVisitor<'_> {
     fn desc_expr(expr: &Expr) -> String {
-        format!("{}", expr)
+        format!("{expr}")
     }
 
     /// Find the first `EnterMark` in the stack, and accumulates every `ExprItem`
@@ -551,7 +551,7 @@ impl ExprRewriter for CommonSubexprRewriter<'_> {
         // Alias this `Column` expr to it original "expr name",
         // `projection_push_down` optimizer use "expr name" to eliminate useless
         // projections.
-        Ok(col(id).alias(&expr_name))
+        Ok(col(id).alias(expr_name))
     }
 }
 

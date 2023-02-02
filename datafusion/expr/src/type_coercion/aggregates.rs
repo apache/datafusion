@@ -260,8 +260,7 @@ fn check_arg_count(
         }
         _ => {
             return Err(DataFusionError::Internal(format!(
-                "Aggregate functions do not support this {:?}",
-                signature
+                "Aggregate functions do not support this {signature:?}"
             )));
         }
     }
@@ -303,8 +302,7 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
             Ok(DataType::Decimal128(new_precision, *scale))
         }
         other => Err(DataFusionError::Plan(format!(
-            "SUM does not support type \"{:?}\"",
-            other
+            "SUM does not support type \"{other:?}\""
         ))),
     }
 }
@@ -323,8 +321,7 @@ pub fn variance_return_type(arg_type: &DataType) -> Result<DataType> {
         | DataType::Float32
         | DataType::Float64 => Ok(DataType::Float64),
         other => Err(DataFusionError::Plan(format!(
-            "VAR does not support {:?}",
-            other
+            "VAR does not support {other:?}"
         ))),
     }
 }
@@ -343,8 +340,7 @@ pub fn covariance_return_type(arg_type: &DataType) -> Result<DataType> {
         | DataType::Float32
         | DataType::Float64 => Ok(DataType::Float64),
         other => Err(DataFusionError::Plan(format!(
-            "COVAR does not support {:?}",
-            other
+            "COVAR does not support {other:?}"
         ))),
     }
 }
@@ -363,8 +359,7 @@ pub fn correlation_return_type(arg_type: &DataType) -> Result<DataType> {
         | DataType::Float32
         | DataType::Float64 => Ok(DataType::Float64),
         other => Err(DataFusionError::Plan(format!(
-            "CORR does not support {:?}",
-            other
+            "CORR does not support {other:?}"
         ))),
     }
 }
@@ -383,8 +378,7 @@ pub fn stddev_return_type(arg_type: &DataType) -> Result<DataType> {
         | DataType::Float32
         | DataType::Float64 => Ok(DataType::Float64),
         other => Err(DataFusionError::Plan(format!(
-            "STDDEV does not support {:?}",
-            other
+            "STDDEV does not support {other:?}"
         ))),
     }
 }
@@ -410,8 +404,7 @@ pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
         | DataType::Float32
         | DataType::Float64 => Ok(DataType::Float64),
         other => Err(DataFusionError::Plan(format!(
-            "AVG does not support {:?}",
-            other
+            "AVG does not support {other:?}"
         ))),
     }
 }

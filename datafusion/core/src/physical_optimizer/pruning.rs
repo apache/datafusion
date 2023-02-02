@@ -202,8 +202,7 @@ impl PruningPredicate {
             other => {
                 Err(DataFusionError::Internal(format!(
                     "Unexpected result of pruning predicate evaluation. Expected Boolean array \
-                     or scalar but got {:?}",
-                    other
+                     or scalar but got {other:?}"
                 )))
             }
         }
@@ -416,7 +415,7 @@ fn build_statistics_record_batch<S: PruningStatistics>(
     options.row_count = Some(statistics.num_containers());
 
     RecordBatch::try_new_with_options(schema, arrays, &options).map_err(|err| {
-        DataFusionError::Plan(format!("Can not create statistics record batch: {}", err))
+        DataFusionError::Plan(format!("Can not create statistics record batch: {err}"))
     })
 }
 
@@ -564,15 +563,13 @@ fn rewrite_expr_to_prunable(
                     Expr::Not(Box::new(scalar_expr.clone())),
                 )),
                 _ => Err(DataFusionError::Plan(format!(
-                    "Not with complex expression {:?} is not supported",
-                    column_expr
+                    "Not with complex expression {column_expr:?} is not supported"
                 ))),
             };
         }
 
         _ => Err(DataFusionError::Plan(format!(
-            "column expression {:?} is not supported",
-            column_expr
+            "column expression {column_expr:?} is not supported"
         ))),
     }
 }
@@ -609,8 +606,7 @@ fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Re
         Ok(())
     } else {
         Err(DataFusionError::Plan(format!(
-            "Try Cast/Cast with from type {} to type {} is not supported",
-            from_type, to_type
+            "Try Cast/Cast with from type {from_type} to type {to_type} is not supported"
         )))
     }
 }
@@ -644,8 +640,7 @@ fn rewrite_column_expr(
 fn reverse_operator(op: Operator) -> Result<Operator> {
     op.swap().ok_or_else(|| {
         DataFusionError::Internal(format!(
-            "Could not reverse operator {} while building pruning predicate",
-            op
+            "Could not reverse operator {op} while building pruning predicate"
         ))
     })
 }

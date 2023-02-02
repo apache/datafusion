@@ -415,8 +415,7 @@ pub fn create_physical_expr(
             }
         },
         other => Err(DataFusionError::NotImplemented(format!(
-            "Physical plan does not support logical expression {:?}",
-            other
+            "Physical plan does not support logical expression {other:?}"
         ))),
     }
 }

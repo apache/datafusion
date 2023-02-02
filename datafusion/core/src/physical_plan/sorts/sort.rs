@@ -606,8 +606,7 @@ async fn spill_partial_sorted_stream(
     match handle.await {
         Ok(r) => r,
         Err(e) => Err(DataFusionError::Execution(format!(
-            "Error occurred while spilling {}",
-            e
+            "Error occurred while spilling {e}"
         ))),
     }
 }
@@ -657,7 +656,7 @@ fn read_spill(sender: Sender<ArrowResult<RecordBatch>>, path: &Path) -> Result<(
     for batch in reader {
         sender
             .blocking_send(batch)
-            .map_err(|e| DataFusionError::Execution(format!("{}", e)))?;
+            .map_err(|e| DataFusionError::Execution(format!("{e}")))?;
     }
     Ok(())
 }

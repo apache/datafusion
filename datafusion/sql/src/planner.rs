@@ -99,15 +99,14 @@ fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
     let scalar = match key {
         SQLExpr::Value(Value::Number(s, _)) => ScalarValue::Int64(Some(
             s.parse()
-                .map_err(|_| ParserError(format!("Cannot parse {} as i64.", s)))?,
+                .map_err(|_| ParserError(format!("Cannot parse {s} as i64.")))?,
         )),
         SQLExpr::Value(Value::SingleQuotedString(s) | Value::DoubleQuotedString(s)) => {
             ScalarValue::Utf8(Some(s))
         }
         _ => {
             return Err(DataFusionError::SQL(ParserError(format!(
-                "Unsuported index key expression: {:?}",
-                key
+                "Unsuported index key expression: {key:?}"
             ))));
         }
     };
@@ -207,7 +206,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .project(
                             plan.schema().fields().iter().zip(columns.into_iter()).map(
                                 |(field, ident)| {
-                                    col(field.name()).alias(&normalize_ident(&ident))
+                                    col(field.name()).alias(normalize_ident(&ident))
                                 },
                             ),
                         )
@@ -300,8 +299,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 filter,
             } => self.show_columns_to_plan(extended, full, &table_name, filter.as_ref()),
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported SQL statement: {:?}",
-                sql
+                "Unsupported SQL statement: {sql:?}"
             ))),
         }
     }
@@ -377,8 +375,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let cte_name = normalize_ident(&cte.alias.name);
                 if ctes.contains_key(&cte_name) {
                     return Err(DataFusionError::SQL(ParserError(format!(
-                        "WITH query name {:?} specified more than once",
-                        cte_name
+                        "WITH query name {cte_name:?} specified more than once"
                     ))));
                 }
                 // create logical plan & pass backreferencing CTEs
@@ -446,8 +443,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             SetExpr::Query(q) => self.query_to_plan(*q, ctes),
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Query {} not implemented yet",
-                set_expr
+                "Query {set_expr} not implemented yet"
             ))),
         }
     }
@@ -637,8 +633,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             JoinOperator::CrossJoin => self.parse_cross_join(left, &right),
             other => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported JOIN operator {:?}",
-                other
+                "Unsupported JOIN operator {other:?}"
             ))),
         }
     }
@@ -714,7 +709,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinConstraint::Using(idents) => {
                 let keys: Vec<Column> = idents
                     .into_iter()
-                    .map(|x| Column::from_name(&normalize_ident(&x)))
+                    .map(|x| Column::from_name(normalize_ident(&x)))
                     .collect();
                 LogicalPlanBuilder::from(left)
                     .join_using(&right, join_type, keys)?
@@ -805,8 +800,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // @todo Support TableFactory::TableFunction?
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
-                    "Unsupported ast node {:?} in create_relation",
-                    relation
+                    "Unsupported ast node {relation:?} in create_relation"
                 )));
             }
         };
@@ -837,7 +831,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Ok(LogicalPlanBuilder::from(plan.clone())
                 .project_with_alias(
                     plan.schema().fields().iter().zip(columns_alias.iter()).map(
-                        |(field, ident)| col(field.name()).alias(&normalize_ident(ident)),
+                        |(field, ident)| col(field.name()).alias(normalize_ident(ident)),
                     ),
                     Some(normalize_ident(&alias.name)),
                 )?
@@ -1364,8 +1358,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Expr::Literal(ScalarValue::Int64(Some(s))) => {
                     if s < 0 {
                         return Err(DataFusionError::Plan(format!(
-                            "Offset must be >= 0, '{}' was provided.",
-                            s
+                            "Offset must be >= 0, '{s}' was provided."
                         )));
                     }
                     Ok(s as usize)
@@ -1531,7 +1524,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expand_wildcard(plan.schema().as_ref(), plan)
             }
             SelectItem::QualifiedWildcard(ref object_name) => {
-                let qualifier = format!("{}", object_name);
+                let qualifier = format!("{object_name}");
                 // do not expand from outer schema
                 expand_qualified_wildcard(&qualifier, plan.schema().as_ref(), plan)
             }
@@ -1562,7 +1555,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .find(|field| match field.qualifier() {
                             Some(field_q) => {
                                 field.name() == &col.name
-                                    && field_q.ends_with(&format!(".{}", q))
+                                    && field_q.ends_with(&format!(".{q}"))
                             }
                             _ => false,
                         }) {
@@ -1599,8 +1592,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => Ok(Expr::Wildcard),
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported qualified wildcard argument: {:?}",
-                sql
+                "Unsupported qualified wildcard argument: {sql:?}"
             ))),
         }
     }
@@ -1638,8 +1630,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             BinaryOperator::PGBitwiseShiftLeft => Ok(Operator::BitwiseShiftLeft),
             BinaryOperator::StringConcat => Ok(Operator::StringConcat),
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported SQL binary operator {:?}",
-                op
+                "Unsupported SQL binary operator {op:?}"
             ))),
         }?;
 
@@ -1672,8 +1663,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             .parse::<f64>()
                             .map_err(|_e| {
                                 DataFusionError::Internal(format!(
-                                    "negative operator can be only applied to integer and float operands, got: {}",
-                                    n))
+                                    "negative operator can be only applied to integer and float operands, got: {n}"))
                             })?)),
                     },
                     // not a literal, apply negative operator on expression
@@ -1681,8 +1671,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported SQL unary operator {:?}",
-                op
+                "Unsupported SQL unary operator {op:?}"
             ))),
         }
     }
@@ -1733,8 +1722,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             convert_data_type(&data_type)?,
                         ))),
                         other => Err(DataFusionError::NotImplemented(format!(
-                            "Unsupported value {:?} in a values list expression",
-                            other
+                            "Unsupported value {other:?} in a values list expression"
                         ))),
                     })
                     .collect::<Result<Vec<_>>>()
@@ -1757,7 +1745,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
                 fun: BuiltinScalarFunction::DatePart,
                 args: vec![
-                    Expr::Literal(ScalarValue::Utf8(Some(format!("{}", field)))),
+                    Expr::Literal(ScalarValue::Utf8(Some(format!("{field}")))),
                     self.sql_expr_to_logical_expr(*expr, schema, ctes)?,
                 ],
             }),
@@ -1785,8 +1773,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .get_variable_type(&var_names)
                         .ok_or_else(|| {
                             DataFusionError::Execution(format!(
-                                "variable {:?} has no type information",
-                                var_names
+                                "variable {var_names:?} has no type information"
                             ))
                         })?;
                     Ok(Expr::ScalarVariable(ty, var_names))
@@ -1807,8 +1794,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     plan_indexed(col(&normalize_ident(id)), keys)
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
-                        "map access requires an identifier, found column {} instead",
-                        column
+                        "map access requires an identifier, found column {column} instead"
                     )))
                 }
             }
@@ -1827,8 +1813,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .get_variable_type(&var_names)
                         .ok_or_else(|| {
                             DataFusionError::Execution(format!(
-                                "variable {:?} has no type information",
-                                var_names
+                                "variable {var_names:?} has no type information"
                             ))
                         })?;
                     Ok(Expr::ScalarVariable(ty, var_names))
@@ -1861,8 +1846,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             }
                         }
                         _ => Err(DataFusionError::NotImplemented(format!(
-                            "Unsupported compound identifier '{:?}'",
-                            var_names,
+                            "Unsupported compound identifier '{var_names:?}'"
                         ))),
                     }
                 }
@@ -2081,8 +2065,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         };
 
                         return Err(DataFusionError::Plan(format!(
-                            "Substring without for/from is not valid {:?}",
-                            orig_sql
+                            "Substring without for/from is not valid {orig_sql:?}"
                         )));
                     }
                 };
@@ -2249,8 +2232,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Ok(Expr::AggregateUDF { fun: fm, args, filter: None })
                         }
                         _ => Err(DataFusionError::Plan(format!(
-                            "Invalid function '{}'",
-                            name
+                            "Invalid function '{name}'"
                         ))),
                     },
                 }
@@ -2277,8 +2259,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Subquery(subquery) => self.parse_scalar_subquery(&subquery, schema, ctes),
 
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported ast node in sqltorel: {:?}",
-                sql
+                "Unsupported ast node in sqltorel: {sql:?}"
             ))),
         }
     }
@@ -2381,22 +2362,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         if leading_precision.is_some() {
             return Err(DataFusionError::NotImplemented(format!(
-                "Unsupported Interval Expression with leading_precision {:?}",
-                leading_precision
+                "Unsupported Interval Expression with leading_precision {leading_precision:?}"
             )));
         }
 
         if last_field.is_some() {
             return Err(DataFusionError::NotImplemented(format!(
-                "Unsupported Interval Expression with last_field {:?}",
-                last_field
+                "Unsupported Interval Expression with last_field {last_field:?}"
             )));
         }
 
         if fractional_seconds_precision.is_some() {
             return Err(DataFusionError::NotImplemented(format!(
-                "Unsupported Interval Expression with fractional_seconds_precision {:?}",
-                fractional_seconds_precision
+                "Unsupported Interval Expression with fractional_seconds_precision {fractional_seconds_precision:?}"
             )));
         }
 
@@ -2407,8 +2385,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ) => s,
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
-                    "Unsupported interval argument. Expected string literal, got: {:?}",
-                    value
+                    "Unsupported interval argument. Expected string literal, got: {value:?}"
                 )));
             }
         };
@@ -2443,8 +2420,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             String::from("SELECT name, setting FROM information_schema.df_settings WHERE name = 'datafusion.execution.time_zone'")
         } else {
             format!(
-                "SELECT name, setting FROM information_schema.df_settings WHERE name = '{}'",
-                variable
+                "SELECT name, setting FROM information_schema.df_settings WHERE name = '{variable}'"
             )
         };
 
@@ -2508,8 +2484,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             },
             // for capture signed number e.g. +8, -8
             SQLExpr::UnaryOp { op, expr } => match op {
-                UnaryOperator::Plus => format!("+{}", expr),
-                UnaryOperator::Minus => format!("-{}", expr),
+                UnaryOperator::Plus => format!("+{expr}"),
+                UnaryOperator::Minus => format!("-{expr}"),
                 _ => {
                     return Err(DataFusionError::Plan(format!(
                         "Unspported Value {}",
@@ -2577,8 +2553,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         let query = format!(
-            "SELECT {} FROM information_schema.columns WHERE {}",
-            select_list, where_clause
+            "SELECT {select_list} FROM information_schema.columns WHERE {where_clause}"
         );
 
         let mut rewrite = DFParser::parse_sql(&query)?;
@@ -2615,8 +2590,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .join(" AND ");
 
         let query = format!(
-            "SELECT table_catalog, table_schema, table_name, definition FROM information_schema.views WHERE {}",
-            where_clause
+            "SELECT table_catalog, table_schema, table_name, definition FROM information_schema.views WHERE {where_clause}"
         );
 
         let mut rewrite = DFParser::parse_sql(&query)?;
@@ -2648,8 +2622,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 _ => {
                     return Err(DataFusionError::NotImplemented(format!(
-                        "Arrays with elements other than literal are not supported: {}",
-                        value
+                        "Arrays with elements other than literal are not supported: {value}"
                     )));
                 }
             }
@@ -2662,8 +2635,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Ok(lit(ScalarValue::new_list(None, DataType::Utf8)))
         } else if data_types.len() > 1 {
             Err(DataFusionError::NotImplemented(format!(
-                "Arrays with different types are not supported: {:?}",
-                data_types,
+                "Arrays with different types are not supported: {data_types:?}"
             )))
         } else {
             let data_type = values[0].get_datatype();
@@ -2848,8 +2820,7 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
             } else {
                 // We dont support TIMETZ and TIME WITH TIME ZONE for now
                 Err(DataFusionError::NotImplemented(format!(
-                    "Unsupported SQL type {:?}",
-                    sql_type
+                    "Unsupported SQL type {sql_type:?}"
                 )))
             }
         }
@@ -2887,8 +2858,7 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         | SQLDataType::CharacterLargeObject(_)
         | SQLDataType::CharLargeObject(_)
         | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported SQL type {:?}",
-            sql_type
+            "Unsupported SQL type {sql_type:?}"
         ))),
     }
 }
@@ -2916,8 +2886,7 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
         .or_else(|_| n.parse::<f64>().map(lit))
         .map_err(|_| {
             DataFusionError::from(ParserError(format!(
-                "Cannot parse {} as i64 or f64",
-                n
+                "Cannot parse {n} as i64 or f64"
             )))
         })
 }

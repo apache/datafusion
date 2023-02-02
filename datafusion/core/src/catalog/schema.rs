@@ -108,8 +108,7 @@ impl SchemaProvider for MemorySchemaProvider {
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         if self.table_exist(name.as_str()) {
             return Err(DataFusionError::Execution(format!(
-                "The table {} already exists",
-                name
+                "The table {name} already exists"
             )));
         }
         let mut tables = self.tables.write();
