@@ -17,6 +17,7 @@
 
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::record_batch::RecordBatch;
+use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::flight_service_server::{FlightService, FlightServiceServer};
 use arrow_flight::sql::server::FlightSqlService;
@@ -29,7 +30,6 @@ use arrow_flight::sql::{
     CommandPreparedStatementUpdate, CommandStatementQuery, CommandStatementUpdate,
     ProstMessageExt, SqlInfo, TicketStatementQuery,
 };
-use arrow_flight::utils::batches_to_flight_data;
 use arrow_flight::{
     Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
     HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket,
@@ -38,7 +38,7 @@ use arrow_schema::Schema;
 use dashmap::DashMap;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::{DataFrame, ParquetReadOptions, SessionConfig, SessionContext};
-use futures::{stream, Stream};
+use futures::{Stream, StreamExt, TryStreamExt};
 use log::info;
 use mimalloc::MiMalloc;
 use prost::Message;
@@ -224,19 +224,18 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let result = self.get_result(&handle)?;
         // if we get an empty result, create an empty schema
         let (schema, batches) = match result.get(0) {
-            None => (Schema::empty(), vec![]),
-            Some(batch) => ((*batch.schema()).clone(), result.clone()),
+            None => (Arc::new(Schema::empty()), vec![]),
+            Some(batch) => (batch.schema(), result.clone()),
         };
 
-        let flight_data = batches_to_flight_data(schema, batches)
-            .map_err(|e| status!("Could not convert batches", e))?
-            .into_iter()
-            .map(Ok);
+        let batch_stream = futures::stream::iter(batches).map(Ok);
 
-        let stream: Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send>> =
-            Box::pin(stream::iter(flight_data));
-        let resp = Response::new(stream);
-        Ok(resp)
+        let stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(batch_stream)
+            .map_err(Status::from);
+
+        Ok(Response::new(Box::pin(stream)))
     }
 
     async fn get_flight_info_statement(
