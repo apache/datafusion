@@ -182,7 +182,8 @@ impl LogicalPlan {
             LogicalPlan::Values(Values { schema, .. }) => vec![schema],
             LogicalPlan::Window(Window { input, schema, .. })
             | LogicalPlan::Projection(Projection { input, schema, .. })
-            | LogicalPlan::Aggregate(Aggregate { input, schema, .. }) => {
+            | LogicalPlan::Aggregate(Aggregate { input, schema, .. })
+            | LogicalPlan::Unnest(Unnest { input, schema, .. }) => {
                 let mut schemas = input.all_schemas();
                 schemas.insert(0, schema);
                 schemas
@@ -232,11 +233,6 @@ impl LogicalPlan {
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::SetVariable(_) => vec![],
             LogicalPlan::Dml(DmlStatement { table_schema, .. }) => vec![table_schema],
-            LogicalPlan::Unnest(Unnest { input, schema, .. }) => {
-                let mut schemas = input.all_schemas();
-                schemas.insert(0, schema);
-                schemas
-            }
         }
     }
 
