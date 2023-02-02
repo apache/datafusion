@@ -117,6 +117,14 @@ use crate::PhysicalExpr;
 #[derive(Clone)]
 pub struct ExprIntervalGraph(NodeIndex, StableGraph<ExprIntervalGraphNode, usize>);
 
+/// Result corresponding the 'update_interval' call.
+#[derive(PartialEq, Debug)]
+pub enum OptimizationResult {
+    CannotPropagate,
+    UnfeasibleSolution,
+    Success,
+}
+
 /// This is a node in the DAEG; it encapsulates a reference to the actual
 /// [PhysicalExpr] as well as an interval containing expression bounds.
 #[derive(Clone, Debug)]
@@ -174,32 +182,6 @@ impl PartialEq for ExprIntervalGraphNode {
     }
 }
 
-/// This function refines the interval `left_child` by propagating intervals
-/// `parent` and `right_child` through the application of `inverse_op`, which
-/// is the inverse operation of the operator in the corresponding DAEG node.
-fn propagate_left(
-    inverse_op: &Operator,
-    parent: &Interval,
-    left_child: &Interval,
-    right_child: &Interval,
-) -> Result<Interval> {
-    let interv = apply_operator(inverse_op, parent, right_child)?;
-    match interv.intersect(left_child) {
-        Ok(Some(val)) => Ok(val),
-        // TODO: We should not have this condition realize in practice. If this
-        //       happens, it would mean the constraint you are propagating will
-        //       never get satisfied (there is no satisfying value). When solving
-        //       equations, that means we should stop and report there is no solution.
-        //       For joins, I think it means we will never have a match. Therefore,
-        //       I think we should just propagate this out in the return value all
-        //       the way up and handle it properly so that we don't lose generality.
-        //       Just returning the left interval without change is not wrong (i.e.
-        //       it is conservatively true), but loses very useful information.
-        Ok(None) => Ok(left_child.clone()),
-        Err(e) => Err(e),
-    }
-}
-
 // This function returns the inverse operator of the given operator.
 fn get_inverse_op(op: Operator) -> Operator {
     match op {
@@ -210,18 +192,60 @@ fn get_inverse_op(op: Operator) -> Operator {
 }
 
 /// This function refines intervals `left_child` and `right_child` by
-/// applying constraint propagation through `parent` via `inverse_op`, which
-/// is the inverse operation of the operator in the corresponding DAEG node.
+/// applying constraint propagation through `parent` via operation.
+///
+/// The main idea is that we can shrink the domains of variables x and y by using
+/// parent interval p.
+///
+/// Assuming that x,y and p has ranges [xL, xU], [yL, yU], and [pL, pU], we simply apply
+/// constraint propagation across [xL, xU], [yL, yH] and [pL, pU].
+/// - For minus operation, specifically, we would first do
+///     - [xL, xU] <- ([yL, yU] + [pL, pU]) ∩ [xL, xU], and then
+///     - [yL, yU] <- ([xL, xU] - [pL, pU]) ∩ [yL, yU].
+/// - For plus operation, specifically, we would first do
+///     - [xL, xU] <- ([pL, pU] - [yL, yU]) ∩ [xL, xU], and then
+///     - [yL, yU] <- ([pL, pU] - [xL, xU]) ∩ [yL, yU].
 pub fn propagate(
     op: &Operator,
     parent: &Interval,
     left_child: &Interval,
     right_child: &Interval,
-) -> Result<(Interval, Interval)> {
+) -> Result<(Option<Interval>, Option<Interval>)> {
     let inverse_op = get_inverse_op(*op);
-    let new_right = propagate_left(&inverse_op, parent, right_child, left_child)?;
-    let new_left = propagate_left(&inverse_op, parent, left_child, &new_right)?;
-    Ok((new_left, new_right))
+    Ok(
+        match apply_operator(&inverse_op, parent, right_child)?.intersect(left_child)? {
+            // Left is feasible
+            Some(value) => {
+                // Adjust the propagation operator and parent-child order.
+                let (o, l, r) = match op {
+                    Operator::Minus => (op, &value, parent),
+                    Operator::Plus => (&inverse_op, parent, &value),
+                    _ => unreachable!(),
+                };
+                // Calculate right child with new left child.
+                let right = apply_operator(o, l, r)?.intersect(right_child)?;
+                // Return intervals for both children.
+                (Some(value), right)
+            }
+            // If left child is not feasible, return both childs None.
+            None => (None, None),
+        },
+    )
+}
+
+fn get_zero_scalar(datatype: &DataType) -> ScalarValue {
+    assert!(datatype.is_primitive());
+    match datatype {
+        DataType::Int8 => ScalarValue::Int8(Some(0)),
+        DataType::Int16 => ScalarValue::Int16(Some(0)),
+        DataType::Int32 => ScalarValue::Int32(Some(0)),
+        DataType::Int64 => ScalarValue::Int64(Some(0)),
+        DataType::UInt8 => ScalarValue::UInt8(Some(0)),
+        DataType::UInt16 => ScalarValue::UInt16(Some(0)),
+        DataType::UInt32 => ScalarValue::UInt32(Some(0)),
+        DataType::UInt64 => ScalarValue::UInt64(Some(0)),
+        _ => unreachable!(),
+    }
 }
 
 /// This function provides a target parent interval for comparison operators.
@@ -231,9 +255,7 @@ pub fn propagate(
 /// are not implemented yet.
 fn comparison_operator_target(datatype: &DataType, op: &Operator) -> Result<Interval> {
     let unbounded = ScalarValue::try_from(datatype)?;
-    // TODO: Going through a string zero to a numeric zero is very inefficient.
-    //       Let's find an efficient way to initialize a zero value with given data type.
-    let zero = ScalarValue::try_from_string("0".to_string(), datatype)?;
+    let zero = get_zero_scalar(datatype);
     Ok(match *op {
         Operator::Gt => Interval {
             lower: zero,
@@ -254,23 +276,15 @@ fn comparison_operator_target(datatype: &DataType, op: &Operator) -> Result<Inte
 /// [yL, yH] and [0, ∞]. Specifically, we would first do
 ///     - [xL, xU] <- ([yL, yU] + [0, ∞]) ∩ [xL, xU], and then
 ///     - [yL, yU] <- ([xL, xU] - [0, ∞]) ∩ [yL, yU].
+/// This means [x1, y1] > [x2, y2] can be rewritten as [xL, xU] - [yL, yU] = [0, ∞]
+/// and [xL, xU] < [yL, yU] can be rewritten as [xL, xU] - [yL, yU] = [-∞, 0].
 pub fn propagate_comparison_operators(
     op: &Operator,
     left_child: &Interval,
     right_child: &Interval,
-) -> Result<(Interval, Interval)> {
+) -> Result<(Option<Interval>, Option<Interval>)> {
     let parent = comparison_operator_target(&left_child.get_datatype(), op)?;
-    // TODO: Same issue with propagate_left, we should report empty intervals
-    //       and handle this outside.
-    let new_left = right_child
-        .add(&parent)?
-        .intersect(left_child)?
-        .unwrap_or_else(|| left_child.clone());
-    let new_right = left_child
-        .sub(&parent)?
-        .intersect(right_child)?
-        .unwrap_or_else(|| right_child.clone());
-    Ok((new_left, new_right))
+    propagate(&Operator::Minus, &parent, left_child, right_child)
 }
 
 impl ExprIntervalGraph {
@@ -288,6 +302,18 @@ impl ExprIntervalGraph {
     /// If we want to calculate intervals starting from and propagate up to BinaryExpr('a', +, 'b')
     /// instead of col('a') and col('b'), we prune under BinaryExpr('a', +, 'b') since we will
     /// never visit there.
+    ///
+    /// One of the reasons behind pruning the expression interval graph is that if we provide
+    ///
+    /// PhysicalSortExpr {
+    ///     expr: BinaryExpr('a', +, 'b'),
+    ///     sort_option: ..
+    /// }
+    ///
+    /// in output_order of one of the SymmetricHashJoin's childs. In this case, we must calculate
+    /// the interval for the BinaryExpr('a', +, 'b') instead of the columns inside the BinaryExpr. Thus,
+    /// the child PhysicalExprs of the BinaryExpr may be pruned for the performance.
+    ///
     /// We do not change the Arc<dyn PhysicalExpr> inside Arc<dyn PhysicalExpr>, just remove the nodes
     /// corresponding that Arc<dyn PhysicalExpr>.
     ///
@@ -455,10 +481,11 @@ impl ExprIntervalGraph {
 
     /// Updates/shrinks bounds for leaf expressions using interval arithmetic
     /// via a top-down traversal.
+    /// If return false, it means we have a unfeasible solution.
     fn propagate_constraints(
         &mut self,
         expr_stats: &mut [(usize, Interval)],
-    ) -> Result<()> {
+    ) -> Result<OptimizationResult> {
         let mut bfs = Bfs::new(&self.1, self.0);
         while let Some(node) = bfs.next(&self.1) {
             // Get plan
@@ -488,30 +515,42 @@ impl ExprIntervalGraph {
                 let first_child_interval =
                     self.1.index(first_child_node_index).interval();
 
-                let (shrink_left_interval, shrink_right_interval) =
+                if let (Some(shrink_left_interval), Some(shrink_right_interval)) =
                     // There is no propagation process for logical operators.
-                    if binary.op().is_logic_operator(){
-                        continue
-                    } else if binary.op().is_comparison_operator() {
-                        // If comparison is strictly false, there is nothing to do for shrink.
-                        if let Interval{ lower: ScalarValue::Boolean(Some(false)), upper: ScalarValue::Boolean(Some(false))} = node_interval { continue }
-                        // Propagate the comparison operator.
-                        propagate_comparison_operators(
-                            binary.op(),
-                            first_child_interval,
-                            second_child_interval,
-                        )?
-                    } else {
-                        // Propagate the arithmetic operator.
-                        propagate(binary.op(),
-                                  &node_interval,
-                                  first_child_interval,
-                                  second_child_interval)?
-                    };
-                let mutable_first_child = self.1.index_mut(first_child_node_index);
-                mutable_first_child.interval = shrink_left_interval.clone();
-                let mutable_second_child = self.1.index_mut(second_child_node_index);
-                mutable_second_child.interval = shrink_right_interval.clone();
+                    if binary.op().is_logic_operator() {
+                            continue;
+                        } else if binary.op().is_comparison_operator() {
+                            // If comparison is strictly false, there is nothing to do for shrink.
+                            if let Interval {
+                                lower: ScalarValue::Boolean(Some(false)),
+                                upper: ScalarValue::Boolean(Some(false)),
+                            } = node_interval
+                            {
+                                continue;
+                            }
+                            // Propagate the comparison operator.
+                            propagate_comparison_operators(
+                                binary.op(),
+                                first_child_interval,
+                                second_child_interval,
+                            )?
+                        } else {
+                            // Propagate the arithmetic operator.
+                            propagate(
+                                binary.op(),
+                                &node_interval,
+                                first_child_interval,
+                                second_child_interval,
+                            )?
+                        }
+                {
+                    let mutable_first_child = self.1.index_mut(first_child_node_index);
+                    mutable_first_child.interval = shrink_left_interval.clone();
+                    let mutable_second_child = self.1.index_mut(second_child_node_index);
+                    mutable_second_child.interval = shrink_right_interval.clone();
+                } else {
+                    return Ok(OptimizationResult::UnfeasibleSolution);
+                };
             } else if let Some(cast) = expr_any.downcast_ref::<CastExpr>() {
                 // Calculate new interval
                 let child_index = edges.next_node(&self.1).unwrap();
@@ -525,7 +564,7 @@ impl ExprIntervalGraph {
                 mutable_child.interval = new_child_interval.clone();
             }
         }
-        Ok(())
+        Ok(OptimizationResult::Success)
     }
 
     /// Updates intervals for all expressions in the DAEG by successive
@@ -533,14 +572,14 @@ impl ExprIntervalGraph {
     pub fn update_intervals(
         &mut self,
         expr_stats: &mut [(usize, Interval)],
-    ) -> Result<()> {
+    ) -> Result<OptimizationResult> {
         self.evaluate_bounds(expr_stats)
             .and_then(|interval| match interval {
                 Interval {
                     upper: ScalarValue::Boolean(Some(true)),
                     ..
                 } => self.propagate_constraints(expr_stats),
-                _ => Ok(()),
+                _ => Ok(OptimizationResult::CannotPropagate),
             })
     }
 }
@@ -564,6 +603,7 @@ mod tests {
         right_interval: (Option<i32>, Option<i32>),
         left_waited: (Option<i32>, Option<i32>),
         right_waited: (Option<i32>, Option<i32>),
+        result: OptimizationResult,
     ) -> Result<()> {
         let col_stats = vec![
             (
@@ -613,7 +653,8 @@ mod tests {
             .map(|((_, interval), (_, index))| (*index, interval.clone()))
             .collect_vec();
 
-        graph.update_intervals(&mut col_stat_nodes[..])?;
+        let exp_result = graph.update_intervals(&mut col_stat_nodes[..])?;
+        assert_eq!(exp_result, result);
         col_stat_nodes
             .iter()
             .zip(expected_nodes.iter())
@@ -675,6 +716,7 @@ mod tests {
             right_interval,
             left_waited,
             right_waited,
+            OptimizationResult::Success,
         )?;
         Ok(())
     }
@@ -698,6 +740,7 @@ mod tests {
             (Some(100), None),
             (Some(10), Some(20)),
             (Some(100), None),
+            OptimizationResult::CannotPropagate,
         )?;
         Ok(())
     }
