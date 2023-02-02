@@ -670,11 +670,10 @@ fn change_corresponding_coalesce_in_sub_plan(
             let coalesce_input = coalesce_onwards.plan.children()[0].clone();
             if let Some(sort_exec) = sort_exec {
                 let sort_expr = sort_exec.expr();
-                // TODO: If coalesce is far below sort, can we still use its equivalence properties?
                 if !ordering_satisfy(
                     coalesce_input.output_ordering(),
                     Some(sort_expr),
-                    || sort_exec.equivalence_properties(),
+                    || coalesce_input.equivalence_properties(),
                 ) {
                     return add_sort_above_child(&coalesce_input, sort_expr.to_vec());
                 }
@@ -1245,6 +1244,9 @@ mod tests {
 
         let physical_plan = aggregate_exec(spm2);
 
+        // When removing SortPreservingMergeExec make sure that partitioning requirements are
+        // not violated. In some cases we may need to replace it with CoalescePartitionsExec instead
+        // directly removing it.
         let expected_input = vec![
             "AggregateExec: mode=Final, gby=[], aggr=[]",
             "  SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
@@ -1673,10 +1675,7 @@ mod tests {
         let schema = create_test_schema()?;
 
         let source1 = parquet_exec(&schema);
-        let repartition = Arc::new(RepartitionExec::try_new(
-            source1,
-            Partitioning::RoundRobinBatch(2),
-        )?) as Arc<dyn ExecutionPlan>;
+        let repartition = repartition_exec(source1);
         let coalesce = Arc::new(CoalescePartitionsExec::new(repartition)) as _;
         // Add dummy layer propagating Sort above, to test whether sort can be removed from multi layer before
         let filter = filter_exec(
@@ -1695,14 +1694,14 @@ mod tests {
             "SortExec: [nullable_col@0 ASC]",
             "  FilterExec: NOT non_nullable_col@1",
             "    CoalescePartitionsExec",
-            "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "        ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
         let expected_optimized = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  FilterExec: NOT non_nullable_col@1",
             "    SortExec: [nullable_col@0 ASC]",
-            "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "        ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -1724,10 +1723,7 @@ mod tests {
         let memory_exec = memory_exec(&schema);
         let sort_exprs = vec![sort_expr("nullable_col", &schema)];
         let window = window_exec("nullable_col", sort_exprs.clone(), memory_exec);
-        let repartition = Arc::new(RepartitionExec::try_new(
-            window,
-            Partitioning::RoundRobinBatch(2),
-        )?) as Arc<dyn ExecutionPlan>;
+        let repartition = repartition_exec(window);
 
         let orig_plan = Arc::new(SortExec::new_with_partitioning(
             sort_exprs,
