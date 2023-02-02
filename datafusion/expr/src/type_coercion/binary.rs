@@ -100,7 +100,7 @@ pub fn coerce_types(
         Operator::And | Operator::Or => match (lhs_type, rhs_type) {
             // logical binary boolean operators can only be evaluated in bools or nulls
             (DataType::Boolean, DataType::Boolean) => Some(DataType::Boolean),
-            (DataType::Null, DataType::Null) => Some(DataType::Null),
+            (DataType::Null, DataType::Null) => Some(DataType::Boolean),
             (DataType::Boolean, DataType::Null) | (DataType::Null, DataType::Boolean) => {
                 Some(DataType::Boolean)
             }
@@ -541,33 +541,30 @@ fn is_time_with_valid_unit(datatype: DataType) -> bool {
 fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (Date64, Date32) => Some(Date64),
-        (Date32, Date64) => Some(Date64),
-        (Utf8, Date32) => Some(Date32),
-        (Date32, Utf8) => Some(Date32),
-        (Utf8, Date64) => Some(Date64),
-        (Date64, Utf8) => Some(Date64),
-        (Utf8, Time32(unit)) => match is_time_with_valid_unit(Time32(unit.clone())) {
-            false => None,
-            true => Some(Time32(unit.clone())),
-        },
-        (Time32(unit), Utf8) => match is_time_with_valid_unit(Time32(unit.clone())) {
-            false => None,
-            true => Some(Time32(unit.clone())),
-        },
-        (Utf8, Time64(unit)) => match is_time_with_valid_unit(Time64(unit.clone())) {
-            false => None,
-            true => Some(Time64(unit.clone())),
-        },
-        (Time64(unit), Utf8) => match is_time_with_valid_unit(Time64(unit.clone())) {
-            false => None,
-            true => Some(Time64(unit.clone())),
-        },
-        (Timestamp(_, tz), Utf8) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
-        (Utf8, Timestamp(_, tz)) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
-        // TODO: need to investigate the result type for the comparison between timestamp and date
-        (Timestamp(_, _), Date32) => Some(Date32),
-        (Timestamp(_, _), Date64) => Some(Date64),
+        (Date64, Date32) | (Date32, Date64) => Some(Date64),
+        (Utf8, Date32) | (Date32, Utf8) => Some(Date32),
+        (Utf8, Date64) | (Date64, Utf8) => Some(Date64),
+        (Utf8, Time32(unit)) | (Time32(unit), Utf8) => {
+            match is_time_with_valid_unit(Time32(unit.clone())) {
+                false => None,
+                true => Some(Time32(unit.clone())),
+            }
+        }
+        (Utf8, Time64(unit)) | (Time64(unit), Utf8) => {
+            match is_time_with_valid_unit(Time64(unit.clone())) {
+                false => None,
+                true => Some(Time64(unit.clone())),
+            }
+        }
+        (Timestamp(_, tz), Utf8) | (Utf8, Timestamp(_, tz)) => {
+            Some(Timestamp(TimeUnit::Nanosecond, tz.clone()))
+        }
+        (Timestamp(_, None), Date32) | (Date32, Timestamp(_, None)) => {
+            Some(Timestamp(TimeUnit::Nanosecond, None))
+        }
+        (Timestamp(_, _tz), Date32) | (Date32, Timestamp(_, _tz)) => {
+            Some(Timestamp(TimeUnit::Nanosecond, None))
+        }
         (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
             let tz = match (lhs_tz, rhs_tz) {
                 // can't cast across timezones
@@ -1147,13 +1144,13 @@ mod tests {
             DataType::Null,
             DataType::Null,
             Operator::Or,
-            DataType::Null
+            DataType::Boolean
         );
         test_coercion_binary_rule!(
             DataType::Null,
             DataType::Null,
             Operator::And,
-            DataType::Null
+            DataType::Boolean
         );
         test_coercion_binary_rule!(
             DataType::Null,
