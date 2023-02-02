@@ -58,8 +58,41 @@ fn parse_decimals() {
             &expected,
             ParserOptions {
                 parse_float_as_decimal: true,
+                enable_ident_normalization: false,
             },
         );
+    }
+}
+
+#[test]
+fn parse_ident_normalization() {
+    let test_data = [
+        (
+            "SELECT age FROM person",
+            "Ok(Projection: person.age\n  TableScan: person)",
+            true,
+        ),
+        (
+            "SELECT AGE FROM PERSON",
+            "Ok(Projection: person.age\n  TableScan: person)",
+            true,
+        ),
+        (
+            "SELECT AGE FROM PERSON",
+            "Err(Plan(\"No table named: PERSON found\"))",
+            false,
+        ),
+    ];
+
+    for (sql, expected, enable_ident_normalization) in test_data {
+        let plan = logical_plan_with_options(
+            sql,
+            ParserOptions {
+                parse_float_as_decimal: false,
+                enable_ident_normalization,
+            },
+        );
+        assert_eq!(expected, format!("{plan:?}"));
     }
 }
 
