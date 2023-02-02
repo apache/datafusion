@@ -95,20 +95,17 @@ select pg_typeof(false or true), pg_typeof(true or false);
 bool bool
 
 
-# TODO: run for DataFusion as well after #4335
-onlyif postgres
 query ??
 select null and null, null or null;
 ----
 NULL NULL
 
 
-# TODO: uncomment after #4335
-#onlyif DataFusion
-#query ??
-#select arrow_typeof(null and null), arrow_typeof(null or null);
-#----
-#Boolean Boolean
+onlyif DataFusion
+query ??
+select arrow_typeof(null and null), arrow_typeof(null or null);
+----
+Boolean Boolean
 
 
 onlyif postgres
