@@ -44,7 +44,6 @@ use crate::physical_plan::{with_new_children_if_necessary, Distribution, Executi
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{reverse_sort_options, DataFusionError};
 use datafusion_physical_expr::utils::{ordering_satisfy, ordering_satisfy_concrete};
-use datafusion_physical_expr::window::WindowExpr;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use itertools::{concat, izip};
 use std::iter::zip;
@@ -445,24 +444,10 @@ fn ensure_sorting(
                 if let Some(tree) = sort_onwards {
                     // For window expressions, we can remove some sorts when we can
                     // calculate the result in reverse:
-                    if let Some(exec) = plan.as_any().downcast_ref::<WindowAggExec>() {
-                        if let Some(result) = analyze_window_sort_removal(
-                            exec.window_expr(),
-                            &exec.partition_keys,
-                            tree,
-                            &plan,
-                        )? {
-                            return Ok(Some(result));
-                        }
-                    } else if let Some(exec) =
-                        plan.as_any().downcast_ref::<BoundedWindowAggExec>()
+                    if plan.as_any().is::<WindowAggExec>()
+                        || plan.as_any().is::<BoundedWindowAggExec>()
                     {
-                        if let Some(result) = analyze_window_sort_removal(
-                            exec.window_expr(),
-                            &exec.partition_keys,
-                            tree,
-                            &plan,
-                        )? {
+                        if let Some(result) = analyze_window_sort_removal(tree, &plan)? {
                             return Ok(Some(result));
                         }
                     }
@@ -553,12 +538,22 @@ fn analyze_immediate_sort_removal(
 /// Analyzes a [WindowAggExec] or a [BoundedWindowAggExec] to determine whether
 /// it may allow removing a sort.
 fn analyze_window_sort_removal(
-    window_expr: &[Arc<dyn WindowExpr>],
-    partition_keys: &[Arc<dyn PhysicalExpr>],
     sort_tree: &mut ExecTree,
     // Either BoundedWindowAggExec or WindowAggExec
     window_exec: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
+    let (window_expr, partition_keys) = if let Some(exec) =
+        window_exec.as_any().downcast_ref::<BoundedWindowAggExec>()
+    {
+        (exec.window_expr(), &exec.partition_keys)
+    } else if let Some(exec) = window_exec.as_any().downcast_ref::<WindowAggExec>() {
+        (exec.window_expr(), &exec.partition_keys)
+    } else {
+        return Err(DataFusionError::Execution(
+            "Expects to receive either WindowAggExec of BoundedWindowAggExec".to_string(),
+        ));
+    };
+
     let mut first_should_reverse = None;
     let mut physical_ordering_common = vec![];
     for sort_any in sort_tree.get_leaves() {
@@ -779,6 +774,14 @@ fn change_finer_sort_in_sub_plan(
             children: vec![],
             plan: updated_plan.clone(),
         };
+        Ok(updated_plan)
+    } else if is_sort_preserving_merge_exec(plan) {
+        let new_sort_expr = get_sort_exprs(plan)?[0..n_sort_expr].to_vec();
+        let new_plan =
+            change_finer_sort_in_sub_plan(&mut sort_onwards.children[0], n_sort_expr)?;
+        let updated_plan = Arc::new(SortPreservingMergeExec::new(new_sort_expr, new_plan))
+            as Arc<dyn ExecutionPlan>;
+        sort_onwards.plan = updated_plan.clone();
         Ok(updated_plan)
     } else {
         let mut children = plan.children();
@@ -1492,9 +1495,9 @@ mod tests {
         let union = union_exec(vec![sort1, source2, sort2]);
         let physical_plan = sort_preserving_merge_exec(sort_exprs1, union);
 
-        // First input to the union is not Sorted (SortExec is finer than required ordering by the SortPreservingMergeExec above).
-        // Second input to the union is already Sorted (matches with the required ordering by the SortPreservingMergeExec above).
-        // Third input to the union is not Sorted (SortExec is matches required ordering by the SortPreservingMergeExec above).
+        // Requirement of SortPreservingMergeExec is not satisfied.
+        // Should add required SortExec to satisfy it. Then should remove unnecessary ordering below
+        // UnionExec where SortExec comes from multiple children.
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "  UnionExec",
@@ -1504,7 +1507,6 @@ mod tests {
             "    SortExec: [nullable_col@0 ASC]",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
-        // should adjust sorting in the first input of the union such that it is not unnecessarily fine
         let expected_optimized = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "  SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
@@ -1562,6 +1564,57 @@ mod tests {
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    SortExec: [nullable_col@0 ASC]",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_union_inputs_different_sorted6() -> Result<()> {
+        let schema = create_test_schema()?;
+
+        let source1 = parquet_exec(&schema);
+        let sort_exprs1 = vec![sort_expr("nullable_col", &schema)];
+        let sort1 = sort_exec(sort_exprs1, source1.clone());
+        let sort_exprs2 = vec![
+            sort_expr("nullable_col", &schema),
+            sort_expr("non_nullable_col", &schema),
+        ];
+        let repartition = repartition_exec(source1);
+        let sort2 = sort_exec(sort_exprs2.clone(), repartition);
+        let spm = sort_preserving_merge_exec(sort_exprs2, sort2);
+
+        let parquet_sort_exprs = vec![sort_expr("nullable_col", &schema)];
+        let source2 = parquet_exec_sorted(&schema, parquet_sort_exprs.clone());
+
+        let union = union_exec(vec![sort1, source2, spm]);
+        let physical_plan = sort_preserving_merge_exec(parquet_sort_exprs, union);
+
+        // This input of UnionExec is unnecessarily fine than the required ordering by SortPreservingMergeExec
+        // Ordering of that child should be changed with requirement ordering(SortEXec and SortPreservingMergeExec)
+        // at that path should be updated.
+        let expected_input = vec![
+            "SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "  UnionExec",
+            "    SortExec: [nullable_col@0 ASC]",
+            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+            "    ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
+            "    SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
+            "      SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
+            "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "          ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        ];
+        // should adjust sorting in the third input of the union such that it is not unnecessarily fine
+        let expected_optimized = vec![
+            "SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "  UnionExec",
+            "    SortExec: [nullable_col@0 ASC]",
+            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+            "    ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
+            "    SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "      SortExec: [nullable_col@0 ASC]",
+            "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "          ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())
