@@ -174,8 +174,8 @@ pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
                 | Float64
                 | Decimal128(_, _)
         ),
-        Timestamp(TimeUnit::Nanosecond, None) => {
-            matches!(type_from, Null | Timestamp(_, None))
+        Timestamp(TimeUnit::Nanosecond, _) => {
+            matches!(type_from, Null | Timestamp(_, _) | Date32)
         }
         Utf8 | LargeUtf8 => true,
         Null => can_cast_types(type_from, type_into),

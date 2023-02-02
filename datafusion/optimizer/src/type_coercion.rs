@@ -1038,4 +1038,23 @@ mod test {
         Ok(())
         // TODO add more test for this
     }
+
+    #[test]
+    fn binary_op_date32_eq_ts() -> Result<()> {
+        let expr = cast(
+            lit("1998-03-18"),
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+        )
+        .eq(cast(lit("1998-03-18"), DataType::Date32));
+        let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        }));
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        dbg!(&plan);
+        let expected =
+            "Projection: CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None)) = CAST(CAST(Utf8(\"1998-03-18\") AS Date32) AS Timestamp(Nanosecond, None))\n  EmptyRelation";
+        assert_optimized_plan_eq(&plan, expected)?;
+        Ok(())
+    }
 }
