@@ -720,18 +720,6 @@ fn remove_corresponding_sort_from_sub_plan(
     // SortExec is always at the bottom of the tree
     if is_sort_exec(&sort_onwards.plan) {
         Ok(sort_onwards.plan.children()[0].clone())
-    } else if is_sort_preserving_merge_exec(&sort_onwards.plan) {
-        let new_plan = remove_corresponding_sort_from_sub_plan(
-            &mut sort_onwards.children[0],
-            false,
-        )?;
-        if requires_single_partition
-            && new_plan.output_partitioning().partition_count() > 1
-        {
-            Ok(Arc::new(CoalescePartitionsExec::new(new_plan)))
-        } else {
-            Ok(new_plan)
-        }
     } else {
         let plan = &sort_onwards.plan;
         let mut children = plan.children();
@@ -743,7 +731,18 @@ fn remove_corresponding_sort_from_sub_plan(
             children[item.idx] =
                 remove_corresponding_sort_from_sub_plan(item, requires_single_partition)?;
         }
-        plan.clone().with_new_children(children)
+        if is_sort_preserving_merge_exec(plan) {
+            let child = &children[0];
+            if requires_single_partition
+                && child.output_partitioning().partition_count() > 1
+            {
+                Ok(Arc::new(CoalescePartitionsExec::new(child.clone())))
+            } else {
+                Ok(child.clone())
+            }
+        } else {
+            plan.clone().with_new_children(children)
+        }
     }
 }
 
@@ -765,6 +764,7 @@ fn change_finer_sort_in_sub_plan(
     n_sort_expr: usize,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let plan = &sort_onwards.plan;
+    // SortExec is always at the bottom of the tree
     if is_sort_exec(plan) {
         let prev_layer = plan.children()[0].clone();
         let new_sort_expr = get_sort_exprs(plan)?[0..n_sort_expr].to_vec();
@@ -775,20 +775,22 @@ fn change_finer_sort_in_sub_plan(
             plan: updated_plan.clone(),
         };
         Ok(updated_plan)
-    } else if is_sort_preserving_merge_exec(plan) {
-        let new_sort_expr = get_sort_exprs(plan)?[0..n_sort_expr].to_vec();
-        let new_plan =
-            change_finer_sort_in_sub_plan(&mut sort_onwards.children[0], n_sort_expr)?;
-        let updated_plan = Arc::new(SortPreservingMergeExec::new(new_sort_expr, new_plan))
-            as Arc<dyn ExecutionPlan>;
-        sort_onwards.plan = updated_plan.clone();
-        Ok(updated_plan)
     } else {
         let mut children = plan.children();
         for item in &mut sort_onwards.children {
             children[item.idx] = change_finer_sort_in_sub_plan(item, n_sort_expr)?;
         }
-        plan.clone().with_new_children(children)
+        if is_sort_preserving_merge_exec(plan) {
+            let new_sort_expr = get_sort_exprs(plan)?[0..n_sort_expr].to_vec();
+            let updated_plan = Arc::new(SortPreservingMergeExec::new(
+                new_sort_expr,
+                children[0].clone(),
+            )) as Arc<dyn ExecutionPlan>;
+            sort_onwards.plan = updated_plan.clone();
+            Ok(updated_plan)
+        } else {
+            plan.clone().with_new_children(children)
+        }
     }
 }
 
