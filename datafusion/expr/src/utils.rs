@@ -740,10 +740,32 @@ pub fn from_plan(
         }
         LogicalPlan::DescribeTable(_) => Ok(plan.clone()),
         LogicalPlan::Unnest(Unnest { column, schema, .. }) => {
+            // Update schema with unnested column type.
+            let input = Arc::new(inputs[0].clone());
+            let nested_field = input.schema().field_from_column(column)?;
+            let unnested_field = schema.field_from_column(column)?;
+            let fields = input
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| {
+                    if f == nested_field {
+                        unnested_field.clone()
+                    } else {
+                        f.clone()
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            let schema = Arc::new(DFSchema::new_with_metadata(
+                fields,
+                input.schema().metadata().clone(),
+            )?);
+
             Ok(LogicalPlan::Unnest(Unnest {
-                input: Arc::new(inputs[0].clone()),
+                input,
                 column: column.clone(),
-                schema: schema.clone(),
+                schema,
             }))
         }
     }

@@ -172,6 +172,57 @@ impl RecordBatchStream for UnnestStream {
     }
 }
 
+#[async_trait]
+impl Stream for UnnestStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.poll_next_impl(cx)
+    }
+}
+
+impl UnnestStream {
+    /// Separate implementation function that unpins the [`UnnestStream`] so
+    /// that partial borrows work correctly
+    fn poll_next_impl(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<RecordBatch>>> {
+        self.input
+            .poll_next_unpin(cx)
+            .map(|maybe_batch| match maybe_batch {
+                Some(Ok(batch)) => {
+                    let start = Instant::now();
+                    let result = build_batch(&batch, &self.schema, &self.column);
+                    self.num_input_batches += 1;
+                    self.num_input_rows += batch.num_rows();
+                    if let Ok(ref batch) = result {
+                        self.unnest_time += start.elapsed().as_millis() as usize;
+                        self.num_output_batches += 1;
+                        self.num_output_rows += batch.num_rows();
+                    }
+
+                    Some(result)
+                }
+                other => {
+                    debug!(
+                        "Processed {} probe-side input batches containing {} rows and \
+                        produced {} output batches containing {} rows in {} ms",
+                        self.num_input_batches,
+                        self.num_input_rows,
+                        self.num_output_batches,
+                        self.num_output_rows,
+                        self.unnest_time,
+                    );
+                    other
+                }
+            })
+    }
+}
+
 fn build_batch(
     batch: &RecordBatch,
     schema: &SchemaRef,
@@ -251,55 +302,4 @@ where
     }
 
     concat_batches(schema, &batches, num_rows).map_err(Into::into)
-}
-
-#[async_trait]
-impl Stream for UnnestStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        self.poll_next_impl(cx)
-    }
-}
-
-impl UnnestStream {
-    /// Separate implementation function that unpins the [`UnnestStream`] so
-    /// that partial borrows work correctly
-    fn poll_next_impl(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Result<RecordBatch>>> {
-        self.input
-            .poll_next_unpin(cx)
-            .map(|maybe_batch| match maybe_batch {
-                Some(Ok(batch)) => {
-                    let start = Instant::now();
-                    let result = build_batch(&batch, &self.schema, &self.column);
-                    self.num_input_batches += 1;
-                    self.num_input_rows += batch.num_rows();
-                    if let Ok(ref batch) = result {
-                        self.unnest_time += start.elapsed().as_millis() as usize;
-                        self.num_output_batches += 1;
-                        self.num_output_rows += batch.num_rows();
-                    }
-
-                    Some(result)
-                }
-                other => {
-                    debug!(
-                        "Processed {} probe-side input batches containing {} rows and \
-                        produced {} output batches containing {} rows in {} ms",
-                        self.num_input_batches,
-                        self.num_input_rows,
-                        self.num_output_batches,
-                        self.num_output_rows,
-                        self.unnest_time,
-                    );
-                    other
-                }
-            })
-    }
 }

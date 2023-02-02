@@ -1111,12 +1111,11 @@ impl DefaultPhysicalPlanner {
                     Ok(Arc::new(GlobalLimitExec::new(input, *skip, *fetch)))
                 }
                 LogicalPlan::Unnest(Unnest { input, column, schema }) => {
-                    let input_exec = self.create_initial_plan(input, session_state).await?;
-                    let input_schema = input.as_ref().schema();
-                    let column_exec = input_schema.index_of_column(column)
+                    let input = self.create_initial_plan(input, session_state).await?;
+                    let column_exec = schema.index_of_column(column)
                         .map(|idx| Column::new(&column.name, idx))?;
                     let schema = SchemaRef::new(schema.as_ref().to_owned().into());
-                    Ok(Arc::new(UnnestExec::new(input_exec, column_exec, schema)))
+                    Ok(Arc::new(UnnestExec::new(input, column_exec, schema)))
                 }
                 LogicalPlan::CreateExternalTable(_) => {
                     // There is no default plan for "CREATE EXTERNAL
