@@ -598,7 +598,7 @@ pub struct FetchResults {
 
 impl ProstMessageExt for FetchResults {
     fn type_url() -> &'static str {
-        "type.googleapis.com/arrow.flight.protocol.sql.FetchResults"
+        "type.googleapis.com/datafusion.example.com.sql.FetchResults"
     }
 
     fn as_any(&self) -> Any {
