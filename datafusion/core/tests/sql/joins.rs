@@ -3311,7 +3311,7 @@ async fn right_as_inner_table_nested_loop_join() -> Result<()> {
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
 
-    // right is single partition side, so it will be visited many times. 
+    // right is single partition side, so it will be visited many times.
     let expected = vec![
         "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@1 as t2_id]",
         "  NestedLoopJoinExec: join_type=Inner, filter=BinaryExpr { left: Column { name: \"t1_id\", index: 0 }, op: Gt, right: Column { name: \"t2_id\", index: 1 } }",
@@ -3360,7 +3360,7 @@ async fn left_as_inner_table_nested_loop_join1() -> Result<()> {
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
 
-    // left is single partition side, so it will be visited many times. 
+    // left is single partition side, so it will be visited many times.
     let expected = vec![
         "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@1 as t2_id]",
         "  NestedLoopJoinExec: join_type=Right, filter=BinaryExpr { left: Column { name: \"t1_id\", index: 0 }, op: Lt, right: Column { name: \"t2_id\", index: 1 } }",
@@ -3400,4 +3400,3 @@ async fn left_as_inner_table_nested_loop_join1() -> Result<()> {
 
     Ok(())
 }
-
