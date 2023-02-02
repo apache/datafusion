@@ -146,7 +146,7 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
                     // all the intermediate executors that maintain this ordering. If
                     // we just saw a sort-introducing operator, we reset the tree and
                     // start accumulating.
-                    if is_sort_exec(plan) {
+                    if is_sort(plan) {
                         return Some(ExecTree {
                             idx,
                             plan: item.plan,
@@ -156,19 +156,20 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
                         // There is no sort linkage for this path, it starts at a limit.
                         return None;
                     }
-                    let union = plan.as_any().is::<UnionExec>();
-                    let is_sort_preserving_merge = is_sort_preserving_merge_exec(plan);
-                    // if executor is UnionExec and it has an output ordering its children
-                    // maintains or partially maintains ordering. In either case propagate Sort linkage
-                    // above
-                    let partially_maintains = union && plan.output_ordering().is_some();
+                    let is_spm = is_sort_preserving_merge(plan);
+                    let is_union = plan.as_any().is::<UnionExec>();
+                    // If the executor is a `UnionExec`, and it has an output ordering;
+                    // then it at least partially maintains some child's output ordering.
+                    // Therefore, we propagate this information upwards.
+                    let partially_maintains =
+                        is_union && plan.output_ordering().is_some();
                     let flags = plan.maintains_input_order();
                     let required_orderings = plan.required_input_ordering();
                     let children = izip!(flags, item.sort_onwards, required_orderings)
                         .filter_map(|(maintains, element, required_ordering)| {
                             if (required_ordering.is_none()
                                 && (maintains || partially_maintains))
-                                || is_sort_preserving_merge
+                                || is_spm
                             {
                                 element
                             } else {
@@ -260,18 +261,18 @@ impl TreeNodeRewritable for PlanWithCorrespondingCoalescePartitions {
                             children: vec![],
                         })
                     } else if plan.children().is_empty() {
-                        // plan has no children, there is nothing
-                        // to propagate
+                        // Plan has no children, there is nothing to propagate.
                         None
                     } else {
                         let children = item
                             .coalesce_onwards
                             .into_iter()
                             .flatten()
-                            .filter(|elem| {
-                                // doesn't require single partition
+                            .filter(|item| {
+                                // Only consider operators that don't require a
+                                // single partition.
                                 !matches!(
-                                    plan.required_input_distribution()[elem.idx],
+                                    plan.required_input_distribution()[item.idx],
                                     Distribution::SinglePartition
                                 )
                             })
@@ -390,13 +391,13 @@ fn is_limit(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<GlobalLimitExec>() || plan.as_any().is::<LocalLimitExec>()
 }
 
-/// Checks whether the given executor is SortExec.
-fn is_sort_exec(plan: &Arc<dyn ExecutionPlan>) -> bool {
+/// Checks whether the given executor is a `SortExec`.
+fn is_sort(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<SortExec>()
 }
 
-/// Checks whether the given executor is SortPreservingMergeExec.
-fn is_sort_preserving_merge_exec(plan: &Arc<dyn ExecutionPlan>) -> bool {
+/// Checks whether the given executor is a `SortPreservingMergeExec`.
+fn is_sort_preserving_merge(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<SortPreservingMergeExec>()
 }
 
@@ -467,7 +468,7 @@ fn ensure_sorting(
                 // another order-imposing operator. Remove or update this sort:
                 if !plan.maintains_input_order()[idx] {
                     let count = plan.output_ordering().map_or(0, |e| e.len());
-                    if (count > 0) && !is_sort_exec(&plan) {
+                    if (count > 0) && !is_sort(&plan) {
                         update_child_to_change_finer_sort(child, sort_onwards, count)?;
                     } else {
                         update_child_to_remove_unnecessary_sort(
@@ -539,7 +540,6 @@ fn analyze_immediate_sort_removal(
 /// it may allow removing a sort.
 fn analyze_window_sort_removal(
     sort_tree: &mut ExecTree,
-    // Either BoundedWindowAggExec or WindowAggExec
     window_exec: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
     let (window_expr, partition_keys) = if let Some(exec) =
@@ -549,7 +549,7 @@ fn analyze_window_sort_removal(
     } else if let Some(exec) = window_exec.as_any().downcast_ref::<WindowAggExec>() {
         (exec.window_expr(), &exec.partition_keys)
     } else {
-        return Err(DataFusionError::Execution(
+        return Err(DataFusionError::Plan(
             "Expects to receive either WindowAggExec of BoundedWindowAggExec".to_string(),
         ));
     };
@@ -564,8 +564,8 @@ fn analyze_window_sort_removal(
         let sort_input = sort_any.children()[0].clone();
         let physical_ordering = sort_input.output_ordering();
         // TODO: Once we can ensure that required ordering information propagates with
-        //       necessary lineage information, compare `physical_ordering` and required ordering by
-        //       Window executor instead of `sort_output_ordering`.
+        //       the necessary lineage information, compare `physical_ordering` and the
+        //       ordering required by the window executor instead of `sort_output_ordering`.
         //       This will enable us to handle cases such as (a,b) -> Sort -> (a,b,c) -> Required(a,b).
         //       Currently, we can not remove such sorts.
         let required_ordering = sort_output_ordering.ok_or_else(|| {
@@ -716,8 +716,8 @@ fn remove_corresponding_sort_from_sub_plan(
     sort_onwards: &mut ExecTree,
     requires_single_partition: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    // SortExec is always at the bottom of the tree
-    if is_sort_exec(&sort_onwards.plan) {
+    // A `SortExec` is always at the bottom of the tree.
+    if is_sort(&sort_onwards.plan) {
         Ok(sort_onwards.plan.children()[0].clone())
     } else {
         let plan = &sort_onwards.plan;
@@ -730,7 +730,7 @@ fn remove_corresponding_sort_from_sub_plan(
             children[item.idx] =
                 remove_corresponding_sort_from_sub_plan(item, requires_single_partition)?;
         }
-        if is_sort_preserving_merge_exec(plan) {
+        if is_sort_preserving_merge(plan) {
             let child = &children[0];
             if requires_single_partition
                 && child.output_partitioning().partition_count() > 1
@@ -763,8 +763,8 @@ fn change_finer_sort_in_sub_plan(
     n_sort_expr: usize,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let plan = &sort_onwards.plan;
-    // SortExec is always at the bottom of the tree
-    if is_sort_exec(plan) {
+    // A `SortExec` is always at the bottom of the tree.
+    if is_sort(plan) {
         let prev_layer = plan.children()[0].clone();
         let new_sort_expr = get_sort_exprs(plan)?[0..n_sort_expr].to_vec();
         let updated_plan = add_sort_above_child(&prev_layer, new_sort_expr)?;
@@ -779,7 +779,7 @@ fn change_finer_sort_in_sub_plan(
         for item in &mut sort_onwards.children {
             children[item.idx] = change_finer_sort_in_sub_plan(item, n_sort_expr)?;
         }
-        if is_sort_preserving_merge_exec(plan) {
+        if is_sort_preserving_merge(plan) {
             let new_sort_expr = get_sort_exprs(plan)?[0..n_sort_expr].to_vec();
             let updated_plan = Arc::new(SortPreservingMergeExec::new(
                 new_sort_expr,
@@ -1244,9 +1244,9 @@ mod tests {
 
         let physical_plan = aggregate_exec(spm2);
 
-        // When removing SortPreservingMergeExec make sure that partitioning requirements are
-        // not violated. In some cases we may need to replace it with CoalescePartitionsExec instead
-        // directly removing it.
+        // When removing a `SortPreservingMergeExec`, make sure that partitioning
+        // requirements are not violated. In some cases, we may need to replace
+        // it with a `CoalescePartitionsExec` instead of directly removing it.
         let expected_input = vec![
             "AggregateExec: mode=Final, gby=[], aggr=[]",
             "  SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
@@ -1298,7 +1298,7 @@ mod tests {
             "            ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
 
-        // expect to keep the bottom SortExec
+        // We should keep the bottom `SortExec`.
         let expected_optimized = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "  SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
@@ -1499,9 +1499,10 @@ mod tests {
         let union = union_exec(vec![sort1, source2, sort2]);
         let physical_plan = sort_preserving_merge_exec(sort_exprs1, union);
 
-        // Requirement of SortPreservingMergeExec is not satisfied.
-        // Should add required SortExec to satisfy it. Then should remove unnecessary ordering below
-        // UnionExec where SortExec comes from multiple children.
+        // Ordering requirement of the `SortPreservingMergeExec` is not met.
+        // Should modify the plan to ensure that all three inputs to the
+        // `UnionExec` satisfy the ordering, OR add a single sort after
+        // the `UnionExec` (both of which are equally good for this example).
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "  UnionExec",
@@ -1550,9 +1551,9 @@ mod tests {
         let union = union_exec(vec![sort1, sort2]);
         let physical_plan = sort_preserving_merge_exec(sort_exprs3, union);
 
-        // Union doesn't preserve any of the inputs ordering in the example below.
-        // However, we should be able to change unnecessarily fine
-        // SortExecs under UnionExec with required SortExecs that are absolutely necessary.
+        // The `UnionExec` doesn't preserve any of the inputs ordering in the
+        // example below. However, we should be able to change the unnecessarily
+        // fine `SortExec`s below with required `SortExec`s that are absolutely necessary.
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  UnionExec",
@@ -1593,10 +1594,12 @@ mod tests {
         let union = union_exec(vec![sort1, source2, spm]);
         let physical_plan = sort_preserving_merge_exec(parquet_sort_exprs, union);
 
-        // Third child of UnionExec is unnecessarily fine than the required ordering by SortPreservingMergeExec at the top,
-        // Also plan is not valid as it is. SortPreservingMergeExec under the third child of the
-        // UnionExec should have its input ordered. We should add SortExec below it. In the final plan
-        // Ordering of the third child shouldn't be finer than necessary
+        // The plan is not valid as it is -- the input ordering requirement
+        // of the `SortPreservingMergeExec` under the third child of the
+        // `UnionExec` is not met. We should add a `SortExec` below it.
+        // At the same time, this ordering requirement is unnecessarily fine.
+        // The final plan should be valid AND the ordering of the third child
+        // shouldn't be finer than necessary.
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  UnionExec",
@@ -1607,7 +1610,8 @@ mod tests {
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "        ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
-        // should adjust sorting in the third input of the union such that it is not unnecessarily fine
+        // Should adjust the requirement in the third input of the union so
+        // that it is not unnecessarily fine.
         let expected_optimized = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  UnionExec",
@@ -1649,9 +1653,10 @@ mod tests {
         let union = union_exec(vec![sort1, sort2]);
         let physical_plan = window_exec("nullable_col", sort_exprs3, union);
 
-        // WindowAggExec gets its Sorting from multiple children
-        // During removal of SortExecs it should be able to remove corresponding SortExecs
-        // Also inputs of the SortExecs are not necessarily same to be able to remove them.
+        // The `WindowAggExec` gets its sorting from multiple children jointly.
+        // During the removal of `SortExec`s, it should be able to remove the
+        // corresponding SortExecs together. Also, the inputs of these `SortExec`s
+        // are not necessarily the same to be able to remove them.
         let expected_input = vec![
             "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
             "  UnionExec",
