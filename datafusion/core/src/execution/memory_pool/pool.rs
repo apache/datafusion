@@ -190,7 +190,7 @@ impl MemoryPool for FairSpillPool {
             false => {
                 let available = self
                     .pool_size
-                    .saturating_sub(state.unspillable + state.unspillable);
+                    .saturating_sub(state.unspillable + state.spillable);
 
                 if available < additional {
                     return Err(insufficient_capacity_err(
@@ -281,5 +281,13 @@ mod tests {
         drop(r2);
         assert_eq!(pool.reserved(), 20);
         r3.try_grow(80).unwrap();
+
+        assert_eq!(pool.reserved(), 100);
+        r1.free();
+        assert_eq!(pool.reserved(), 80);
+
+        let mut r4 = MemoryConsumer::new("s4").register(&pool);
+        let err = r4.try_grow(30).unwrap_err().to_string();
+        assert_eq!(err, "Resources exhausted: Failed to allocate additional 30 bytes for s4 with 0 bytes already allocated - maximum available is 20");
     }
 }
