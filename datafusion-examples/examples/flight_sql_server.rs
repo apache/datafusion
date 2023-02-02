@@ -102,9 +102,12 @@ impl FlightSqlServiceImpl {
             .with_information_schema(true);
         let ctx = Arc::new(SessionContext::with_config(session_config));
 
+        let testdata = datafusion::test_util::parquet_test_data();
+
+        // register parquet file with the execution context
         ctx.register_parquet(
-            "nadt_pq",
-            "/home/kmitchener/dev/convert/test-parquet/part-0.parquet",
+            "alltypes_plain",
+            &format!("{testdata}/alltypes_plain.parquet"),
             ParquetReadOptions::default(),
         )
         .await
@@ -544,16 +547,6 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("do_action_create_prepared_statement: {user_query}");
 
         let ctx = self.get_ctx(&request)?;
-        let testdata = datafusion::test_util::parquet_test_data();
-
-        // register parquet file with the execution context
-        ctx.register_parquet(
-            "alltypes_plain",
-            &format!("{testdata}/alltypes_plain.parquet"),
-            ParquetReadOptions::default(),
-        )
-        .await
-        .map_err(|e| status!("Error registering table", e))?;
 
         let plan = ctx
             .sql(user_query)
