@@ -100,7 +100,7 @@ pub fn coerce_types(
         Operator::And | Operator::Or => match (lhs_type, rhs_type) {
             // logical binary boolean operators can only be evaluated in bools or nulls
             (DataType::Boolean, DataType::Boolean) => Some(DataType::Boolean),
-            (DataType::Null, DataType::Null) => Some(DataType::Null),
+            (DataType::Null, DataType::Null) => Some(DataType::Boolean),
             (DataType::Boolean, DataType::Null) | (DataType::Null, DataType::Boolean) => {
                 Some(DataType::Boolean)
             }
@@ -1147,13 +1147,13 @@ mod tests {
             DataType::Null,
             DataType::Null,
             Operator::Or,
-            DataType::Null
+            DataType::Boolean
         );
         test_coercion_binary_rule!(
             DataType::Null,
             DataType::Null,
             Operator::And,
-            DataType::Null
+            DataType::Boolean
         );
         test_coercion_binary_rule!(
             DataType::Null,
