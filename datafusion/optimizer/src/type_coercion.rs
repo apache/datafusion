@@ -553,8 +553,20 @@ fn coerce_arguments_for_signature(
     expressions
         .iter()
         .enumerate()
-        .map(|(i, expr)| expr.clone().cast_to(&new_types[i], schema))
+        .map(|(i, expr)| cast_expr(expr, &new_types[i], schema))
         .collect::<Result<Vec<_>>>()
+}
+
+/// Cast `expr` to the specified type, if possible
+fn cast_expr(expr: &Expr, to_type: &DataType, schema: &DFSchema) -> Result<Expr> {
+    // Special case until Interval coercion is handled in arrow-rs
+    // https://github.com/apache/arrow-rs/issues/3643
+    match (expr, to_type) {
+        (Expr::Literal(ScalarValue::Utf8(Some(s))), DataType::Interval(_)) => {
+            parse_interval("millisecond", s.as_str()).map(Expr::Literal)
+        }
+        _ => expr.clone().cast_to(to_type, schema),
+    }
 }
 
 /// Returns the coerced exprs for each `input_exprs`.
@@ -1037,5 +1049,24 @@ mod test {
         assert_eq!(expected, result);
         Ok(())
         // TODO add more test for this
+    }
+
+    #[test]
+    fn binary_op_date32_eq_ts() -> Result<()> {
+        let expr = cast(
+            lit("1998-03-18"),
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+        )
+        .eq(cast(lit("1998-03-18"), DataType::Date32));
+        let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        }));
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        dbg!(&plan);
+        let expected =
+            "Projection: CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None)) = CAST(CAST(Utf8(\"1998-03-18\") AS Date32) AS Timestamp(Nanosecond, None))\n  EmptyRelation";
+        assert_optimized_plan_eq(&plan, expected)?;
+        Ok(())
     }
 }
