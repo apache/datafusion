@@ -1581,8 +1581,7 @@ mod tests {
             sort_expr("non_nullable_col", &schema),
         ];
         let repartition = repartition_exec(source1);
-        let sort2 = sort_exec(sort_exprs2.clone(), repartition);
-        let spm = sort_preserving_merge_exec(sort_exprs2, sort2);
+        let spm = sort_preserving_merge_exec(sort_exprs2, repartition);
 
         let parquet_sort_exprs = vec![sort_expr("nullable_col", &schema)];
         let source2 = parquet_exec_sorted(&schema, parquet_sort_exprs.clone());
@@ -1590,9 +1589,10 @@ mod tests {
         let union = union_exec(vec![sort1, source2, spm]);
         let physical_plan = sort_preserving_merge_exec(parquet_sort_exprs, union);
 
-        // This input of UnionExec is unnecessarily fine than the required ordering by SortPreservingMergeExec
-        // Ordering of that child should be changed with requirement ordering(SortEXec and SortPreservingMergeExec)
-        // at that path should be updated.
+        // Third child of UnionExec is unnecessarily fine than the required ordering by SortPreservingMergeExec at the top,
+        // Also plan is not valid as it is. SortPreservingMergeExec under the third child of the
+        // UnionExec should have its input ordered. We should add SortExec below it. In the final plan
+        // Ordering of the third child shouldn't be finer than necessary
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  UnionExec",
@@ -1600,9 +1600,8 @@ mod tests {
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
             "    SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
-            "      SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
-            "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "          ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "        ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
         // should adjust sorting in the third input of the union such that it is not unnecessarily fine
         let expected_optimized = vec![
