@@ -2113,8 +2113,11 @@ mod roundtrip_tests {
             DataType::Float16,
             DataType::Float32,
             DataType::Float64,
-            // Add more timestamp tests
+            DataType::Timestamp(TimeUnit::Second, None),
             DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
             DataType::Date32,
             DataType::Date64,
             DataType::Time32(TimeUnit::Second),
