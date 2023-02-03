@@ -18,7 +18,7 @@
 //! Constraint propagator/solver for custom PhysicalExpr graphs.
 
 use std::fmt::{Display, Formatter};
-use std::ops::{Index, IndexMut};
+use std::ops::Index;
 use std::sync::Arc;
 
 use arrow_schema::DataType;
@@ -115,13 +115,16 @@ use crate::PhysicalExpr;
 /// This object implements a directed acyclic expression graph (DAEG) that
 /// is used to compute ranges for expressions through interval arithmetic.
 #[derive(Clone)]
-pub struct ExprIntervalGraph(NodeIndex, StableGraph<ExprIntervalGraphNode, usize>);
+pub struct ExprIntervalGraph {
+    graph: StableGraph<ExprIntervalGraphNode, usize>,
+    root: NodeIndex,
+}
 
 /// Result corresponding the 'update_interval' call.
 #[derive(PartialEq, Debug)]
-pub enum OptimizationResult {
+pub enum PropagationResult {
     CannotPropagate,
-    UnfeasibleSolution,
+    Infeasible,
     Success,
 }
 
@@ -191,60 +194,41 @@ fn get_inverse_op(op: Operator) -> Operator {
     }
 }
 
-/// This function refines intervals `left_child` and `right_child` by
-/// applying constraint propagation through `parent` via operation.
+/// This function refines intervals `left_child` and `right_child` by applying
+/// constraint propagation through `parent` via operation. The main idea is
+/// that we can shrink ranges of variables x and y using parent interval p.
 ///
-/// The main idea is that we can shrink the domains of variables x and y by using
-/// parent interval p.
-///
-/// Assuming that x,y and p has ranges [xL, xU], [yL, yU], and [pL, pU], we simply apply
-/// constraint propagation across [xL, xU], [yL, yH] and [pL, pU].
-/// - For minus operation, specifically, we would first do
-///     - [xL, xU] <- ([yL, yU] + [pL, pU]) ∩ [xL, xU], and then
-///     - [yL, yU] <- ([xL, xU] - [pL, pU]) ∩ [yL, yU].
+/// Assuming that x,y and p has ranges [xL, xU], [yL, yU], and [pL, pU], we
+/// apply the following operations:
 /// - For plus operation, specifically, we would first do
 ///     - [xL, xU] <- ([pL, pU] - [yL, yU]) ∩ [xL, xU], and then
 ///     - [yL, yU] <- ([pL, pU] - [xL, xU]) ∩ [yL, yU].
-pub fn propagate(
+/// - For minus operation, specifically, we would first do
+///     - [xL, xU] <- ([yL, yU] + [pL, pU]) ∩ [xL, xU], and then
+///     - [yL, yU] <- ([xL, xU] - [pL, pU]) ∩ [yL, yU].
+pub fn propagate_arithmetic(
     op: &Operator,
     parent: &Interval,
     left_child: &Interval,
     right_child: &Interval,
 ) -> Result<(Option<Interval>, Option<Interval>)> {
     let inverse_op = get_inverse_op(*op);
-    Ok(
-        match apply_operator(&inverse_op, parent, right_child)?.intersect(left_child)? {
-            // Left is feasible
-            Some(value) => {
-                // Adjust the propagation operator and parent-child order.
-                let (o, l, r) = match op {
-                    Operator::Minus => (op, &value, parent),
-                    Operator::Plus => (&inverse_op, parent, &value),
-                    _ => unreachable!(),
-                };
-                // Calculate right child with new left child.
-                let right = apply_operator(o, l, r)?.intersect(right_child)?;
-                // Return intervals for both children.
-                (Some(value), right)
-            }
-            // If left child is not feasible, return both childs None.
-            None => (None, None),
-        },
-    )
-}
-
-fn get_zero_scalar(datatype: &DataType) -> ScalarValue {
-    assert!(datatype.is_primitive());
-    match datatype {
-        DataType::Int8 => ScalarValue::Int8(Some(0)),
-        DataType::Int16 => ScalarValue::Int16(Some(0)),
-        DataType::Int32 => ScalarValue::Int32(Some(0)),
-        DataType::Int64 => ScalarValue::Int64(Some(0)),
-        DataType::UInt8 => ScalarValue::UInt8(Some(0)),
-        DataType::UInt16 => ScalarValue::UInt16(Some(0)),
-        DataType::UInt32 => ScalarValue::UInt32(Some(0)),
-        DataType::UInt64 => ScalarValue::UInt64(Some(0)),
-        _ => unreachable!(),
+    // First, propagate to the left:
+    match apply_operator(&inverse_op, parent, right_child)?.intersect(left_child)? {
+        // Left is feasible:
+        Some(value) => {
+            // Propagate to the right using the new left.
+            let right = match op {
+                Operator::Minus => apply_operator(op, &value, parent),
+                Operator::Plus => apply_operator(&inverse_op, parent, &value),
+                _ => unreachable!(),
+            }?
+            .intersect(right_child)?;
+            // Return intervals for both children:
+            Ok((Some(value), right))
+        }
+        // If the left child is infeasible, short-circuit.
+        None => Ok((None, None)),
     }
 }
 
@@ -255,7 +239,7 @@ fn get_zero_scalar(datatype: &DataType) -> ScalarValue {
 /// are not implemented yet.
 fn comparison_operator_target(datatype: &DataType, op: &Operator) -> Result<Interval> {
     let unbounded = ScalarValue::try_from(datatype)?;
-    let zero = get_zero_scalar(datatype);
+    let zero = ScalarValue::new_zero(datatype)?;
     Ok(match *op {
         Operator::Gt => Interval {
             lower: zero,
@@ -276,114 +260,113 @@ fn comparison_operator_target(datatype: &DataType, op: &Operator) -> Result<Inte
 /// [yL, yH] and [0, ∞]. Specifically, we would first do
 ///     - [xL, xU] <- ([yL, yU] + [0, ∞]) ∩ [xL, xU], and then
 ///     - [yL, yU] <- ([xL, xU] - [0, ∞]) ∩ [yL, yU].
-/// This means [x1, y1] > [x2, y2] can be rewritten as [xL, xU] - [yL, yU] = [0, ∞]
-/// and [xL, xU] < [yL, yU] can be rewritten as [xL, xU] - [yL, yU] = [-∞, 0].
-pub fn propagate_comparison_operators(
+pub fn propagate_comparison(
     op: &Operator,
     left_child: &Interval,
     right_child: &Interval,
 ) -> Result<(Option<Interval>, Option<Interval>)> {
     let parent = comparison_operator_target(&left_child.get_datatype(), op)?;
-    propagate(&Operator::Minus, &parent, left_child, right_child)
+    propagate_arithmetic(&Operator::Minus, &parent, left_child, right_child)
 }
 
 impl ExprIntervalGraph {
     pub fn try_new(expr: Arc<dyn PhysicalExpr>) -> Result<Self> {
         // Build the full graph:
-        let (root_node, graph) =
+        let (root, graph) =
             build_physical_expr_graph(expr, &ExprIntervalGraphNode::make_node)?;
-        Ok(Self(root_node, graph))
+        Ok(Self { graph, root })
     }
 
-    ///
-    /// ``` text
-    ///
-    ///
-    /// If we want to calculate intervals starting from and propagate up to BinaryExpr('a', +, 'b')
-    /// instead of col('a') and col('b'), we prune under BinaryExpr('a', +, 'b') since we will
-    /// never visit there.
-    ///
-    /// One of the reasons behind pruning the expression interval graph is that if we provide
-    ///
-    /// PhysicalSortExpr {
-    ///     expr: BinaryExpr('a', +, 'b'),
-    ///     sort_option: ..
-    /// }
-    ///
-    /// in output_order of one of the SymmetricHashJoin's childs. In this case, we must calculate
-    /// the interval for the BinaryExpr('a', +, 'b') instead of the columns inside the BinaryExpr. Thus,
-    /// the child PhysicalExprs of the BinaryExpr may be pruned for the performance.
-    ///
-    /// We do not change the Arc<dyn PhysicalExpr> inside Arc<dyn PhysicalExpr>, just remove the nodes
-    /// corresponding that Arc<dyn PhysicalExpr>.
-    ///
-    ///
-    ///                                  +-----+                                          +-----+
-    ///                                  | GT  |                                          | GT  |
-    ///                         +--------|     |-------+                         +--------|     |-------+
-    ///                         |        +-----+       |                         |        +-----+       |
-    ///                         |                      |                         |                      |
-    ///                      +-----+                   |                      +-----+                   |
-    ///                      |Cast |                   |                      |Cast |                   |
-    ///                      |     |                   |             --\      |     |                   |
-    ///                      +-----+                   |       ----------     +-----+                   |
-    ///                         |                      |             --/         |                      |
-    ///                         |                      |                         |                      |
-    ///                      +-----+                +-----+                   +-----+                +-----+
-    ///                   +--|Plus |--+          +--|Plus |--+                |Plus |             +--|Plus |--+
-    ///                   |  |     |  |          |  |     |  |                |     |             |  |     |  |
-    ///  Prune from here  |  +-----+  |          |  +-----+  |                +-----+             |  +-----+  |
-    ///  ------------------------------------    |           |                                    |           |
-    ///                   |           |          |           |                                    |           |
-    ///                +-----+     +-----+    +-----+     +-----+                              +-----+     +-----+
-    ///                | a   |     |  b  |    |  c  |     |  2  |                              |  c  |     |  2  |
-    ///                |     |     |     |    |     |     |     |                              |     |     |     |
-    ///                +-----+     +-----+    +-----+     +-----+                              +-----+     +-----+
-    ///
-    /// This operation mutates the underline graph, so use it after constructor.
-    /// ```
-    ///
-    /// Since graph is stable, the NodeIndex will stay same even if we delete a node. We exploit
-    /// this stability by matching Arc<dyn PhysicalExpr> and NodeIndex for membership tests.
-    pub fn pair_node_indices_with_interval_providers(
+    // Sometimes, we do not want to calculate and/or propagate intervals all
+    // way down to leaf expressions. For example, assume that we have a
+    // `SymmetricHashJoin` which has a child with an output ordering like:
+    //
+    // PhysicalSortExpr {
+    //     expr: BinaryExpr('a', +, 'b'),
+    //     sort_option: ..
+    // }
+    //
+    // i.e. its output order comes from a clause like "ORDER BY a + b". In such
+    // a case, we must calculate the interval for the BinaryExpr('a', +, 'b')
+    // instead of the columns inside this BinaryExpr, because this interval
+    // decides whether we prune or not. Therefore, children `PhysicalExpr`s of
+    // this `BinaryExpr` may be pruned for performance. The figure below
+    // explains this example visually.
+    //
+    // Note that we just remove the nodes from the DAEG, do not make any change
+    // to the plan itself.
+    //
+    // ```text
+    //
+    //                                  +-----+                                          +-----+
+    //                                  | GT  |                                          | GT  |
+    //                         +--------|     |-------+                         +--------|     |-------+
+    //                         |        +-----+       |                         |        +-----+       |
+    //                         |                      |                         |                      |
+    //                      +-----+                   |                      +-----+                   |
+    //                      |Cast |                   |                      |Cast |                   |
+    //                      |     |                   |             --\      |     |                   |
+    //                      +-----+                   |       ----------     +-----+                   |
+    //                         |                      |             --/         |                      |
+    //                         |                      |                         |                      |
+    //                      +-----+                +-----+                   +-----+                +-----+
+    //                   +--|Plus |--+          +--|Plus |--+                |Plus |             +--|Plus |--+
+    //                   |  |     |  |          |  |     |  |                |     |             |  |     |  |
+    //  Prune from here  |  +-----+  |          |  +-----+  |                +-----+             |  +-----+  |
+    //  ------------------------------------    |           |                                    |           |
+    //                   |           |          |           |                                    |           |
+    //                +-----+     +-----+    +-----+     +-----+                              +-----+     +-----+
+    //                | a   |     |  b  |    |  c  |     |  2  |                              |  c  |     |  2  |
+    //                |     |     |     |    |     |     |     |                              |     |     |     |
+    //                +-----+     +-----+    +-----+     +-----+                              +-----+     +-----+
+    //
+    // ```
+
+    /// This function associates stable node indices with [PhysicalExpr]s so
+    /// that we can match Arc<dyn PhysicalExpr> and NodeIndex objects during
+    /// membership tests.
+    pub fn gather_node_indices(
         &mut self,
         exprs: &[Arc<dyn PhysicalExpr>],
-    ) -> Result<Vec<(Arc<dyn PhysicalExpr>, usize)>> {
-        let mut bfs = Bfs::new(&self.1, self.0);
-        // We collect the node indexes  (usize) of the PhysicalExprs, with the same order
-        // with `exprs`. To preserve order, we initiate each expr's node index with usize::MAX,
-        // then find the corresponding node indexes by traversing the graph.
+    ) -> Vec<(Arc<dyn PhysicalExpr>, usize)> {
+        let graph = &self.graph;
+        let mut bfs = Bfs::new(graph, self.root);
+        // We collect the node indices (usize) of [PhysicalExpr]s in the order
+        // given by argument `exprs`. To preserve this order, we initialize each
+        // expression's node index with usize::MAX, and then find the corresponding
+        // node indices by traversing the graph.
         let mut removals = vec![];
-        let mut expr_node_indices: Vec<(Arc<dyn PhysicalExpr>, usize)> =
-            exprs.iter().map(|e| (e.clone(), usize::MAX)).collect();
-        while let Some(node) = bfs.next(&self.1) {
+        let mut expr_node_indices = exprs
+            .iter()
+            .map(|e| (e.clone(), usize::MAX))
+            .collect::<Vec<_>>();
+        while let Some(node) = bfs.next(graph) {
             // Get the plan corresponding to this node:
-            let input = self.1.index(node);
+            let input = graph.index(node);
             let expr = input.expr.clone();
-            // If the current expression is among `exprs`, slate its
-            // children for removal.
+            // If the current expression is among `exprs`, slate its children
+            // for removal:
             if let Some(value) = exprs.iter().position(|e| expr.eq(e)) {
-                // Update NodeIndex of the PhysicalExpr
+                // Update the node index of the associated `PhysicalExpr`:
                 expr_node_indices[value].1 = node.index();
-                let mut edges = self.1.neighbors_directed(node, Outgoing).detach();
-                while let Some(n_index) = edges.next_node(&self.1) {
+                let mut edges = graph.neighbors_directed(node, Outgoing).detach();
+                while let Some(n_index) = edges.next_node(graph) {
                     // Slate the child for removal, do not remove immediately.
                     removals.push(n_index);
                 }
             }
         }
         for node in removals {
-            self.1.remove_node(node);
+            self.graph.remove_node(node);
         }
-        Ok(expr_node_indices)
+        expr_node_indices
     }
 
     /// Computes bounds for an expression using interval arithmetic via a
     /// bottom-up traversal.
-    /// It returns root node's interval.
     ///
     /// # Arguments
-    /// * `expr_stats` - &[(usize, Interval)]. Provide NodeIndex, Interval tuples for bound evaluation.
+    /// * `expr_stats` - &[(usize, Interval)]. Provide NodeIndex, Interval tuples for leaf variables.
     ///
     /// # Examples
     ///
@@ -403,10 +386,9 @@ impl ExprIntervalGraph {
     ///  let mut graph = ExprIntervalGraph::try_new(expr).unwrap();
     ///  // Do it once, while constructing.
     ///  let node_indices = graph
-    ///     .pair_node_indices_with_interval_providers(&[Arc::new(Column::new("gnz", 0))])
-    ///     .unwrap();
+    ///     .gather_node_indices(&[Arc::new(Column::new("gnz", 0))]);
     ///  let left_index = node_indices.get(0).unwrap().1;
-    ///  // Provide intervals
+    ///  // Provide intervals for leaf variables (here, there is only one).
     ///  let intervals = vec![(
     ///     left_index,
     ///     Interval {
@@ -414,7 +396,7 @@ impl ExprIntervalGraph {
     ///         upper: ScalarValue::Int32(Some(20)),
     ///         },
     ///     )];
-    ///  // Evaluate bounds
+    ///  // Evaluate bounds for the composite expression:
     ///  assert_eq!(
     ///     graph.evaluate_bounds(&intervals).unwrap(),
     ///     Interval {
@@ -428,143 +410,115 @@ impl ExprIntervalGraph {
         &mut self,
         expr_stats: &[(usize, Interval)],
     ) -> Result<Interval> {
-        let mut dfs = DfsPostOrder::new(&self.1, self.0);
-        while let Some(node) = dfs.next(&self.1) {
-            // Outgoing (Children) edges
-            let mut edges = self.1.neighbors_directed(node, Outgoing).detach();
-            // Get PhysicalExpr
-            let expr = self.1[node].expr.clone();
-            // Check if we have a interval information about given PhysicalExpr, if so, directly
-            // propagate it to the upper.
-            if let Some((_, interval)) =
-                expr_stats.iter().find(|(e, _)| *e == node.index())
-            {
-                let input = self.1.index_mut(node);
-                input.interval = interval.clone();
+        let mut dfs = DfsPostOrder::new(&self.graph, self.root);
+        while let Some(node) = dfs.next(&self.graph) {
+            // Get outgoing edges (i.e. children):
+            let mut edges = self.graph.neighbors_directed(node, Outgoing).detach();
+            // If the current expression is a leaf expression, it should have
+            // externally-given intervals. Use this information if available:
+            let index = node.index();
+            if let Some((_, interval)) = expr_stats.iter().find(|(e, _)| *e == index) {
+                self.graph[node].interval = interval.clone();
                 continue;
             }
-            let expr_any = expr.as_any();
+            let expr_any = self.graph[node].expr.as_any();
             if let Some(binary) = expr_any.downcast_ref::<BinaryExpr>() {
-                // Access left child immutable
-                let second_child_node_index = edges.next_node(&self.1).unwrap();
-                // Access left child immutable
-                let first_child_node_index = edges.next_node(&self.1).unwrap();
-                // Do not use any reference from graph, MUST clone here.
-                let left_interval =
-                    self.1.index(first_child_node_index).interval().clone();
-                let right_interval =
-                    self.1.index(second_child_node_index).interval().clone();
-                // Since we release the reference, we can get mutable reference.
-                let input = self.1.index_mut(node);
-                // Calculate and replace the interval
-                input.interval =
-                    apply_operator(binary.op(), &left_interval, &right_interval)?;
+                // Get children intervals:
+                let left_child_idx = edges.next_node(&self.graph).unwrap();
+                let right_child_idx = edges.next_node(&self.graph).unwrap();
+                let left_interval = self.graph.index(right_child_idx).interval();
+                let right_interval = self.graph.index(left_child_idx).interval();
+                // Calculate and replace current node's interval:
+                self.graph[node].interval =
+                    apply_operator(binary.op(), left_interval, right_interval)?;
             } else if let Some(CastExpr {
                 cast_type,
                 cast_options,
                 ..
             }) = expr_any.downcast_ref::<CastExpr>()
             {
-                // Access the child immutable
-                let child_index = edges.next_node(&self.1).unwrap();
-                let child = self.1.index(child_index);
-                // Cast the interval
-                let new_interval = child.interval.cast_to(cast_type, cast_options)?;
-                // Update the interval
-                let input = self.1.index_mut(node);
-                input.interval = new_interval;
+                let child_index = edges.next_node(&self.graph).unwrap();
+                let child = self.graph.index(child_index);
+                // Cast current node's interval to the right type:
+                self.graph[node].interval =
+                    child.interval.cast_to(cast_type, cast_options)?;
             }
         }
-        let root_interval = self.1.index(self.0).interval.clone();
-        Ok(root_interval)
+        Ok(self.graph.index(self.root).interval.clone())
     }
 
     /// Updates/shrinks bounds for leaf expressions using interval arithmetic
     /// via a top-down traversal.
-    /// If return false, it means we have a unfeasible solution.
     fn propagate_constraints(
         &mut self,
         expr_stats: &mut [(usize, Interval)],
-    ) -> Result<OptimizationResult> {
-        let mut bfs = Bfs::new(&self.1, self.0);
-        while let Some(node) = bfs.next(&self.1) {
+    ) -> Result<PropagationResult> {
+        let mut bfs = Bfs::new(&self.graph, self.root);
+        while let Some(node) = bfs.next(&self.graph) {
             // Get plan
-            let input = self.1.index(node);
-            let expr = input.expr.clone();
+            let input = self.graph.index(node);
             // Get calculated interval. BinaryExpr will propagate the interval according to
             // this.
             let node_interval = input.interval().clone();
-            if let Some((_, interval)) =
-                expr_stats.iter_mut().find(|(e, _)| *e == node.index())
+            let index = node.index();
+            if let Some((_, interval)) = expr_stats.iter_mut().find(|(e, _)| *e == index)
             {
                 *interval = node_interval;
                 continue;
             }
 
-            // Outgoing (Children) edges
-            let mut edges = self.1.neighbors_directed(node, Outgoing).detach();
+            // Get outgoing edges (i.e. children):
+            let mut edges = self.graph.neighbors_directed(node, Outgoing).detach();
 
-            let expr_any = expr.as_any();
+            let expr_any = input.expr.as_any();
             if let Some(binary) = expr_any.downcast_ref::<BinaryExpr>() {
-                // Get right node.
-                let second_child_node_index = edges.next_node(&self.1).unwrap();
-                let second_child_interval =
-                    self.1.index(second_child_node_index).interval();
-                // Get left node.
-                let first_child_node_index = edges.next_node(&self.1).unwrap();
-                let first_child_interval =
-                    self.1.index(first_child_node_index).interval();
+                // Get children intervals (note that we traverse in reverse):
+                let right_child_idx = edges.next_node(&self.graph).unwrap();
+                let right_interval = self.graph.index(right_child_idx).interval();
+                let left_child_idx = edges.next_node(&self.graph).unwrap();
+                let left_interval = self.graph.index(left_child_idx).interval();
 
-                if let (Some(shrink_left_interval), Some(shrink_right_interval)) =
-                    // There is no propagation process for logical operators.
-                    if binary.op().is_logic_operator() {
+                let op = binary.op();
+                if let (Some(new_left_interval), Some(new_right_interval)) =
+                    if op.is_logic_operator() {
+                        // There is no propagation process for logical operators.
+                        continue;
+                    } else if op.is_comparison_operator() {
+                        // If comparison is strictly false, there is nothing to do for shrink.
+                        if let Interval {
+                            lower: ScalarValue::Boolean(Some(false)),
+                            upper: ScalarValue::Boolean(Some(false)),
+                        } = node_interval
+                        {
                             continue;
-                        } else if binary.op().is_comparison_operator() {
-                            // If comparison is strictly false, there is nothing to do for shrink.
-                            if let Interval {
-                                lower: ScalarValue::Boolean(Some(false)),
-                                upper: ScalarValue::Boolean(Some(false)),
-                            } = node_interval
-                            {
-                                continue;
-                            }
-                            // Propagate the comparison operator.
-                            propagate_comparison_operators(
-                                binary.op(),
-                                first_child_interval,
-                                second_child_interval,
-                            )?
-                        } else {
-                            // Propagate the arithmetic operator.
-                            propagate(
-                                binary.op(),
-                                &node_interval,
-                                first_child_interval,
-                                second_child_interval,
-                            )?
                         }
+                        // Propagate the comparison operator.
+                        propagate_comparison(op, left_interval, right_interval)?
+                    } else {
+                        // Propagate the arithmetic operator.
+                        propagate_arithmetic(
+                            op,
+                            &node_interval,
+                            left_interval,
+                            right_interval,
+                        )?
+                    }
                 {
-                    let mutable_first_child = self.1.index_mut(first_child_node_index);
-                    mutable_first_child.interval = shrink_left_interval.clone();
-                    let mutable_second_child = self.1.index_mut(second_child_node_index);
-                    mutable_second_child.interval = shrink_right_interval.clone();
+                    self.graph[left_child_idx].interval = new_left_interval;
+                    self.graph[right_child_idx].interval = new_right_interval;
                 } else {
-                    return Ok(OptimizationResult::UnfeasibleSolution);
+                    return Ok(PropagationResult::Infeasible);
                 };
             } else if let Some(cast) = expr_any.downcast_ref::<CastExpr>() {
-                // Calculate new interval
-                let child_index = edges.next_node(&self.1).unwrap();
-                let child = self.1.index(child_index);
-                // Get child's internal datatype.
+                let child_index = edges.next_node(&self.graph).unwrap();
+                let child = self.graph.index(child_index);
+                // Get child's data type:
                 let cast_type = child.interval().get_datatype();
-                let cast_options = cast.cast_options();
-                let new_child_interval =
-                    node_interval.cast_to(&cast_type, cast_options)?;
-                let mutable_child = self.1.index_mut(child_index);
-                mutable_child.interval = new_child_interval.clone();
+                self.graph[child_index].interval =
+                    node_interval.cast_to(&cast_type, cast.cast_options())?;
             }
         }
-        Ok(OptimizationResult::Success)
+        Ok(PropagationResult::Success)
     }
 
     /// Updates intervals for all expressions in the DAEG by successive
@@ -572,14 +526,14 @@ impl ExprIntervalGraph {
     pub fn update_intervals(
         &mut self,
         expr_stats: &mut [(usize, Interval)],
-    ) -> Result<OptimizationResult> {
+    ) -> Result<PropagationResult> {
         self.evaluate_bounds(expr_stats)
             .and_then(|interval| match interval {
                 Interval {
                     upper: ScalarValue::Boolean(Some(true)),
                     ..
                 } => self.propagate_constraints(expr_stats),
-                _ => Ok(OptimizationResult::CannotPropagate),
+                _ => Ok(PropagationResult::CannotPropagate),
             })
     }
 }
@@ -603,7 +557,7 @@ mod tests {
         right_interval: (Option<i32>, Option<i32>),
         left_waited: (Option<i32>, Option<i32>),
         right_waited: (Option<i32>, Option<i32>),
-        result: OptimizationResult,
+        result: PropagationResult,
     ) -> Result<()> {
         let col_stats = vec![
             (
@@ -638,9 +592,8 @@ mod tests {
             ),
         ];
         let mut graph = ExprIntervalGraph::try_new(expr)?;
-        let expr_indexes = graph.pair_node_indices_with_interval_providers(
-            &col_stats.iter().map(|(e, _)| e.clone()).collect_vec(),
-        )?;
+        let expr_indexes = graph
+            .gather_node_indices(&col_stats.iter().map(|(e, _)| e.clone()).collect_vec());
 
         let mut col_stat_nodes = col_stats
             .iter()
@@ -716,7 +669,7 @@ mod tests {
             right_interval,
             left_waited,
             right_waited,
-            OptimizationResult::Success,
+            PropagationResult::Success,
         )?;
         Ok(())
     }
@@ -740,7 +693,7 @@ mod tests {
             (Some(100), None),
             (Some(10), Some(20)),
             (Some(100), None),
-            OptimizationResult::CannotPropagate,
+            PropagationResult::CannotPropagate,
         )?;
         Ok(())
     }

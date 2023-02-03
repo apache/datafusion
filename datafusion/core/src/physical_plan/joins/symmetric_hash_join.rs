@@ -37,7 +37,6 @@ use arrow::record_batch::RecordBatch;
 use futures::{Stream, StreamExt};
 use hashbrown::raw::RawTable;
 use hashbrown::HashSet;
-use itertools::Itertools;
 
 use datafusion_common::utils::bisect;
 use datafusion_common::ScalarValue;
@@ -270,23 +269,20 @@ impl SymmetricHashJoinExec {
             ExprIntervalGraph::try_new(filter.expression().clone())?;
 
         // Since the graph is stable, we reuse NodeIndex of our filter expressions.
-        let child_node_indexes = physical_expr_graph
-            .pair_node_indices_with_interval_providers(
-                &filter_columns
-                    .iter()
-                    .map(|sorted_expr| sorted_expr.filter_expr())
-                    .collect_vec(),
-            )?;
+        let child_node_indexes = physical_expr_graph.gather_node_indices(
+            &filter_columns
+                .iter()
+                .map(|sorted_expr| sorted_expr.filter_expr())
+                .collect::<Vec<_>>(),
+        );
 
         // We inject calculated node indexes into SortedFilterExpr. In graph calculations,
         // we will be using node index to put calculated intervals into Columns or BinaryExprs .
-        filter_columns
-            .iter_mut()
-            .zip(child_node_indexes.iter())
-            .map(|(sorted_expr, (_, index))| {
-                sorted_expr.set_node_index(*index);
-            })
-            .collect_vec();
+        for (sorted_expr, (_, index)) in
+            filter_columns.iter_mut().zip(child_node_indexes.iter())
+        {
+            sorted_expr.set_node_index(*index);
+        }
 
         Ok(SymmetricHashJoinExec {
             left,
@@ -968,10 +964,10 @@ impl OneSideHashJoiner {
         // We use Vec<(usize, Interval)> instead of Hashmap<usize, Interval> since the expected
         // filter exprs relatively low and conversion between Vec<SortedFilterExpr> and Hashmap
         // back and forth may be slower.
-        let mut filter_intervals: Vec<(usize, Interval)> = filter_columns
+        let mut filter_intervals = filter_columns
             .iter()
             .map(|sorted_expr| (sorted_expr.node_index(), sorted_expr.interval().clone()))
-            .collect_vec();
+            .collect::<Vec<_>>();
         // Use this vector to seed the child PhysicalExpr interval.
         physical_expr_graph.update_intervals(&mut filter_intervals)?;
         let mut change_track = Vec::with_capacity(filter_intervals.len());
@@ -1304,15 +1300,15 @@ mod tests {
     ) -> Result<Vec<RecordBatch>> {
         let partition_count = 1;
 
-        let left_expr: Vec<Arc<dyn PhysicalExpr>> = on
+        let left_expr = on
             .iter()
             .map(|(l, _)| Arc::new(l.clone()) as Arc<dyn PhysicalExpr>)
-            .collect_vec();
+            .collect::<Vec<_>>();
 
-        let right_expr: Vec<Arc<dyn PhysicalExpr>> = on
+        let right_expr = on
             .iter()
             .map(|(_, r)| Arc::new(r.clone()) as Arc<dyn PhysicalExpr>)
-            .collect_vec();
+            .collect::<Vec<_>>();
 
         let join = SymmetricHashJoinExec::try_new(
             Arc::new(RepartitionExec::try_new(
