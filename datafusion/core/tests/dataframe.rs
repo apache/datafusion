@@ -21,6 +21,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion::from_slice::FromSlice;
+use datafusion_common::DataFusionError;
 use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
@@ -121,6 +122,39 @@ async fn sort_on_unprojected_columns() -> Result<()> {
     ];
     assert_batches_eq!(expected, &results);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn sort_on_distinct_unprojected_columns() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![
+            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
+            Arc::new(Int32Array::from_slice([2, 12, 12, 120])),
+        ],
+    )
+    .unwrap();
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch).unwrap();
+
+    assert!(matches!(
+        ctx.table("t")
+            .await
+            .unwrap()
+            .select(vec![col("a")])
+            .unwrap()
+            .distinct()
+            .unwrap()
+            .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))]),
+        Err(DataFusionError::Plan(_))
+    ));
     Ok(())
 }
 
