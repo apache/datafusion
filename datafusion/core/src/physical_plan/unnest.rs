@@ -146,7 +146,7 @@ impl ExecutionPlan for UnnestExec {
     }
 }
 
-/// A stream that issues [RecordBatch]es as they arrive from the right  of the join.
+/// A stream that issues [RecordBatch]es with unnested column data.
 struct UnnestStream {
     /// Input stream
     input: SendableRecordBatchStream,
@@ -162,7 +162,7 @@ struct UnnestStream {
     num_output_batches: usize,
     /// number of rows produced
     num_output_rows: usize,
-    /// total time for joining probe-side batches to the build-side batches
+    /// total time for column unnesting
     unnest_time: usize,
 }
 
