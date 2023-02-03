@@ -231,6 +231,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             other => self.convert_simple_data_type(other),
         }
     }
+
     fn convert_simple_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
         match sql_type {
             SQLDataType::Boolean => Ok(DataType::Boolean),
@@ -321,6 +322,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 "Unsupported SQL type {sql_type:?}"
             ))),
         }
+    }
+
+    pub(crate) fn object_name_to_table_reference(
+        &self,
+        object_name: ObjectName,
+    ) -> Result<OwnedTableReference> {
+        object_name_to_table_reference(
+            object_name,
+            self.options.enable_ident_normalization,
+        )
     }
 }
 
