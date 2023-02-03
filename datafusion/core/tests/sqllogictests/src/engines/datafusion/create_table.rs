@@ -21,7 +21,7 @@ use crate::engines::datafusion::util::LogicTestContextProvider;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DataFusionError, OwnedTableReference};
-use datafusion_sql::planner::{object_name_to_table_reference, SqlToRel};
+use datafusion_sql::planner::{object_name_to_table_reference, ParserOptions, SqlToRel};
 use sqllogictest::DBOutput;
 use sqlparser::ast::{ColumnDef, ObjectName};
 use std::sync::Arc;
@@ -64,7 +64,7 @@ fn create_new_table(
     let config = ctx.copied_config();
     let sql_to_rel = SqlToRel::new_with_options(
         &LogicTestContextProvider {},
-        datafusion_sql::planner::ParserOptions {
+        ParserOptions {
             parse_float_as_decimal: config
                 .config_options()
                 .sql_parser
