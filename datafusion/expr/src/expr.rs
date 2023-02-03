@@ -1200,13 +1200,13 @@ fn create_name(e: &Expr) -> Result<String> {
             name += "END";
             Ok(name)
         }
-        Expr::Cast(Cast { expr, .. }) => {
-            // CAST does not change the expression name
-            create_name(expr)
+        Expr::Cast(Cast { expr, data_type }) => {
+            let expr = create_name(expr)?;
+            Ok(format!("CAST({expr} AS {data_type})"))
         }
-        Expr::TryCast(TryCast { expr, .. }) => {
-            // CAST does not change the expression name
-            create_name(expr)
+        Expr::TryCast(TryCast { expr, data_type }) => {
+            let expr = create_name(expr)?;
+            Ok(format!("TRY_CAST({expr} AS {data_type})"))
         }
         Expr::Not(expr) => {
             let expr = create_name(expr)?;

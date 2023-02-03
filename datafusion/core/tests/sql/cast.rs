@@ -74,3 +74,13 @@ async fn cast_unsigned_bigint() -> Result<()> {
     assert_eq!(&DataType::UInt64, actual[0].schema().field(0).data_type());
     Ok(())
 }
+
+#[tokio::test]
+async fn cast_duplicate() -> Result<()> {
+    let actual = execute_sql("SELECT 10, cast(10 as tinyint)").await;
+    assert_eq!(&DataType::Int64, actual[0].schema().field(0).data_type());
+    assert_eq!("Int64(10)", actual[0].schema().field(0).name());
+    assert_eq!(&DataType::Int8, actual[0].schema().field(1).data_type());
+    assert_eq!("CAST(Int64(10) AS Int8)", actual[0].schema().field(1).name());
+    Ok(())
+}
