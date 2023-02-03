@@ -322,6 +322,8 @@ macro_rules! compute_op_dyn_scalar {
 /// LEFT is Primitive or Dictionary array of numeric values, RIGHT is scalar value
 /// OP_TYPE is the return type of scalar function
 /// SCALAR_TYPE is the type of the scalar value
+/// Different to `compute_op_dyn_scalar`, this calls the `_dyn_scalar` functions that
+/// take a `SCALAR_TYPE`.
 macro_rules! compute_primitive_op_dyn_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr, $SCALAR_TYPE:ident) => {{
         // generate the scalar function name, such as lt_dyn_scalar, from the $OP parameter
@@ -341,16 +343,13 @@ macro_rules! compute_primitive_op_dyn_scalar {
 /// Invoke a dyn decimal compute kernel on a data array and a scalar value
 /// LEFT is Decimal or Dictionary array of decimal values, RIGHT is scalar value
 /// OP_TYPE is the return type of scalar function
-/// SCALAR_TYPE is the type of the scalar value
 macro_rules! compute_primitive_decimal_op_dyn_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
-        // generate the scalar function name, such as lt_dyn_scalar, from the $OP parameter
-        // (which could have a value of lt_dyn) and the suffix _scalar
+        // generate the scalar function name, such as add_decimal_dyn_scalar,
+        // from the $OP parameter (which could have a value of add) and the
+        // suffix _decimal_dyn_scalar
         if let Some(value) = $RIGHT {
-            Ok(paste::expr! {[<$OP _decimal_dyn_scalar>]}(
-                $LEFT,
-                value,
-            )?)
+            Ok(paste::expr! {[<$OP _decimal_dyn_scalar>]}($LEFT, value)?)
         } else {
             // when the $RIGHT is a NULL, generate a NULL array of $OP_TYPE
             Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
