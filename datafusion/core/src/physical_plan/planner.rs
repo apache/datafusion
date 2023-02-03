@@ -1114,7 +1114,7 @@ impl DefaultPhysicalPlanner {
                     // TABLE" -- it must be handled at a higher level (so
                     // that the appropriate table can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: CreateExternalTable".to_string(),
                     ))
                 }
@@ -1122,7 +1122,7 @@ impl DefaultPhysicalPlanner {
                     // There is no default plan for "PREPARE" -- it must be
                     // handled at a higher level (so that the appropriate
                     // statement can be prepared)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: Prepare".to_string(),
                     ))
                 }
@@ -1131,7 +1131,7 @@ impl DefaultPhysicalPlanner {
                     // It must be handled at a higher level (so
                     // that the schema can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: CreateCatalogSchema".to_string(),
                     ))
                 }
@@ -1140,7 +1140,7 @@ impl DefaultPhysicalPlanner {
                     // It must be handled at a higher level (so
                     // that the schema can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: CreateCatalog".to_string(),
                     ))
                 }
@@ -1149,7 +1149,7 @@ impl DefaultPhysicalPlanner {
                     // It must be handled at a higher level (so
                     // that the schema can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: CreateMemoryTable".to_string(),
                     ))
                 }
@@ -1158,7 +1158,7 @@ impl DefaultPhysicalPlanner {
                     // It must be handled at a higher level (so
                     // that the schema can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: DropTable".to_string(),
                     ))
                 }
@@ -1167,7 +1167,7 @@ impl DefaultPhysicalPlanner {
                     // It must be handled at a higher level (so
                     // that the schema can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: DropView".to_string(),
                     ))
                 }
@@ -1176,13 +1176,13 @@ impl DefaultPhysicalPlanner {
                     // It must be handled at a higher level (so
                     // that the schema can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: CreateView".to_string(),
                     ))
                 }
                 LogicalPlan::Dml(_) => {
                     // DataFusion is a read-only query engine, but also a library, so consumers may implement this
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: Dml".to_string(),
                     ))
                 }
