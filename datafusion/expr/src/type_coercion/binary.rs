@@ -141,7 +141,7 @@ pub fn coerce_types(
         Operator::RegexMatch
         | Operator::RegexIMatch
         | Operator::RegexNotMatch
-        | Operator::RegexNotIMatch => string_coercion(lhs_type, rhs_type),
+        | Operator::RegexNotIMatch => regex_coercion(lhs_type, rhs_type),
         // "||" operator has its own rules, and always return a string type
         Operator::StringConcat => string_concat_coercion(lhs_type, rhs_type),
         Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => {
@@ -540,6 +540,13 @@ pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
     string_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, false))
         .or_else(|| null_coercion(lhs_type, rhs_type))
+}
+
+/// coercion rules for regular expression comparison operations.
+/// This is a union of string coercion rules and dictionary coercion rules
+pub fn regex_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    string_coercion(lhs_type, rhs_type)
+        .or_else(|| dictionary_coercion(lhs_type, rhs_type, false))
 }
 
 /// Checks if the TimeUnit associated with a Time32 or Time64 type is consistent,
@@ -965,6 +972,30 @@ mod tests {
         );
         test_coercion_binary_rule!(
             DataType::Utf8,
+            DataType::Utf8,
+            Operator::RegexNotIMatch,
+            DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            DataType::Utf8,
+            Operator::RegexMatch,
+            DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            DataType::Utf8,
+            Operator::RegexIMatch,
+            DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            DataType::Utf8,
+            Operator::RegexNotMatch,
+            DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
             DataType::Utf8,
             Operator::RegexNotIMatch,
             DataType::Utf8
