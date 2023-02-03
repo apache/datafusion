@@ -341,6 +341,15 @@ fn mathematics_numerical_coercion(
         (Null, dec_type @ Decimal128(_, _)) | (dec_type @ Decimal128(_, _), Null) => {
             Some(dec_type.clone())
         }
+        (Dictionary(key_type, value_type), _) => {
+            let value_type =
+                mathematics_numerical_coercion(mathematics_op, value_type, rhs_type);
+            value_type
+                .map(|value_type| Dictionary(key_type.clone(), Box::new(value_type)))
+        }
+        (_, Dictionary(_, value_type)) => {
+            mathematics_numerical_coercion(mathematics_op, lhs_type, value_type)
+        }
         (Decimal128(_, _), Float32 | Float64) => Some(Float64),
         (Float32 | Float64, Decimal128(_, _)) => Some(Float64),
         (Decimal128(_, _), _) => {
@@ -439,6 +448,16 @@ fn both_numeric_or_null_and_numeric(lhs_type: &DataType, rhs_type: &DataType) ->
     match (lhs_type, rhs_type) {
         (_, DataType::Null) => is_numeric(lhs_type),
         (DataType::Null, _) => is_numeric(rhs_type),
+        (
+            DataType::Dictionary(_, lhs_value_type),
+            DataType::Dictionary(_, rhs_value_type),
+        ) => is_numeric(lhs_value_type) && is_numeric(rhs_value_type),
+        (DataType::Dictionary(_, value_type), _) => {
+            is_numeric(value_type) && is_numeric(rhs_type)
+        }
+        (_, DataType::Dictionary(_, value_type)) => {
+            is_numeric(lhs_type) && is_numeric(value_type)
+        }
         _ => is_numeric(lhs_type) && is_numeric(rhs_type),
     }
 }
