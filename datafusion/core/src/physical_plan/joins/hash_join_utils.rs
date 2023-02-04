@@ -648,19 +648,18 @@ impl PhysicalExpressionVisitor for PhysicalExprColumnCollector<'_> {
 //                 index: 0, -> field index in main schema
 //                 side: JoinSide::Left, -> child side
 //             },
-fn map_origin_col_to_filter_col(
+pub fn map_origin_col_to_filter_col(
     filter: &JoinFilter,
-    main_schema: SchemaRef,
-    side: JoinSide,
+    schema: SchemaRef,
+    side: &JoinSide,
 ) -> Result<HashMap<Column, Column>> {
     let mut col_to_col_map: HashMap<Column, Column> = HashMap::new();
     for (filter_schema_index, index) in filter.column_indices().iter().enumerate() {
-        if index.side.eq(&side) {
+        if index.side.eq(side) {
             // Get main field from column index
-            let main_field = main_schema.field(index.index);
+            let main_field = schema.field(index.index);
             // Create a column PhysicalExpr
-            let main_col =
-                Column::new_with_schema(main_field.name(), main_schema.as_ref())?;
+            let main_col = Column::new_with_schema(main_field.name(), schema.as_ref())?;
             // Since the filter.column_indices() order directly same with intermediate schema fields, we can
             // get the column.
             let filter_field = filter.schema().field(filter_schema_index);
@@ -671,100 +670,107 @@ fn map_origin_col_to_filter_col(
     }
     Ok(col_to_col_map)
 }
-/// If converted PhysicalExpr is inside the Filter, we use the sort information. The visitor
-/// visits each node and checks if the filter expression includes the converted expr.
+
+/// This function plays an important role in the expression graph traversal process. It is necessary to analyze the `PhysicalSortExpr`
+/// because the sorting of expressions is required for join filter expressions.
 ///
-/// We want to filter out the expression if the filter is a + b > c + 10 AND a + b < c + 100
-///     - a + d is sorted. D is not part of the filter.
-///     - d is sorted. D is not part of the filter.
-///     - a + b + c  is sorted. All columns are represented in filter expression however there is no exact match.
-/// These expression does not indicate prune.
+/// The method works as follows:
+/// 1. Maps the original columns to the filter columns using the `map_origin_col_to_filter_col` function.
+/// 2. Collects all columns in the sort expression using the `PhysicalExprColumnCollector` visitor.
+/// 3. Checks if all columns are included in the `column_mapping_information` map.
+/// 4. If all columns are included, the sort expression is converted into a filter expression using the `transform_up` and `convert_filter_columns` functions.
+/// 5. Searches the converted filter expression in the filter expression using the `CheckFilterExprContainsSortInformation` visitor.
+/// 6. If an exact match is encountered, returns the converted filter expression as `Some(Arc<dyn PhysicalExpr>)`.
+/// 7. If all columns are not included or the exact match is not encountered, returns `None`.
 ///
-fn rewrite_sort_information_for_filter(
+/// Use Cases:
+/// Consider the filter expression "a + b > c + 10 AND a + b < c + 100".
+/// 1. If the expression "a@ + d@" is sorted, it will not be accepted since the "d@" column is not part of the filter.
+/// 2. If the expression "d@" is sorted, it will not be accepted since the "d@" column is not part of the filter.
+/// 3. If the expression "a@ + b@ + c@" is sorted, all columns are represented in the filter expression. However,
+///    there is no exact match, so this expression does not indicate pruning.
+///
+pub fn convert_sort_expr_with_filter_schema(
+    side: &JoinSide,
+    filter: &JoinFilter,
+    schema: SchemaRef,
+    sort_expr: &PhysicalSortExpr,
+) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+    let column_mapping_information: HashMap<Column, Column> =
+        map_origin_col_to_filter_col(filter, schema, side)?;
+    let expr = sort_expr.expr.clone();
+    // Get main schema columns
+    let mut expr_columns = vec![];
+    expr.clone()
+        .accept(PhysicalExprColumnCollector::new(&mut expr_columns))?;
+    // Calculation is possible with 'column_mapping_information' since sort exprs belong to a child.
+    let all_columns_are_included = expr_columns
+        .iter()
+        .all(|col| column_mapping_information.contains_key(col));
+    if all_columns_are_included {
+        // Since we are sure that one to one column mapping includes all columns, we convert
+        // the sort expression into a filter expression.
+        let converted_filter_expr = expr
+            .transform_up(&|p| convert_filter_columns(p, &column_mapping_information))?;
+        let mut contains = false;
+        // Search converted PhysicalExpr in filter expression
+        filter.expression().clone().accept(
+            CheckFilterExprContainsSortInformation::new(
+                &mut contains,
+                converted_filter_expr.clone(),
+            ),
+        )?;
+        // If the exact match is encountered, use this sorted expression in graph traversals.
+        if contains {
+            Ok(Some(converted_filter_expr))
+        } else {
+            Ok(None)
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+/// This function is used to build the filter expression based on the sort order of input columns.
+///
+/// It first calls the convert_sort_expr_with_filter_schema method to determine if the sort
+/// order of columns can be used in the filter expression.
+/// If it returns a Some value, the method wraps the result in a SortedFilterExpr
+/// instance with the original sort expression, converted filter expression, and sort options.
+/// If it returns a None value, this function returns None.
+///
+/// The SortedFilterExpr instance contains information about the sort order of columns
+/// that can be used in the filter expression, which can be used to optimize the query execution process.
+pub fn build_filter_input_order_v2(
     side: JoinSide,
     filter: &JoinFilter,
-    col_to_col_map: &HashMap<Column, Column>,
-    child_order: &[PhysicalSortExpr],
-) -> Result<Vec<SortedFilterExpr>> {
-    let mut sorted_exps = vec![];
-    for sort_expr in child_order {
-        let expr = sort_expr.expr.clone();
-        // Get main schema columns
-        let mut expr_columns = vec![];
-        expr.clone()
-            .accept(PhysicalExprColumnCollector::new(&mut expr_columns))?;
-        // Calculation is possible with col_to_col_map since sort exprs belong to a child.
-        let all_columns_are_included = expr_columns
-            .iter()
-            .all(|col| col_to_col_map.contains_key(col));
-        if all_columns_are_included {
-            // Since we are sure that one to one column mapping includes all column, we convert
-            // the sort expression into Filter expression.
-            let converted_filter_expr =
-                expr.transform_up(&|p| convert_filter_columns(p, col_to_col_map))?;
-            let mut contains = false;
-            // Search converted PhysicalExpr in filter expression
-            filter.expression().clone().accept(
-                CheckFilterExprContainsSortInformation::new(
-                    &mut contains,
-                    converted_filter_expr.clone(),
-                ),
-            )?;
-            // If the exact match is encountered, use this sorted expression in graph traversals.
-            if contains {
-                sorted_exps.push(SortedFilterExpr::new(
-                    side,
-                    sort_expr.expr.clone(),
-                    converted_filter_expr.clone(),
-                    sort_expr.options,
-                ));
-            }
-        }
+    schema: SchemaRef,
+    order: &PhysicalSortExpr,
+) -> Result<Option<SortedFilterExpr>> {
+    match convert_sort_expr_with_filter_schema(&side, filter, schema, order)? {
+        Some(expr) => Ok(Some(SortedFilterExpr::new(
+            side,
+            order.expr.clone(),
+            expr,
+            order.options,
+        ))),
+        None => Ok(None),
     }
-    Ok(sorted_exps)
 }
 
-/// Here, we map the main column information to filter intermediate schema.
-/// child_orders are derived from child schemas. However, filter schema is different. We enforce
-/// that we get the column order for each corresponding [ColumnIndex]. If not, we return None and
-/// assume this expression is not capable of pruning.
-pub fn build_filter_input_order(
-    filter: &JoinFilter,
-    left_main_schema: SchemaRef,
-    right_main_schema: SchemaRef,
-    left_order: &[PhysicalSortExpr],
-    right_order: &[PhysicalSortExpr],
-) -> Result<Vec<SortedFilterExpr>> {
-    // Get left mapping
-    let left_hashmap: HashMap<Column, Column> =
-        map_origin_col_to_filter_col(filter, left_main_schema, JoinSide::Left)?;
-    // Get right mapping
-    let right_hashmap: HashMap<Column, Column> =
-        map_origin_col_to_filter_col(filter, right_main_schema, JoinSide::Right)?;
-    // Extract sorted expression that belongs to the filter expression
-    let left_sorted_filter_exprs = rewrite_sort_information_for_filter(
-        JoinSide::Left,
-        filter,
-        &left_hashmap,
-        left_order,
-    )?;
-    let right_sorted_filter_exprs = rewrite_sort_information_for_filter(
-        JoinSide::Right,
-        filter,
-        &right_hashmap,
-        right_order,
-    )?;
-    Ok([left_sorted_filter_exprs, right_sorted_filter_exprs].concat())
-}
-
+/// Convert a physical expression into a filter expression using a column mapping information.
 fn convert_filter_columns(
     input: Arc<dyn PhysicalExpr>,
-    column_change_information: &HashMap<Column, Column>,
+    column_mapping_information: &HashMap<Column, Column>,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+    // Attempt to downcast the input expression to a Column type.
     if let Some(col) = input.as_any().downcast_ref::<Column>() {
-        let filter_col = column_change_information.get(col).unwrap().clone();
+        // If the downcast is successful, retrieve the corresponding filter column.
+        let filter_col = column_mapping_information.get(col).unwrap().clone();
+        // Return the filter column as an Arc wrapped in an Option.
         Ok(Some(Arc::new(filter_col)))
     } else {
+        // If the downcast is not successful, return the input expression as is.
         Ok(Some(input))
     }
 }
@@ -1026,42 +1032,99 @@ mod tests {
 
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
-        // Only two of them in Filter PhysicalExpr (la1, la2)
-        let left_sorted = vec![
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("lt1", 3)),
-                options: SortOptions::default(),
-            },
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("la2", 4)),
-                options: SortOptions::default(),
-            },
-            PhysicalSortExpr {
+        assert!(build_filter_input_order_v2(
+            JoinSide::Left,
+            &filter,
+            left_schema.clone(),
+            &PhysicalSortExpr {
                 expr: Arc::new(Column::new("la1", 0)),
                 options: SortOptions::default(),
-            },
-        ];
-        // Only "ra1" in Filter PhysicalExpr
-        let right_sorted = vec![
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("ra1", 0)),
-                options: SortOptions::default(),
-            },
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new("rt1", 3)),
-                options: SortOptions::default(),
-            },
-        ];
-
-        let sorted = build_filter_input_order(
+            }
+        )?
+        .is_some());
+        assert!(build_filter_input_order_v2(
+            JoinSide::Left,
             &filter,
             left_schema,
+            &PhysicalSortExpr {
+                expr: Arc::new(Column::new("lt1", 3)),
+                options: SortOptions::default(),
+            }
+        )?
+        .is_none());
+        assert!(build_filter_input_order_v2(
+            JoinSide::Right,
+            &filter,
+            right_schema.clone(),
+            &PhysicalSortExpr {
+                expr: Arc::new(Column::new("ra1", 0)),
+                options: SortOptions::default(),
+            }
+        )?
+        .is_some());
+        assert!(build_filter_input_order_v2(
+            JoinSide::Right,
+            &filter,
             right_schema,
-            &left_sorted,
-            &right_sorted,
-        )?;
-        assert_eq!(sorted.len(), 3);
+            &PhysicalSortExpr {
+                expr: Arc::new(Column::new("rb1", 1)),
+                options: SortOptions::default(),
+            }
+        )?
+        .is_none());
 
+        Ok(())
+    }
+    // if one side is sorted by ORDER BY (a+b), and join filter condition includes (a-b).
+    #[test]
+    fn sorted_filter_expr_build() -> Result<()> {
+        let filter_col_0 = Arc::new(Column::new("0", 0));
+        let filter_col_1 = Arc::new(Column::new("1", 1));
+
+        let column_indices = vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Left,
+            },
+        ];
+        let intermediate_schema = Schema::new(vec![
+            Field::new(filter_col_0.name(), DataType::Int32, true),
+            Field::new(filter_col_1.name(), DataType::Int32, true),
+        ]);
+
+        let filter_expr = Arc::new(BinaryExpr {
+            left: Arc::new(Column::new("0", 0)),
+            op: Operator::Minus,
+            right: Arc::new(Column::new("1", 1)),
+        });
+
+        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+
+        let sorted = PhysicalSortExpr {
+            expr: Arc::new(BinaryExpr {
+                left: Arc::new(Column::new("a", 0)),
+                op: Operator::Plus,
+                right: Arc::new(Column::new("b", 1)),
+            }),
+            options: SortOptions::default(),
+        };
+
+        let res = convert_sort_expr_with_filter_schema(
+            &JoinSide::Left,
+            &filter,
+            schema,
+            &sorted,
+        )?;
+        assert!(res.is_none());
         Ok(())
     }
 }

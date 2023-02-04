@@ -29,7 +29,10 @@ use crate::physical_optimizer::pipeline_checker::{
     check_finiteness_requirements, PipelineStatePropagator,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::joins::{HashJoinExec, PartitionMode, SymmetricHashJoinExec};
+use crate::physical_plan::joins::{
+    convert_sort_expr_with_filter_schema, HashJoinExec, PartitionMode,
+    SymmetricHashJoinExec,
+};
 use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::ExecutionPlan;
 use arrow::datatypes::DataType;
@@ -42,6 +45,7 @@ use datafusion_physical_expr::physical_expr_visitor::{
 };
 use datafusion_physical_expr::PhysicalExpr;
 
+use crate::physical_plan::joins::utils::JoinSide;
 use std::sync::Arc;
 
 /// The [PipelineFixer] rule tries to modify a given plan so that it can
@@ -155,12 +159,39 @@ fn is_suitable_for_symmetric_hash_join(hash_join: &HashJoinExec) -> Result<bool>
             expr.accept(UnsupportedPhysicalExprVisitor {
                 supported: &mut is_expr_supported,
             })?;
+            let left_is_convertable = convert_sort_expr_with_filter_schema(
+                &JoinSide::Left,
+                filter,
+                hash_join.left().schema(),
+                hash_join
+                    .left()
+                    .output_ordering()
+                    .as_ref()
+                    .unwrap()
+                    .get(0)
+                    .unwrap(),
+            )?
+            .is_some();
+            let right_is_convertable = convert_sort_expr_with_filter_schema(
+                &JoinSide::Right,
+                filter,
+                hash_join.right().schema(),
+                hash_join
+                    .right()
+                    .output_ordering()
+                    .as_ref()
+                    .unwrap()
+                    .get(0)
+                    .unwrap(),
+            )?
+            .is_some();
+            let sort_expressions_supported = left_is_convertable && right_is_convertable;
             let is_fields_supported = filter
                 .schema()
                 .fields()
                 .iter()
                 .all(|f| is_datatype_supported(f.data_type()));
-            is_expr_supported && is_fields_supported
+            is_expr_supported && is_fields_supported && sort_expressions_supported
         }
     };
     Ok(are_children_ordered && is_filter_supported)

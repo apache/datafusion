@@ -481,15 +481,21 @@ impl ExprIntervalGraph {
                 let op = binary.op();
                 if let (Some(new_left_interval), Some(new_right_interval)) =
                     if op.is_logic_operator() {
-                        // There is no propagation process for logical operators.
+                        // TODO: Currently, this implementation only supports the AND operator
+                        //  and does not require any further propagation.
+                        //  In the future, upon adding support for additional logical operators,
+                        //  this method will require modification to support propagating
+                        //  the changes accordingly.
                         continue;
                     } else if op.is_comparison_operator() {
-                        // If comparison is strictly false, there is nothing to do for shrink.
                         if let Interval {
                             lower: ScalarValue::Boolean(Some(false)),
                             upper: ScalarValue::Boolean(Some(false)),
                         } = node_interval
                         {
+                            // TODO: The optimization of handling strictly false clauses through
+                            //  conversion to equivalent comparison operators (e.g. GT to LE, LT to GE)
+                            //  can be implemented once support for open/closed intervals is added.
                             continue;
                         }
                         // Propagate the comparison operator.
