@@ -460,6 +460,7 @@ jobs:
           #
           # ignore ./Cargo.toml because putting workspaces in multi-line lists make it easy to read
           ci/scripts/rust_toml_fmt.sh
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git diff --exit-code
 
   config-docs-check:
