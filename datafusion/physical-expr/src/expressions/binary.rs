@@ -24,9 +24,9 @@ use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
 use arrow::compute::kernels::arithmetic::{
-    add, add_scalar_dyn as add_dyn_scalar, divide_opt,
-    divide_scalar_dyn as divide_dyn_scalar, modulus, modulus_scalar, multiply,
-    multiply_scalar_dyn as multiply_dyn_scalar, subtract,
+    add_dyn, add_scalar_dyn as add_dyn_scalar, divide_dyn_opt,
+    divide_scalar_dyn as divide_dyn_scalar, modulus, modulus_scalar, multiply_dyn,
+    multiply_scalar_dyn as multiply_dyn_scalar, subtract_dyn,
     subtract_scalar_dyn as subtract_dyn_scalar,
 };
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
@@ -61,12 +61,13 @@ use kernels::{
     bitwise_xor, bitwise_xor_scalar,
 };
 use kernels_arrow::{
-    add_decimal, add_decimal_dyn_scalar, divide_decimal_dyn_scalar, divide_opt_decimal,
-    is_distinct_from, is_distinct_from_bool, is_distinct_from_decimal,
-    is_distinct_from_null, is_distinct_from_utf8, is_not_distinct_from,
-    is_not_distinct_from_bool, is_not_distinct_from_decimal, is_not_distinct_from_null,
-    is_not_distinct_from_utf8, modulus_decimal, modulus_decimal_scalar, multiply_decimal,
-    multiply_decimal_dyn_scalar, subtract_decimal, subtract_decimal_dyn_scalar,
+    add_decimal_dyn_scalar, add_dyn_decimal, divide_decimal_dyn_scalar,
+    divide_dyn_opt_decimal, is_distinct_from, is_distinct_from_bool,
+    is_distinct_from_decimal, is_distinct_from_null, is_distinct_from_utf8,
+    is_not_distinct_from, is_not_distinct_from_bool, is_not_distinct_from_decimal,
+    is_not_distinct_from_null, is_not_distinct_from_utf8, modulus_decimal,
+    modulus_decimal_scalar, multiply_decimal_dyn_scalar, multiply_dyn_decimal,
+    subtract_decimal_dyn_scalar, subtract_dyn_decimal,
 };
 
 use arrow::datatypes::{DataType, Schema, TimeUnit};
@@ -414,6 +415,23 @@ macro_rules! binary_primitive_array_op {
                 "Data type {:?} not supported for binary operation '{}' on primitive arrays",
                 other, stringify!($OP)
             ))),
+        }
+    }};
+}
+
+/// Invoke a compute kernel on a pair of arrays
+/// The binary_primitive_array_op macro only evaluates for primitive types
+/// like integers and floats.
+macro_rules! binary_primitive_array_op_dyn {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+        match $LEFT.data_type() {
+            DataType::Decimal128(_,_) => {
+                Ok(paste::expr! {[<$OP _decimal>]}(&$LEFT, &$RIGHT)?)
+                // Ok(Arc::new($OP(&$LEFT, &$RIGHT).map_err(|err| DataFusionError::ArrowError(err))?))
+            }
+            _ => {
+                Ok(Arc::new($OP(&$LEFT, &$RIGHT).map_err(|err| DataFusionError::ArrowError(err))?))
+            },
         }
     }};
 }
@@ -1116,10 +1134,14 @@ impl BinaryExpr {
             Operator::IsNotDistinctFrom => {
                 binary_array_op!(left, right, is_not_distinct_from)
             }
-            Operator::Plus => binary_primitive_array_op!(left, right, add),
-            Operator::Minus => binary_primitive_array_op!(left, right, subtract),
-            Operator::Multiply => binary_primitive_array_op!(left, right, multiply),
-            Operator::Divide => binary_primitive_array_op!(left, right, divide_opt),
+            Operator::Plus => binary_primitive_array_op_dyn!(left, right, add_dyn),
+            Operator::Minus => binary_primitive_array_op_dyn!(left, right, subtract_dyn),
+            Operator::Multiply => {
+                binary_primitive_array_op_dyn!(left, right, multiply_dyn)
+            }
+            Operator::Divide => {
+                binary_primitive_array_op_dyn!(left, right, divide_dyn_opt)
+            }
             Operator::Modulo => binary_primitive_array_op!(left, right, modulus),
             Operator::And => {
                 if left_data_type == &DataType::Boolean {
