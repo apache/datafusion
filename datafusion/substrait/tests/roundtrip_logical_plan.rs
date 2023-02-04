@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_substrait::consumer;
-use datafusion_substrait::producer;
+use datafusion_substrait::logical_plan::{self, consumer, producer};
 
 #[cfg(test)]
 mod tests {
