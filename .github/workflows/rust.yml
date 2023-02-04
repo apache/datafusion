@@ -97,7 +97,9 @@ jobs:
       - name: Run tests (excluding doctests)
         run: cargo test --lib --tests --bins --features avro,jit,scheduler,json,dictionary_expressions
       - name: Verify Working Directory Clean
-        run: git diff --exit-code
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git diff --exit-code
 
   linux-test-example:
     name: cargo examples (amd64)
@@ -132,7 +134,9 @@ jobs:
           cargo run --example simple_udf
           cargo run --example simple_udaf
       - name: Verify Working Directory Clean
-        run: git diff --exit-code
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git diff --exit-code
 
   # Run doc tests
   linux-test-doc:
@@ -153,7 +157,9 @@ jobs:
       - name: Run doctests
         run: cargo test --doc --features avro,jit,scheduler,json
       - name: Verify Working Directory Clean
-        run: git diff --exit-code
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git diff --exit-code
 
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
@@ -191,7 +197,9 @@ jobs:
           cargo test verify_q --profile release-nonlto --features=ci -- --test-threads=1
           cargo test serde_q --profile release-nonlto --features=ci -- --test-threads=1
       - name: Verify Working Directory Clean
-        run: git diff --exit-code
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git diff --exit-code
 
   sqllogictest-postgres:
     name: "Run sqllogictest with Postgres runner"
@@ -460,6 +468,7 @@ jobs:
           #
           # ignore ./Cargo.toml because putting workspaces in multi-line lists make it easy to read
           ci/scripts/rust_toml_fmt.sh
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git diff --exit-code
 
   config-docs-check:
@@ -489,4 +498,5 @@ jobs:
         run: |
           # If you encounter an error, run './dev/update_config_docs.sh' and commit
           ./dev/update_config_docs.sh
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git diff --exit-code
