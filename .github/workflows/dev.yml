@@ -54,5 +54,4 @@ jobs:
             '!datafusion/CHANGELOG.md' \
             README.md \
             CONTRIBUTING.md
-          git config --global --add safe.directory "$GITHUB_WORKSPACE" 
           git diff --exit-code
