@@ -1695,6 +1695,49 @@ mod tests {
     }
 
     #[test]
+    fn plus_op_dict_scalar_decimal() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Decimal128(10, 0)),
+            ),
+            true,
+        )]);
+
+        let value = 123;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[Some(value), None, Some(value - 1), Some(value + 1)],
+            10,
+            0,
+        )) as ArrayRef;
+
+        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
+        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+
+        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
+        let decimal_array = create_decimal_array(
+            &[Some(value + 1), None, Some(value), Some(value + 2)],
+            10,
+            0,
+        );
+        let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
+
+        apply_arithmetic_scalar(
+            Arc::new(schema),
+            vec![Arc::new(a)],
+            Operator::Plus,
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(ScalarValue::Decimal128(Some(1), 10, 0)),
+            ),
+            Arc::new(expected),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
     fn minus_op() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -1777,6 +1820,49 @@ mod tests {
     }
 
     #[test]
+    fn minus_op_dict_scalar_decimal() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Decimal128(10, 0)),
+            ),
+            true,
+        )]);
+
+        let value = 123;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[Some(value), None, Some(value - 1), Some(value + 1)],
+            10,
+            0,
+        )) as ArrayRef;
+
+        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
+        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+
+        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
+        let decimal_array = create_decimal_array(
+            &[Some(value - 1), None, Some(value - 2), Some(value)],
+            10,
+            0,
+        );
+        let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
+
+        apply_arithmetic_scalar(
+            Arc::new(schema),
+            vec![Arc::new(a)],
+            Operator::Minus,
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(ScalarValue::Decimal128(Some(1), 10, 0)),
+            ),
+            Arc::new(expected),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
     fn multiply_op() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -1851,6 +1937,46 @@ mod tests {
     }
 
     #[test]
+    fn multiply_op_dict_scalar_decimal() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Decimal128(10, 0)),
+            ),
+            true,
+        )]);
+
+        let value = 123;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[Some(value), None, Some(value - 1), Some(value + 1)],
+            10,
+            0,
+        )) as ArrayRef;
+
+        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
+        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+
+        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
+        let decimal_array =
+            create_decimal_array(&[Some(246), None, Some(244), Some(248)], 10, 0);
+        let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
+
+        apply_arithmetic_scalar(
+            Arc::new(schema),
+            vec![Arc::new(a)],
+            Operator::Multiply,
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(ScalarValue::Decimal128(Some(2), 10, 0)),
+            ),
+            Arc::new(expected),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
     fn divide_op() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -1917,6 +2043,46 @@ mod tests {
             ScalarValue::Dictionary(
                 Box::new(DataType::Int8),
                 Box::new(ScalarValue::Int32(Some(2))),
+            ),
+            Arc::new(expected),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn divide_op_dict_scalar_decimal() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Decimal128(10, 0)),
+            ),
+            true,
+        )]);
+
+        let value = 123;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[Some(value), None, Some(value - 1), Some(value + 1)],
+            10,
+            0,
+        )) as ArrayRef;
+
+        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
+        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+
+        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
+        let decimal_array =
+            create_decimal_array(&[Some(61), None, Some(61), Some(62)], 10, 0);
+        let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
+
+        apply_arithmetic_scalar(
+            Arc::new(schema),
+            vec![Arc::new(a)],
+            Operator::Divide,
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(ScalarValue::Decimal128(Some(2), 10, 0)),
             ),
             Arc::new(expected),
         )?;
