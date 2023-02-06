@@ -36,15 +36,15 @@ mod tests {
         let plan_ref = df_ref.into_optimized_plan()?;
         // Test
         // Write substrait plan to file
-        serializer::serialize(sql, &ctx, &path).await?;
+        serializer::serialize(sql, &ctx, path).await?;
         // Read substrait plan from file
         let proto = serializer::deserialize(path).await?;
         // Check plan equality
         let plan = from_substrait_plan(&mut ctx, &proto).await?;
         // #[allow(deprecated)]
         // let plan = ctx.optimize(&plan)?;
-        let plan_str_ref = format!("{:?}", plan_ref);
-        let plan_str = format!("{:?}", plan);
+        let plan_str_ref = format!("{plan_ref:?}");
+        let plan_str = format!("{plan:?}");
         assert_eq!(plan_str_ref, plan_str);
         // Delete test binary file
         fs::remove_file(path)?;

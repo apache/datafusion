@@ -97,12 +97,10 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             .map(|value| match value {
                 Ok(Value::Record(v)) => Ok(v),
                 Err(e) => Err(ArrowError::ParseError(format!(
-                    "Failed to parse avro value: {:?}",
-                    e
+                    "Failed to parse avro value: {e:?}"
                 ))),
                 other => Err(ArrowError::ParseError(format!(
-                    "Row needs to be of type object, got: {:?}",
-                    other
+                    "Row needs to be of type object, got: {other:?}"
                 ))),
             })
             .collect::<ArrowResult<Vec<Vec<(String, Value)>>>>()?;
@@ -237,8 +235,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 self.list_array_string_array_builder::<UInt64Type>(&dtype, col_name, rows)
             }
             ref e => Err(SchemaError(format!(
-                "Data type is currently not supported for dictionaries in list : {:?}",
-                e
+                "Data type is currently not supported for dictionaries in list : {e:?}"
             ))),
         }
     }
@@ -265,8 +262,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             }
             e => {
                 return Err(SchemaError(format!(
-                    "Nested list data builder type is not supported: {:?}",
-                    e
+                    "Nested list data builder type is not supported: {e:?}"
                 )))
             }
         };
@@ -331,8 +327,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                     }
                     e => {
                         return Err(SchemaError(format!(
-                            "Nested list data builder type is not supported: {:?}",
-                            e
+                            "Nested list data builder type is not supported: {e:?}"
                         )))
                     }
                 }
@@ -564,8 +559,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             }
             datatype => {
                 return Err(ArrowError::SchemaError(format!(
-                    "Nested list of {:?} not supported",
-                    datatype
+                    "Nested list of {datatype:?} not supported"
                 )));
             }
         };
@@ -673,8 +667,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                             ),
                         t => {
                             return Err(ArrowError::SchemaError(format!(
-                                "TimeUnit {:?} not supported with Time64",
-                                t
+                                "TimeUnit {t:?} not supported with Time64"
                             )))
                         }
                     },
@@ -691,8 +684,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                             ),
                         t => {
                             return Err(ArrowError::SchemaError(format!(
-                                "TimeUnit {:?} not supported with Time32",
-                                t
+                                "TimeUnit {t:?} not supported with Time32"
                             )))
                         }
                     },
@@ -755,7 +747,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                                     bit_util::set_bit(null_buffer.as_slice_mut(), i);
                                     value
                                 } else {
-                                    panic!("expected struct got {:?}", v);
+                                    panic!("expected struct got {v:?}");
                                 }
                             })
                             .collect::<Vec<&Vec<(String, Value)>>>();
@@ -877,7 +869,7 @@ fn resolve_string(v: &Value) -> ArrowResult<String> {
         }
         other => Err(AvroError::GetString(other.into())),
     }
-    .map_err(|e| SchemaError(format!("expected resolvable string : {:?}", e)))
+    .map_err(|e| SchemaError(format!("expected resolvable string : {e:?}")))
 }
 
 fn resolve_u8(v: &Value) -> AvroResult<u8> {
@@ -904,7 +896,7 @@ fn resolve_bytes(v: &Value) -> Option<Vec<u8>> {
             items
                 .iter()
                 .map(resolve_u8)
-                .collect::<std::result::Result<Vec<_>, _>>()
+                .collect::<Result<Vec<_>, _>>()
                 .ok()?,
         )),
         other => Err(AvroError::GetBytes(other.into())),
@@ -983,7 +975,7 @@ mod test {
 
     fn build_reader(name: &str, batch_size: usize) -> Reader<File> {
         let testdata = crate::test_util::arrow_test_data();
-        let filename = format!("{}/avro/{}", testdata, name);
+        let filename = format!("{testdata}/avro/{name}");
         let builder = ReaderBuilder::new()
             .read_schema()
             .with_batch_size(batch_size);

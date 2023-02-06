@@ -26,7 +26,7 @@ use futures::{Stream, StreamExt};
 use parking_lot::Mutex;
 
 use crate::arrow::datatypes::SchemaRef;
-use crate::arrow::{error::Result as ArrowResult, record_batch::RecordBatch};
+use crate::arrow::record_batch::RecordBatch;
 use crate::error::Result;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
@@ -186,7 +186,7 @@ struct InputPartitionStream {
 }
 
 impl Stream for InputPartitionStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut partition = self.partition.lock();
@@ -239,7 +239,7 @@ impl ExecutionPlan for ProxyExecutionPlan {
         self.inner.required_input_distribution()
     }
 
-    fn maintains_input_order(&self) -> bool {
+    fn maintains_input_order(&self) -> Vec<bool> {
         self.inner.maintains_input_order()
     }
 

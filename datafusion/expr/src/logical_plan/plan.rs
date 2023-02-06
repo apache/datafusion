@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expr_rewriter::{ExprRewritable, ExprRewriter};
-use crate::expr_visitor::walk_expr_down;
+use crate::expr_rewriter::rewrite_expr;
+use crate::expr_visitor::inspect_expr_pre;
+use crate::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 ///! Logical plan types
 use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
@@ -118,6 +119,10 @@ pub enum LogicalPlan {
     SetVariable(SetVariable),
     /// Prepare a statement
     Prepare(Prepare),
+    /// Insert / Update / Delete
+    Dml(DmlStatement),
+    /// Describe the schema of table
+    DescribeTable(DescribeTable),
 }
 
 impl LogicalPlan {
@@ -158,6 +163,10 @@ impl LogicalPlan {
             LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
             LogicalPlan::DropView(DropView { schema, .. }) => schema,
             LogicalPlan::SetVariable(SetVariable { schema, .. }) => schema,
+            LogicalPlan::DescribeTable(DescribeTable { dummy_schema, .. }) => {
+                dummy_schema
+            }
+            LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
         }
     }
 
@@ -217,7 +226,9 @@ impl LogicalPlan {
             | LogicalPlan::Prepare(Prepare { input, .. }) => input.all_schemas(),
             LogicalPlan::DropTable(_)
             | LogicalPlan::DropView(_)
+            | LogicalPlan::DescribeTable(_)
             | LogicalPlan::SetVariable(_) => vec![],
+            LogicalPlan::Dml(DmlStatement { table_schema, .. }) => vec![table_schema],
         }
     }
 
@@ -316,6 +327,8 @@ impl LogicalPlan {
             | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::Distinct(_)
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Prepare(_) => Ok(()),
         }
     }
@@ -342,6 +355,7 @@ impl LogicalPlan {
             LogicalPlan::Distinct(Distinct { input }) => vec![input],
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
+            LogicalPlan::Dml(write) => vec![&write.input],
             LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
             | LogicalPlan::CreateView(CreateView { input, .. })
             | LogicalPlan::Prepare(Prepare { input, .. }) => {
@@ -356,7 +370,8 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
             | LogicalPlan::SetVariable(_)
-            | LogicalPlan::DropView(_) => vec![],
+            | LogicalPlan::DropView(_)
+            | LogicalPlan::DescribeTable(_) => vec![],
         }
     }
 
@@ -544,6 +559,7 @@ impl LogicalPlan {
             }
             LogicalPlan::Explain(explain) => explain.plan.accept(visitor)?,
             LogicalPlan::Analyze(analyze) => analyze.input.accept(visitor)?,
+            LogicalPlan::Dml(write) => write.input.accept(visitor)?,
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation(_)
@@ -553,7 +569,8 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
             | LogicalPlan::SetVariable(_)
-            | LogicalPlan::DropView(_) => true,
+            | LogicalPlan::DropView(_)
+            | LogicalPlan::DescribeTable(_) => true,
         };
         if !recurse {
             return Ok(false);
@@ -573,7 +590,7 @@ impl LogicalPlan {
     {
         self.inspect_expressions(|expr| {
             // recursively look for subqueries
-            walk_expr_down(expr, |expr| {
+            inspect_expr_pre(expr, |expr| {
                 match expr {
                     Expr::Exists { subquery, .. }
                     | Expr::InSubquery { subquery, .. }
@@ -616,48 +633,105 @@ impl LogicalPlan {
         Ok(new_plan)
     }
 
+    /// Walk the logical plan, find any `PlaceHolder` tokens, and return a map of their IDs and DataTypes
+    pub fn get_parameter_types(
+        &self,
+    ) -> Result<HashMap<String, Option<DataType>>, DataFusionError> {
+        struct ParamTypeVisitor {
+            param_types: HashMap<String, Option<DataType>>,
+        }
+
+        struct ExprParamTypeVisitor {
+            param_types: HashMap<String, Option<DataType>>,
+        }
+
+        impl ExpressionVisitor for ExprParamTypeVisitor {
+            fn pre_visit(
+                mut self,
+                expr: &Expr,
+            ) -> datafusion_common::Result<Recursion<Self>>
+            where
+                Self: ExpressionVisitor,
+            {
+                if let Expr::Placeholder { id, data_type } = expr {
+                    let prev = self.param_types.get(id);
+                    match (prev, data_type) {
+                        (Some(Some(prev)), Some(dt)) => {
+                            if prev != dt {
+                                Err(DataFusionError::Plan(format!(
+                                    "Conflicting types for {id}"
+                                )))?;
+                            }
+                        }
+                        (_, Some(dt)) => {
+                            let _ = self.param_types.insert(id.clone(), Some(dt.clone()));
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(Recursion::Continue(self))
+            }
+        }
+
+        impl PlanVisitor for ParamTypeVisitor {
+            type Error = DataFusionError;
+
+            fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
+                let mut param_types = HashMap::new();
+                plan.inspect_expressions(|expr| {
+                    let mut visitor = ExprParamTypeVisitor {
+                        param_types: Default::default(),
+                    };
+                    visitor = expr.accept(visitor)?;
+                    param_types.extend(visitor.param_types);
+                    Ok(()) as Result<(), DataFusionError>
+                })?;
+                self.param_types.extend(param_types);
+                Ok(true)
+            }
+        }
+
+        let mut visitor = ParamTypeVisitor {
+            param_types: Default::default(),
+        };
+        self.accept(&mut visitor)?;
+        Ok(visitor.param_types)
+    }
+
     /// Return an Expr with all placeholders replaced with their
     /// corresponding values provided in the params_values
     fn replace_placeholders_with_values(
         expr: Expr,
-        param_values: &Vec<ScalarValue>,
+        param_values: &[ScalarValue],
     ) -> Result<Expr, DataFusionError> {
-        struct PlaceholderReplacer<'a> {
-            param_values: &'a Vec<ScalarValue>,
-        }
-
-        impl<'a> ExprRewriter for PlaceholderReplacer<'a> {
-            fn mutate(&mut self, expr: Expr) -> Result<Expr, DataFusionError> {
-                if let Expr::Placeholder { id, data_type } = &expr {
-                    // convert id (in format $1, $2, ..) to idx (0, 1, ..)
-                    let idx = id[1..].parse::<usize>().map_err(|e| {
-                        DataFusionError::Internal(format!(
-                            "Failed to parse placeholder id: {e}"
-                        ))
-                    })? - 1;
-                    // value at the idx-th position in param_values should be the value for the placeholder
-                    let value = self.param_values.get(idx).ok_or_else(|| {
-                        DataFusionError::Internal(format!(
-                            "No value found for placeholder with id {id}"
-                        ))
-                    })?;
-                    // check if the data type of the value matches the data type of the placeholder
-                    if value.get_datatype() != *data_type {
-                        return Err(DataFusionError::Internal(format!(
-                            "Placeholder value type mismatch: expected {:?}, got {:?}",
-                            data_type,
-                            value.get_datatype()
-                        )));
-                    }
-                    // Replace the placeholder with the value
-                    Ok(Expr::Literal(value.clone()))
-                } else {
-                    Ok(expr)
+        rewrite_expr(expr, |expr| {
+            if let Expr::Placeholder { id, data_type } = &expr {
+                // convert id (in format $1, $2, ..) to idx (0, 1, ..)
+                let idx = id[1..].parse::<usize>().map_err(|e| {
+                    DataFusionError::Internal(format!(
+                        "Failed to parse placeholder id: {e}"
+                    ))
+                })? - 1;
+                // value at the idx-th position in param_values should be the value for the placeholder
+                let value = param_values.get(idx).ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "No value found for placeholder with id {id}"
+                    ))
+                })?;
+                // check if the data type of the value matches the data type of the placeholder
+                if Some(value.get_datatype()) != *data_type {
+                    return Err(DataFusionError::Internal(format!(
+                        "Placeholder value type mismatch: expected {:?}, got {:?}",
+                        data_type,
+                        value.get_datatype()
+                    )));
                 }
+                // Replace the placeholder with the value
+                Ok(Expr::Literal(value.clone()))
+            } else {
+                Ok(expr)
             }
-        }
-
-        expr.rewrite(&mut PlaceholderReplacer { param_values })
+        })
     }
 }
 
@@ -929,6 +1003,9 @@ impl LogicalPlan {
                         }
                         Ok(())
                     }
+                    LogicalPlan::Dml(DmlStatement { table_name, op, .. }) => {
+                        write!(f, "Dml: op=[{op}] table=[{table_name}]")
+                    }
                     LogicalPlan::Filter(Filter {
                         predicate: ref expr,
                         ..
@@ -1094,6 +1171,9 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "Prepare: {name:?} {data_types:?} ")
                     }
+                    LogicalPlan::DescribeTable(DescribeTable { .. }) => {
+                        write!(f, "DescribeTable")
+                    }
                 }
             }
         }
@@ -1209,7 +1289,8 @@ pub struct DropView {
     pub schema: DFSchemaRef,
 }
 
-/// Set a Variable's value -- value in [`ConfigOptions`]
+/// Set a Variable's value -- value in
+/// [`ConfigOptions`](datafusion_common::config::ConfigOptions)
 #[derive(Clone)]
 pub struct SetVariable {
     /// The variable name
@@ -1504,6 +1585,38 @@ pub struct CreateExternalTable {
     pub options: HashMap<String, String>,
 }
 
+#[derive(Clone)]
+pub enum WriteOp {
+    Insert,
+    Delete,
+    Update,
+    Ctas,
+}
+
+impl Display for WriteOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            WriteOp::Insert => write!(f, "Insert"),
+            WriteOp::Delete => write!(f, "Delete"),
+            WriteOp::Update => write!(f, "Update"),
+            WriteOp::Ctas => write!(f, "Ctas"),
+        }
+    }
+}
+
+/// The operator that modifies the content of a database (adapted from substrait WriteRel)
+#[derive(Clone)]
+pub struct DmlStatement {
+    /// The table name
+    pub table_name: OwnedTableReference,
+    /// The schema of the table (must align with Rel input)
+    pub table_schema: DFSchemaRef,
+    /// The type of operation to perform
+    pub op: WriteOp,
+    /// The relation that determines the tuples to add/remove/modify the schema must match with table_schema
+    pub input: Arc<LogicalPlan>,
+}
+
 /// Prepare a statement but do not execute it. Prepare statements can have 0 or more
 /// `Expr::Placeholder` expressions that are filled in during execution
 #[derive(Clone)]
@@ -1514,6 +1627,15 @@ pub struct Prepare {
     pub data_types: Vec<DataType>,
     /// The logical plan of the statements
     pub input: Arc<LogicalPlan>,
+}
+
+/// Describe the schema of table
+#[derive(Clone)]
+pub struct DescribeTable {
+    /// Table schema
+    pub schema: Arc<Schema>,
+    /// Dummy schema
+    pub dummy_schema: DFSchemaRef,
 }
 
 /// Produces a relation with string representations of
@@ -1528,6 +1650,8 @@ pub struct Explain {
     pub stringified_plans: Vec<StringifiedPlan>,
     /// The output schema of the explain (2 columns of text)
     pub schema: DFSchemaRef,
+    /// Used by physical planner to check if should proceed with planning
+    pub logical_optimization_succeeded: bool,
 }
 
 /// Runs the actual plan, and then prints the physical plan with
@@ -1966,10 +2090,7 @@ mod tests {
     impl PlanVisitor for OkVisitor {
         type Error = String;
 
-        fn pre_visit(
-            &mut self,
-            plan: &LogicalPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "pre_visit Projection",
                 LogicalPlan::Filter { .. } => "pre_visit Filter",
@@ -1981,10 +2102,7 @@ mod tests {
             Ok(true)
         }
 
-        fn post_visit(
-            &mut self,
-            plan: &LogicalPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "post_visit Projection",
                 LogicalPlan::Filter { .. } => "post_visit Filter",
@@ -2051,20 +2169,14 @@ mod tests {
     impl PlanVisitor for StoppingVisitor {
         type Error = String;
 
-        fn pre_visit(
-            &mut self,
-            plan: &LogicalPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
             if self.return_false_from_pre_in.dec() {
                 return Ok(false);
             }
             self.inner.pre_visit(plan)
         }
 
-        fn post_visit(
-            &mut self,
-            plan: &LogicalPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
             if self.return_false_from_post_in.dec() {
                 return Ok(false);
             }
@@ -2124,10 +2236,7 @@ mod tests {
     impl PlanVisitor for ErrorVisitor {
         type Error = String;
 
-        fn pre_visit(
-            &mut self,
-            plan: &LogicalPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
             if self.return_error_from_pre_in.dec() {
                 return Err("Error in pre_visit".into());
             }
@@ -2135,10 +2244,7 @@ mod tests {
             self.inner.pre_visit(plan)
         }
 
-        fn post_visit(
-            &mut self,
-            plan: &LogicalPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
             if self.return_error_from_post_in.dec() {
                 return Err("Error in post_visit".into());
             }

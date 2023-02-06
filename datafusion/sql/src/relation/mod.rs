@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{
-    object_name_to_table_reference, ContextProvider, PlannerContext, SqlToRel,
-};
+use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::TableFactor;
@@ -33,7 +31,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let (plan, alias) = match relation {
             TableFactor::Table { name, alias, .. } => {
                 // normalize name and alias
-                let table_ref = object_name_to_table_reference(name)?;
+                let table_ref = self.object_name_to_table_reference(name)?;
                 let table_name = table_ref.to_string();
                 let cte = planner_context.ctes.get(&table_name);
                 (

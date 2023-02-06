@@ -111,7 +111,9 @@ impl ExecutionPlan for StreamingTableExec {
         Ok(match self.projection.clone() {
             Some(projection) => Box::pin(RecordBatchStreamAdapter::new(
                 self.projected_schema.clone(),
-                stream.map(move |x| x.and_then(|b| b.project(projection.as_ref()))),
+                stream.map(move |x| {
+                    x.and_then(|b| b.project(projection.as_ref()).map_err(Into::into))
+                }),
             )),
             None => stream,
         })

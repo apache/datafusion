@@ -32,7 +32,6 @@ use crate::physical_plan::{
     Partitioning, PhysicalExpr,
 };
 use arrow::datatypes::{Field, Schema, SchemaRef};
-use arrow::error::Result as ArrowResult;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use log::debug;
 
@@ -196,9 +195,9 @@ impl ExecutionPlan for ProjectionExec {
         self.output_ordering.as_deref()
     }
 
-    fn maintains_input_order(&self) -> bool {
+    fn maintains_input_order(&self) -> Vec<bool> {
         // tell optimizer this operator doesn't reorder its input
-        true
+        vec![true]
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
@@ -318,7 +317,7 @@ fn stats_projection(
 }
 
 impl ProjectionStream {
-    fn batch_project(&self, batch: &RecordBatch) -> ArrowResult<RecordBatch> {
+    fn batch_project(&self, batch: &RecordBatch) -> Result<RecordBatch> {
         // records time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
         let arrays = self
@@ -332,8 +331,9 @@ impl ProjectionStream {
             let options =
                 RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
             RecordBatch::try_new_with_options(self.schema.clone(), arrays, &options)
+                .map_err(Into::into)
         } else {
-            RecordBatch::try_new(self.schema.clone(), arrays)
+            RecordBatch::try_new(self.schema.clone(), arrays).map_err(Into::into)
         }
     }
 }
@@ -347,7 +347,7 @@ struct ProjectionStream {
 }
 
 impl Stream for ProjectionStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,

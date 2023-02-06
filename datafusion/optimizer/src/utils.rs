@@ -22,9 +22,9 @@ use datafusion_common::Result;
 use datafusion_common::{plan_err, Column, DFSchemaRef};
 use datafusion_expr::expr::{BinaryExpr, Sort};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
-use datafusion_expr::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
+use datafusion_expr::expr_visitor::inspect_expr_pre;
 use datafusion_expr::{
-    and, col,
+    and,
     logical_plan::{Filter, LogicalPlan},
     utils::from_plan,
     Expr, Operator,
@@ -232,28 +232,21 @@ pub fn unalias(expr: Expr) -> Expr {
 ///
 /// A PlanError if a disjunction is found
 pub fn verify_not_disjunction(predicates: &[&Expr]) -> Result<()> {
-    struct DisjunctionVisitor {}
-
-    impl ExpressionVisitor for DisjunctionVisitor {
-        fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
-            match expr {
-                Expr::BinaryExpr(BinaryExpr {
-                    left: _,
-                    op: Operator::Or,
-                    right: _,
-                }) => {
-                    plan_err!("Optimizing disjunctions not supported!")
-                }
-                _ => Ok(Recursion::Continue(self)),
+    // recursively check for unallowed predicates in expr
+    fn check(expr: &&Expr) -> Result<()> {
+        inspect_expr_pre(expr, |expr| match expr {
+            Expr::BinaryExpr(BinaryExpr {
+                left: _,
+                op: Operator::Or,
+                right: _,
+            }) => {
+                plan_err!("Optimizing disjunctions not supported!")
             }
-        }
+            _ => Ok(()),
+        })
     }
 
-    for predicate in predicates.iter() {
-        predicate.accept(DisjunctionVisitor {})?;
-    }
-
-    Ok(())
+    predicates.iter().try_for_each(check)
 }
 
 /// returns a new [LogicalPlan] that wraps `plan` in a [LogicalPlan::Filter] with
@@ -417,60 +410,6 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
         [] => plan_err!("No items found!"),
         _ => plan_err!("More than one item found!"),
     }
-}
-
-/// Merge and deduplicate two sets Column slices
-///
-/// # Arguments
-///
-/// * `a` - A tuple of slices of Columns
-/// * `b` - A tuple of slices of Columns
-///
-/// # Return value
-///
-/// The deduplicated union of the two slices
-pub fn merge_cols(
-    a: (&[Column], &[Column]),
-    b: (&[Column], &[Column]),
-) -> (Vec<Column>, Vec<Column>) {
-    let e =
-        a.0.iter()
-            .map(|it| it.flat_name())
-            .chain(a.1.iter().map(|it| it.flat_name()))
-            .map(|it| Column::from(it.as_str()));
-    let f =
-        b.0.iter()
-            .map(|it| it.flat_name())
-            .chain(b.1.iter().map(|it| it.flat_name()))
-            .map(|it| Column::from(it.as_str()));
-    let mut g = e.zip(f).collect::<Vec<_>>();
-    g.dedup();
-    g.into_iter().unzip()
-}
-
-/// Change the relation on a slice of Columns
-///
-/// # Arguments
-///
-/// * `new_table` - The table/relation for the new columns
-/// * `cols` - A slice of Columns
-///
-/// # Return value
-///
-/// A new slice of columns, now belonging to the new table
-pub fn swap_table(new_table: &str, cols: &[Column]) -> Vec<Column> {
-    cols.iter()
-        .map(|it| Column {
-            relation: Some(new_table.to_string()),
-            name: it.name.clone(),
-        })
-        .collect()
-}
-
-pub fn alias_cols(cols: &[Column]) -> Vec<Expr> {
-    cols.iter()
-        .map(|it| col(it.flat_name().as_str()).alias(it.name.as_str()))
-        .collect()
 }
 
 /// Rewrites `expr` using `rewriter`, ensuring that the output has the

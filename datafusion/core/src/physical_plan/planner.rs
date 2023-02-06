@@ -63,9 +63,9 @@ use datafusion_expr::expr::{
     Like, TryCast, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
-use datafusion_expr::logical_plan;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::utils::expand_wildcard;
+use datafusion_expr::{logical_plan, StringifiedPlan};
 use datafusion_expr::{WindowFrame, WindowFrameBound};
 use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
@@ -1114,7 +1114,7 @@ impl DefaultPhysicalPlanner {
                     // TABLE" -- it must be handled at a higher level (so
                     // that the appropriate table can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: CreateExternalTable".to_string(),
                     ))
                 }
@@ -1122,7 +1122,7 @@ impl DefaultPhysicalPlanner {
                     // There is no default plan for "PREPARE" -- it must be
                     // handled at a higher level (so that the appropriate
                     // statement can be prepared)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: Prepare".to_string(),
                     ))
                 }
@@ -1131,7 +1131,7 @@ impl DefaultPhysicalPlanner {
                     // It must be handled at a higher level (so
                     // that the schema can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: CreateCatalogSchema".to_string(),
                     ))
                 }
@@ -1140,7 +1140,7 @@ impl DefaultPhysicalPlanner {
                     // It must be handled at a higher level (so
                     // that the schema can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: CreateCatalog".to_string(),
                     ))
                 }
@@ -1149,7 +1149,7 @@ impl DefaultPhysicalPlanner {
                     // It must be handled at a higher level (so
                     // that the schema can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: CreateMemoryTable".to_string(),
                     ))
                 }
@@ -1158,7 +1158,7 @@ impl DefaultPhysicalPlanner {
                     // It must be handled at a higher level (so
                     // that the schema can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: DropTable".to_string(),
                     ))
                 }
@@ -1167,7 +1167,7 @@ impl DefaultPhysicalPlanner {
                     // It must be handled at a higher level (so
                     // that the schema can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: DropView".to_string(),
                     ))
                 }
@@ -1176,13 +1176,24 @@ impl DefaultPhysicalPlanner {
                     // It must be handled at a higher level (so
                     // that the schema can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: CreateView".to_string(),
+                    ))
+                }
+                LogicalPlan::Dml(_) => {
+                    // DataFusion is a read-only query engine, but also a library, so consumers may implement this
+                    Err(DataFusionError::NotImplemented(
+                        "Unsupported logical plan: Dml".to_string(),
                     ))
                 }
                 LogicalPlan::SetVariable(_) => {
                     Err(DataFusionError::Internal(
                         "Unsupported logical plan: SetVariable must be root of the plan".to_string(),
+                    ))
+                }
+                LogicalPlan::DescribeTable(_) => {
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: DescribeTable must be root of the plan".to_string(),
                     ))
                 }
                 LogicalPlan::Explain(_) => Err(DataFusionError::Internal(
@@ -1206,18 +1217,13 @@ impl DefaultPhysicalPlanner {
                         }
 
                         let logical_input = e.node.inputs();
-                        let plan = planner.plan_extension(
+                        maybe_plan = planner.plan_extension(
                             self,
                             e.node.as_ref(),
                             &logical_input,
                             &physical_inputs,
                             session_state,
-                        );
-                        let plan = plan.await;
-                        if plan.is_err() {
-                            continue;
-                        }
-                        maybe_plan = plan.unwrap();
+                        ).await?;
                     }
 
                     let plan = maybe_plan.ok_or_else(|| DataFusionError::Plan(format!(
@@ -1734,28 +1740,47 @@ impl DefaultPhysicalPlanner {
 
             if !config.physical_plan_only {
                 stringified_plans = e.stringified_plans.clone();
-                stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
+                if e.logical_optimization_succeeded {
+                    stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
+                }
             }
 
-            if !config.logical_plan_only {
-                let input = self
+            if !config.logical_plan_only && e.logical_optimization_succeeded {
+                match self
                     .create_initial_plan(e.plan.as_ref(), session_state)
-                    .await?;
+                    .await
+                {
+                    Ok(input) => {
+                        stringified_plans.push(
+                            displayable(input.as_ref())
+                                .to_stringified(InitialPhysicalPlan),
+                        );
 
-                stringified_plans.push(
-                    displayable(input.as_ref()).to_stringified(InitialPhysicalPlan),
-                );
-
-                let input =
-                    self.optimize_internal(input, session_state, |plan, optimizer| {
-                        let optimizer_name = optimizer.name().to_string();
-                        let plan_type = OptimizedPhysicalPlan { optimizer_name };
-                        stringified_plans
-                            .push(displayable(plan).to_stringified(plan_type));
-                    })?;
-
-                stringified_plans
-                    .push(displayable(input.as_ref()).to_stringified(FinalPhysicalPlan));
+                        match self.optimize_internal(
+                            input,
+                            session_state,
+                            |plan, optimizer| {
+                                let optimizer_name = optimizer.name().to_string();
+                                let plan_type = OptimizedPhysicalPlan { optimizer_name };
+                                stringified_plans
+                                    .push(displayable(plan).to_stringified(plan_type));
+                            },
+                        ) {
+                            Ok(input) => stringified_plans.push(
+                                displayable(input.as_ref())
+                                    .to_stringified(FinalPhysicalPlan),
+                            ),
+                            Err(DataFusionError::Context(optimizer_name, e)) => {
+                                let plan_type = OptimizedPhysicalPlan { optimizer_name };
+                                stringified_plans
+                                    .push(StringifiedPlan::new(plan_type, e.to_string()))
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    Err(e) => stringified_plans
+                        .push(StringifiedPlan::new(InitialPhysicalPlan, e.to_string())),
+                }
             }
 
             Ok(Some(Arc::new(ExplainExec::new(
@@ -1789,14 +1814,22 @@ impl DefaultPhysicalPlanner {
         let mut new_plan = plan;
         for optimizer in optimizers {
             let before_schema = new_plan.schema();
-            new_plan = optimizer.optimize(new_plan, session_state.config_options())?;
+            new_plan = optimizer
+                .optimize(new_plan, session_state.config_options())
+                .map_err(|e| {
+                    DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
+                })?;
             if optimizer.schema_check() && new_plan.schema() != before_schema {
-                return Err(DataFusionError::Internal(format!(
-                        "PhysicalOptimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
-                        optimizer.name(),
-                        before_schema,
-                        new_plan.schema()
-                    )));
+                let e = DataFusionError::Internal(format!(
+                    "PhysicalOptimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
+                    optimizer.name(),
+                    before_schema,
+                    new_plan.schema()
+                ));
+                return Err(DataFusionError::Context(
+                    optimizer.name().to_string(),
+                    Box::new(e),
+                ));
             }
             trace!(
                 "Optimized physical plan by {}:\n{}\n",
@@ -1979,6 +2012,25 @@ mod tests {
         assert!(plan_debug_str.contains("GlobalLimitExec"));
         assert!(plan_debug_str.contains("skip: 3"));
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn error_during_extension_planning() {
+        let session_state = make_session_state();
+        let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
+            ErrorExtensionPlanner {},
+        )]);
+
+        let logical_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoOpExtensionNode::default()),
+        });
+        match planner
+            .create_physical_plan(&logical_plan, &session_state)
+            .await
+        {
+            Ok(_) => panic!("Expected planning failure"),
+            Err(e) => assert!(e.to_string().contains("BOOM"),),
+        }
     }
 
     #[tokio::test]
@@ -2299,7 +2351,22 @@ mod tests {
             );
         }
     }
+    struct ErrorExtensionPlanner {}
 
+    #[async_trait]
+    impl ExtensionPlanner for ErrorExtensionPlanner {
+        /// Create a physical plan for an extension node
+        async fn plan_extension(
+            &self,
+            _planner: &dyn PhysicalPlanner,
+            _node: &dyn UserDefinedLogicalNode,
+            _logical_inputs: &[&LogicalPlan],
+            _physical_inputs: &[Arc<dyn ExecutionPlan>],
+            _session_state: &SessionState,
+        ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+            Err(DataFusionError::Internal("BOOM".to_string()))
+        }
+    }
     /// An example extension node that doesn't do anything
     struct NoOpExtensionNode {
         schema: DFSchemaRef,

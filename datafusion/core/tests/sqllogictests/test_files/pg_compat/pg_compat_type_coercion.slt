@@ -1,0 +1,175 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+query ??
+select true and true, false and false;
+----
+true false
+
+
+onlyif DataFusion
+query ??
+select arrow_typeof(true and true), arrow_typeof(false and false);
+----
+Boolean Boolean
+
+
+onlyif postgres
+query ??
+select pg_typeof(true and true), pg_typeof(false and false);
+----
+bool bool
+
+
+query ??
+select true or true, false or false;
+----
+true false
+
+
+onlyif DataFusion
+query ??
+select arrow_typeof(true or true), arrow_typeof(false or false);
+----
+Boolean Boolean
+
+
+onlyif postgres
+query ??
+select pg_typeof(true or true), pg_typeof(false or false);
+----
+bool bool
+
+
+query ??
+select false and true, true and false;
+----
+false false
+
+
+onlyif DataFusion
+query ??
+select arrow_typeof(false and true), arrow_typeof(true and false);
+----
+Boolean Boolean
+
+
+onlyif postgres
+query ??
+select pg_typeof(false and true), pg_typeof(true and false);
+----
+bool bool
+
+
+query ??
+select false or true, true or false;
+----
+true true
+
+
+onlyif DataFusion
+query ??
+select arrow_typeof(false or true), arrow_typeof(true or false);
+----
+Boolean Boolean
+
+
+onlyif postgres
+query ??
+select pg_typeof(false or true), pg_typeof(true or false);
+----
+bool bool
+
+
+query ??
+select null and null, null or null;
+----
+NULL NULL
+
+
+onlyif DataFusion
+query ??
+select arrow_typeof(null and null), arrow_typeof(null or null);
+----
+Boolean Boolean
+
+
+onlyif postgres
+query ??
+select pg_typeof(null and null), pg_typeof(null or null);
+----
+bool bool
+
+
+onlyif postgres
+query ????
+select true and null,
+       false and null,
+       null and true,
+       null and false;
+----
+NULL false NULL false
+
+
+onlyif DataFusion
+query ????
+select arrow_typeof(true and null),
+       arrow_typeof(false and null),
+       arrow_typeof(null and true),
+       arrow_typeof(null and false);
+----
+Boolean Boolean Boolean Boolean
+
+
+onlyif postgres
+query ????
+select pg_typeof(true and null),
+       pg_typeof(false and null),
+       pg_typeof(null and true),
+       pg_typeof(null and false);
+----
+bool bool bool bool
+
+
+onlyif postgres
+query ????
+select true or null,
+       false or null,
+       null or true,
+       null or false;
+----
+true NULL true NULL
+
+
+onlyif DataFusion
+query ????
+select arrow_typeof(true or null),
+       arrow_typeof(false or null),
+       arrow_typeof(null or true),
+       arrow_typeof(null or false);
+----
+Boolean Boolean Boolean Boolean
+
+
+onlyif postgres
+query ????
+select pg_typeof(true or null),
+       pg_typeof(false or null),
+       pg_typeof(null or true),
+       pg_typeof(null or false);
+----
+bool bool bool bool

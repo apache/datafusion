@@ -25,7 +25,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
 
-use arrow::error::Result as ArrowResult;
 use arrow::{
     datatypes::{Field, Schema, SchemaRef},
     record_batch::RecordBatch,
@@ -43,11 +42,11 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution::context::TaskContext;
+use crate::physical_plan::common::get_meet_of_orderings;
 use crate::{
     error::Result,
     physical_plan::{expressions, metrics::BaselineMetrics},
 };
-use datafusion_physical_expr::sort_expr_list_eq_strict_order;
 use tokio::macros::support::thread_rng_n;
 
 /// `UnionExec`: `UNION ALL` execution plan.
@@ -220,30 +219,38 @@ impl ExecutionPlan for UnionExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        let first_input_ordering = self.inputs[0].output_ordering();
-        // If the Union is not partition aware and all the input ordering spec strictly equal with the first_input_ordering
-        // Return the first_input_ordering as the output_ordering
-        //
-        // It might be too strict here in the case that the input ordering are compatible but not exactly the same.
-        // For example one input ordering has the ordering spec SortExpr('a','b','c') and the other has the ordering
-        // spec SortExpr('a'), It is safe to derive the out ordering with the spec SortExpr('a').
-        if !self.partition_aware
-            && first_input_ordering.is_some()
-            && self
-                .inputs
+        // If the Union is partition aware, there is no output ordering.
+        // Otherwise, the output ordering is the "meet" of its input orderings.
+        // The meet is the finest ordering that satisfied by all the input
+        // orderings, see https://en.wikipedia.org/wiki/Join_and_meet.
+        if self.partition_aware {
+            return None;
+        }
+        get_meet_of_orderings(&self.inputs)
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        // If the Union has an output ordering, it maintains at least one
+        // child's ordering (i.e. the meet).
+        // For instance, assume that the first child is SortExpr('a','b','c'),
+        // the second child is SortExpr('a','b') and the third child is
+        // SortExpr('a','b'). The output ordering would be SortExpr('a','b'),
+        // which is the "meet" of all input orderings. In this example, this
+        // function will return vec![false, true, true], indicating that we
+        // preserve the orderings for the 2nd and the 3rd children.
+        if let Some(output_ordering) = self.output_ordering() {
+            self.inputs()
                 .iter()
-                .map(|plan| plan.output_ordering())
-                .all(|ordering| {
-                    ordering.is_some()
-                        && sort_expr_list_eq_strict_order(
-                            ordering.unwrap(),
-                            first_input_ordering.unwrap(),
-                        )
+                .map(|child| {
+                    if let Some(child_ordering) = child.output_ordering() {
+                        output_ordering.len() == child_ordering.len()
+                    } else {
+                        false
+                    }
                 })
-        {
-            first_input_ordering
+                .collect()
         } else {
-            None
+            vec![false; self.inputs().len()]
         }
     }
 
@@ -355,7 +362,7 @@ impl RecordBatchStream for CombinedRecordBatchStream {
 }
 
 impl Stream for CombinedRecordBatchStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -423,7 +430,7 @@ impl RecordBatchStream for ObservedStream {
 }
 
 impl futures::Stream for ObservedStream {
-    type Item = arrow::error::Result<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,

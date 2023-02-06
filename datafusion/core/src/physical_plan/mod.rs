@@ -27,7 +27,6 @@ use crate::error::Result;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 
 use arrow::datatypes::SchemaRef;
-use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
 pub use datafusion_expr::Accumulator;
@@ -44,7 +43,7 @@ use std::task::{Context, Poll};
 use std::{any::Any, pin::Pin};
 
 /// Trait for types that stream [arrow::record_batch::RecordBatch]
-pub trait RecordBatchStream: Stream<Item = ArrowResult<RecordBatch>> {
+pub trait RecordBatchStream: Stream<Item = Result<RecordBatch>> {
     /// Returns the schema of this `RecordBatchStream`.
     ///
     /// Implementation of this trait should guarantee that all `RecordBatch`'s returned by this
@@ -76,7 +75,7 @@ impl RecordBatchStream for EmptyRecordBatchStream {
 }
 
 impl Stream for EmptyRecordBatchStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         self: Pin<&mut Self>,
@@ -162,8 +161,8 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// WARNING: if you override this default, you *MUST* ensure that
     /// the operator's maintains the ordering invariant or else
     /// DataFusion may produce incorrect results.
-    fn maintains_input_order(&self) -> bool {
-        false
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![false; self.children().len()]
     }
 
     /// Returns `true` if this operator would benefit from
@@ -322,7 +321,7 @@ pub fn with_new_children_if_necessary(
 ///   assert_eq!("ProjectionExec: expr=[a@0 as a]\
 ///              \n  CoalesceBatchesExec: target_batch_size=8192\
 ///              \n    FilterExec: a@0 < 5\
-///              \n      RepartitionExec: partitioning=RoundRobinBatch(3)\
+///              \n      RepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1\
 ///              \n        CsvExec: files={1 group: [[WORKING_DIR/tests/data/example.csv]]}, has_header=true, limit=None, projection=[a]",
 ///               plan_string.trim());
 ///
@@ -342,7 +341,7 @@ pub fn displayable(plan: &dyn ExecutionPlan) -> DisplayableExecutionPlan<'_> {
 pub fn accept<V: ExecutionPlanVisitor>(
     plan: &dyn ExecutionPlan,
     visitor: &mut V,
-) -> std::result::Result<(), V::Error> {
+) -> Result<(), V::Error> {
     visitor.pre_visit(plan)?;
     for child in plan.children() {
         visit_execution_plan(child.as_ref(), visitor)?;
@@ -386,19 +385,13 @@ pub trait ExecutionPlanVisitor {
     /// recursion continues. If Err(..) or Ok(false) are returned, the
     /// recursion stops immediately and the error, if any, is returned
     /// to `accept`
-    fn pre_visit(
-        &mut self,
-        plan: &dyn ExecutionPlan,
-    ) -> std::result::Result<bool, Self::Error>;
+    fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error>;
 
     /// Invoked on an `ExecutionPlan` plan *after* all of its child
     /// inputs have been visited. The return value is handled the same
     /// as the return value of `pre_visit`. The provided default
     /// implementation returns `Ok(true)`.
-    fn post_visit(
-        &mut self,
-        _plan: &dyn ExecutionPlan,
-    ) -> std::result::Result<bool, Self::Error> {
+    fn post_visit(&mut self, _plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         Ok(true)
     }
 }
@@ -408,7 +401,7 @@ pub trait ExecutionPlanVisitor {
 pub fn visit_execution_plan<V: ExecutionPlanVisitor>(
     plan: &dyn ExecutionPlan,
     visitor: &mut V,
-) -> std::result::Result<(), V::Error> {
+) -> Result<(), V::Error> {
     visitor.pre_visit(plan)?;
     for child in plan.children() {
         visit_execution_plan(child.as_ref(), visitor)?;

@@ -279,10 +279,7 @@ impl WindowFrameStateRange {
         last_range: &Range<usize>,
         length: usize,
     ) -> Result<usize> {
-        let current_row_values = range_columns
-            .iter()
-            .map(|col| ScalarValue::try_from_array(col, idx))
-            .collect::<Result<Vec<ScalarValue>>>()?;
+        let current_row_values = get_row_at_idx(range_columns, idx)?;
         let end_range = if let Some(delta) = delta {
             let is_descending: bool = sort_options
                 .first()

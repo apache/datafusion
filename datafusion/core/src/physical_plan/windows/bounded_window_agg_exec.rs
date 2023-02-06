@@ -35,7 +35,6 @@ use arrow::compute::{concat, lexicographical_partition_ranges, SortColumn};
 use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
-    error::Result as ArrowResult,
     record_batch::RecordBatch,
 };
 use datafusion_common::{DataFusionError, ScalarValue};
@@ -186,8 +185,8 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self.input().equivalence_properties()
     }
 
-    fn maintains_input_order(&self) -> bool {
-        true
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
     }
 
     fn with_new_children(
@@ -414,7 +413,7 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
 }
 
 impl Stream for SortedPartitionByBoundedWindowStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -449,7 +448,7 @@ impl SortedPartitionByBoundedWindowStream {
         }
     }
 
-    fn compute_aggregates(&mut self) -> ArrowResult<RecordBatch> {
+    fn compute_aggregates(&mut self) -> Result<RecordBatch> {
         // calculate window cols
         for (cur_window_expr, state) in
             self.window_expr.iter().zip(&mut self.window_agg_states)
@@ -462,7 +461,7 @@ impl SortedPartitionByBoundedWindowStream {
         if let Some(columns_to_show) = columns_to_show {
             let n_generated = columns_to_show[0].len();
             self.prune_state(n_generated)?;
-            RecordBatch::try_new(schema, columns_to_show)
+            Ok(RecordBatch::try_new(schema, columns_to_show)?)
         } else {
             Ok(RecordBatch::new_empty(schema))
         }
@@ -472,7 +471,7 @@ impl SortedPartitionByBoundedWindowStream {
     fn poll_next_inner(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<ArrowResult<RecordBatch>>> {
+    ) -> Poll<Option<Result<RecordBatch>>> {
         if self.finished {
             return Poll::Ready(None);
         }
@@ -548,13 +547,14 @@ impl SortedPartitionByBoundedWindowStream {
         for window_agg_state in self.window_agg_states.iter_mut() {
             window_agg_state.retain(|_, WindowState { state, .. }| !state.is_end);
             for (partition_row, WindowState { state: value, .. }) in window_agg_state {
+                let n_prune =
+                    min(value.window_frame_range.start, value.last_calculated_index);
                 if let Some(state) = n_prune_each_partition.get_mut(partition_row) {
-                    if value.window_frame_range.start < *state {
-                        *state = value.window_frame_range.start;
+                    if n_prune < *state {
+                        *state = n_prune;
                     }
                 } else {
-                    n_prune_each_partition
-                        .insert(partition_row.clone(), value.window_frame_range.start);
+                    n_prune_each_partition.insert(partition_row.clone(), n_prune);
                 }
             }
         }
@@ -652,9 +652,7 @@ impl SortedPartitionByBoundedWindowStream {
                 end: num_rows,
             }]
         } else {
-            lexicographical_partition_ranges(partition_columns)
-                .map_err(DataFusionError::ArrowError)?
-                .collect::<Vec<_>>()
+            lexicographical_partition_ranges(partition_columns)?.collect()
         })
     }
 }
@@ -696,8 +694,7 @@ fn get_aggregate_result_out_column(
     }
     if running_length != len_to_show {
         return Err(DataFusionError::Execution(format!(
-            "Generated row number should be {}, it is {}",
-            len_to_show, running_length
+            "Generated row number should be {len_to_show}, it is {running_length}"
         )));
     }
     result

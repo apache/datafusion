@@ -32,7 +32,6 @@ use crate::physical_plan::{
 };
 use arrow::array::{ArrayRef, UInt64Builder};
 use arrow::datatypes::SchemaRef;
-use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use log::debug;
 
@@ -53,7 +52,7 @@ use tokio::task::JoinHandle;
 
 mod distributor_channels;
 
-type MaybeBatch = Option<ArrowResult<RecordBatch>>;
+type MaybeBatch = Option<Result<RecordBatch>>;
 type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
 
 /// Inner state of [`RepartitionExec`].
@@ -331,16 +330,16 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        if self.maintains_input_order() {
+        if self.maintains_input_order()[0] {
             self.input().output_ordering()
         } else {
             None
         }
     }
 
-    fn maintains_input_order(&self) -> bool {
+    fn maintains_input_order(&self) -> Vec<bool> {
         // We preserve ordering when input partitioning is 1
-        self.input().output_partitioning().partition_count() <= 1
+        vec![self.input().output_partitioning().partition_count() <= 1]
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
@@ -445,7 +444,12 @@ impl ExecutionPlan for RepartitionExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(f, "RepartitionExec: partitioning={:?}", self.partitioning)
+                write!(
+                    f,
+                    "RepartitionExec: partitioning={:?}, input_partitions={}",
+                    self.partitioning,
+                    self.input.output_partitioning().partition_count()
+                )
             }
         }
     }
@@ -540,7 +544,7 @@ impl RepartitionExec {
     /// channels.
     async fn wait_for_task(
         input_task: AbortOnDropSingle<Result<()>>,
-        txs: HashMap<usize, DistributionSender<Option<ArrowResult<RecordBatch>>>>,
+        txs: HashMap<usize, DistributionSender<Option<Result<RecordBatch>>>>,
     ) {
         // wait for completion, and propagate error
         // note we ignore errors on send (.ok) as that means the receiver has already shutdown.
@@ -550,12 +554,10 @@ impl RepartitionExec {
                 let e = Arc::new(e);
 
                 for (_, tx) in txs {
-                    let err = Err(ArrowError::ExternalError(Box::new(
-                        DataFusionError::Context(
-                            "Join Error".to_string(),
-                            Box::new(DataFusionError::External(Box::new(Arc::clone(&e)))),
-                        ),
-                    )));
+                    let err = Err(DataFusionError::Context(
+                        "Join Error".to_string(),
+                        Box::new(DataFusionError::External(Box::new(Arc::clone(&e)))),
+                    ));
                     tx.send(Some(err)).await.ok();
                 }
             }
@@ -565,7 +567,7 @@ impl RepartitionExec {
 
                 for (_, tx) in txs {
                     // wrap it because need to send error to all output partitions
-                    let err = Err(ArrowError::ExternalError(Box::new(e.clone())));
+                    let err = Err(DataFusionError::External(Box::new(e.clone())));
                     tx.send(Some(err)).await.ok();
                 }
             }
@@ -602,7 +604,7 @@ struct RepartitionStream {
 }
 
 impl Stream for RepartitionStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -667,12 +669,9 @@ mod tests {
             },
         },
     };
+    use arrow::array::{ArrayRef, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use arrow::{
-        array::{ArrayRef, StringArray},
-        error::ArrowError,
-    };
     use datafusion_common::cast::as_string_array;
     use futures::FutureExt;
     use std::collections::HashSet;
@@ -803,9 +802,7 @@ mod tests {
                 repartition(&schema, partitions, Partitioning::RoundRobinBatch(5)).await
             });
 
-        let output_partitions = join_handle
-            .await
-            .map_err(|e| DataFusionError::Internal(e.to_string()))??;
+        let output_partitions = join_handle.await.unwrap().unwrap();
 
         assert_eq!(5, output_partitions.len());
         assert_eq!(30, output_partitions[0].len());
@@ -887,7 +884,7 @@ mod tests {
 
         // input stream returns one good batch and then one error. The
         // error should be returned.
-        let err = Err(ArrowError::ComputeError("bad data error".to_string()));
+        let err = Err(DataFusionError::Execution("bad data error".to_string()));
 
         let schema = batch.schema();
         let input = MockExec::new(vec![Ok(batch), err], schema);
@@ -1174,8 +1171,9 @@ mod tests {
         // pull partitions
         for i in 0..exec.partitioning.partition_count() {
             let mut stream = exec.execute(i, task_ctx.clone())?;
-            let err =
-                DataFusionError::ArrowError(stream.next().await.unwrap().unwrap_err());
+            let err = DataFusionError::ArrowError(
+                stream.next().await.unwrap().unwrap_err().into(),
+            );
             let err = err.find_root();
             assert!(
                 matches!(err, DataFusionError::ResourcesExhausted(_)),

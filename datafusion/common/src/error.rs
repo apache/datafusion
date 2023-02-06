@@ -17,7 +17,7 @@
 
 //! DataFusion error types
 
-use std::error;
+use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io;
 use std::result;
@@ -34,10 +34,13 @@ use parquet::errors::ParquetError;
 use sqlparser::parser::ParserError;
 
 /// Result type for operations that could result in an [DataFusionError]
-pub type Result<T> = result::Result<T, DataFusionError>;
+pub type Result<T, E = DataFusionError> = result::Result<T, E>;
+
+/// Result type for operations that could result in an [DataFusionError] and needs to be shared (wrapped into `Arc`).
+pub type SharedResult<T> = result::Result<T, Arc<DataFusionError>>;
 
 /// Error type for generic operations that could result in DataFusionError::External
-pub type GenericError = Box<dyn error::Error + Send + Sync>;
+pub type GenericError = Box<dyn Error + Send + Sync>;
 
 /// DataFusion error
 #[derive(Debug)]
@@ -86,6 +89,9 @@ pub enum DataFusionError {
     JITError(ModuleError),
     /// Error with additional context
     Context(String, Box<DataFusionError>),
+    /// Errors originating from either mapping LogicalPlans to/from Substrait plans
+    /// or serializing/deserializing protobytes to Substrait plans
+    Substrait(String),
 }
 
 #[macro_export]
@@ -125,7 +131,7 @@ pub enum SchemaError {
     /// No field with this name
     FieldNotFound {
         field: Column,
-        valid_fields: Option<Vec<Column>>,
+        valid_fields: Vec<Column>,
     },
 }
 
@@ -137,13 +143,11 @@ pub fn field_not_found(
 ) -> DataFusionError {
     DataFusionError::SchemaError(SchemaError::FieldNotFound {
         field: Column::new(qualifier, name),
-        valid_fields: Some(
-            schema
-                .fields()
-                .iter()
-                .map(|f| f.qualified_column())
-                .collect(),
-        ),
+        valid_fields: schema
+            .fields()
+            .iter()
+            .map(|f| f.qualified_column())
+            .collect(),
     })
 }
 
@@ -160,11 +164,11 @@ impl Display for SchemaError {
                 } else {
                     write!(f, "'{}'", field.name)?;
                 }
-                if let Some(fields) = valid_fields {
+                if !valid_fields.is_empty() {
                     write!(
                         f,
                         ". Valid fields are {}",
-                        fields
+                        valid_fields
                             .iter()
                             .map(|field| {
                                 if let Some(q) = &field.relation {
@@ -201,6 +205,8 @@ impl Display for SchemaError {
         }
     }
 }
+
+impl Error for SchemaError {}
 
 impl From<io::Error> for DataFusionError {
     fn from(e: io::Error) -> Self {
@@ -281,7 +287,7 @@ impl Display for DataFusionError {
             }
             #[cfg(feature = "avro")]
             DataFusionError::AvroError(ref desc) => {
-                write!(f, "Avro error: {}", desc)
+                write!(f, "Avro error: {desc}")
             }
             DataFusionError::IoError(ref desc) => write!(f, "IO error: {desc}"),
             DataFusionError::SQL(ref desc) => {
@@ -320,22 +326,44 @@ impl Display for DataFusionError {
             DataFusionError::Context(ref desc, ref err) => {
                 write!(f, "{}\ncaused by\n{}", desc, *err)
             }
+            DataFusionError::Substrait(ref desc) => {
+                write!(f, "Substrait error: {desc}")
+            }
         }
     }
 }
 
-impl error::Error for DataFusionError {}
+impl Error for DataFusionError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            DataFusionError::ArrowError(e) => Some(e),
+            #[cfg(feature = "parquet")]
+            DataFusionError::ParquetError(e) => Some(e),
+            #[cfg(feature = "avro")]
+            DataFusionError::AvroError(e) => Some(e),
+            #[cfg(feature = "object_store")]
+            DataFusionError::ObjectStore(e) => Some(e),
+            DataFusionError::IoError(e) => Some(e),
+            DataFusionError::SQL(e) => Some(e),
+            DataFusionError::NotImplemented(_) => None,
+            DataFusionError::Internal(_) => None,
+            DataFusionError::Plan(_) => None,
+            DataFusionError::SchemaError(e) => Some(e),
+            DataFusionError::Execution(_) => None,
+            DataFusionError::ResourcesExhausted(_) => None,
+            DataFusionError::External(e) => Some(e.as_ref()),
+            #[cfg(feature = "jit")]
+            DataFusionError::JITError(e) => Some(e),
+            DataFusionError::Context(_, e) => Some(e.as_ref()),
+            DataFusionError::Substrait(_) => None,
+        }
+    }
+}
 
 impl From<DataFusionError> for io::Error {
     fn from(e: DataFusionError) -> Self {
         io::Error::new(io::ErrorKind::Other, e)
     }
-}
-
-/// Helper for [`DataFusionError::find_root`].
-enum OtherErr<'a> {
-    Arrow(&'a ArrowError),
-    Dyn(&'a (dyn std::error::Error + Send + Sync + 'static)),
 }
 
 impl DataFusionError {
@@ -355,83 +383,25 @@ impl DataFusionError {
     ///
     /// This may be the same as `self`.
     pub fn find_root(&self) -> &Self {
-        // Note: This is a non-recursive algorithm so we do not run out of stack space, even for long error chains. The
-        //       algorithm will always terminate because all steps access the next error through "converging" ownership,
-        //       i.e. there can be a fan-in by multiple parents (e.g. via `Arc`), but never a fan-out by multiple
-        //       children (e.g. via `Weak` or interior mutability via `Mutex`).
+        // Note: This is a non-recursive algorithm so we do not run
+        // out of stack space, even for long error chains.
 
-        // last error in the chain that was a DataFusionError
-        let mut checkpoint: &Self = self;
-
-        // current non-DataFusion error
-        let mut other_e: Option<OtherErr<'_>> = None;
-
-        loop {
-            // do we have another error type to explore?
-            if let Some(inner) = other_e {
-                // `other_e` is now bound to `inner`, so we can clear this path
-                other_e = None;
-
-                match inner {
-                    OtherErr::Arrow(inner) => {
-                        if let ArrowError::ExternalError(inner) = inner {
-                            other_e = Some(OtherErr::Dyn(inner.as_ref()));
-                            continue;
-                        }
-                    }
-                    OtherErr::Dyn(inner) => {
-                        if let Some(inner) = inner.downcast_ref::<Self>() {
-                            checkpoint = inner;
-                            continue;
-                        }
-
-                        if let Some(inner) = inner.downcast_ref::<ArrowError>() {
-                            other_e = Some(OtherErr::Arrow(inner));
-                            continue;
-                        }
-
-                        // some errors are wrapped into `Arc`s to share them with multiple receivers
-                        if let Some(inner) = inner.downcast_ref::<Arc<Self>>() {
-                            checkpoint = inner.as_ref();
-                            continue;
-                        }
-
-                        if let Some(inner) = inner.downcast_ref::<Arc<ArrowError>>() {
-                            other_e = Some(OtherErr::Arrow(inner.as_ref()));
-                            continue;
-                        }
-                    }
-                }
-
-                // dead end?
-                break;
+        let mut last_datafusion_error = self;
+        let mut root_error: &dyn Error = self;
+        while let Some(source) = root_error.source() {
+            // walk the next level
+            root_error = source;
+            // remember the lowest datafusion error so far
+            if let Some(e) = root_error.downcast_ref::<DataFusionError>() {
+                last_datafusion_error = e;
+            } else if let Some(e) = root_error.downcast_ref::<Arc<DataFusionError>>() {
+                // As `Arc<T>::source()` calls through to `T::source()` we need to
+                // explicitly match `Arc<DataFusionError>` to capture it
+                last_datafusion_error = e.as_ref();
             }
-
-            // traverse context chain
-            if let Self::Context(_msg, inner) = checkpoint {
-                checkpoint = inner;
-                continue;
-            }
-
-            // The Arrow error may itself contain a datafusion error again
-            // See https://github.com/apache/arrow-datafusion/issues/4172
-            if let Self::ArrowError(inner) = checkpoint {
-                other_e = Some(OtherErr::Arrow(inner));
-                continue;
-            }
-
-            // also try to introspect direct external errors
-            if let Self::External(inner) = checkpoint {
-                other_e = Some(OtherErr::Dyn(inner.as_ref()));
-                continue;
-            }
-
-            // no more traversal
-            break;
         }
-
         // return last checkpoint (which may be the original error)
-        checkpoint
+        last_datafusion_error
     }
 }
 

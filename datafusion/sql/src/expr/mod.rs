@@ -29,6 +29,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::normalize_ident;
 use arrow_schema::DataType;
 use datafusion_common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr_rewriter::rewrite_expr;
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
@@ -76,6 +77,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut expr = self.sql_expr_to_logical_expr(sql, schema, planner_context)?;
         expr = self.rewrite_partial_qualifier(expr, schema);
         self.validate_schema_satisfies_exprs(schema, &[expr.clone()])?;
+        let expr = infer_placeholder_types(expr, schema.clone())?;
         Ok(expr)
     }
 
@@ -494,6 +496,41 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )),
         }
     }
+}
+
+/// Find all `PlaceHolder` tokens in a logical plan, and try to infer their type from context
+fn infer_placeholder_types(expr: Expr, schema: DFSchema) -> Result<Expr> {
+    rewrite_expr(expr, |expr| {
+        let expr = match expr {
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                let left = (*left).clone();
+                let right = (*right).clone();
+                let lt = left.get_type(&schema);
+                let rt = right.get_type(&schema);
+                let left = match (&left, rt) {
+                    (Expr::Placeholder { id, data_type }, Ok(dt)) => Expr::Placeholder {
+                        id: id.clone(),
+                        data_type: Some(data_type.clone().unwrap_or(dt)),
+                    },
+                    _ => left.clone(),
+                };
+                let right = match (&right, lt) {
+                    (Expr::Placeholder { id, data_type }, Ok(dt)) => Expr::Placeholder {
+                        id: id.clone(),
+                        data_type: Some(data_type.clone().unwrap_or(dt)),
+                    },
+                    _ => right.clone(),
+                };
+                Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(left),
+                    op,
+                    right: Box::new(right),
+                })
+            }
+            _ => expr.clone(),
+        };
+        Ok(expr)
+    })
 }
 
 fn plan_key(key: SQLExpr) -> Result<ScalarValue> {

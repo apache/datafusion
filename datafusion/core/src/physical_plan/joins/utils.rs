@@ -17,7 +17,7 @@
 
 //! Join related functionality used both on logical and physical plans
 
-use crate::error::{DataFusionError, Result};
+use crate::error::{DataFusionError, Result, SharedResult};
 use crate::logical_expr::JoinType;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::SchemaRef;
@@ -27,7 +27,6 @@ use arrow::array::{
 };
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, UInt32Type, UInt64Type};
-use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::ScalarValue;
@@ -438,7 +437,7 @@ impl<T: 'static> OnceAsync<T> {
 }
 
 /// The shared future type used internally within [`OnceAsync`]
-type OnceFutPending<T> = Shared<BoxFuture<'static, Arc<Result<T>>>>;
+type OnceFutPending<T> = Shared<BoxFuture<'static, SharedResult<Arc<T>>>>;
 
 /// A [`OnceFut`] represents a shared asynchronous computation, that will be evaluated
 /// once for all [`Clone`]'s, with [`OnceFut::get`] providing a non-consuming interface
@@ -653,7 +652,7 @@ fn get_int_range(min: ScalarValue, max: ScalarValue) -> Option<usize> {
 
 enum OnceFutState<T> {
     Pending(OnceFutPending<T>),
-    Ready(Arc<Result<T>>),
+    Ready(SharedResult<Arc<T>>),
 }
 
 impl<T> Clone for OnceFutState<T> {
@@ -672,15 +671,16 @@ impl<T: 'static> OnceFut<T> {
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
         Self {
-            state: OnceFutState::Pending(fut.map(Arc::new).boxed().shared()),
+            state: OnceFutState::Pending(
+                fut.map(|res| res.map(Arc::new).map_err(Arc::new))
+                    .boxed()
+                    .shared(),
+            ),
         }
     }
 
     /// Get the result of the computation if it is ready, without consuming it
-    pub(crate) fn get(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<&T, ArrowError>> {
+    pub(crate) fn get(&mut self, cx: &mut Context<'_>) -> Poll<Result<&T>> {
         if let OnceFutState::Pending(fut) = &mut self.state {
             let r = ready!(fut.poll_unpin(cx));
             self.state = OnceFutState::Ready(r);
@@ -691,8 +691,8 @@ impl<T: 'static> OnceFut<T> {
             OnceFutState::Pending(_) => unreachable!(),
             OnceFutState::Ready(r) => Poll::Ready(
                 r.as_ref()
-                    .as_ref()
-                    .map_err(|e| ArrowError::ExternalError(e.to_string().into())),
+                    .map(|r| r.as_ref())
+                    .map_err(|e| DataFusionError::External(Box::new(e.clone()))),
             ),
         }
     }
@@ -788,7 +788,7 @@ pub(crate) fn build_batch_from_indices(
     left_indices: UInt64Array,
     right_indices: UInt32Array,
     column_indices: &[ColumnIndex],
-) -> ArrowResult<RecordBatch> {
+) -> Result<RecordBatch> {
     // build the columns of the new [RecordBatch]:
     // 1. pick whether the column is from the left or right
     // 2. based on the pick, `take` items from the different RecordBatches
@@ -820,7 +820,7 @@ pub(crate) fn build_batch_from_indices(
         };
         columns.push(array);
     }
-    RecordBatch::try_new(Arc::new(schema.clone()), columns)
+    Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
 }
 
 /// The input is the matched indices for left and right and
@@ -937,8 +937,10 @@ pub(crate) fn get_semi_indices(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::DataType;
+    use arrow::error::Result as ArrowResult;
+    use arrow::{datatypes::DataType, error::ArrowError};
     use datafusion_common::ScalarValue;
+    use std::pin::Pin;
 
     fn check(left: &[Column], right: &[Column], on: &[(Column, Column)]) -> Result<()> {
         let left = left
@@ -969,6 +971,41 @@ mod tests {
         let on = &[(Column::new("a", 0), Column::new("a", 0))];
 
         assert!(check(&left, &right, on).is_err());
+    }
+
+    #[tokio::test]
+    async fn check_error_nesting() {
+        let once_fut = OnceFut::<()>::new(async {
+            Err(DataFusionError::ArrowError(ArrowError::CsvError(
+                "some error".to_string(),
+            )))
+        });
+
+        struct TestFut(OnceFut<()>);
+        impl Future for TestFut {
+            type Output = ArrowResult<()>;
+
+            fn poll(
+                mut self: Pin<&mut Self>,
+                cx: &mut Context<'_>,
+            ) -> Poll<Self::Output> {
+                match ready!(self.0.get(cx)) {
+                    Ok(()) => Poll::Ready(Ok(())),
+                    Err(e) => Poll::Ready(Err(e.into())),
+                }
+            }
+        }
+
+        let res = TestFut(once_fut).await;
+        let arrow_err_from_fut = res.expect_err("once_fut always return error");
+
+        let wrapped_err = DataFusionError::from(arrow_err_from_fut);
+        let root_err = wrapped_err.find_root();
+
+        assert!(matches!(
+            root_err,
+            DataFusionError::ArrowError(ArrowError::CsvError(_))
+        ))
     }
 
     #[test]

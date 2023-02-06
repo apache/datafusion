@@ -34,7 +34,7 @@ use datafusion_expr::utils::find_column_exprs;
 use datafusion_expr::TableSource;
 use datafusion_expr::{col, AggregateUDF, Expr, ScalarUDF, SubqueryAlias};
 
-use crate::utils::{make_decimal_type, normalize_ident};
+use crate::utils::make_decimal_type;
 
 /// The ContextProvider trait allows the query planner to obtain meta-data about tables and
 /// functions referenced in SQL statements
@@ -53,9 +53,19 @@ pub trait ContextProvider {
 }
 
 /// SQL parser options
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ParserOptions {
     pub parse_float_as_decimal: bool,
+    pub enable_ident_normalization: bool,
+}
+
+impl Default for ParserOptions {
+    fn default() -> Self {
+        Self {
+            parse_float_as_decimal: false,
+            enable_ident_normalization: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -114,7 +124,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    pub(crate) fn build_schema(&self, columns: Vec<SQLColumnDef>) -> Result<Schema> {
+    pub fn build_schema(&self, columns: Vec<SQLColumnDef>) -> Result<Schema> {
         let mut fields = Vec::with_capacity(columns.len());
 
         for column in columns {
@@ -124,7 +134,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .iter()
                 .any(|x| x.option == ColumnOption::Null);
             fields.push(Field::new(
-                normalize_ident(column.name),
+                normalize_ident(column.name, self.options.enable_ident_normalization),
                 data_type,
                 allow_null,
             ));
@@ -141,7 +151,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let apply_name_plan = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
             plan,
-            normalize_ident(alias.name),
+            normalize_ident(alias.name, self.options.enable_ident_normalization),
         )?);
 
         self.apply_expr_alias(apply_name_plan, alias.columns)
@@ -164,7 +174,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let fields = plan.schema().fields().clone();
             LogicalPlanBuilder::from(plan)
                 .project(fields.iter().zip(idents.into_iter()).map(|(field, ident)| {
-                    col(field.name()).alias(normalize_ident(ident))
+                    col(field.name()).alias(normalize_ident(
+                        ident,
+                        self.options.enable_ident_normalization,
+                    ))
                 }))?
                 .build()
         }
@@ -218,6 +231,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             other => self.convert_simple_data_type(other),
         }
     }
+
     fn convert_simple_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
         match sql_type {
             SQLDataType::Boolean => Ok(DataType::Boolean),
@@ -309,6 +323,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ))),
         }
     }
+
+    pub(crate) fn object_name_to_table_reference(
+        &self,
+        object_name: ObjectName,
+    ) -> Result<OwnedTableReference> {
+        object_name_to_table_reference(
+            object_name,
+            self.options.enable_ident_normalization,
+        )
+    }
 }
 
 /// Create a [`OwnedTableReference`] after normalizing the specified ObjectName
@@ -323,23 +347,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 /// ```
 pub fn object_name_to_table_reference(
     object_name: ObjectName,
+    enable_normalization: bool,
 ) -> Result<OwnedTableReference> {
     // use destructure to make it clear no fields on ObjectName are ignored
     let ObjectName(idents) = object_name;
-    idents_to_table_reference(idents)
+    idents_to_table_reference(idents, enable_normalization)
 }
 
 /// Create a [`OwnedTableReference`] after normalizing the specified identifier
 pub(crate) fn idents_to_table_reference(
     idents: Vec<Ident>,
+    enable_normalization: bool,
 ) -> Result<OwnedTableReference> {
     struct IdentTaker(Vec<Ident>);
     /// take the next identifier from the back of idents, panic'ing if
     /// there are none left
     impl IdentTaker {
-        fn take(&mut self) -> String {
+        fn take(&mut self, enable_normalization: bool) -> String {
             let ident = self.0.pop().expect("no more identifiers");
-            normalize_ident(ident)
+            normalize_ident(ident, enable_normalization)
         }
     }
 
@@ -347,18 +373,18 @@ pub(crate) fn idents_to_table_reference(
 
     match taker.0.len() {
         1 => {
-            let table = taker.take();
+            let table = taker.take(enable_normalization);
             Ok(OwnedTableReference::Bare { table })
         }
         2 => {
-            let table = taker.take();
-            let schema = taker.take();
+            let table = taker.take(enable_normalization);
+            let schema = taker.take(enable_normalization);
             Ok(OwnedTableReference::Partial { schema, table })
         }
         3 => {
-            let table = taker.take();
-            let schema = taker.take();
-            let catalog = taker.take();
+            let table = taker.take(enable_normalization);
+            let schema = taker.take(enable_normalization);
+            let catalog = taker.take(enable_normalization);
             Ok(OwnedTableReference::Full {
                 catalog,
                 schema,
@@ -374,7 +400,10 @@ pub(crate) fn idents_to_table_reference(
 
 /// Construct a WHERE qualifier suitable for e.g. information_schema filtering
 /// from the provided object identifiers (catalog, schema and table names).
-pub fn object_name_to_qualifier(sql_table_name: &ObjectName) -> String {
+pub fn object_name_to_qualifier(
+    sql_table_name: &ObjectName,
+    enable_normalization: bool,
+) -> String {
     let columns = vec!["table_name", "table_schema", "table_catalog"].into_iter();
     sql_table_name
         .0
@@ -382,8 +411,20 @@ pub fn object_name_to_qualifier(sql_table_name: &ObjectName) -> String {
         .rev()
         .zip(columns)
         .map(|(ident, column_name)| {
-            format!(r#"{} = '{}'"#, column_name, normalize_ident(ident.clone()))
+            format!(
+                r#"{} = '{}'"#,
+                column_name,
+                normalize_ident(ident.clone(), enable_normalization)
+            )
         })
         .collect::<Vec<_>>()
         .join(" AND ")
+}
+
+fn normalize_ident(id: Ident, enable_normalization: bool) -> String {
+    if enable_normalization {
+        return crate::utils::normalize_ident(id);
+    }
+
+    id.value
 }

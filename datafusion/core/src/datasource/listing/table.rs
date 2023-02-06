@@ -57,7 +57,7 @@ use super::PartitionedFile;
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 
-/// Configuration for creating a 'ListingTable'
+/// Configuration for creating a [`ListingTable`]
 #[derive(Debug, Clone)]
 pub struct ListingTableConfig {
     /// Paths on the `ObjectStore` for creating `ListingTable`.
@@ -70,8 +70,10 @@ pub struct ListingTableConfig {
 }
 
 impl ListingTableConfig {
-    /// Creates new `ListingTableConfig`.
-    /// The `SchemaRef` and `ListingOptions` are inferred based on the suffix of the provided `table_paths` first element.
+    /// Creates new [`ListingTableConfig`].
+    ///
+    /// The [`SchemaRef`] and [`ListingOptions`] are inferred based on
+    /// the suffix of the provided `table_paths` first element.
     pub fn new(table_path: ListingTableUrl) -> Self {
         let table_paths = vec![table_path];
         Self {
@@ -81,8 +83,10 @@ impl ListingTableConfig {
         }
     }
 
-    /// Creates new `ListingTableConfig` with multiple table paths.
-    /// The `SchemaRef` and `ListingOptions` are inferred based on the suffix of the provided `table_paths` first element.
+    /// Creates new [`ListingTableConfig`] with multiple table paths.
+    ///
+    /// The [`SchemaRef`] and [`ListingOptions`] are inferred based on
+    /// the suffix of the provided `table_paths` first element.
     pub fn new_with_multi_paths(table_paths: Vec<ListingTableUrl>) -> Self {
         Self {
             table_paths,
@@ -90,7 +94,7 @@ impl ListingTableConfig {
             options: None,
         }
     }
-    /// Add `schema` to `ListingTableConfig`
+    /// Add `schema` to [`ListingTableConfig`]
     pub fn with_schema(self, schema: SchemaRef) -> Self {
         Self {
             table_paths: self.table_paths,
@@ -99,7 +103,7 @@ impl ListingTableConfig {
         }
     }
 
-    /// Add `listing_options` to `ListingTableConfig`
+    /// Add `listing_options` to [`ListingTableConfig`]
     pub fn with_listing_options(self, listing_options: ListingOptions) -> Self {
         Self {
             table_paths: self.table_paths,
@@ -172,7 +176,7 @@ impl ListingTableConfig {
         })
     }
 
-    /// Infer `SchemaRef` based on `table_path` suffix.  Requires `self.options` to be set prior to using.
+    /// Infer the [`SchemaRef`] based on `table_path` suffix.  Requires `self.options` to be set prior to using.
     pub async fn infer_schema(self, state: &SessionState) -> Result<Self> {
         match self.options {
             Some(options) => {
@@ -198,7 +202,7 @@ impl ListingTableConfig {
     }
 }
 
-/// Options for creating a `ListingTable`
+/// Options for creating a [`ListingTable`]
 #[derive(Clone, Debug)]
 pub struct ListingOptions {
     /// A suffix on which files should be filtered (leave empty to
@@ -432,8 +436,71 @@ impl StatisticsCache {
     }
 }
 
-/// An implementation of `TableProvider` that uses the object store
-/// or file system listing capability to get the list of files.
+/// Reads data from one or more files via an
+/// [`ObjectStore`](object_store::ObjectStore). For example, from
+/// local files or objects from AWS S3. Implements [`TableProvider`],
+/// a DataFusion data source.
+///
+/// # Features
+///
+/// 1. Merges schemas if the files have compatible but not indentical schemas
+///
+/// 2. Hive-style partitioning support, where a path such as
+/// `/files/date=1/1/2022/data.parquet` is injected as a `date` column.
+///
+/// 3. Projection pushdown for formats that support it such as such as
+/// Parquet
+///
+/// # Example
+///
+/// Here is an example of reading a directory of parquet files using a
+/// [`ListingTable`]:
+///
+/// ```no_run
+/// # use datafusion::prelude::SessionContext;
+/// # use datafusion::error::Result;
+/// # use std::sync::Arc;
+/// # use datafusion::datasource::{
+/// #   listing::{
+/// #      ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+/// #   },
+/// #   file_format::parquet::ParquetFormat,
+/// # };
+/// # #[tokio::main]
+/// # async fn main() -> Result<()> {
+/// let ctx = SessionContext::new();
+/// let session_state = ctx.state();
+/// let table_path = "/path/to/parquet";
+///
+/// // Parse the path
+/// let table_path = ListingTableUrl::parse(table_path)?;
+///
+/// // Create default parquet options
+/// let file_format = ParquetFormat::new();
+/// let listing_options = ListingOptions::new(Arc::new(file_format))
+///   .with_file_extension(".parquet");
+///
+/// // Resolve the schema
+/// let resolved_schema = listing_options
+///    .infer_schema(&session_state, &table_path)
+///    .await?;
+///
+/// let config = ListingTableConfig::new(table_path)
+///   .with_listing_options(listing_options)
+///   .with_schema(resolved_schema);
+///
+/// // Create a a new TableProvider
+/// let provider = Arc::new(ListingTable::try_new(config)?);
+///
+/// // This provider can now be read as a dataframe:
+/// let df = ctx.read_table(provider.clone());
+///
+/// // or registered as a named table:
+/// ctx.register_table("my_table", provider);
+///
+/// # Ok(())
+/// # }
+/// ```
 pub struct ListingTable {
     table_paths: Vec<ListingTableUrl>,
     /// File fields only
@@ -447,13 +514,16 @@ pub struct ListingTable {
 }
 
 impl ListingTable {
-    /// Create new table that lists the FS to get the files to scan.
+    /// Create new [`ListingTable`] that lists the FS to get the files
+    /// to scan. See [`ListingTable`] for and example.
+    ///
     /// Takes a `ListingTableConfig` as input which requires an `ObjectStore` and `table_path`.
     /// `ListingOptions` and `SchemaRef` are optional.  If they are not
     /// provided the file type is inferred based on the file suffix.
     /// If the schema is provided then it must be resolved before creating the table
     /// and should contain the fields of the file without the table
     /// partitioning columns.
+    ///
     pub fn try_new(config: ListingTableConfig) -> Result<Self> {
         let file_schema = config
             .file_schema
@@ -711,6 +781,7 @@ mod tests {
     use crate::prelude::*;
     use crate::{
         datasource::file_format::{avro::AvroFormat, parquet::ParquetFormat},
+        execution::options::ReadOptions,
         logical_expr::{col, lit},
         test::{columns, object_store::register_test_store},
     };
@@ -1027,7 +1098,8 @@ mod tests {
         #[values(true, false)] infinite_data: bool,
     ) -> Result<()> {
         let config = CsvReadOptions::new().mark_infinite(infinite_data);
-        let listing_options = config.to_listing_options(1);
+        let session_config = SessionConfig::new().with_target_partitions(1);
+        let listing_options = config.to_listing_options(&session_config);
         unbounded_table_helper(FileType::CSV, listing_options, infinite_data).await
     }
 
@@ -1037,7 +1109,8 @@ mod tests {
         #[values(true, false)] infinite_data: bool,
     ) -> Result<()> {
         let config = NdJsonReadOptions::default().mark_infinite(infinite_data);
-        let listing_options = config.to_listing_options(1);
+        let session_config = SessionConfig::new().with_target_partitions(1);
+        let listing_options = config.to_listing_options(&session_config);
         unbounded_table_helper(FileType::JSON, listing_options, infinite_data).await
     }
 
@@ -1047,7 +1120,8 @@ mod tests {
         #[values(true, false)] infinite_data: bool,
     ) -> Result<()> {
         let config = AvroReadOptions::default().mark_infinite(infinite_data);
-        let listing_options = config.to_listing_options(1);
+        let session_config = SessionConfig::new().with_target_partitions(1);
+        let listing_options = config.to_listing_options(&session_config);
         unbounded_table_helper(FileType::AVRO, listing_options, infinite_data).await
     }
 

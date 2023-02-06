@@ -39,8 +39,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Self::create_placeholder_expr(param, param_data_types)
             }
             _ => Err(DataFusionError::Plan(format!(
-                "Unsupported Value '{:?}'",
-                value,
+                "Unsupported Value '{value:?}'",
             ))),
         }
     }
@@ -100,19 +99,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let idx = match index {
             Ok(index) => index - 1,
             Err(_) => {
-                return Err(DataFusionError::Internal(format!(
+                return Err(DataFusionError::Plan(format!(
                     "Invalid placeholder, not a number: {param}"
                 )));
             }
         };
         // Check if the placeholder is in the parameter list
-        if param_data_types.len() <= idx {
-            return Err(DataFusionError::Internal(format!(
-                "Placehoder {param} does not exist in the parameter list: {param_data_types:?}"
-            )));
-        }
+        let param_type = param_data_types.get(idx);
         // Data type of the parameter
-        let param_type = param_data_types[idx].clone();
         debug!(
             "type of param {} param_data_types[idx]: {:?}",
             param, param_type
@@ -120,7 +114,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         Ok(Expr::Placeholder {
             id: param,
-            data_type: param_type,
+            data_type: param_type.cloned(),
         })
     }
 

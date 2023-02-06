@@ -534,11 +534,11 @@ async fn timestamp_minmax() -> Result<()> {
     let sql = "SELECT MIN(table_a.ts), MAX(table_b.ts) FROM table_a, table_b";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-------------------------+----------------------------------+",
-        "| MIN(table_a.ts)         | MAX(table_b.ts)                  |",
-        "+-------------------------+----------------------------------+",
-        "| 2020-09-08T11:42:29.190 | 2020-09-08T13:42:29.190855+00:00 |",
-        "+-------------------------+----------------------------------+",
+        "+-------------------------+-----------------------------+",
+        "| MIN(table_a.ts)         | MAX(table_b.ts)             |",
+        "+-------------------------+-----------------------------+",
+        "| 2020-09-08T11:42:29.190 | 2020-09-08T13:42:29.190855Z |",
+        "+-------------------------+-----------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -560,19 +560,19 @@ async fn timestamp_coercion() -> Result<()> {
         let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
-            "+---------------------------+-------------------------------+-------------------------+",
-            "| ts                        | ts                            | table_a.ts = table_b.ts |",
-            "+---------------------------+-------------------------------+-------------------------+",
-            "| 2020-09-08T13:42:29+00:00 | 2020-09-08T13:42:29.190+00:00 | true                    |",
-            "| 2020-09-08T13:42:29+00:00 | 2020-09-08T12:42:29.190+00:00 | false                   |",
-            "| 2020-09-08T13:42:29+00:00 | 2020-09-08T11:42:29.190+00:00 | false                   |",
-            "| 2020-09-08T12:42:29+00:00 | 2020-09-08T13:42:29.190+00:00 | false                   |",
-            "| 2020-09-08T12:42:29+00:00 | 2020-09-08T12:42:29.190+00:00 | true                    |",
-            "| 2020-09-08T12:42:29+00:00 | 2020-09-08T11:42:29.190+00:00 | false                   |",
-            "| 2020-09-08T11:42:29+00:00 | 2020-09-08T13:42:29.190+00:00 | false                   |",
-            "| 2020-09-08T11:42:29+00:00 | 2020-09-08T12:42:29.190+00:00 | false                   |",
-            "| 2020-09-08T11:42:29+00:00 | 2020-09-08T11:42:29.190+00:00 | true                    |",
-            "+---------------------------+-------------------------------+-------------------------+",
+            "+----------------------+--------------------------+-------------------------+",
+            "| ts                   | ts                       | table_a.ts = table_b.ts |",
+            "+----------------------+--------------------------+-------------------------+",
+            "| 2020-09-08T13:42:29Z | 2020-09-08T13:42:29.190Z | true                    |",
+            "| 2020-09-08T13:42:29Z | 2020-09-08T12:42:29.190Z | false                   |",
+            "| 2020-09-08T13:42:29Z | 2020-09-08T11:42:29.190Z | false                   |",
+            "| 2020-09-08T12:42:29Z | 2020-09-08T13:42:29.190Z | false                   |",
+            "| 2020-09-08T12:42:29Z | 2020-09-08T12:42:29.190Z | true                    |",
+            "| 2020-09-08T12:42:29Z | 2020-09-08T11:42:29.190Z | false                   |",
+            "| 2020-09-08T11:42:29Z | 2020-09-08T13:42:29.190Z | false                   |",
+            "| 2020-09-08T11:42:29Z | 2020-09-08T12:42:29.190Z | false                   |",
+            "| 2020-09-08T11:42:29Z | 2020-09-08T11:42:29.190Z | true                    |",
+            "+----------------------+--------------------------+-------------------------+",
         ];
         assert_batches_eq!(expected, &actual);
     }
@@ -1244,117 +1244,6 @@ async fn to_timestamp_seconds_i32() -> Result<()> {
 }
 
 #[tokio::test]
-async fn date_bin() {
-    let ctx = SessionContext::new();
-
-    let sql = "SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:00:00Z') AS res";
-    let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------+",
-        "| res                 |",
-        "+---------------------+",
-        "| 2022-08-03T14:30:00 |",
-        "+---------------------+",
-    ];
-    assert_batches_eq!(expected, &results);
-
-    // Shift forward by 5 minutes
-    let sql = "SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:05:00Z') AS res";
-    let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------+",
-        "| res                 |",
-        "+---------------------+",
-        "| 2022-08-03T14:35:00 |",
-        "+---------------------+",
-    ];
-    assert_batches_eq!(expected, &results);
-
-    // Shift backward by 5 minutes
-    let sql = "SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T23:55:00Z') AS res";
-    let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------+",
-        "| res                 |",
-        "+---------------------+",
-        "| 2022-08-03T14:25:00 |",
-        "+---------------------+",
-    ];
-    assert_batches_eq!(expected, &results);
-
-    // origin after source, timestamp in previous bucket
-    let sql = "SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '2022-08-03 14:40:00Z') AS res";
-    let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------+",
-        "| res                 |",
-        "+---------------------+",
-        "| 2022-08-03T14:25:00 |",
-        "+---------------------+",
-    ];
-    assert_batches_eq!(expected, &results);
-
-    // stride by 7 days
-    let sql = "SELECT DATE_BIN(INTERVAL '7 days', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01 00:00:00Z') AS res";
-    let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------+",
-        "| res                 |",
-        "+---------------------+",
-        "| 2022-07-28T00:00:00 |",
-        "+---------------------+",
-    ];
-    assert_batches_eq!(expected, &results);
-
-    // origin shifts bins forward 1 day
-    let sql = "SELECT DATE_BIN(INTERVAL '7 days', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-02 00:00:00Z') AS res";
-    let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------+",
-        "| res                 |",
-        "+---------------------+",
-        "| 2022-07-29T00:00:00 |",
-        "+---------------------+",
-    ];
-    assert_batches_eq!(expected, &results);
-
-    // following test demonstrates array values for the source argument
-    let sql = "SELECT
-      DATE_BIN(INTERVAL '15' minute, time, TIMESTAMP '2001-01-01T00:00:00Z') AS time,
-      val
-    FROM (
-      VALUES
-        (TIMESTAMP '2021-06-10 17:05:00Z', 0.5),
-        (TIMESTAMP '2021-06-10 17:19:10Z', 0.3)
-      ) as t (time, val)";
-    let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------+-----+",
-        "| time                | val |",
-        "+---------------------+-----+",
-        "| 2021-06-10T17:00:00 | 0.5 |",
-        "| 2021-06-10T17:15:00 | 0.3 |",
-        "+---------------------+-----+",
-    ];
-    assert_batches_eq!(expected, &results);
-
-    // following test demonstrates array values for the origin argument are not currently supported
-    let sql = "SELECT
-      DATE_BIN(INTERVAL '15' minute, time, origin) AS time,
-      val
-    FROM (
-      VALUES
-        (TIMESTAMP '2021-06-10 17:05:00Z', TIMESTAMP '2001-01-01T00:00:00Z', 0.5),
-        (TIMESTAMP '2021-06-10 17:19:10Z', TIMESTAMP '2001-01-01T00:00:00Z', 0.3)
-      ) as t (time, origin, val)";
-    let result = try_execute_to_batches(&ctx, sql).await;
-    assert_eq!(
-        result.err().unwrap().to_string(),
-        "Arrow error: External error: This feature is not implemented: DATE_BIN only supports literal values for the origin argument, not arrays"
-    );
-}
-
-#[tokio::test]
 async fn timestamp_add_interval_second() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -1539,13 +1428,13 @@ async fn cast_timestamp_to_timestamptz() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+----------------------------------+---------------------------------------+",
-        "| table_a.ts                       | arrowtypeof(table_a.ts)               |",
-        "+----------------------------------+---------------------------------------+",
-        "| 2020-09-08T13:42:29.190855+00:00 | Timestamp(Nanosecond, Some(\"+00:00\")) |",
-        "| 2020-09-08T12:42:29.190855+00:00 | Timestamp(Nanosecond, Some(\"+00:00\")) |",
-        "| 2020-09-08T11:42:29.190855+00:00 | Timestamp(Nanosecond, Some(\"+00:00\")) |",
-        "+----------------------------------+---------------------------------------+",
+        "+-----------------------------+---------------------------------------+",
+        "| table_a.ts                  | arrowtypeof(table_a.ts)               |",
+        "+-----------------------------+---------------------------------------+",
+        "| 2020-09-08T13:42:29.190855Z | Timestamp(Nanosecond, Some(\"+00:00\")) |",
+        "| 2020-09-08T12:42:29.190855Z | Timestamp(Nanosecond, Some(\"+00:00\")) |",
+        "| 2020-09-08T11:42:29.190855Z | Timestamp(Nanosecond, Some(\"+00:00\")) |",
+        "+-----------------------------+---------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -1683,7 +1572,6 @@ async fn test_current_time() -> Result<()> {
 #[tokio::test]
 async fn test_ts_dt_binary_ops() -> Result<()> {
     let ctx = SessionContext::new();
-
     // test cast in where clause
     let sql =
         "select count(1) result from (select now() as n) a where n = '2000-01-01'::date";
@@ -1741,6 +1629,56 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
     ];
 
     assert_batches_eq!(expected, &results);
+
+    //test cast path timestamp date using literals
+    let sql = "select '2000-01-01'::timestamp >= '2000-01-01'::date";
+    let df = ctx.sql(sql).await.unwrap();
+
+    let plan = df.explain(true, false)?.collect().await?;
+    let batch = &plan[0];
+    let mut res: Option<String> = None;
+    for row in 0..batch.num_rows() {
+        if &array_value_to_string(batch.column(0), row)?
+            == "logical_plan after type_coercion"
+        {
+            res = Some(array_value_to_string(batch.column(1), row)?);
+            break;
+        }
+    }
+    assert_eq!(res, Some("Projection: CAST(Utf8(\"2000-01-01\") AS Timestamp(Nanosecond, None)) >= CAST(CAST(Utf8(\"2000-01-01\") AS Date32) AS Timestamp(Nanosecond, None))\n  EmptyRelation".to_string()));
+
+    //test cast path timestamp date using function
+    let sql = "select now() >= '2000-01-01'::date";
+    let df = ctx.sql(sql).await.unwrap();
+
+    let plan = df.explain(true, false)?.collect().await?;
+    let batch = &plan[0];
+    let mut res: Option<String> = None;
+    for row in 0..batch.num_rows() {
+        if &array_value_to_string(batch.column(0), row)?
+            == "logical_plan after type_coercion"
+        {
+            res = Some(array_value_to_string(batch.column(1), row)?);
+            break;
+        }
+    }
+    assert_eq!(res, Some("Projection: CAST(now() AS Timestamp(Nanosecond, None)) >= CAST(CAST(Utf8(\"2000-01-01\") AS Date32) AS Timestamp(Nanosecond, None))\n  EmptyRelation".to_string()));
+
+    let sql = "select now() = current_date()";
+    let df = ctx.sql(sql).await.unwrap();
+
+    let plan = df.explain(true, false)?.collect().await?;
+    let batch = &plan[0];
+    let mut res: Option<String> = None;
+    for row in 0..batch.num_rows() {
+        if &array_value_to_string(batch.column(0), row)?
+            == "logical_plan after type_coercion"
+        {
+            res = Some(array_value_to_string(batch.column(1), row)?);
+            break;
+        }
+    }
+    assert_eq!(res, Some("Projection: CAST(now() AS Timestamp(Nanosecond, None)) = CAST(currentdate() AS Timestamp(Nanosecond, None))\n  EmptyRelation".to_string()));
 
     Ok(())
 }

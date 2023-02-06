@@ -24,8 +24,10 @@ use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
 use arrow::compute::kernels::arithmetic::{
-    add, add_scalar, divide_opt, divide_scalar, modulus, modulus_scalar, multiply,
-    multiply_scalar, subtract, subtract_scalar,
+    add, add_scalar_dyn as add_dyn_scalar, divide_opt,
+    divide_scalar_dyn as divide_dyn_scalar, modulus, modulus_scalar, multiply,
+    multiply_scalar_dyn as multiply_dyn_scalar, subtract,
+    subtract_scalar_dyn as subtract_dyn_scalar,
 };
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::comparison::regexp_is_match_utf8;
@@ -49,6 +51,7 @@ use arrow::compute::kernels::comparison::{
 use arrow::compute::kernels::comparison::{
     eq_scalar, gt_eq_scalar, gt_scalar, lt_eq_scalar, lt_scalar, neq_scalar,
 };
+use arrow::datatypes::*;
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
@@ -58,12 +61,12 @@ use kernels::{
     bitwise_xor, bitwise_xor_scalar,
 };
 use kernels_arrow::{
-    add_decimal, add_decimal_scalar, divide_decimal_scalar, divide_opt_decimal,
+    add_decimal, add_decimal_dyn_scalar, divide_decimal_dyn_scalar, divide_opt_decimal,
     is_distinct_from, is_distinct_from_bool, is_distinct_from_decimal,
     is_distinct_from_null, is_distinct_from_utf8, is_not_distinct_from,
     is_not_distinct_from_bool, is_not_distinct_from_decimal, is_not_distinct_from_null,
     is_not_distinct_from_utf8, modulus_decimal, modulus_decimal_scalar, multiply_decimal,
-    multiply_decimal_scalar, subtract_decimal, subtract_decimal_scalar,
+    multiply_decimal_dyn_scalar, subtract_decimal, subtract_decimal_dyn_scalar,
 };
 
 use arrow::datatypes::{DataType, Schema, TimeUnit};
@@ -315,6 +318,45 @@ macro_rules! compute_op_dyn_scalar {
     }};
 }
 
+/// Invoke a dyn compute kernel on a data array and a scalar value
+/// LEFT is Primitive or Dictionary array of numeric values, RIGHT is scalar value
+/// OP_TYPE is the return type of scalar function
+/// SCALAR_TYPE is the type of the scalar value
+/// Different to `compute_op_dyn_scalar`, this calls the `_dyn_scalar` functions that
+/// take a `SCALAR_TYPE`.
+macro_rules! compute_primitive_op_dyn_scalar {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr, $SCALAR_TYPE:ident) => {{
+        // generate the scalar function name, such as lt_dyn_scalar, from the $OP parameter
+        // (which could have a value of lt_dyn) and the suffix _scalar
+        if let Some(value) = $RIGHT {
+            Ok(Arc::new(paste::expr! {[<$OP _dyn_scalar>]::<$SCALAR_TYPE>}(
+                $LEFT,
+                value,
+            )?))
+        } else {
+            // when the $RIGHT is a NULL, generate a NULL array of $OP_TYPE
+            Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
+        }
+    }};
+}
+
+/// Invoke a dyn decimal compute kernel on a data array and a scalar value
+/// LEFT is Decimal or Dictionary array of decimal values, RIGHT is scalar value
+/// OP_TYPE is the return type of scalar function
+macro_rules! compute_primitive_decimal_op_dyn_scalar {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
+        // generate the scalar function name, such as add_decimal_dyn_scalar,
+        // from the $OP parameter (which could have a value of add) and the
+        // suffix _decimal_dyn_scalar
+        if let Some(value) = $RIGHT {
+            Ok(paste::expr! {[<$OP _decimal_dyn_scalar>]}($LEFT, value)?)
+        } else {
+            // when the $RIGHT is a NULL, generate a NULL array of $OP_TYPE
+            Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
+        }
+    }};
+}
+
 /// Invoke a compute kernel on array(s)
 macro_rules! compute_op {
     // invoke binary operator
@@ -374,6 +416,37 @@ macro_rules! binary_primitive_array_op {
             ))),
         }
     }};
+}
+
+/// Invoke a compute dyn kernel on an array and a scalar
+/// The binary_primitive_array_op_dyn_scalar macro only evaluates for primitive
+/// types like integers and floats.
+macro_rules! binary_primitive_array_op_dyn_scalar {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+        // unwrap underlying (non dictionary) value
+        let right = unwrap_dict_value($RIGHT);
+        let op_type = $LEFT.data_type();
+
+        let result: Result<Arc<dyn Array>> = match right {
+            ScalarValue::Decimal128(v, _, _) => compute_primitive_decimal_op_dyn_scalar!($LEFT, v, $OP, op_type),
+            ScalarValue::Int8(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int8Type),
+            ScalarValue::Int16(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int16Type),
+            ScalarValue::Int32(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int32Type),
+            ScalarValue::Int64(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int64Type),
+            ScalarValue::UInt8(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, UInt8Type),
+            ScalarValue::UInt16(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, UInt16Type),
+            ScalarValue::UInt32(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, UInt32Type),
+            ScalarValue::UInt64(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, UInt64Type),
+            ScalarValue::Float32(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Float32Type),
+            ScalarValue::Float64(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Float64Type),
+            other => Err(DataFusionError::Internal(format!(
+                "Data type {:?} not supported for scalar operation '{}' on dyn array",
+                other, stringify!($OP)))
+            )
+        };
+
+        Some(result)
+    }}
 }
 
 /// Invoke a compute kernel on an array and a scalar
@@ -924,18 +997,19 @@ impl BinaryExpr {
                 binary_array_op_dyn_scalar!(array, scalar.clone(), neq, bool_type)
             }
             Operator::Plus => {
-                binary_primitive_array_op_scalar!(array, scalar.clone(), add)
+                binary_primitive_array_op_dyn_scalar!(array, scalar.clone(), add)
             }
             Operator::Minus => {
-                binary_primitive_array_op_scalar!(array, scalar.clone(), subtract)
+                binary_primitive_array_op_dyn_scalar!(array, scalar.clone(), subtract)
             }
             Operator::Multiply => {
-                binary_primitive_array_op_scalar!(array, scalar.clone(), multiply)
+                binary_primitive_array_op_dyn_scalar!(array, scalar.clone(), multiply)
             }
             Operator::Divide => {
-                binary_primitive_array_op_scalar!(array, scalar.clone(), divide)
+                binary_primitive_array_op_dyn_scalar!(array, scalar.clone(), divide)
             }
             Operator::Modulo => {
+                // todo: change to binary_primitive_array_op_dyn_scalar! once modulo is implemented
                 binary_primitive_array_op_scalar!(array, scalar.clone(), modulus)
             }
             Operator::RegexMatch => binary_string_array_flag_op_scalar!(
@@ -1106,7 +1180,7 @@ pub fn binary(
     let rhs_type = &rhs.data_type(input_schema)?;
     if !lhs_type.eq(rhs_type) {
         return Err(DataFusionError::Internal(format!(
-            "The type of {lhs_type} {op} {rhs_type} of binary physical should be same"
+            "The type of {lhs_type} {op:?} {rhs_type} of binary physical should be same"
         )));
     }
     Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
@@ -1115,8 +1189,8 @@ pub fn binary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::try_cast;
     use crate::expressions::{col, lit};
+    use crate::expressions::{try_cast, Literal};
     use arrow::datatypes::{
         ArrowNumericType, Decimal128Type, Field, Int32Type, SchemaRef,
     };
@@ -1502,6 +1576,7 @@ mod tests {
     // is no way at the time of this writing to create a dictionary
     // array using the `From` trait
     #[test]
+    #[cfg(feature = "dictionary_expressions")]
     fn test_dictionary_type_to_array_coersion() -> Result<()> {
         // Test string  a string dictionary
         let dict_type =
@@ -1565,6 +1640,61 @@ mod tests {
     }
 
     #[test]
+    fn plus_op_scalar() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+
+        apply_arithmetic_scalar(
+            Arc::new(schema),
+            vec![Arc::new(a)],
+            Operator::Plus,
+            ScalarValue::Int32(Some(1)),
+            Arc::new(Int32Array::from(vec![2, 3, 4, 5, 6])),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn plus_op_dict_scalar() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
+            true,
+        )]);
+
+        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
+
+        dict_builder.append(1)?;
+        dict_builder.append_null();
+        dict_builder.append(2)?;
+        dict_builder.append(5)?;
+
+        let a = dict_builder.finish();
+
+        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
+
+        dict_builder.append(2)?;
+        dict_builder.append_null();
+        dict_builder.append(3)?;
+        dict_builder.append(6)?;
+        let expected = dict_builder.finish();
+
+        apply_arithmetic_scalar(
+            Arc::new(schema),
+            vec![Arc::new(a)],
+            Operator::Plus,
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(ScalarValue::Int32(Some(1))),
+            ),
+            Arc::new(expected),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
     fn minus_op() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -1592,6 +1722,61 @@ mod tests {
     }
 
     #[test]
+    fn minus_op_scalar() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+
+        apply_arithmetic_scalar(
+            Arc::new(schema),
+            vec![Arc::new(a)],
+            Operator::Minus,
+            ScalarValue::Int32(Some(1)),
+            Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4])),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn minus_op_dict_scalar() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
+            true,
+        )]);
+
+        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
+
+        dict_builder.append(1)?;
+        dict_builder.append_null();
+        dict_builder.append(2)?;
+        dict_builder.append(5)?;
+
+        let a = dict_builder.finish();
+
+        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
+
+        dict_builder.append(0)?;
+        dict_builder.append_null();
+        dict_builder.append(1)?;
+        dict_builder.append(4)?;
+        let expected = dict_builder.finish();
+
+        apply_arithmetic_scalar(
+            Arc::new(schema),
+            vec![Arc::new(a)],
+            Operator::Minus,
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(ScalarValue::Int32(Some(1))),
+            ),
+            Arc::new(expected),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
     fn multiply_op() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -1611,6 +1796,61 @@ mod tests {
     }
 
     #[test]
+    fn multiply_op_scalar() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+
+        apply_arithmetic_scalar(
+            Arc::new(schema),
+            vec![Arc::new(a)],
+            Operator::Multiply,
+            ScalarValue::Int32(Some(2)),
+            Arc::new(Int32Array::from(vec![2, 4, 6, 8, 10])),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn multiply_op_dict_scalar() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
+            true,
+        )]);
+
+        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
+
+        dict_builder.append(1)?;
+        dict_builder.append_null();
+        dict_builder.append(2)?;
+        dict_builder.append(5)?;
+
+        let a = dict_builder.finish();
+
+        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
+
+        dict_builder.append(2)?;
+        dict_builder.append_null();
+        dict_builder.append(4)?;
+        dict_builder.append(10)?;
+        let expected = dict_builder.finish();
+
+        apply_arithmetic_scalar(
+            Arc::new(schema),
+            vec![Arc::new(a)],
+            Operator::Multiply,
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(ScalarValue::Int32(Some(2))),
+            ),
+            Arc::new(expected),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
     fn divide_op() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -1624,6 +1864,61 @@ mod tests {
             vec![a, b],
             Operator::Divide,
             Int32Array::from(vec![4, 8, 16, 32, 64]),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn divide_op_scalar() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+
+        apply_arithmetic_scalar(
+            Arc::new(schema),
+            vec![Arc::new(a)],
+            Operator::Divide,
+            ScalarValue::Int32(Some(2)),
+            Arc::new(Int32Array::from(vec![0, 1, 1, 2, 2])),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn divide_op_dict_scalar() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
+            true,
+        )]);
+
+        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
+
+        dict_builder.append(1)?;
+        dict_builder.append_null();
+        dict_builder.append(2)?;
+        dict_builder.append(5)?;
+
+        let a = dict_builder.finish();
+
+        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
+
+        dict_builder.append(0)?;
+        dict_builder.append_null();
+        dict_builder.append(1)?;
+        dict_builder.append(2)?;
+        let expected = dict_builder.finish();
+
+        apply_arithmetic_scalar(
+            Arc::new(schema),
+            vec![Arc::new(a)],
+            Operator::Divide,
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(ScalarValue::Int32(Some(2))),
+            ),
+            Arc::new(expected),
         )?;
 
         Ok(())
@@ -1660,6 +1955,22 @@ mod tests {
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
 
         assert_eq!(result.as_ref(), &expected);
+        Ok(())
+    }
+
+    fn apply_arithmetic_scalar(
+        schema: SchemaRef,
+        data: Vec<ArrayRef>,
+        op: Operator,
+        literal: ScalarValue,
+        expected: ArrayRef,
+    ) -> Result<()> {
+        let lit = Arc::new(Literal::new(literal));
+        let arithmetic_op = binary_simple(col("a", &schema)?, op, lit, &schema);
+        let batch = RecordBatch::try_new(schema, data)?;
+        let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
+
+        assert_eq!(&result, &expected);
         Ok(())
     }
 

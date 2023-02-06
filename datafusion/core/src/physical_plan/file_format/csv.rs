@@ -21,12 +21,11 @@ use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::{SessionState, TaskContext};
 use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::file_format::delimited_stream::newline_delimited_stream;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::physical_plan::file_format::FileMeta;
-use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
+use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
@@ -35,12 +34,15 @@ use arrow::datatypes::SchemaRef;
 
 use bytes::Buf;
 
+use bytes::Bytes;
+use futures::ready;
 use futures::{StreamExt, TryStreamExt};
 use object_store::{GetResult, ObjectStore};
 use std::any::Any;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::task::Poll;
 use tokio::task::{self, JoinHandle};
 
 use super::{get_output_ordering, FileScanConfig};
@@ -153,7 +155,7 @@ impl ExecutionPlan for CsvExec {
             file_compression_type: self.file_compression_type.to_owned(),
         };
         let stream =
-            FileStream::new(&self.base_config, partition, opener, self.metrics.clone())?;
+            FileStream::new(&self.base_config, partition, opener, &self.metrics)?;
         Ok(Box::pin(stream) as SendableRecordBatchStream)
     }
 
@@ -179,6 +181,10 @@ impl ExecutionPlan for CsvExec {
     fn statistics(&self) -> Statistics {
         self.projected_statistics.clone()
     }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -192,18 +198,32 @@ struct CsvConfig {
 }
 
 impl CsvConfig {
-    fn open<R: std::io::Read>(&self, reader: R, first_chunk: bool) -> csv::Reader<R> {
+    fn open<R: std::io::Read>(&self, reader: R) -> csv::Reader<R> {
         let datetime_format = None;
         csv::Reader::new(
             reader,
             Arc::clone(&self.file_schema),
-            self.has_header && first_chunk,
+            self.has_header,
             Some(self.delimiter),
             self.batch_size,
             None,
             self.file_projection.clone(),
             datetime_format,
         )
+    }
+
+    fn builder(&self) -> csv::ReaderBuilder {
+        let mut builder = csv::ReaderBuilder::new()
+            .with_schema(self.file_schema.clone())
+            .with_delimiter(self.delimiter)
+            .with_batch_size(self.batch_size)
+            .has_header(self.has_header);
+
+        if let Some(proj) = &self.file_projection {
+            builder = builder.with_projection(proj.clone());
+        }
+
+        builder
     }
 }
 
@@ -220,20 +240,38 @@ impl FileOpener for CsvOpener {
             match config.object_store.get(file_meta.location()).await? {
                 GetResult::File(file, _) => {
                     let decoder = file_compression_type.convert_read(file)?;
-                    Ok(futures::stream::iter(config.open(decoder, true)).boxed())
+                    Ok(futures::stream::iter(config.open(decoder)).boxed())
                 }
                 GetResult::Stream(s) => {
-                    let mut first_chunk = true;
-                    let s = s.map_err(Into::<DataFusionError>::into);
-                    let decoder = file_compression_type.convert_stream(s)?;
-                    Ok(newline_delimited_stream(decoder)
-                        .map_ok(move |bytes| {
-                            let reader = config.open(bytes.reader(), first_chunk);
-                            first_chunk = false;
-                            futures::stream::iter(reader)
-                        })
-                        .try_flatten()
-                        .boxed())
+                    let mut decoder = config.builder().build_decoder();
+                    let s = s.map_err(DataFusionError::from);
+                    let mut input = file_compression_type.convert_stream(s)?.fuse();
+                    let mut buffered = Bytes::new();
+
+                    let s = futures::stream::poll_fn(move |cx| {
+                        loop {
+                            if buffered.is_empty() {
+                                match ready!(input.poll_next_unpin(cx)) {
+                                    Some(Ok(b)) => buffered = b,
+                                    Some(Err(e)) => {
+                                        return Poll::Ready(Some(Err(e.into())))
+                                    }
+                                    None => {}
+                                };
+                            }
+                            let decoded = match decoder.decode(buffered.as_ref()) {
+                                // Note: the decoder needs to be called with an empty
+                                // array to delimt the final record
+                                Ok(0) => break,
+                                Ok(decoded) => decoded,
+                                Err(e) => return Poll::Ready(Some(Err(e))),
+                            };
+                            buffered.advance(decoded);
+                        }
+
+                        Poll::Ready(decoder.flush().transpose())
+                    });
+                    Ok(s.boxed())
                 }
             }
         }))
@@ -448,7 +486,7 @@ mod tests {
         let err = it.next().await.unwrap().unwrap_err().to_string();
         assert_eq!(
             err,
-            "Csv error: incorrect number of fields, expected 14 got 13"
+            "Arrow error: Csv error: incorrect number of fields for line 1, expected 14 got 13"
         );
         Ok(())
     }
@@ -515,6 +553,13 @@ mod tests {
             "+----+------------+",
         ];
         crate::assert_batches_eq!(expected, &[batch.slice(0, 5)]);
+
+        let metrics = csv.metrics().expect("doesn't found metrics");
+        let time_elapsed_processing = get_value(&metrics, "time_elapsed_processing");
+        assert!(
+            time_elapsed_processing > 0,
+            "Expected time_elapsed_processing greater than 0",
+        );
         Ok(())
     }
 
@@ -604,6 +649,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_no_trailing_delimiter() {
+        let session_ctx = SessionContext::new();
+        let store = object_store::memory::InMemory::new();
+
+        let data = bytes::Bytes::from("a,b\n1,2\n3,4");
+        let path = object_store::path::Path::from("a.csv");
+        store.put(&path, data).await.unwrap();
+
+        session_ctx
+            .runtime_env()
+            .register_object_store("memory", "", Arc::new(store));
+
+        let df = session_ctx
+            .read_csv("memory:///", CsvReadOptions::new())
+            .await
+            .unwrap();
+
+        let result = df.collect().await.unwrap();
+
+        let expected = vec![
+            "+---+---+",
+            "| a | b |",
+            "+---+---+",
+            "| 1 | 2 |",
+            "| 3 | 4 |",
+            "+---+---+",
+        ];
+
+        crate::assert_batches_eq!(expected, &result);
+    }
+
+    #[tokio::test]
     async fn write_csv_results_error_handling() -> Result<()> {
         let ctx = SessionContext::new();
         let options = CsvReadOptions::default()
@@ -675,5 +752,16 @@ mod tests {
         assert_eq!(allparts_count, 80);
 
         Ok(())
+    }
+
+    fn get_value(metrics: &MetricsSet, metric_name: &str) -> usize {
+        match metrics.sum_by_name(metric_name) {
+            Some(v) => v.as_usize(),
+            _ => {
+                panic!(
+                    "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
+                );
+            }
+        }
     }
 }
