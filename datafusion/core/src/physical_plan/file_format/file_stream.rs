@@ -99,10 +99,10 @@ enum FileStreamState {
         partition_values: Vec<ScalarValue>,
         /// The reader instance
         reader: BoxStream<'static, Result<RecordBatch, ArrowError>>,
-        /// A [`FileOpenFuture`] for the next file to be processed, 
+        /// A [`FileOpenFuture`] for the next file to be processed,
         /// and its corresponding partition column values, if any.
         /// This allows the next file to be opened in parallel while the
-        /// current file is read. 
+        /// current file is read.
         next: Option<(FileOpenFuture, Vec<ScalarValue>)>,
     },
     /// Encountered an error
@@ -208,11 +208,11 @@ impl<F: FileOpener> FileStream<F> {
         })
     }
 
-    // Begin opening the next file in parallel while decoding the current file in FileStream. 
-    // Since file opening is mostly IO (and may involve a 
-    // bunch of sequential IO), it can be parallelized with decoding. 
+    // Begin opening the next file in parallel while decoding the current file in FileStream.
+    // Since file opening is mostly IO (and may involve a
+    // bunch of sequential IO), it can be parallelized with decoding.
     fn start_next_file(&mut self) -> Option<Result<(FileOpenFuture, Vec<ScalarValue>)>> {
-        let part_file =  self.file_iter.pop_front()?;
+        let part_file = self.file_iter.pop_front()?;
 
         let file_meta = FileMeta {
             object_meta: part_file.object_meta,
