@@ -189,28 +189,20 @@ pub(crate) fn add_decimal(
 }
 
 pub(crate) fn add_decimal_dyn_scalar(left: &dyn Array, right: i128) -> Result<ArrayRef> {
-    let left_decimal = left.as_any().downcast_ref::<Decimal128Array>().unwrap();
+    let (precision, scale) = get_precision_scale(left)?;
 
     let array = add_scalar_dyn::<Decimal128Type>(left, right)?;
-    let decimal_array = as_decimal128_array(&array)?;
-    let decimal_array = decimal_array
-        .clone()
-        .with_precision_and_scale(left_decimal.precision(), left_decimal.scale())?;
-    Ok(Arc::new(decimal_array))
+    decimal_array_with_precision_scale(array, precision, scale)
 }
 
 pub(crate) fn subtract_decimal_dyn_scalar(
     left: &dyn Array,
     right: i128,
 ) -> Result<ArrayRef> {
-    let left_decimal = left.as_any().downcast_ref::<Decimal128Array>().unwrap();
+    let (precision, scale) = get_precision_scale(left)?;
 
     let array = subtract_scalar_dyn::<Decimal128Type>(left, right)?;
-    let decimal_array = as_decimal128_array(&array)?;
-    let decimal_array = decimal_array
-        .clone()
-        .with_precision_and_scale(left_decimal.precision(), left_decimal.scale())?;
-    Ok(Arc::new(decimal_array))
+    decimal_array_with_precision_scale(array, precision, scale)
 }
 
 fn get_precision_scale(left: &dyn Array) -> Result<(u8, i8)> {
