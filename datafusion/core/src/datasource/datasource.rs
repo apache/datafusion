@@ -76,7 +76,6 @@ pub trait TableProvider: Sync + Send {
         &self,
         _filter: &Expr,
     ) -> Result<TableProviderFilterPushDown> {
-        
         Ok(TableProviderFilterPushDown::Unsupported)
     }
 
