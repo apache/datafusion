@@ -32,7 +32,7 @@ use substrait::proto::{
     expression::MaskExpression, read_rel::ReadType, rel::RelType, Rel,
 };
 
-/// Convert Substrait Rel to DataFusion LogicalPlan
+/// Convert Substrait Rel to DataFusion ExecutionPlan
 #[async_recursion]
 pub async fn from_substrait_rel(
     _ctx: &mut SessionContext,
