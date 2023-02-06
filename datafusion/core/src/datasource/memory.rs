@@ -92,11 +92,7 @@ impl MemTable {
             Vec::with_capacity(exec.output_partitioning().partition_count());
 
         for result in futures::future::join_all(tasks).await {
-            data.push(result.map_err(|_| {
-                DataFusionError::Internal(
-                    "MemTable::load could not join task".to_string(),
-                )
-            })??)
+            data.push(result.map_err(|e| DataFusionError::External(Box::new(e)))??)
         }
 
         let exec = MemoryExec::try_new(&data, schema.clone(), None)?;
