@@ -181,8 +181,7 @@ pub(crate) fn is_not_distinct_from_decimal(
 pub(crate) fn add_dyn_decimal(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
     let (precision, scale) = get_precision_scale(left)?;
     let array = add_dyn(left, right)?;
-    let array = decimal_array_with_precision_scale(array, precision, scale)?;
-    Ok(array)
+    decimal_array_with_precision_scale(array, precision, scale)
 }
 
 pub(crate) fn add_decimal_dyn_scalar(left: &dyn Array, right: i128) -> Result<ArrayRef> {
@@ -285,8 +284,7 @@ pub(crate) fn subtract_dyn_decimal(
 ) -> Result<ArrayRef> {
     let (precision, scale) = get_precision_scale(left)?;
     let array = subtract_dyn(left, right)?;
-    let array = decimal_array_with_precision_scale(array, precision, scale)?;
-    Ok(array)
+    decimal_array_with_precision_scale(array, precision, scale)
 }
 
 pub(crate) fn multiply_dyn_decimal(
@@ -298,8 +296,7 @@ pub(crate) fn multiply_dyn_decimal(
     let divide = 10_i128.pow(scale as u32);
     let array = multiply_dyn(left, right)?;
     let array = divide_scalar_dyn::<Decimal128Type>(&array, divide)?;
-    let array = decimal_array_with_precision_scale(array, precision, scale)?;
-    Ok(array)
+    decimal_array_with_precision_scale(array, precision, scale)
 }
 
 pub(crate) fn divide_dyn_opt_decimal(
@@ -310,9 +307,9 @@ pub(crate) fn divide_dyn_opt_decimal(
 
     let mul = 10_i128.pow(scale as u32);
     let array = multiply_scalar_dyn::<Decimal128Type>(left, mul)?;
-    let array = divide_dyn_opt(&array, right)?;
     let array = decimal_array_with_precision_scale(array, precision, scale)?;
-    Ok(array)
+    let array = divide_dyn_opt(&array, right)?;
+    decimal_array_with_precision_scale(array, precision, scale)
 }
 
 pub(crate) fn modulus_decimal(
