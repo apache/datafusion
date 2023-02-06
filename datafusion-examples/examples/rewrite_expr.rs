@@ -18,7 +18,7 @@
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
+use datafusion_expr::expr_rewriter::rewrite_expr;
 use datafusion_expr::{
     AggregateUDF, Between, Expr, Filter, LogicalPlan, ScalarUDF, TableSource,
 };
@@ -82,9 +82,7 @@ impl OptimizerRule for MyRule {
         let optimized_plan = utils::optimize_children(self, plan, config)?;
         match optimized_plan {
             Some(LogicalPlan::Filter(filter)) => {
-                let mut expr_rewriter = MyExprRewriter {};
-                let predicate = filter.predicate.clone();
-                let predicate = predicate.rewrite(&mut expr_rewriter)?;
+                let predicate = my_rewrite(filter.predicate.clone())?;
                 Ok(Some(LogicalPlan::Filter(Filter::try_new(
                     predicate,
                     filter.input,
@@ -93,9 +91,7 @@ impl OptimizerRule for MyRule {
             Some(optimized_plan) => Ok(Some(optimized_plan)),
             None => match plan {
                 LogicalPlan::Filter(filter) => {
-                    let mut expr_rewriter = MyExprRewriter {};
-                    let predicate = filter.predicate.clone();
-                    let predicate = predicate.rewrite(&mut expr_rewriter)?;
+                    let predicate = my_rewrite(filter.predicate.clone())?;
                     Ok(Some(LogicalPlan::Filter(Filter::try_new(
                         predicate,
                         filter.input.clone(),
@@ -107,29 +103,30 @@ impl OptimizerRule for MyRule {
     }
 }
 
-struct MyExprRewriter {}
-
-impl ExprRewriter for MyExprRewriter {
-    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        match expr {
+/// use rewrite_expr to modify the expression tree.
+fn my_rewrite(expr: Expr) -> Result<Expr> {
+    rewrite_expr(expr, |e| {
+        // closure is invoked for all sub expressions
+        match e {
             Expr::Between(Between {
                 expr,
                 negated,
                 low,
                 high,
             }) => {
-                let expr: Expr = expr.as_ref().clone();
-                let low: Expr = low.as_ref().clone();
-                let high: Expr = high.as_ref().clone();
+                // unbox
+                let expr: Expr = *expr;
+                let low: Expr = *low;
+                let high: Expr = *high;
                 if negated {
                     Ok(expr.clone().lt(low).or(expr.gt(high)))
                 } else {
                     Ok(expr.clone().gt_eq(low).and(expr.lt_eq(high)))
                 }
             }
-            _ => Ok(expr.clone()),
+            _ => Ok(e),
         }
-    }
+    })
 }
 
 #[derive(Default)]

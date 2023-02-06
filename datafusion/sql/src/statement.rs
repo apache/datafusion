@@ -19,8 +19,7 @@ use crate::parser::{
     CreateExternalTable, DFParser, DescribeTableStmt, Statement as DFStatement,
 };
 use crate::planner::{
-    object_name_to_qualifier, object_name_to_table_reference, ContextProvider,
-    PlannerContext, SqlToRel,
+    object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
 };
 use crate::utils::normalize_ident;
 use arrow_schema::DataType;
@@ -158,7 +157,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 };
 
                 Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                    name: object_name_to_table_reference(name)?,
+                    name: self.object_name_to_table_reference(name)?,
                     input: Arc::new(plan),
                     if_not_exists,
                     or_replace,
@@ -176,7 +175,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 plan = self.apply_expr_alias(plan, columns)?;
 
                 Ok(LogicalPlan::CreateView(CreateView {
-                    name: object_name_to_table_reference(name)?,
+                    name: self.object_name_to_table_reference(name)?,
                     input: Arc::new(plan),
                     or_replace,
                     definition: sql,
@@ -221,7 +220,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // nor do we support multiple object names
                 let name = match names.len() {
                     0 => Err(ParserError("Missing table name.".to_string()).into()),
-                    1 => object_name_to_table_reference(names.pop().unwrap()),
+                    1 => self.object_name_to_table_reference(names.pop().unwrap()),
                     _ => {
                         Err(ParserError("Multiple objects not supported".to_string())
                             .into())
@@ -412,7 +411,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         statement: DescribeTableStmt,
     ) -> Result<LogicalPlan> {
         let DescribeTableStmt { table_name } = statement;
-        let table_ref = object_name_to_table_reference(table_name)?;
+        let table_ref = self.object_name_to_table_reference(table_name)?;
 
         let table_source = self
             .schema_provider
@@ -631,7 +630,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // Do a table lookup to verify the table exists
-        let table_ref = object_name_to_table_reference(table_name.clone())?;
+        let table_ref = self.object_name_to_table_reference(table_name.clone())?;
         let provider = self
             .schema_provider
             .get_table_provider((&table_ref).into())?;
@@ -683,7 +682,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // Do a table lookup to verify the table exists
-        let table_name = object_name_to_table_reference(table_name)?;
+        let table_name = self.object_name_to_table_reference(table_name)?;
         let provider = self
             .schema_provider
             .get_table_provider((&table_name).into())?;
@@ -785,7 +784,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         source: Box<Query>,
     ) -> Result<LogicalPlan> {
         // Do a table lookup to verify the table exists
-        let table_name = object_name_to_table_reference(table_name)?;
+        let table_name = self.object_name_to_table_reference(table_name)?;
         let provider = self
             .schema_provider
             .get_table_provider((&table_name).into())?;
@@ -887,10 +886,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ));
         }
         // Figure out the where clause
-        let where_clause = object_name_to_qualifier(&sql_table_name);
+        let where_clause = object_name_to_qualifier(
+            &sql_table_name,
+            self.options.enable_ident_normalization,
+        );
 
         // Do a table lookup to verify the table exists
-        let table_ref = object_name_to_table_reference(sql_table_name)?;
+        let table_ref = self.object_name_to_table_reference(sql_table_name)?;
         let _ = self
             .schema_provider
             .get_table_provider((&table_ref).into())?;
@@ -922,10 +924,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ));
         }
         // Figure out the where clause
-        let where_clause = object_name_to_qualifier(&sql_table_name);
+        let where_clause = object_name_to_qualifier(
+            &sql_table_name,
+            self.options.enable_ident_normalization,
+        );
 
         // Do a table lookup to verify the table exists
-        let table_ref = object_name_to_table_reference(sql_table_name)?;
+        let table_ref = self.object_name_to_table_reference(sql_table_name)?;
         let _ = self
             .schema_provider
             .get_table_provider((&table_ref).into())?;

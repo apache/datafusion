@@ -34,19 +34,26 @@ path = "examples/avro_sql.rs"
 required-features = ["datafusion/avro"]
 
 [dev-dependencies]
-arrow = "31.0.0"
-arrow-flight = "31.0.0"
+arrow = "32.0.0"
+arrow-flight = { version = "32.0.0", features = ["flight-sql-experimental"] }
+arrow-schema = "32.0.0"
 async-trait = "0.1.41"
+dashmap = "5.4"
 datafusion = { path = "../datafusion/core" }
 datafusion-common = { path = "../datafusion/common" }
 datafusion-expr = { path = "../datafusion/expr" }
 datafusion-optimizer = { path = "../datafusion/optimizer" }
 datafusion-sql = { path = "../datafusion/sql" }
+env_logger = "0.10"
 futures = "0.3"
+log = "0.4"
+mimalloc = { version = "0.1", default-features = false }
 num_cpus = "1.13.0"
-object_store = { version = "0.5.0", features = ["aws"] }
-prost = "0.11.0"
+object_store = { version = "0.5", features = ["aws"] }
+prost = { version = "0.11", default-features = false }
+prost-derive = { version = "0.11", default-features = false }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.82"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
 tonic = "0.8"
+uuid = "1.2"

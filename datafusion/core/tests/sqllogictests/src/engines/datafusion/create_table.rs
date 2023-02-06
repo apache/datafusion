@@ -21,7 +21,7 @@ use crate::engines::datafusion::util::LogicTestContextProvider;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DataFusionError, OwnedTableReference};
-use datafusion_sql::planner::{object_name_to_table_reference, SqlToRel};
+use datafusion_sql::planner::{object_name_to_table_reference, ParserOptions, SqlToRel};
 use sqllogictest::DBOutput;
 use sqlparser::ast::{ColumnDef, ObjectName};
 use std::sync::Arc;
@@ -33,7 +33,8 @@ pub async fn create_table(
     if_not_exists: bool,
     or_replace: bool,
 ) -> Result<DBOutput> {
-    let table_reference = object_name_to_table_reference(name)?;
+    let table_reference =
+        object_name_to_table_reference(name, ctx.enable_ident_normalization())?;
     let existing_table = ctx.table(&table_reference).await;
     match (if_not_exists, or_replace, existing_table) {
         (true, false, Ok(_)) => Ok(DBOutput::StatementComplete(0)),
@@ -60,7 +61,20 @@ fn create_new_table(
     table_reference: OwnedTableReference,
     columns: Vec<ColumnDef>,
 ) -> Result<DBOutput> {
-    let sql_to_rel = SqlToRel::new(&LogicTestContextProvider {});
+    let config = ctx.copied_config();
+    let sql_to_rel = SqlToRel::new_with_options(
+        &LogicTestContextProvider {},
+        ParserOptions {
+            parse_float_as_decimal: config
+                .config_options()
+                .sql_parser
+                .parse_float_as_decimal,
+            enable_ident_normalization: config
+                .config_options()
+                .sql_parser
+                .enable_ident_normalization,
+        },
+    );
     let schema = Arc::new(sql_to_rel.build_schema(columns)?);
     let table_provider = Arc::new(MemTable::try_new(schema, vec![])?);
     ctx.register_table(&table_reference, table_provider)?;

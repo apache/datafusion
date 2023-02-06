@@ -180,7 +180,7 @@ struct CoalesceBatchesStream {
 }
 
 impl Stream for CoalesceBatchesStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -200,7 +200,7 @@ impl CoalesceBatchesStream {
     fn poll_next_inner(
         self: &mut Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<ArrowResult<RecordBatch>>> {
+    ) -> Poll<Option<Result<RecordBatch>>> {
         // Get a clone (uses same underlying atomic) as self gets borrowed below
         let cloned_time = self.baseline_metrics.elapsed_compute().clone();
 

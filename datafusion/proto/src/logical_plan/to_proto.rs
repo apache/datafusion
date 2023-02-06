@@ -223,6 +223,11 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     "Proto serialization error: The Map data type is not yet supported".to_owned()
                 ))
             }
+            DataType::RunEndEncoded(_, _) => {
+                return Err(Error::General(
+                    "Proto serialization error: The RunEndEncoded data type is not yet supported".to_owned()
+                ))
+            }
         };
 
         Ok(res)

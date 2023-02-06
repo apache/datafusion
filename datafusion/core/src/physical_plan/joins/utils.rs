@@ -23,7 +23,6 @@ use arrow::array::{
 };
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, UInt32Type, UInt64Type};
-use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
@@ -695,7 +694,7 @@ impl<T: 'static> OnceFut<T> {
     }
 
     /// Get the result of the computation if it is ready, without consuming it
-    pub(crate) fn get(&mut self, cx: &mut Context<'_>) -> Poll<Result<&T, ArrowError>> {
+    pub(crate) fn get(&mut self, cx: &mut Context<'_>) -> Poll<Result<&T>> {
         if let OnceFutState::Pending(fut) = &mut self.state {
             let r = ready!(fut.poll_unpin(cx));
             self.state = OnceFutState::Ready(r);
@@ -707,7 +706,7 @@ impl<T: 'static> OnceFut<T> {
             OnceFutState::Ready(r) => Poll::Ready(
                 r.as_ref()
                     .map(|r| r.as_ref())
-                    .map_err(|e| ArrowError::ExternalError(Box::new(e.clone()))),
+                    .map_err(|e| DataFusionError::External(Box::new(e.clone()))),
             ),
         }
     }
@@ -803,7 +802,7 @@ pub(crate) fn build_batch_from_indices(
     probe_indices: UInt32Array,
     column_indices: &[ColumnIndex],
     build_side: JoinSide,
-) -> ArrowResult<RecordBatch> {
+) -> Result<RecordBatch> {
     // build the columns of the new [RecordBatch]:
     // 1. pick whether the column is from the left or right
     // 2. based on the pick, `take` items from the different RecordBatches
@@ -832,7 +831,7 @@ pub(crate) fn build_batch_from_indices(
         };
         columns.push(array);
     }
-    RecordBatch::try_new(Arc::new(schema.clone()), columns)
+    Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
 }
 
 /// The input is the matched indices for left and right and
@@ -948,12 +947,11 @@ pub(crate) fn get_semi_indices(
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::DataType;
-
+    use super::*;
+    use arrow::error::Result as ArrowResult;
+    use arrow::{datatypes::DataType, error::ArrowError};
     use datafusion_common::ScalarValue;
     use std::pin::Pin;
-
-    use super::*;
 
     fn check(left: &[Column], right: &[Column], on: &[(Column, Column)]) -> Result<()> {
         let left = left
@@ -1004,7 +1002,7 @@ mod tests {
             ) -> Poll<Self::Output> {
                 match ready!(self.0.get(cx)) {
                     Ok(()) => Poll::Ready(Ok(())),
-                    Err(e) => Poll::Ready(Err(e)),
+                    Err(e) => Poll::Ready(Err(e.into())),
                 }
             }
         }

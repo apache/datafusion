@@ -34,9 +34,8 @@ use arrow::array::{
     BooleanBufferBuilder, UInt32Array, UInt32Builder, UInt64Array, UInt64Builder,
 };
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Statistics;
+use datafusion_common::{DataFusionError, Statistics};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortExpr};
 use futures::{ready, Stream, StreamExt, TryStreamExt};
@@ -357,7 +356,7 @@ impl NestedLoopJoinStream {
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<ArrowResult<RecordBatch>>> {
+    ) -> Poll<Option<Result<RecordBatch>>> {
         // all left row
         let left_data = match ready!(self.left_fut.get(cx)) {
             Ok(left_data) => left_data,
@@ -401,12 +400,9 @@ impl NestedLoopJoinStream {
                     let mut left_indices_builder = UInt64Builder::new();
                     let mut right_indices_builder = UInt32Builder::new();
                     let left_right_indices = match indices_result {
-                        Err(_) => {
-                            // TODO why the type of result stream is `Result<T, ArrowError>`, and not the `DataFusionError`
-                            Err(ArrowError::ComputeError(
-                                "Build left right indices error".to_string(),
-                            ))
-                        }
+                        Err(_) => Err(DataFusionError::Execution(
+                            "Build left right indices error".to_string(),
+                        )),
                         Ok(indices) => {
                             for (left_side, right_side) in indices {
                                 left_indices_builder.append_values(
@@ -489,7 +485,7 @@ impl NestedLoopJoinStream {
 }
 
 impl Stream for NestedLoopJoinStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,

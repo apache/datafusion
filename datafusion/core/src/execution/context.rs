@@ -65,7 +65,7 @@ use crate::logical_expr::{
     SetVariable, TableSource, TableType, UNNAMED_TABLE,
 };
 use crate::optimizer::OptimizerRule;
-use datafusion_sql::{ResolvedTableReference, TableReference};
+use datafusion_sql::{planner::ParserOptions, ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::repartition::Repartition;
@@ -233,6 +233,16 @@ impl SessionContext {
     /// Return the session_id of this Session
     pub fn session_id(&self) -> String {
         self.session_id.clone()
+    }
+
+    /// Return the enable_ident_normalization of this Session
+    pub fn enable_ident_normalization(&self) -> bool {
+        self.state
+            .read()
+            .config
+            .options
+            .sql_parser
+            .enable_ident_normalization
     }
 
     /// Return a copied version of config for this Session
@@ -1251,6 +1261,18 @@ impl SessionConfig {
         self
     }
 
+    /// Sets minimum file range size for repartitioning scans
+    pub fn with_repartition_file_min_size(mut self, size: usize) -> Self {
+        self.options.optimizer.repartition_file_min_size = size;
+        self
+    }
+
+    /// Enables or disables the use of repartitioning for file scans
+    pub fn with_repartition_file_scans(mut self, enabled: bool) -> Self {
+        self.options.optimizer.repartition_file_scans = enabled;
+        self
+    }
+
     /// Enables or disables the use of repartitioning for window functions to improve parallelism
     pub fn with_repartition_windows(mut self, enabled: bool) -> Self {
         self.options.optimizer.repartition_windows = enabled;
@@ -1738,8 +1760,13 @@ impl SessionState {
             tables: HashMap::with_capacity(relations.len()),
         };
 
+        let enable_ident_normalization =
+            self.config.options.sql_parser.enable_ident_normalization;
+        let parse_float_as_decimal =
+            self.config.options.sql_parser.parse_float_as_decimal;
         for relation in relations {
-            let reference = object_name_to_table_reference(relation)?;
+            let reference =
+                object_name_to_table_reference(relation, enable_ident_normalization)?;
             let resolved = self.resolve_table_ref(reference.as_table_reference());
             if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
                 if let Ok(schema) = self.schema_for_ref(resolved) {
@@ -1750,7 +1777,13 @@ impl SessionState {
             }
         }
 
-        let query = SqlToRel::new(&provider);
+        let query = SqlToRel::new_with_options(
+            &provider,
+            ParserOptions {
+                parse_float_as_decimal,
+                enable_ident_normalization,
+            },
+        );
         query.statement_to_plan(statement)
     }
 

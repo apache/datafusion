@@ -438,9 +438,9 @@ mod tests {
     #[test]
     fn test_static_pattern_regexp_replace_early_abort() {
         let values = StringArray::from(vec!["abc"; 5]);
-        let patterns = StringArray::from(vec![None; 5]);
+        let patterns = StringArray::from(vec![None::<&str>; 5]);
         let replacements = StringArray::from(vec!["foo"; 5]);
-        let expected = StringArray::from(vec![None; 5]);
+        let expected = StringArray::from(vec![None::<&str>; 5]);
 
         let re = _regexp_replace_static_pattern_replace::<i32>(&[
             Arc::new(values),
@@ -474,8 +474,8 @@ mod tests {
         let values = StringArray::from(vec!["abc"; 5]);
         let patterns = StringArray::from(vec!["a"; 5]);
         let replacements = StringArray::from(vec!["foo"; 5]);
-        let flags = StringArray::from(vec![None; 5]);
-        let expected = StringArray::from(vec![None; 5]);
+        let flags = StringArray::from(vec![None::<&str>; 5]);
+        let expected = StringArray::from(vec![None::<&str>; 5]);
 
         let re = _regexp_replace_static_pattern_replace::<i32>(&[
             Arc::new(values),
