@@ -44,4 +44,6 @@ log = "^0.4"
 sqlparser = "0.30"
 
 [dev-dependencies]
+ctor = "0.1.22"
+env_logger = "0.10"
 rstest = "0.16"

@@ -524,6 +524,11 @@ mod test {
     use arrow::datatypes::DataType;
     use datafusion_common::{DFField, DFSchema, ScalarValue};
 
+    #[ctor::ctor]
+    fn init() {
+        let _ = env_logger::try_init();
+    }
+
     #[derive(Default)]
     struct RecordingRewriter {
         v: Vec<String>,
