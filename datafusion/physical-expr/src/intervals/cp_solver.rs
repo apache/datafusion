@@ -431,12 +431,9 @@ impl ExprIntervalGraph {
                 // Calculate and replace current node's interval:
                 self.graph[node].interval =
                     apply_operator(binary.op(), left_interval, right_interval)?;
-            } else if let Some(CastExpr {
-                cast_type,
-                cast_options,
-                ..
-            }) = expr_any.downcast_ref::<CastExpr>()
-            {
+            } else if let Some(cast_expr) = expr_any.downcast_ref::<CastExpr>() {
+                let cast_type = cast_expr.cast_type();
+                let cast_options = cast_expr.cast_options();
                 let child_index = edges.next_node(&self.graph).unwrap();
                 let child = self.graph.index(child_index);
                 // Cast current node's interval to the right type:
