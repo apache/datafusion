@@ -162,7 +162,7 @@ struct UnnestStream {
     num_output_batches: usize,
     /// number of rows produced
     num_output_rows: usize,
-    /// total time for column unnesting
+    /// total time for column unnesting, in ms
     unnest_time: usize,
 }
 
