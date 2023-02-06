@@ -406,18 +406,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         (0, Some(fallback_schema)) => {
                             match fallback_schema.fields_with_unqualified_name(name).len()
                             {
-                                0 => Err(DataFusionError::Internal(format!(
+                                0 => Err(DataFusionError::Plan(format!(
                                     "column reference {name} is unknown",
                                 ))),
                                 1 => Ok(()),
-                                _ => Err(DataFusionError::Internal(format!(
+                                _ => Err(DataFusionError::Plan(format!(
                                     "column reference {name} is ambiguous",
                                 ))),
                             }
                         }
                         (1, _) => Ok(()),
                         // should get only one field in from_schema.
-                        _ => Err(DataFusionError::Internal(format!(
+                        _ => Err(DataFusionError::Plan(format!(
                             "column reference {name} is ambiguous",
                         ))),
                     }

@@ -515,7 +515,7 @@ fn select_with_ambiguous_column() {
     let sql = "SELECT id FROM person a, person b";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Internal(\"column reference id is ambiguous\")",
+        "Plan(\"column reference id is ambiguous\")",
         format!("{err:?}")
     );
 }
@@ -538,7 +538,7 @@ fn where_selection_with_ambiguous_column() {
     let sql = "SELECT * FROM person a, person b WHERE id = id + 1";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Internal(\"column reference id is ambiguous\")",
+        "Plan(\"column reference id is ambiguous\")",
         format!("{err:?}")
     );
 }
