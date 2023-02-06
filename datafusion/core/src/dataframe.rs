@@ -144,6 +144,26 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, project_plan))
     }
 
+    /// Expand each list element of a column to multiple rows.
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let df = df.unnest_column("a")?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn unnest_column(self, column: &str) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .unnest_column(column)?
+            .build()?;
+        Ok(DataFrame::new(self.session_state, plan))
+    }
+
     /// Filter a DataFrame to only include rows that match the specified filter expression.
     ///
     /// ```
