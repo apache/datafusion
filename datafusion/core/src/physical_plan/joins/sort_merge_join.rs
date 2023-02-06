@@ -724,7 +724,6 @@ impl SMJStream {
                     } else {
                         self.streamed_state = StreamedState::Polling;
                     }
-                    continue;
                 }
                 StreamedState::Polling => match self.streamed.poll_next_unpin(cx)? {
                     Poll::Pending => {

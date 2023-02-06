@@ -241,6 +241,9 @@ impl ExprSchemable for Expr {
     }
 
     /// Returns a [arrow::datatypes::Field] compatible with this expression.
+    ///
+    /// So for example, a projected expression `col(c1) + col(c2)` is
+    /// placed in an output field **named** col("c1 + c2")
     fn to_field(&self, input_schema: &DFSchema) -> Result<DFField> {
         match self {
             Expr::Column(c) => Ok(DFField::new(
