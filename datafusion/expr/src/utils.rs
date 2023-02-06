@@ -26,7 +26,7 @@ use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, Distinct, Extension, Filter, Join,
     Limit, Partitioning, Prepare, Projection, Repartition, Sort as SortPlan, Subquery,
-    SubqueryAlias, Union, Values, Window,
+    SubqueryAlias, Union, Unnest, Values, Window,
 };
 use crate::{
     BinaryExpr, Cast, DmlStatement, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
@@ -739,6 +739,35 @@ pub fn from_plan(
             Ok(plan.clone())
         }
         LogicalPlan::DescribeTable(_) => Ok(plan.clone()),
+        LogicalPlan::Unnest(Unnest { column, schema, .. }) => {
+            // Update schema with unnested column type.
+            let input = Arc::new(inputs[0].clone());
+            let nested_field = input.schema().field_from_column(column)?;
+            let unnested_field = schema.field_from_column(column)?;
+            let fields = input
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| {
+                    if f == nested_field {
+                        unnested_field.clone()
+                    } else {
+                        f.clone()
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            let schema = Arc::new(DFSchema::new_with_metadata(
+                fields,
+                input.schema().metadata().clone(),
+            )?);
+
+            Ok(LogicalPlan::Unnest(Unnest {
+                input,
+                column: column.clone(),
+                schema,
+            }))
+        }
     }
 }
 

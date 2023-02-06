@@ -123,6 +123,8 @@ pub enum LogicalPlan {
     Dml(DmlStatement),
     /// Describe the schema of table
     DescribeTable(DescribeTable),
+    /// Unnest a column that contains a nested list type.
+    Unnest(Unnest),
 }
 
 impl LogicalPlan {
@@ -167,6 +169,7 @@ impl LogicalPlan {
                 dummy_schema
             }
             LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
+            LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
         }
     }
 
@@ -179,7 +182,8 @@ impl LogicalPlan {
             LogicalPlan::Values(Values { schema, .. }) => vec![schema],
             LogicalPlan::Window(Window { input, schema, .. })
             | LogicalPlan::Projection(Projection { input, schema, .. })
-            | LogicalPlan::Aggregate(Aggregate { input, schema, .. }) => {
+            | LogicalPlan::Aggregate(Aggregate { input, schema, .. })
+            | LogicalPlan::Unnest(Unnest { input, schema, .. }) => {
                 let mut schemas = input.all_schemas();
                 schemas.insert(0, schema);
                 schemas
@@ -309,6 +313,9 @@ impl LogicalPlan {
             LogicalPlan::TableScan(TableScan { filters, .. }) => {
                 filters.iter().try_for_each(f)
             }
+            LogicalPlan::Unnest(Unnest { column, .. }) => {
+                f(&Expr::Column(column.clone()))
+            }
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Subquery(_)
@@ -361,6 +368,7 @@ impl LogicalPlan {
             | LogicalPlan::Prepare(Prepare { input, .. }) => {
                 vec![input]
             }
+            LogicalPlan::Unnest(Unnest { input, .. }) => vec![input],
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
@@ -560,6 +568,7 @@ impl LogicalPlan {
             LogicalPlan::Explain(explain) => explain.plan.accept(visitor)?,
             LogicalPlan::Analyze(analyze) => analyze.input.accept(visitor)?,
             LogicalPlan::Dml(write) => write.input.accept(visitor)?,
+            LogicalPlan::Unnest(Unnest { input, .. }) => input.accept(visitor)?,
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation(_)
@@ -1173,6 +1182,9 @@ impl LogicalPlan {
                     }
                     LogicalPlan::DescribeTable(DescribeTable { .. }) => {
                         write!(f, "DescribeTable")
+                    }
+                    LogicalPlan::Unnest(Unnest { column, .. }) => {
+                        write!(f, "Unnest: {column}")
                     }
                 }
             }
@@ -1969,6 +1981,17 @@ impl StringifiedPlan {
 pub trait ToStringifiedPlan {
     /// Create a stringified plan with the specified type
     fn to_stringified(&self, plan_type: PlanType) -> StringifiedPlan;
+}
+
+/// Unnest a column that contains a nested list type.
+#[derive(Debug, Clone)]
+pub struct Unnest {
+    /// The incoming logical plan
+    pub input: Arc<LogicalPlan>,
+    /// The column to unnest
+    pub column: Column,
+    /// The output schema, containing the unnested field column.
+    pub schema: DFSchemaRef,
 }
 
 #[cfg(test)]
