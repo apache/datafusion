@@ -211,7 +211,7 @@ impl<F: FileOpener> FileStream<F> {
     // Begin opening the next file in parallel while decoding the current file in FileStream. 
     // Since file opening is mostly IO (and may involve a 
     // bunch of sequential IO), it can be parallelized with decoding. 
-    fn next_file(&mut self) -> Option<Result<(FileOpenFuture, Vec<ScalarValue>)>> {
+    fn start_next_file(&mut self) -> Option<Result<(FileOpenFuture, Vec<ScalarValue>)>> {
         let part_file =  self.file_iter.pop_front()?;
 
         let file_meta = FileMeta {
@@ -233,7 +233,7 @@ impl<F: FileOpener> FileStream<F> {
                 FileStreamState::Idle => {
                     self.file_stream_metrics.time_opening.start();
 
-                    match self.next_file().transpose() {
+                    match self.start_next_file().transpose() {
                         Ok(Some((future, partition_values))) => {
                             self.state = FileStreamState::Open {
                                 future,
@@ -254,7 +254,7 @@ impl<F: FileOpener> FileStream<F> {
                     Ok(reader) => {
                         let partition_values = mem::take(partition_values);
 
-                        let next = self.next_file().transpose();
+                        let next = self.start_next_file().transpose();
 
                         self.file_stream_metrics.time_opening.stop();
                         self.file_stream_metrics.time_scanning_until_data.start();
