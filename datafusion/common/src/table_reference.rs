@@ -191,7 +191,7 @@ impl<'a> TableReference<'a> {
     }
 
     /// Forms a [`TableReference`] by attempting to parse `s` as a multipart identifier,
-    /// failing that then taking the entire input as the identifier itself.
+    /// failing that then taking the entire unnormalized input as the identifier itself.
     ///
     /// Will normalize (convert to lowercase) any unquoted identifiers.
     /// e.g. `Foo` will be parsed as `foo`, and `"Foo"".bar"` will be parsed as
@@ -203,7 +203,6 @@ impl<'a> TableReference<'a> {
             .into_iter()
             .map(|id| match id.quote_style {
                 Some(_) => id.value,
-                // TODO: someway to be able to toggle this functionality?
                 None => id.value.to_ascii_lowercase(),
             })
             .collect::<Vec<_>>();
@@ -221,12 +220,12 @@ impl<'a> TableReference<'a> {
                 schema: parts.remove(0).into(),
                 table: parts.remove(0).into(),
             },
-            // TODO: should normalize?
             _ => Self::Bare { table: s.into() },
         }
     }
 }
 
+// TODO: remove when can use https://github.com/sqlparser-rs/sqlparser-rs/issues/805
 fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
     let dialect = GenericDialect;
     let mut parser = Parser::new(&dialect).try_with_sql(s)?;
