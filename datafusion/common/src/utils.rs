@@ -158,10 +158,9 @@ where
     Ok(low)
 }
 
-/// This function searches for a tuple of given values (`target`) among a slice of
-/// the given rows (`item_columns`) via a linear scan. The slice starts at the index
-/// `low` and ends at the index `high`. The boolean-valued function `compare_fn`
-/// specifies the stopping criterion.
+/// This function implements a linear search algorithm to find the
+/// first row in a table that differs from the starting row e.g
+/// row at idx `low`
 pub fn search_till_change(
     item_columns: &[ArrayRef],
     mut low: usize,
