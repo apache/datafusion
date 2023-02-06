@@ -395,7 +395,7 @@ pub async fn test_create_unbounded_sorted_file(
     table_name: &str,
 ) -> datafusion_common::Result<()> {
     // Register table
-    let right_schema = Arc::new(Schema::new(vec![
+    let schema = Arc::new(Schema::new(vec![
         Field::new("a1", DataType::UInt32, false),
         Field::new("a2", DataType::UInt32, false),
     ]));
@@ -410,7 +410,7 @@ pub async fn test_create_unbounded_sorted_file(
         .collect::<Vec<_>>();
     // Mark infinite and provide schema
     let fifo_options = CsvReadOptions::new()
-        .schema(right_schema.as_ref())
+        .schema(schema.as_ref())
         .has_header(false)
         .mark_infinite(true);
     // Get listing options
@@ -422,7 +422,7 @@ pub async fn test_create_unbounded_sorted_file(
         table_name,
         file_path.as_os_str().to_str().unwrap(),
         options_sort.clone(),
-        Some(right_schema),
+        Some(schema),
         None,
     )
     .await?;

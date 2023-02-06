@@ -32,7 +32,6 @@ use arrow::array::{ArrowPrimitiveType, NativeAdapter, PrimitiveBuilder};
 use arrow::compute::concat_batches;
 use arrow::datatypes::ArrowNativeType;
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use futures::{Stream, StreamExt};
 use hashbrown::raw::RawTable;
@@ -561,7 +560,7 @@ impl RecordBatchStream for SymmetricHashJoinStream {
 }
 
 impl Stream for SymmetricHashJoinStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -1038,7 +1037,7 @@ impl OneSideHashJoiner {
         column_indices: &[ColumnIndex],
         random_state: &RandomState,
         null_equals_null: &bool,
-    ) -> ArrowResult<Option<RecordBatch>> {
+    ) -> Result<Option<RecordBatch>> {
         if self.input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
             return Ok(Some(RecordBatch::new_empty(schema)));
         }
@@ -1111,7 +1110,7 @@ impl OneSideHashJoiner {
         probe_schema: SchemaRef,
         join_type: JoinType,
         column_indices: &[ColumnIndex],
-    ) -> ArrowResult<Option<RecordBatch>> {
+    ) -> Result<Option<RecordBatch>> {
         // Check if we need to produce a result in the final output
         let result = if need_produce_result_in_final(self.build_side, join_type) {
             // Calculate the indices for build and probe sides based on join type and build side
@@ -1172,7 +1171,7 @@ impl OneSideHashJoiner {
         join_type: JoinType,
         column_indices: &[ColumnIndex],
         physical_expr_graph: &mut ExprIntervalGraph,
-    ) -> ArrowResult<Option<RecordBatch>> {
+    ) -> Result<Option<RecordBatch>> {
         // Return None if there are no rows in the input buffer
         if self.input_buffer.num_rows() == 0 {
             return Ok(None);
@@ -1248,9 +1247,9 @@ impl OneSideHashJoiner {
 
 fn combine_two_batches_result(
     output_schema: SchemaRef,
-    left_batch: ArrowResult<Option<RecordBatch>>,
-    right_batch: ArrowResult<Option<RecordBatch>>,
-) -> ArrowResult<RecordBatch> {
+    left_batch: Result<Option<RecordBatch>>,
+    right_batch: Result<Option<RecordBatch>>,
+) -> Result<RecordBatch> {
     match (left_batch, right_batch) {
         (Ok(Some(batch)), Ok(None)) | (Ok(None), Ok(Some(batch))) => {
             // If either left_batch or right_batch is present, return that batch
@@ -1263,6 +1262,7 @@ fn combine_two_batches_result(
         (Ok(Some(left_batch)), Ok(Some(right_batch))) => {
             // If both left_batch and right_batch are present, concatenate them
             concat_batches(&output_schema, &[left_batch, right_batch])
+                .map_err(|e| DataFusionError::ArrowError(e))
         }
         (Ok(None), Ok(None)) => {
             // If both left_batch and right_batch are not present, return an empty batch
@@ -1279,7 +1279,7 @@ impl SymmetricHashJoinStream {
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<ArrowResult<RecordBatch>>> {
+    ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
             // If the final result has already been obtained, return `Poll::Ready(None)`
             if self.final_result {
@@ -1355,7 +1355,7 @@ impl SymmetricHashJoinStream {
                     {
                         Ok(_) => {}
                         Err(e) => {
-                            return Poll::Ready(Some(Err(ArrowError::ComputeError(
+                            return Poll::Ready(Some(Err(DataFusionError::Internal(
                                 e.to_string(),
                             ))))
                         }
@@ -2038,6 +2038,69 @@ mod tests {
             },
             ColumnIndex {
                 index: 0,
+                side: JoinSide::Right,
+            },
+        ];
+        let intermediate_schema = Schema::new(vec![
+            Field::new(left_col.name(), DataType::Int32, true),
+            Field::new(right_col.name(), DataType::Int32, true),
+        ]);
+
+        let filter_expr =
+            join_expr_tests_fixture(case_expr, left_col.clone(), right_col.clone());
+
+        let filter = JoinFilter::new(
+            filter_expr,
+            column_indices.clone(),
+            intermediate_schema.clone(),
+        );
+
+        experiment(left, right, filter, join_type, on, task_ctx).await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn single_test() -> Result<()> {
+        let case_expr = 1;
+        let cardinality = (11, 21);
+        let join_type = JoinType::Full;
+        let config = SessionConfig::new().with_repartition_joins(false);
+        let session_ctx = SessionContext::with_config(config);
+        let task_ctx = session_ctx.task_ctx();
+        let (left_batch, right_batch) =
+            build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_sorted = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new_with_schema("la1_des", &left_batch.schema())?),
+            options: SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+        }];
+        let right_sorted = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new_with_schema("ra1_des", &right_batch.schema())?),
+            options: SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+        }];
+        let (left, right) =
+            create_memory_table(left_batch, right_batch, left_sorted, right_sorted)?;
+
+        let on = vec![(
+            Column::new_with_schema("lc1", &left.schema())?,
+            Column::new_with_schema("rc1", &right.schema())?,
+        )];
+
+        let left_col = Arc::new(Column::new("left", 0));
+        let right_col = Arc::new(Column::new("right", 1));
+
+        let column_indices = vec![
+            ColumnIndex {
+                index: 5,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 5,
                 side: JoinSide::Right,
             },
         ];

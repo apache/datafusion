@@ -277,7 +277,8 @@ mod unix_test {
                     for (cnt, (a1, a2)) in a1_iter.zip(a2_iter).enumerate() {
                         // Wait a reading sign for unbounded execution
                         // After first batch FIFO reading, we will wait for a batch created.
-                        while *waiting_thread.lock().unwrap() && TEST_BATCH_SIZE < cnt {
+                        while *waiting_thread.lock().unwrap() && TEST_BATCH_SIZE + 1 < cnt
+                        {
                             thread::sleep(Duration::from_millis(200));
                         }
                         let line = format!("{a1},{a2}\n").to_owned();
