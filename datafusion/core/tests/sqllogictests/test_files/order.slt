@@ -163,3 +163,98 @@ SELECT c1, c2 FROM test ORDER BY c1 DESC, c2 ASC
 query RC
 SELECT c1, c2 FROM test WHERE c1 > 100000 ORDER BY c1 DESC, c2 ASC
 ----
+
+#####
+# Sorting and Grouping
+#####
+statement ok
+create table foo as values (1, 2), (3, 4), (5, 6);
+
+query ok rowsort
+select * from foo
+----
+1 2
+3 4
+5 6
+
+query ok
+select column1 from foo order by column2;
+----
+1
+3
+5
+
+query ok
+select column1 from foo order by column1 + column2;
+----
+1
+3
+5
+
+query ok
+select column1 from foo order by column1 + column2;
+----
+1
+3
+5
+
+query ok rowsort
+select column1 + column2 from foo group by column1, column2;
+----
+11
+3
+7
+
+query ok
+select column1 + column2 from foo group by column1, column2 ORDER BY column2 desc;
+----
+11
+7
+3
+
+
+# Cleanup
+statement ok
+drop table foo;
+
+
+#####
+# Tests for https://github.com/apache/arrow-datafusion/issues/4854
+# Ordering / grouping by the same column
+#####
+statement ok
+create or replace table t as select column1 as value, column2 as time from (select * from (values
+  (1, timestamp '2022-01-01 00:00:30'),
+  (2, timestamp '2022-01-01 01:00:10'),
+  (3, timestamp '2022-01-02 00:00:20')
+) as sq) as sq
+
+
+query I,I rowsort
+select
+  sum(value) AS "value",
+  date_trunc('hour',time) AS "time"
+FROM t
+GROUP BY time;
+----
+1 2022-01-01T00:00:00
+2 2022-01-01T01:00:00
+3 2022-01-02T00:00:00
+
+# should work fine
+query I,I
+select
+  sum(value) AS "value",
+  date_trunc('minute',time) AS "time"
+FROM t
+GROUP BY time
+ORDER BY time;
+----
+1 2022-01-01T00:00:00
+2 2022-01-01T01:00:00
+3 2022-01-02T00:00:00
+
+
+## Cleanup
+statement ok
+drop table t;
