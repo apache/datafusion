@@ -34,6 +34,7 @@ use arrow::datatypes::SchemaRef;
 
 use bytes::Buf;
 
+use crate::physical_plan::common::AbortOnDropSingle;
 use bytes::Bytes;
 use futures::ready;
 use futures::{StreamExt, TryStreamExt};
@@ -44,7 +45,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::task::Poll;
 use tokio::task::{self, JoinHandle};
-use tokio_util::sync::CancellationToken;
 
 use super::{get_output_ordering, FileScanConfig};
 
@@ -294,9 +294,6 @@ pub async fn plan_to_csv(
     }
 
     let mut tasks = vec![];
-    // Create cancellation-token to interrupt background execution on drop.
-    let cancellation_token = CancellationToken::new();
-    let _guard = cancellation_token.clone().drop_guard();
     for i in 0..plan.output_partitioning().partition_count() {
         let plan = plan.clone();
         let filename = format!("part-{i}.csv");
@@ -306,16 +303,14 @@ pub async fn plan_to_csv(
         let task_ctx = Arc::new(TaskContext::from(state));
         let stream = plan.execute(i, task_ctx)?;
 
-        let cancellation_token = cancellation_token.child_token();
         let handle: JoinHandle<Result<()>> = task::spawn(async move {
-            let exec_future = stream.map(|batch| writer.write(&batch?)).try_collect();
-
-            tokio::select! {
-                res = exec_future => res.map_err(DataFusionError::from),
-                _ = cancellation_token.cancelled() => Err(DataFusionError::Execution("Execution was stopped by the caller".to_string()))
-            }
+            stream
+                .map(|batch| writer.write(&batch?))
+                .try_collect()
+                .await
+                .map_err(DataFusionError::from)
         });
-        tasks.push(handle);
+        tasks.push(AbortOnDropSingle::new(handle));
     }
 
     futures::future::join_all(tasks)
