@@ -98,7 +98,7 @@ pub fn update_hash(
     Ok(())
 }
 
-// Get build and probe indices which is satisfies the on condition (include equal_conditon and filter_in_join) in the Join
+// Get build and probe indices which satisfies the on condition (include equal_conditon and filter_in_join) in the Join
 #[allow(clippy::too_many_arguments)]
 pub fn build_join_indices(
     probe_batch: &RecordBatch,
@@ -113,7 +113,7 @@ pub fn build_join_indices(
     offset: Option<usize>,
     build_side: JoinSide,
 ) -> Result<(UInt64Array, UInt32Array)> {
-    // Get the indices which is satisfies the equal join condition, like `left.a1 = right.a2`
+    // Get the indices which satisfies the equal join condition, like `left.a1 = right.a2`
     let (build_indices, probe_indices) = build_equal_condition_join_indices(
         build_hashmap,
         build_input_buffer,
@@ -126,7 +126,7 @@ pub fn build_join_indices(
         offset,
     )?;
     if let Some(filter) = filter {
-        // Filter the indices which is satisfies the non-equal join condition, like `left.b1 = 10`
+        // Filter the indices which satisfies the non-equal join condition, like `left.b1 = 10`
         apply_join_filter_to_indices(
             build_input_buffer,
             probe_batch,
@@ -845,66 +845,50 @@ impl SortedFilterExpr {
 /// Filter expr for a + b > c + 10 AND a + b < c + 100
 #[allow(dead_code)]
 pub(crate) fn complicated_filter() -> Arc<dyn PhysicalExpr> {
-    let left_expr = BinaryExpr {
-        left: Arc::new(CastExpr {
-            expr: Arc::new(BinaryExpr {
-                left: Arc::new(Column {
-                    name: "0".to_string(),
-                    index: 0,
-                }),
-                op: Operator::Plus,
-                right: Arc::new(Column {
-                    name: "1".to_string(),
-                    index: 1,
-                }),
-            }),
-            cast_type: DataType::Int64,
-            cast_options: CastOptions { safe: false },
-        }),
-        op: Operator::Gt,
-        right: Arc::new(BinaryExpr {
-            left: Arc::new(CastExpr {
-                expr: Arc::new(Column {
-                    name: "2".to_string(),
-                    index: 2,
-                }),
-                cast_type: DataType::Int64,
-                cast_options: CastOptions { safe: false },
-            }),
-            op: Operator::Plus,
-            right: Arc::new(Literal::new(ScalarValue::Int64(Some(10)))),
-        }),
-    };
-    let right_expr = BinaryExpr {
-        left: Arc::new(CastExpr {
-            expr: Arc::new(BinaryExpr {
-                left: Arc::new(Column {
-                    name: "0".to_string(),
-                    index: 0,
-                }),
-                op: Operator::Plus,
-                right: Arc::new(Column {
-                    name: "1".to_string(),
-                    index: 1,
-                }),
-            }),
-            cast_type: DataType::Int64,
-            cast_options: CastOptions { safe: false },
-        }),
-        op: Operator::Lt,
-        right: Arc::new(BinaryExpr {
-            left: Arc::new(CastExpr {
-                expr: Arc::new(Column {
-                    name: "2".to_string(),
-                    index: 2,
-                }),
-                cast_type: DataType::Int64,
-                cast_options: CastOptions { safe: false },
-            }),
-            op: Operator::Plus,
-            right: Arc::new(Literal::new(ScalarValue::Int64(Some(100)))),
-        }),
-    };
+    let left_expr = BinaryExpr::new(
+        Arc::new(CastExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("0", 0)),
+                Operator::Plus,
+                Arc::new(Column::new("1", 1)),
+            )),
+            DataType::Int64,
+            CastOptions { safe: false },
+        )),
+        Operator::Gt,
+        Arc::new(BinaryExpr::new(
+            Arc::new(CastExpr::new(
+                Arc::new(Column::new("2", 2)),
+                DataType::Int64,
+                CastOptions { safe: false },
+            )),
+            Operator::Plus,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(10)))),
+        )),
+    );
+
+    let right_expr = BinaryExpr::new(
+        Arc::new(CastExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("0", 0)),
+                Operator::Plus,
+                Arc::new(Column::new("1", 1)),
+            )),
+            DataType::Int64,
+            CastOptions { safe: false },
+        )),
+        Operator::Lt,
+        Arc::new(BinaryExpr::new(
+            Arc::new(CastExpr::new(
+                Arc::new(Column::new("2", 2)),
+                DataType::Int64,
+                CastOptions { safe: false },
+            )),
+            Operator::Plus,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(100)))),
+        )),
+    );
+
     Arc::new(BinaryExpr::new(
         Arc::new(left_expr),
         Operator::And,
@@ -948,21 +932,15 @@ mod tests {
         assert!(contains2);
 
         let mut contains3 = false;
-        let expr_3 = Arc::new(CastExpr {
-            expr: Arc::new(BinaryExpr {
-                left: Arc::new(Column {
-                    name: "0".to_string(),
-                    index: 0,
-                }),
-                op: Operator::Plus,
-                right: Arc::new(Column {
-                    name: "1".to_string(),
-                    index: 1,
-                }),
-            }),
-            cast_type: DataType::Int64,
-            cast_options: CastOptions { safe: false },
-        });
+        let expr_3 = Arc::new(CastExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("0", 0)),
+                Operator::Plus,
+                Arc::new(Column::new("1", 1)),
+            )),
+            DataType::Int64,
+            CastOptions { safe: false },
+        ));
         filter_expr
             .clone()
             .accept(CheckFilterExprContainsSortInformation::new(
@@ -1096,11 +1074,11 @@ mod tests {
             Field::new(filter_col_1.name(), DataType::Int32, true),
         ]);
 
-        let filter_expr = Arc::new(BinaryExpr {
-            left: Arc::new(Column::new("0", 0)),
-            op: Operator::Minus,
-            right: Arc::new(Column::new("1", 1)),
-        });
+        let filter_expr = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("0", 0)),
+            Operator::Minus,
+            Arc::new(Column::new("1", 1)),
+        ));
 
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
@@ -1110,11 +1088,11 @@ mod tests {
         ]));
 
         let sorted = PhysicalSortExpr {
-            expr: Arc::new(BinaryExpr {
-                left: Arc::new(Column::new("a", 0)),
-                op: Operator::Plus,
-                right: Arc::new(Column::new("b", 1)),
-            }),
+            expr: Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Plus,
+                Arc::new(Column::new("b", 1)),
+            )),
             options: SortOptions::default(),
         };
 

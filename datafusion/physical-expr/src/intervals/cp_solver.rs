@@ -536,6 +536,10 @@ impl ExprIntervalGraph {
                     upper: ScalarValue::Boolean(Some(true)),
                     ..
                 } => self.propagate_constraints(expr_stats),
+                Interval {
+                    lower: ScalarValue::Boolean(Some(false)),
+                    ..
+                } => Ok(PropagationResult::Infeasible),
                 _ => Ok(PropagationResult::CannotPropagate),
             })
     }
@@ -696,7 +700,7 @@ mod tests {
             (Some(100), None),
             (Some(10), Some(20)),
             (Some(100), None),
-            PropagationResult::CannotPropagate,
+            PropagationResult::Infeasible,
         )?;
         Ok(())
     }

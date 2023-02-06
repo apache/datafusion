@@ -967,7 +967,6 @@ impl OneSideHashJoiner {
     ///
     /// # Arguments
     ///
-    /// * `on_build` - A slice of Columns that defines the join key of the OneSideHashJoiner
     /// * `batch` - The incoming RecordBatch to be merged with the internal input buffer
     /// * `random_state` - The random state used to hash values
     ///
@@ -1262,7 +1261,7 @@ fn combine_two_batches_result(
         (Ok(Some(left_batch)), Ok(Some(right_batch))) => {
             // If both left_batch and right_batch are present, concatenate them
             concat_batches(&output_schema, &[left_batch, right_batch])
-                .map_err(|e| DataFusionError::ArrowError(e))
+                .map_err(DataFusionError::ArrowError)
         }
         (Ok(None), Ok(None)) => {
             // If both left_batch and right_batch are not present, return an empty batch
@@ -1928,11 +1927,11 @@ mod tests {
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
         let left_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(BinaryExpr {
-                left: Arc::new(Column::new_with_schema("la1", &left_batch.schema())?),
-                op: Operator::Plus,
-                right: Arc::new(Column::new_with_schema("la2", &left_batch.schema())?),
-            }),
+            expr: Arc::new(BinaryExpr::new(
+                Arc::new(Column::new_with_schema("la1", &left_batch.schema())?),
+                Operator::Plus,
+                Arc::new(Column::new_with_schema("la2", &left_batch.schema())?),
+            )),
             options: SortOptions::default(),
         }];
 

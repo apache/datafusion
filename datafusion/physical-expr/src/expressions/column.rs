@@ -33,8 +33,8 @@ use datafusion_expr::ColumnarValue;
 /// Represents the column at a given index in a RecordBatch
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct Column {
-    pub name: String,
-    pub index: usize,
+    name: String,
+    index: usize,
 }
 
 impl Column {
