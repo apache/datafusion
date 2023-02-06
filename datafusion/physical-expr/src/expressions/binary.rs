@@ -1682,7 +1682,7 @@ mod tests {
         ]);
 
         let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
-        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
+        let keys = Int8Array::from(vec![Some(0), None, Some(1), Some(3), None]);
         let a = DictionaryArray::try_new(&keys, &a)?;
 
         let b = Int32Array::from(vec![1, 2, 4, 8, 16]);
@@ -1693,7 +1693,7 @@ mod tests {
             Arc::new(schema),
             vec![Arc::new(a), Arc::new(b)],
             Operator::Plus,
-            Int32Array::from(vec![2, 5, 4, 8, 3]),
+            Int32Array::from(vec![Some(2), None, Some(4), Some(8), None]),
         )?;
 
         Ok(())
@@ -1901,7 +1901,7 @@ mod tests {
         ]);
 
         let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
-        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
+        let keys = Int8Array::from(vec![Some(0), None, Some(1), Some(3), None]);
         let a = DictionaryArray::try_new(&keys, &a)?;
 
         let b = Int32Array::from(vec![1, 2, 4, 8, 16]);
@@ -1912,7 +1912,7 @@ mod tests {
             Arc::new(schema),
             vec![Arc::new(a), Arc::new(b)],
             Operator::Minus,
-            Int32Array::from(vec![0, 1, 0, 0, -1]),
+            Int32Array::from(vec![Some(0), None, Some(0), Some(0), None]),
         )?;
 
         Ok(())
@@ -2112,7 +2112,7 @@ mod tests {
         ]);
 
         let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
-        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
+        let keys = Int8Array::from(vec![Some(0), None, Some(1), Some(3), None]);
         let a = DictionaryArray::try_new(&keys, &a)?;
 
         let b = Int32Array::from(vec![1, 2, 4, 8, 16]);
@@ -2123,7 +2123,7 @@ mod tests {
             Arc::new(schema),
             vec![Arc::new(a), Arc::new(b)],
             Operator::Multiply,
-            Int32Array::from(vec![1, 6, 4, 16, 2]),
+            Int32Array::from(vec![Some(1), None, Some(4), Some(16), None]),
         )?;
 
         Ok(())
