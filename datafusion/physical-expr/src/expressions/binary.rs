@@ -679,11 +679,11 @@ impl PhysicalExpr for BinaryExpr {
         let scalar_result = match (&left_value, &right_value) {
             (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
                 // if left is array and right is literal - use scalar operations
-                self.evaluate_array_scalar(array, scalar)?
+                self.evaluate_array_scalar(array, scalar.clone())?
             }
             (ColumnarValue::Scalar(scalar), ColumnarValue::Array(array)) => {
                 // if right is literal and left is array - reverse operator and parameters
-                self.evaluate_scalar_array(scalar, array)?
+                self.evaluate_scalar_array(scalar.clone(), array)?
             }
             (_, _) => None, // default to array implementation
         };
@@ -974,81 +974,77 @@ impl BinaryExpr {
     fn evaluate_array_scalar(
         &self,
         array: &dyn Array,
-        scalar: &ScalarValue,
+        scalar: ScalarValue,
     ) -> Result<Option<Result<ArrayRef>>> {
         let bool_type = &DataType::Boolean;
         let scalar_result = match &self.op {
             Operator::Lt => {
-                binary_array_op_dyn_scalar!(array, scalar.clone(), lt, bool_type)
+                binary_array_op_dyn_scalar!(array, scalar, lt, bool_type)
             }
             Operator::LtEq => {
-                binary_array_op_dyn_scalar!(array, scalar.clone(), lt_eq, bool_type)
+                binary_array_op_dyn_scalar!(array, scalar, lt_eq, bool_type)
             }
             Operator::Gt => {
-                binary_array_op_dyn_scalar!(array, scalar.clone(), gt, bool_type)
+                binary_array_op_dyn_scalar!(array, scalar, gt, bool_type)
             }
             Operator::GtEq => {
-                binary_array_op_dyn_scalar!(array, scalar.clone(), gt_eq, bool_type)
+                binary_array_op_dyn_scalar!(array, scalar, gt_eq, bool_type)
             }
             Operator::Eq => {
-                binary_array_op_dyn_scalar!(array, scalar.clone(), eq, bool_type)
+                binary_array_op_dyn_scalar!(array, scalar, eq, bool_type)
             }
             Operator::NotEq => {
-                binary_array_op_dyn_scalar!(array, scalar.clone(), neq, bool_type)
+                binary_array_op_dyn_scalar!(array, scalar, neq, bool_type)
             }
             Operator::Plus => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar.clone(), add)
+                binary_primitive_array_op_dyn_scalar!(array, scalar, add)
             }
             Operator::Minus => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar.clone(), subtract)
+                binary_primitive_array_op_dyn_scalar!(array, scalar, subtract)
             }
             Operator::Multiply => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar.clone(), multiply)
+                binary_primitive_array_op_dyn_scalar!(array, scalar, multiply)
             }
             Operator::Divide => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar.clone(), divide)
+                binary_primitive_array_op_dyn_scalar!(array, scalar, divide)
             }
             Operator::Modulo => {
                 // todo: change to binary_primitive_array_op_dyn_scalar! once modulo is implemented
-                binary_primitive_array_op_scalar!(array, scalar.clone(), modulus)
+                binary_primitive_array_op_scalar!(array, scalar, modulus)
             }
             Operator::RegexMatch => binary_string_array_flag_op_scalar!(
                 array,
-                scalar.clone(),
+                scalar,
                 regexp_is_match,
                 false,
                 false
             ),
             Operator::RegexIMatch => binary_string_array_flag_op_scalar!(
                 array,
-                scalar.clone(),
+                scalar,
                 regexp_is_match,
                 false,
                 true
             ),
             Operator::RegexNotMatch => binary_string_array_flag_op_scalar!(
                 array,
-                scalar.clone(),
+                scalar,
                 regexp_is_match,
                 true,
                 false
             ),
             Operator::RegexNotIMatch => binary_string_array_flag_op_scalar!(
                 array,
-                scalar.clone(),
+                scalar,
                 regexp_is_match,
                 true,
                 true
             ),
-            Operator::BitwiseAnd => bitwise_and_scalar(array, scalar.clone()),
-            Operator::BitwiseOr => bitwise_or_scalar(array, scalar.clone()),
-            Operator::BitwiseXor => bitwise_xor_scalar(array, scalar.clone()),
-            Operator::BitwiseShiftRight => {
-                bitwise_shift_right_scalar(array, scalar.clone())
-            }
-            Operator::BitwiseShiftLeft => {
-                bitwise_shift_left_scalar(array, scalar.clone())
-            }
+            Operator::BitwiseAnd => bitwise_and_scalar(array, scalar),
+            Operator::BitwiseOr => bitwise_or_scalar(array, scalar),
+            Operator::BitwiseXor => bitwise_xor_scalar(array, scalar),
+            Operator::BitwiseShiftRight => bitwise_shift_right_scalar(array, scalar),
+            Operator::BitwiseShiftLeft => bitwise_shift_left_scalar(array, scalar),
             // if scalar operation is not supported - fallback to array implementation
             _ => None,
         };
@@ -1060,28 +1056,28 @@ impl BinaryExpr {
     /// right is an array - reverse operator and parameters
     fn evaluate_scalar_array(
         &self,
-        scalar: &ScalarValue,
+        scalar: ScalarValue,
         array: &ArrayRef,
     ) -> Result<Option<Result<ArrayRef>>> {
         let bool_type = &DataType::Boolean;
         let scalar_result = match &self.op {
             Operator::Lt => {
-                binary_array_op_dyn_scalar!(array, scalar.clone(), gt, bool_type)
+                binary_array_op_dyn_scalar!(array, scalar, gt, bool_type)
             }
             Operator::LtEq => {
-                binary_array_op_dyn_scalar!(array, scalar.clone(), gt_eq, bool_type)
+                binary_array_op_dyn_scalar!(array, scalar, gt_eq, bool_type)
             }
             Operator::Gt => {
-                binary_array_op_dyn_scalar!(array, scalar.clone(), lt, bool_type)
+                binary_array_op_dyn_scalar!(array, scalar, lt, bool_type)
             }
             Operator::GtEq => {
-                binary_array_op_dyn_scalar!(array, scalar.clone(), lt_eq, bool_type)
+                binary_array_op_dyn_scalar!(array, scalar, lt_eq, bool_type)
             }
             Operator::Eq => {
-                binary_array_op_dyn_scalar!(array, scalar.clone(), eq, bool_type)
+                binary_array_op_dyn_scalar!(array, scalar, eq, bool_type)
             }
             Operator::NotEq => {
-                binary_array_op_dyn_scalar!(array, scalar.clone(), neq, bool_type)
+                binary_array_op_dyn_scalar!(array, scalar, neq, bool_type)
             }
             // if scalar operation is not supported - fallback to array implementation
             _ => None,
