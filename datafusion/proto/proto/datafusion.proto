@@ -519,6 +519,7 @@ enum ScalarFunction {
   CurrentDate = 70;
   CurrentTime = 71;
   Uuid = 72;
+  Unnest = 73;
 }
 
 message ScalarFunctionNode {

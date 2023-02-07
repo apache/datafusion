@@ -1286,6 +1286,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::FromUnixtime => Self::FromUnixtime,
             BuiltinScalarFunction::Atan2 => Self::Atan2,
             BuiltinScalarFunction::ArrowTypeof => Self::ArrowTypeof,
+            BuiltinScalarFunction::Unnest => Self::Unnest,
         };
 
         Ok(scalar_function)

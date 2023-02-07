@@ -2100,6 +2100,7 @@ pub enum ScalarFunction {
     CurrentDate = 70,
     CurrentTime = 71,
     Uuid = 72,
+    Unnest = 73,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2181,6 +2182,7 @@ impl ScalarFunction {
             ScalarFunction::CurrentDate => "CurrentDate",
             ScalarFunction::CurrentTime => "CurrentTime",
             ScalarFunction::Uuid => "Uuid",
+            ScalarFunction::Unnest => "Unnest",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2259,6 +2261,7 @@ impl ScalarFunction {
             "CurrentDate" => Some(Self::CurrentDate),
             "CurrentTime" => Some(Self::CurrentTime),
             "Uuid" => Some(Self::Uuid),
+            "Unnest" => Some(Self::Unnest),
             _ => None,
         }
     }
