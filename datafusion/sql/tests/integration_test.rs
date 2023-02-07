@@ -3541,7 +3541,7 @@ Projection: person.id, person.age
             TableScan: person
     TableScan: person
         "#
-        .trim();
+    .trim();
 
     let expected_dt = "[Int32]";
     let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
@@ -3562,7 +3562,7 @@ Projection: person.id, person.age
             TableScan: person
     TableScan: person
         "#
-        .trim();
+    .trim();
     let plan = plan.replace_params_with_values(&param_values).unwrap();
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);

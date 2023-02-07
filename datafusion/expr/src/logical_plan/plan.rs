@@ -22,6 +22,7 @@ use crate::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
+use crate::logical_plan::plan;
 use crate::utils::{
     self, exprlist_to_fields, from_plan, grouping_set_expr_count,
     grouping_set_to_exprlist,
@@ -39,7 +40,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use crate::logical_plan::plan;
 
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
@@ -735,11 +735,14 @@ impl LogicalPlan {
                     }
                     // Replace the placeholder with the value
                     Ok(Expr::Literal(value.clone()))
-                },
+                }
                 Expr::ScalarSubquery(qry) => {
-                    let subquery = Arc::new(qry.subquery.replace_params_with_values(&param_values.to_vec())?);
-                    Ok(Expr::ScalarSubquery(plan::Subquery {subquery}))
-                },
+                    let subquery = Arc::new(
+                        qry.subquery
+                            .replace_params_with_values(&param_values.to_vec())?,
+                    );
+                    Ok(Expr::ScalarSubquery(plan::Subquery { subquery }))
+                }
                 _ => Ok(expr),
             }
         })
