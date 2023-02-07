@@ -179,7 +179,6 @@ impl LogicalPlan {
             LogicalPlan::TableScan(TableScan {
                 projected_schema, ..
             }) => vec![projected_schema],
-            LogicalPlan::Values(Values { schema, .. }) => vec![schema],
             LogicalPlan::Window(Window { input, schema, .. })
             | LogicalPlan::Projection(Projection { input, schema, .. })
             | LogicalPlan::Aggregate(Aggregate { input, schema, .. })
@@ -205,19 +204,16 @@ impl LogicalPlan {
                 schemas
             }
             LogicalPlan::Subquery(Subquery { subquery, .. }) => subquery.all_schemas(),
-            LogicalPlan::SubqueryAlias(SubqueryAlias { schema, .. }) => {
-                vec![schema]
-            }
-            LogicalPlan::Union(Union { schema, .. }) => {
-                vec![schema]
-            }
             LogicalPlan::Extension(extension) => vec![extension.node.schema()],
             LogicalPlan::Explain(Explain { schema, .. })
             | LogicalPlan::Analyze(Analyze { schema, .. })
             | LogicalPlan::EmptyRelation(EmptyRelation { schema, .. })
             | LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. })
             | LogicalPlan::CreateCatalogSchema(CreateCatalogSchema { schema, .. })
-            | LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => {
+            | LogicalPlan::CreateCatalog(CreateCatalog { schema, .. })
+            | LogicalPlan::Values(Values { schema, .. })
+            | LogicalPlan::SubqueryAlias(SubqueryAlias { schema, .. })
+            | LogicalPlan::Union(Union { schema, .. }) => {
                 vec![schema]
             }
             LogicalPlan::Limit(Limit { input, .. })

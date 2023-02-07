@@ -43,7 +43,7 @@ use datafusion_expr::{
 };
 use datafusion_expr::{ExprSchemable, Signature};
 
-use crate::utils::rewrite_preserving_name;
+use crate::utils::{merge_schema, rewrite_preserving_name};
 use crate::{OptimizerConfig, OptimizerRule};
 
 #[derive(Default)]
@@ -82,13 +82,7 @@ fn optimize_internal(
         .collect::<Result<Vec<_>>>()?;
     // get schema representing all available input fields. This is used for data type
     // resolution only, so order does not matter here
-    let mut schema = new_inputs.iter().map(|input| input.schema()).fold(
-        DFSchema::empty(),
-        |mut lhs, rhs| {
-            lhs.merge(rhs);
-            lhs
-        },
-    );
+    let mut schema = merge_schema(new_inputs.iter().collect());
 
     if let LogicalPlan::TableScan(ts) = plan {
         let source_schema =
