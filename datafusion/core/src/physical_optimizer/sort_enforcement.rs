@@ -49,19 +49,14 @@ use std::iter::zip;
 use std::sync::Arc;
 
 /// This rule inspects SortExec's in the given physical plan and removes the
-/// ones it can prove unnecessary. The boolean flag `parallelize_sorts`
-/// indicates whether we elect to transform CoalescePartitionsExec + SortExec
-/// cascades into SortExec + SortPreservingMergeExec cascades, which enables
-/// us to perform sorting in parallel.
+/// ones it can prove unnecessary.
 #[derive(Default)]
-pub struct EnforceSorting {
-    parallelize_sorts: bool,
-}
+pub struct EnforceSorting {}
 
 impl EnforceSorting {
     #[allow(missing_docs)]
-    pub fn new(parallelize_sorts: bool) -> Self {
-        Self { parallelize_sorts }
+    pub fn new() -> Self {
+        Self {}
     }
 }
 
@@ -294,16 +289,20 @@ impl TreeNodeRewritable for PlanWithCorrespondingCoalescePartitions {
     }
 }
 
+/// The boolean flag `parallelize_sorts` defined in the config
+/// indicates whether we elect to transform CoalescePartitionsExec + SortExec
+/// cascades into SortExec + SortPreservingMergeExec cascades, which enables
+/// us to perform sorting in parallel.
 impl PhysicalOptimizerRule for EnforceSorting {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Execute a post-order traversal to adjust input key ordering:
         let plan_requirements = PlanWithCorrespondingSort::new(plan);
         let adjusted = plan_requirements.transform_up(&ensure_sorting)?;
-        if self.parallelize_sorts {
+        if config.optimizer.parallelize_sorts {
             let plan_with_coalesce_partitions =
                 PlanWithCorrespondingCoalescePartitions::new(adjusted.plan);
             let parallel =
@@ -1043,7 +1042,7 @@ mod tests {
 
             // Run the actual optimizer
             let optimized_physical_plan =
-                EnforceSorting::new(true).optimize(physical_plan, state.config_options())?;
+                EnforceSorting::new().optimize(physical_plan, state.config_options())?;
             // Get string representation of the plan
             let actual = get_plan_string(&optimized_physical_plan);
             assert_eq!(
@@ -1736,7 +1735,7 @@ mod tests {
         let mut plan = orig_plan.clone();
         let rules = vec![
             Arc::new(EnforceDistribution::new()) as Arc<dyn PhysicalOptimizerRule>,
-            Arc::new(EnforceSorting::new(true)) as Arc<dyn PhysicalOptimizerRule>,
+            Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,
         ];
         for rule in rules {
             plan = rule.optimize(plan, state.config_options())?;
@@ -1745,9 +1744,9 @@ mod tests {
 
         let mut plan = orig_plan.clone();
         let rules = vec![
-            Arc::new(EnforceSorting::new(true)) as Arc<dyn PhysicalOptimizerRule>,
+            Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,
             Arc::new(EnforceDistribution::new()) as Arc<dyn PhysicalOptimizerRule>,
-            Arc::new(EnforceSorting::new(true)) as Arc<dyn PhysicalOptimizerRule>,
+            Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,
         ];
         for rule in rules {
             plan = rule.optimize(plan, state.config_options())?;

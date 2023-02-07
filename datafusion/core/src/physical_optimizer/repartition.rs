@@ -512,7 +512,7 @@ mod tests {
                 Arc::new(EnforceDistribution::new()),
                 // EnforceSorting is an essential rule to be applied.
                 // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
-                Arc::new(EnforceSorting::new(true)),
+                Arc::new(EnforceSorting::new()),
             ];
             let optimized = optimizers.into_iter().fold($PLAN, |plan, optimizer| {
                 optimizer.optimize(plan, &config).unwrap()
