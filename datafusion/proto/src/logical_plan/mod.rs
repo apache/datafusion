@@ -1333,6 +1333,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
+            LogicalPlan::Unnest(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for Unnest",
+            )),
             LogicalPlan::CreateMemoryTable(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for CreateMemoryTable",
             )),

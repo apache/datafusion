@@ -15,9 +15,5 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod logical_plan;
-pub mod physical_plan;
-pub mod serializer;
-
-// Re-export substrait crate
-pub use substrait;
+pub mod consumer;
+pub mod producer;

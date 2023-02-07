@@ -20,7 +20,7 @@ use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, normalize_ident, rebase_expr,
     resolve_aliases_to_exprs, resolve_columns, resolve_positions_to_exprs,
 };
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::expr_rewriter::{normalize_col, normalize_col_with_schemas};
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::Join as HashJoin;
@@ -73,6 +73,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan,
             outer_query_schema,
             planner_context,
+            &from_schema,
         )?;
 
         // process the SELECT expressions, with wildcards expanded.
@@ -237,6 +238,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         plan: LogicalPlan,
         outer_query_schema: Option<&DFSchema>,
         planner_context: &mut PlannerContext,
+        from_schema: &DFSchema,
     ) -> Result<LogicalPlan> {
         match selection {
             Some(predicate_expr) => {
@@ -253,6 +255,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, &join_schema, planner_context)?;
+                self.column_reference_ambiguous_check(
+                    &[filter_expr.clone()],
+                    from_schema,
+                    outer_query_schema,
+                )?;
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
                 let filter_expr = normalize_col_with_schemas(
@@ -337,15 +344,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match sql {
             SelectItem::UnnamedExpr(expr) => {
                 let expr = self.sql_to_expr(expr, plan.schema(), planner_context)?;
-                self.column_reference_ambiguous_check(from_schema, &[expr.clone()])?;
+                self.column_reference_ambiguous_check(
+                    &[expr.clone()],
+                    from_schema,
+                    None,
+                )?;
                 Ok(vec![normalize_col(expr, plan)?])
             }
             SelectItem::ExprWithAlias { expr, alias } => {
                 let select_expr =
                     self.sql_to_expr(expr, plan.schema(), planner_context)?;
                 self.column_reference_ambiguous_check(
-                    from_schema,
                     &[select_expr.clone()],
+                    from_schema,
+                    None,
                 )?;
                 let expr = Alias(Box::new(select_expr), normalize_ident(alias));
                 Ok(vec![normalize_col(expr, plan)?])
@@ -374,26 +386,42 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// ambiguous check for unqualifier column
     fn column_reference_ambiguous_check(
         &self,
-        schema: &DFSchema,
         exprs: &[Expr],
+        schema: &DFSchema,
+        fallback_schema: Option<&DFSchema>,
     ) -> Result<()> {
         find_column_exprs(exprs)
             .iter()
             .try_for_each(|col| match col {
-                Expr::Column(col) => match &col.relation {
-                    None => {
-                        // should get only one field in from_schema.
-                        if schema.fields_with_unqualified_name(&col.name).len() != 1 {
-                            Err(DataFusionError::Internal(format!(
-                                "column reference {} is ambiguous",
-                                col.name
-                            )))
-                        } else {
-                            Ok(())
+                Expr::Column(Column {
+                    name,
+                    relation: None,
+                    ..
+                }) => {
+                    match (
+                        schema.fields_with_unqualified_name(name).len(),
+                        fallback_schema,
+                    ) {
+                        // in case is from outer query if this is inner subquery
+                        (0, Some(fallback_schema)) => {
+                            match fallback_schema.fields_with_unqualified_name(name).len()
+                            {
+                                0 => Err(DataFusionError::Plan(format!(
+                                    "column reference {name} is unknown",
+                                ))),
+                                1 => Ok(()),
+                                _ => Err(DataFusionError::Plan(format!(
+                                    "column reference {name} is ambiguous",
+                                ))),
+                            }
                         }
+                        (1, _) => Ok(()),
+                        // should get only one field in from_schema.
+                        _ => Err(DataFusionError::Plan(format!(
+                            "column reference {name} is ambiguous",
+                        ))),
                     }
-                    _ => Ok(()),
-                },
+                }
                 _ => Ok(()),
             })
     }
