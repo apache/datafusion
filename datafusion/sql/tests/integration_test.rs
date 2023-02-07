@@ -3528,6 +3528,47 @@ Projection: person.id, person.age
 }
 
 #[test]
+fn test_prepare_statement_infer_types_subquery() {
+    let sql = "SELECT id, age FROM person WHERE age = (select max(age) from person where id = $1)";
+
+    let expected_plan = r#"
+Projection: person.id, person.age
+  Filter: person.age = (<subquery>)
+    Subquery:
+      Projection: MAX(person.age)
+        Aggregate: groupBy=[[]], aggr=[[MAX(person.age)]]
+          Filter: person.id = $1
+            TableScan: person
+    TableScan: person
+        "#
+        .trim();
+
+    let expected_dt = "[Int32]";
+    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([("$1".to_string(), Some(DataType::UInt32))]);
+    assert_eq!(actual_types, expected_types);
+
+    // replace params with values
+    let param_values = vec![ScalarValue::UInt32(Some(10))];
+    let expected_plan = r#"
+Projection: person.id, person.age
+  Filter: person.age = (<subquery>)
+    Subquery:
+      Projection: MAX(person.age)
+        Aggregate: groupBy=[[]], aggr=[[MAX(person.age)]]
+          Filter: person.id = UInt32(10)
+            TableScan: person
+    TableScan: person
+        "#
+        .trim();
+    let plan = plan.replace_params_with_values(&param_values).unwrap();
+
+    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+}
+
+#[test]
 fn test_prepare_statement_update_infer() {
     let sql = "update person set age=$1 where id=$2";
 
