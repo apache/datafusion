@@ -38,7 +38,6 @@ use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 use arrow::datatypes::SchemaRef;
@@ -135,14 +134,13 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
             let children_plans = children_requirements
                 .iter()
                 .map(|item| item.plan.clone())
-                .collect();
+                .collect::<Vec<_>>();
             let sort_onwards = children_requirements
                 .into_iter()
                 .enumerate()
                 .map(|(idx, item)| {
                     let plan = &item.plan;
-                    // Leaves of the `sort_onwards` tree are sort-introducing operators
-                    // (e.g `SortExec`, `SortPreservingMergeExec`). This tree collects
+                    // Leaves of the `sort_onwards` are `SortExec`(Introduces ordering). This tree collects
                     // all the intermediate executors that maintain this ordering. If
                     // we just saw a sort-introducing operator, we reset the tree and
                     // start accumulating.
@@ -157,26 +155,24 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
                         return None;
                     }
                     let is_spm = is_sort_preserving_merge(plan);
-                    let is_union = plan.as_any().is::<UnionExec>();
-                    // If the executor is a `UnionExec`, and it has an output ordering;
-                    // then it at least partially maintains some child's output ordering.
-                    // Therefore, we propagate this information upwards.
-                    let partially_maintains =
-                        is_union && plan.output_ordering().is_some();
-                    let flags = plan.maintains_input_order();
+                    let output_ordering = plan.output_ordering();
                     let required_orderings = plan.required_input_ordering();
-                    let children = izip!(flags, item.sort_onwards, required_orderings)
-                        .filter_map(|(maintains, element, required_ordering)| {
-                            if (required_ordering.is_none()
-                                && (maintains || partially_maintains))
-                                || is_spm
-                            {
-                                element
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<ExecTree>>();
+                    let children =
+                        izip!(&plan.children(), item.sort_onwards, required_orderings)
+                            .filter_map(|(child, element, required_ordering)| {
+                                // Executor maintains or partially maintains its child's output ordering
+                                let maintains = ordering_satisfy(
+                                    child.output_ordering(),
+                                    output_ordering,
+                                    || child.equivalence_properties(),
+                                );
+                                if (required_ordering.is_none() && maintains) || is_spm {
+                                    element
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<ExecTree>>();
                     if !children.is_empty() {
                         // Add parent node to the tree if there is at least one
                         // child with a subtree:
