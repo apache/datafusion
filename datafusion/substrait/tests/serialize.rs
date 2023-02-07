@@ -17,8 +17,7 @@
 
 #[cfg(test)]
 mod tests {
-
-    use datafusion_substrait::consumer::from_substrait_plan;
+    use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
     use datafusion_substrait::serializer;
 
     use datafusion::error::Result;
