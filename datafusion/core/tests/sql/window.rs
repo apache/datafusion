@@ -2389,7 +2389,7 @@ async fn test_window_agg_global_sort() -> Result<()> {
     let config = SessionConfig::new()
         .with_repartition_windows(true)
         .with_target_partitions(2)
-        .with_parallelize_sorts(true);
+        .with_repartition_sorts(true);
     let ctx = SessionContext::with_config(config);
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, ROW_NUMBER() OVER (PARTITION BY c1) as rn1 FROM aggregate_test_100 ORDER BY c1 ASC";
@@ -2427,7 +2427,7 @@ async fn test_window_agg_global_sort_parallelize_sort_disabled() -> Result<()> {
     let config = SessionConfig::new()
         .with_repartition_windows(true)
         .with_target_partitions(2)
-        .with_parallelize_sorts(false);
+        .with_repartition_sorts(false);
     let ctx = SessionContext::with_config(config);
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, ROW_NUMBER() OVER (PARTITION BY c1) as rn1 FROM aggregate_test_100 ORDER BY c1 ASC";
@@ -2466,7 +2466,7 @@ async fn test_window_agg_global_sort_intermediate_parallel_sort() -> Result<()> 
     let config = SessionConfig::new()
         .with_repartition_windows(true)
         .with_target_partitions(2)
-        .with_parallelize_sorts(true);
+        .with_repartition_sorts(true);
     let ctx = SessionContext::with_config(config);
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, \

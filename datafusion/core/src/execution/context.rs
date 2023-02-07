@@ -1232,10 +1232,10 @@ impl SessionConfig {
         self.options.optimizer.repartition_windows
     }
 
-    /// Are Sorts distributed to multiple cores, If there is already
-    /// multiple cores in the plan?
-    pub fn parallelize_sorts(&self) -> bool {
-        self.options.optimizer.parallelize_sorts
+    /// Do we execute sorts in a per-partition fashion and merge afterwards,
+    /// or do we coalesce partitions first and sort globally?
+    pub fn repartition_sorts(&self) -> bool {
+        self.options.optimizer.repartition_sorts
     }
 
     /// Are statistics collected during execution?
@@ -1296,9 +1296,9 @@ impl SessionConfig {
         self
     }
 
-    /// Enables or disables the use of Sort parallelization
-    pub fn with_parallelize_sorts(mut self, enabled: bool) -> Self {
-        self.options.optimizer.parallelize_sorts = enabled;
+    /// Enables or disables the use of per-partition sorting to improve parallelism
+    pub fn with_repartition_sorts(mut self, enabled: bool) -> Self {
+        self.options.optimizer.repartition_sorts = enabled;
         self
     }
 

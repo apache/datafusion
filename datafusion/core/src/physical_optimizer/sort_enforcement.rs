@@ -289,10 +289,10 @@ impl TreeNodeRewritable for PlanWithCorrespondingCoalescePartitions {
     }
 }
 
-/// The boolean flag `parallelize_sorts` defined in the config
-/// indicates whether we elect to transform CoalescePartitionsExec + SortExec
-/// cascades into SortExec + SortPreservingMergeExec cascades, which enables
-/// us to perform sorting in parallel.
+/// The boolean flag `repartition_sorts` defined in the config indicates
+/// whether we elect to transform CoalescePartitionsExec + SortExec cascades
+/// into SortExec + SortPreservingMergeExec cascades, which enables us to
+/// perform sorting in parallel.
 impl PhysicalOptimizerRule for EnforceSorting {
     fn optimize(
         &self,
@@ -302,7 +302,7 @@ impl PhysicalOptimizerRule for EnforceSorting {
         // Execute a post-order traversal to adjust input key ordering:
         let plan_requirements = PlanWithCorrespondingSort::new(plan);
         let adjusted = plan_requirements.transform_up(&ensure_sorting)?;
-        if config.optimizer.parallelize_sorts {
+        if config.optimizer.repartition_sorts {
             let plan_with_coalesce_partitions =
                 PlanWithCorrespondingCoalescePartitions::new(adjusted.plan);
             let parallel =
