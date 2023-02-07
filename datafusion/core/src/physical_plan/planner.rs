@@ -18,6 +18,7 @@
 //! Physical query planner
 
 use super::analyze::AnalyzeExec;
+use super::unnest::UnnestExec;
 use super::{
     aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
     values::ValuesExec, windows,
@@ -27,7 +28,7 @@ use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
     Aggregate, Distinct, EmptyRelation, Join, Projection, Sort, SubqueryAlias, TableScan,
-    Window,
+    Unnest, Window,
 };
 use crate::logical_expr::{
     CrossJoin, Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType,
@@ -1108,6 +1109,13 @@ impl DefaultPhysicalPlanner {
                     };
 
                     Ok(Arc::new(GlobalLimitExec::new(input, *skip, *fetch)))
+                }
+                LogicalPlan::Unnest(Unnest { input, column, schema }) => {
+                    let input = self.create_initial_plan(input, session_state).await?;
+                    let column_exec = schema.index_of_column(column)
+                        .map(|idx| Column::new(&column.name, idx))?;
+                    let schema = SchemaRef::new(schema.as_ref().to_owned().into());
+                    Ok(Arc::new(UnnestExec::new(input, column_exec, schema)))
                 }
                 LogicalPlan::CreateExternalTable(_) => {
                     // There is no default plan for "CREATE EXTERNAL
