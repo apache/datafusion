@@ -39,6 +39,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use crate::logical_plan::plan;
 
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
@@ -710,31 +711,36 @@ impl LogicalPlan {
         param_values: &[ScalarValue],
     ) -> Result<Expr, DataFusionError> {
         rewrite_expr(expr, |expr| {
-            if let Expr::Placeholder { id, data_type } = &expr {
-                // convert id (in format $1, $2, ..) to idx (0, 1, ..)
-                let idx = id[1..].parse::<usize>().map_err(|e| {
-                    DataFusionError::Internal(format!(
-                        "Failed to parse placeholder id: {e}"
-                    ))
-                })? - 1;
-                // value at the idx-th position in param_values should be the value for the placeholder
-                let value = param_values.get(idx).ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "No value found for placeholder with id {id}"
-                    ))
-                })?;
-                // check if the data type of the value matches the data type of the placeholder
-                if Some(value.get_datatype()) != *data_type {
-                    return Err(DataFusionError::Internal(format!(
-                        "Placeholder value type mismatch: expected {:?}, got {:?}",
-                        data_type,
-                        value.get_datatype()
-                    )));
-                }
-                // Replace the placeholder with the value
-                Ok(Expr::Literal(value.clone()))
-            } else {
-                Ok(expr)
+            match &expr {
+                Expr::Placeholder { id, data_type } => {
+                    // convert id (in format $1, $2, ..) to idx (0, 1, ..)
+                    let idx = id[1..].parse::<usize>().map_err(|e| {
+                        DataFusionError::Internal(format!(
+                            "Failed to parse placeholder id: {e}"
+                        ))
+                    })? - 1;
+                    // value at the idx-th position in param_values should be the value for the placeholder
+                    let value = param_values.get(idx).ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "No value found for placeholder with id {id}"
+                        ))
+                    })?;
+                    // check if the data type of the value matches the data type of the placeholder
+                    if Some(value.get_datatype()) != *data_type {
+                        return Err(DataFusionError::Internal(format!(
+                            "Placeholder value type mismatch: expected {:?}, got {:?}",
+                            data_type,
+                            value.get_datatype()
+                        )));
+                    }
+                    // Replace the placeholder with the value
+                    Ok(Expr::Literal(value.clone()))
+                },
+                Expr::ScalarSubquery(qry) => {
+                    let subquery = Arc::new(qry.subquery.replace_params_with_values(&param_values.to_vec())?);
+                    Ok(Expr::ScalarSubquery(plan::Subquery {subquery}))
+                },
+                _ => Ok(expr),
             }
         })
     }
