@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::producer;
+use crate::logical_plan::producer;
 
 use datafusion::common::DataFusionError;
 use datafusion::error::Result;
