@@ -105,6 +105,73 @@ impl PlanWithCorrespondingSort {
         }
     }
 
+    pub fn new_from_children_nodes(
+        children_nodes: Vec<PlanWithCorrespondingSort>,
+        parent_plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Self> {
+        let children_plans = children_nodes
+            .iter()
+            .map(|item| item.plan.clone())
+            .collect::<Vec<_>>();
+
+        let sort_onwards = children_nodes
+            .into_iter()
+            .enumerate()
+            .map(|(idx, item)| {
+                let plan = &item.plan;
+                // Leaves of the `sort_onwards` are `SortExec`(Introduces ordering). This tree collects
+                // all the intermediate executors that maintain this ordering. If
+                // we just saw a sort-introducing operator, we reset the tree and
+                // start accumulating.
+                if is_sort(plan) {
+                    return Some(ExecTree {
+                        idx,
+                        plan: item.plan,
+                        children: vec![],
+                    });
+                } else if is_limit(plan) {
+                    // There is no sort linkage for this path, it starts at a limit.
+                    return None;
+                }
+                let is_spm = is_sort_preserving_merge(plan);
+                let is_union = plan.as_any().is::<UnionExec>();
+                // If the executor is a `UnionExec`, and it has an output ordering;
+                // then it at least partially maintains some child's output ordering.
+                // Therefore, we propagate this information upwards.
+                let partially_maintains = is_union && plan.output_ordering().is_some();
+                let required_orderings = plan.required_input_ordering();
+                let flags = plan.maintains_input_order();
+                let children = izip!(flags, item.sort_onwards, required_orderings)
+                    .filter_map(|(maintains, element, required_ordering)| {
+                        if (required_ordering.is_none()
+                            && (maintains || partially_maintains))
+                            || is_spm
+                        {
+                            element
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<ExecTree>>();
+                if !children.is_empty() {
+                    // Add parent node to the tree if there is at least one
+                    // child with a subtree:
+                    Some(ExecTree {
+                        idx,
+                        plan: item.plan,
+                        children,
+                    })
+                } else {
+                    // There is no sort linkage for this child, do nothing.
+                    None
+                }
+            })
+            .collect();
+
+        let plan = with_new_children_if_necessary(parent_plan, children_plans)?;
+        Ok(PlanWithCorrespondingSort { plan, sort_onwards })
+    }
+
     pub fn children(&self) -> Vec<PlanWithCorrespondingSort> {
         self.plan
             .children()
@@ -123,70 +190,14 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
         if children.is_empty() {
             Ok(self)
         } else {
-            let children_requirements = children
+            let children_nodes = children
                 .into_iter()
                 .map(transform)
                 .collect::<Result<Vec<_>>>()?;
-            let children_plans = children_requirements
-                .iter()
-                .map(|item| item.plan.clone())
-                .collect::<Vec<_>>();
-            let sort_onwards = children_requirements
-                .into_iter()
-                .enumerate()
-                .map(|(idx, item)| {
-                    let plan = &item.plan;
-                    // Leaves of the `sort_onwards` are `SortExec`(Introduces ordering). This tree collects
-                    // all the intermediate executors that maintain this ordering. If
-                    // we just saw a sort-introducing operator, we reset the tree and
-                    // start accumulating.
-                    if is_sort(plan) {
-                        return Some(ExecTree {
-                            idx,
-                            plan: item.plan,
-                            children: vec![],
-                        });
-                    } else if is_limit(plan) {
-                        // There is no sort linkage for this path, it starts at a limit.
-                        return None;
-                    }
-                    let is_spm = is_sort_preserving_merge(plan);
-                    let is_union = plan.as_any().is::<UnionExec>();
-                    // If the executor is a `UnionExec`, and it has an output ordering;
-                    // then it at least partially maintains some child's output ordering.
-                    // Therefore, we propagate this information upwards.
-                    let partially_maintains =
-                        is_union && plan.output_ordering().is_some();
-                    let required_orderings = plan.required_input_ordering();
-                    let flags = plan.maintains_input_order();
-                    let children = izip!(flags, item.sort_onwards, required_orderings)
-                        .filter_map(|(maintains, element, required_ordering)| {
-                            if (required_ordering.is_none()
-                                && (maintains || partially_maintains))
-                                || is_spm
-                            {
-                                element
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<ExecTree>>();
-                    if !children.is_empty() {
-                        // Add parent node to the tree if there is at least one
-                        // child with a subtree:
-                        Some(ExecTree {
-                            idx,
-                            plan: item.plan,
-                            children,
-                        })
-                    } else {
-                        // There is no sort linkage for this child, do nothing.
-                        None
-                    }
-                })
-                .collect();
-            let plan = with_new_children_if_necessary(self.plan, children_plans)?;
-            Ok(PlanWithCorrespondingSort { plan, sort_onwards })
+            PlanWithCorrespondingSort::new_from_children_nodes(
+                children_nodes,
+                self.plan.clone(),
+            )
         }
     }
 }
@@ -200,7 +211,7 @@ struct PlanWithCorrespondingCoalescePartitions {
     // child until the `CoalescePartitionsExec`(s) -- could be multiple for
     // n-ary plans like Union -- that affect the output partitioning of the
     // child. If the child has no connection to any `CoalescePartitionsExec`,
-    // simpliy store None (and not a subtree).
+    // simplify store None (and not a subtree).
     coalesce_onwards: Vec<Option<ExecTree>>,
 }
 
@@ -211,6 +222,65 @@ impl PlanWithCorrespondingCoalescePartitions {
             plan,
             coalesce_onwards: vec![None; length],
         }
+    }
+
+    pub fn new_from_children_nodes(
+        children_nodes: Vec<PlanWithCorrespondingCoalescePartitions>,
+        parent_plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Self> {
+        let children_plans = children_nodes
+            .iter()
+            .map(|item| item.plan.clone())
+            .collect();
+        let coalesce_onwards = children_nodes
+            .into_iter()
+            .enumerate()
+            .map(|(idx, item)| {
+                // Leaves of the `coalesce_onwards` tree are `CoalescePartitionsExec`
+                // operators. This tree collects all the intermediate executors that
+                // maintain a single partition. If we just saw a `CoalescePartitionsExec`
+                // operator, we reset the tree and start accumulating.
+                let plan = item.plan;
+                if plan.as_any().is::<CoalescePartitionsExec>() {
+                    Some(ExecTree {
+                        idx,
+                        plan,
+                        children: vec![],
+                    })
+                } else if plan.children().is_empty() {
+                    // Plan has no children, there is nothing to propagate.
+                    None
+                } else {
+                    let children = item
+                        .coalesce_onwards
+                        .into_iter()
+                        .flatten()
+                        .filter(|item| {
+                            // Only consider operators that don't require a
+                            // single partition.
+                            !matches!(
+                                plan.required_input_distribution()[item.idx],
+                                Distribution::SinglePartition
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    if children.is_empty() {
+                        None
+                    } else {
+                        Some(ExecTree {
+                            idx,
+                            plan,
+                            children,
+                        })
+                    }
+                }
+            })
+            .collect();
+        let plan = with_new_children_if_necessary(parent_plan, children_plans)?;
+        Ok(PlanWithCorrespondingCoalescePartitions {
+            plan,
+            coalesce_onwards,
+        })
     }
 
     pub fn children(&self) -> Vec<PlanWithCorrespondingCoalescePartitions> {
@@ -231,63 +301,14 @@ impl TreeNodeRewritable for PlanWithCorrespondingCoalescePartitions {
         if children.is_empty() {
             Ok(self)
         } else {
-            let children_requirements = children
+            let children_nodes = children
                 .into_iter()
                 .map(transform)
                 .collect::<Result<Vec<_>>>()?;
-            let children_plans = children_requirements
-                .iter()
-                .map(|item| item.plan.clone())
-                .collect();
-            let coalesce_onwards = children_requirements
-                .into_iter()
-                .enumerate()
-                .map(|(idx, item)| {
-                    // Leaves of the `coalesce_onwards` tree are `CoalescePartitionsExec`
-                    // operators. This tree collects all the intermediate executors that
-                    // maintain a single partition. If we just saw a `CoalescePartitionsExec`
-                    // operator, we reset the tree and start accumulating.
-                    let plan = item.plan;
-                    if plan.as_any().is::<CoalescePartitionsExec>() {
-                        Some(ExecTree {
-                            idx,
-                            plan,
-                            children: vec![],
-                        })
-                    } else if plan.children().is_empty() {
-                        // Plan has no children, there is nothing to propagate.
-                        None
-                    } else {
-                        let children = item
-                            .coalesce_onwards
-                            .into_iter()
-                            .flatten()
-                            .filter(|item| {
-                                // Only consider operators that don't require a
-                                // single partition.
-                                !matches!(
-                                    plan.required_input_distribution()[item.idx],
-                                    Distribution::SinglePartition
-                                )
-                            })
-                            .collect::<Vec<_>>();
-                        if children.is_empty() {
-                            None
-                        } else {
-                            Some(ExecTree {
-                                idx,
-                                plan,
-                                children,
-                            })
-                        }
-                    }
-                })
-                .collect();
-            let plan = with_new_children_if_necessary(self.plan, children_plans)?;
-            Ok(PlanWithCorrespondingCoalescePartitions {
-                plan,
-                coalesce_onwards,
-            })
+            PlanWithCorrespondingCoalescePartitions::new_from_children_nodes(
+                children_nodes,
+                self.plan.clone(),
+            )
         }
     }
 }
@@ -302,7 +323,6 @@ impl PhysicalOptimizerRule for EnforceSorting {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Execute a post-order traversal to adjust input key ordering:
         let plan_requirements = PlanWithCorrespondingSort::new(plan);
         let adjusted = plan_requirements.transform_up(&ensure_sorting)?;
         if config.optimizer.repartition_sorts {
