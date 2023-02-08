@@ -113,16 +113,15 @@ impl PlanWithCorrespondingSort {
             .iter()
             .map(|item| item.plan.clone())
             .collect::<Vec<_>>();
-
         let sort_onwards = children_nodes
             .into_iter()
             .enumerate()
             .map(|(idx, item)| {
                 let plan = &item.plan;
-                // Leaves of the `sort_onwards` are `SortExec`(Introduces ordering). This tree collects
-                // all the intermediate executors that maintain this ordering. If
-                // we just saw a sort-introducing operator, we reset the tree and
-                // start accumulating.
+                // Leaves of `sort_onwards` are `SortExec` operators, which impose
+                // an ordering. This tree collects all the intermediate executors
+                // that maintain this ordering. If we just saw a order imposing
+                // operator, we reset the tree and start accumulating.
                 if is_sort(plan) {
                     return Some(ExecTree {
                         idx,
@@ -194,10 +193,7 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
                 .into_iter()
                 .map(transform)
                 .collect::<Result<Vec<_>>>()?;
-            PlanWithCorrespondingSort::new_from_children_nodes(
-                children_nodes,
-                self.plan.clone(),
-            )
+            PlanWithCorrespondingSort::new_from_children_nodes(children_nodes, self.plan)
         }
     }
 }
@@ -307,7 +303,7 @@ impl TreeNodeRewritable for PlanWithCorrespondingCoalescePartitions {
                 .collect::<Result<Vec<_>>>()?;
             PlanWithCorrespondingCoalescePartitions::new_from_children_nodes(
                 children_nodes,
-                self.plan.clone(),
+                self.plan,
             )
         }
     }
