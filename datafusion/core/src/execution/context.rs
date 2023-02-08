@@ -1232,6 +1232,12 @@ impl SessionConfig {
         self.options.optimizer.repartition_windows
     }
 
+    /// Do we execute sorts in a per-partition fashion and merge afterwards,
+    /// or do we coalesce partitions first and sort globally?
+    pub fn repartition_sorts(&self) -> bool {
+        self.options.optimizer.repartition_sorts
+    }
+
     /// Are statistics collected during execution?
     pub fn collect_statistics(&self) -> bool {
         self.options.execution.collect_statistics
@@ -1287,6 +1293,12 @@ impl SessionConfig {
     /// Enables or disables the use of repartitioning for window functions to improve parallelism
     pub fn with_repartition_windows(mut self, enabled: bool) -> Self {
         self.options.optimizer.repartition_windows = enabled;
+        self
+    }
+
+    /// Enables or disables the use of per-partition sorting to improve parallelism
+    pub fn with_repartition_sorts(mut self, enabled: bool) -> Self {
+        self.options.optimizer.repartition_sorts = enabled;
         self
     }
 
