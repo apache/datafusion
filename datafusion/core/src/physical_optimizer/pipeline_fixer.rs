@@ -29,6 +29,7 @@ use crate::physical_optimizer::pipeline_checker::{
     check_finiteness_requirements, PipelineStatePropagator,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
+use crate::physical_plan::joins::utils::JoinSide;
 use crate::physical_plan::joins::{
     convert_sort_expr_with_filter_schema, HashJoinExec, PartitionMode,
     SymmetricHashJoinExec,
@@ -44,7 +45,6 @@ use datafusion_physical_expr::physical_expr_visitor::{
 };
 use datafusion_physical_expr::PhysicalExpr;
 
-use crate::physical_plan::joins::utils::JoinSide;
 use std::sync::Arc;
 
 /// The [PipelineFixer] rule tries to modify a given plan so that it can
@@ -60,7 +60,7 @@ impl PipelineFixer {
     }
 }
 type PipelineFixerSubrule =
-    dyn Fn(&PipelineStatePropagator) -> Option<Result<PipelineStatePropagator>>;
+    dyn Fn(PipelineStatePropagator) -> Option<Result<PipelineStatePropagator>>;
 impl PhysicalOptimizerRule for PipelineFixer {
     fn optimize(
         &self,
@@ -90,13 +90,13 @@ impl PhysicalOptimizerRule for PipelineFixer {
     }
 }
 
-/// We do not support every type of [PhysicalExpr] for interval calculation. Also, we are not
-/// supporting every type of [Operator]s in [BinaryExpr]. This check is subject to change while
-/// we are adding additional [PhysicalExpr] and [Operator] support.
-///
-/// We support [CastExpr], [BinaryExpr], [Column], and [Literal] for interval calculations.
+/// This object tracks the support state for [PhysicalExpr]s in the plan.
+/// Currently, we do not support all [PhysicalExpr]s for interval calculations.
+/// We do not support every type of [Operator]s either. Over time, this check
+/// will relax as more types of [PhysicalExpr]s and [Operator]s are supported.
+/// Currently, [CastExpr], [BinaryExpr], [Column] and [Literal] is supported.
 #[derive(Debug)]
-pub struct UnsupportedPhysicalExprVisitor<'a> {
+struct UnsupportedPhysicalExprVisitor<'a> {
     /// Supported state
     pub supported: &'a mut bool,
 }
@@ -104,8 +104,7 @@ pub struct UnsupportedPhysicalExprVisitor<'a> {
 impl PhysicalExpressionVisitor for UnsupportedPhysicalExprVisitor<'_> {
     fn pre_visit(self, expr: Arc<dyn PhysicalExpr>) -> Result<Recursion<Self>> {
         if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
-            let op_is_supported = is_operator_supported(binary_expr.op());
-            *self.supported = *self.supported && op_is_supported;
+            *self.supported &= is_operator_supported(binary_expr.op());
         } else if !(expr.as_any().is::<Column>()
             || expr.as_any().is::<Literal>()
             || expr.as_any().is::<CastExpr>())
@@ -116,95 +115,87 @@ impl PhysicalExpressionVisitor for UnsupportedPhysicalExprVisitor<'_> {
     }
 }
 
-// If it does not contain any unsupported [Operator].
-// Sorting information must cover every column in filter expression.
-// Float is unsupported
-// Anything beside than BinaryExpr, Col, Literal and operations Ge and Le is currently unsupported.
+/// This function returns whether a given hash join is replacable by a
+/// symmetric hash join. Basically, the requirement is that involved
+/// [PhysicalExpr]s, [Operator]s and data types need to be supported,
+/// and order information must cover every column in the filter expression.
 fn is_suitable_for_symmetric_hash_join(hash_join: &HashJoinExec) -> Result<bool> {
-    let are_children_ordered = hash_join.left().output_ordering().is_some()
-        && hash_join.right().output_ordering().is_some();
-    let is_filter_supported = match hash_join.filter() {
-        None => false,
-        Some(filter) => {
-            let expr: Arc<dyn PhysicalExpr> = filter.expression().clone();
-            let mut is_expr_supported = true;
-            expr.accept(UnsupportedPhysicalExprVisitor {
-                supported: &mut is_expr_supported,
-            })?;
-            let left_is_convertable = convert_sort_expr_with_filter_schema(
-                &JoinSide::Left,
-                filter,
-                hash_join.left().schema(),
-                hash_join
-                    .left()
-                    .output_ordering()
-                    .as_ref()
-                    .unwrap()
-                    .get(0)
-                    .unwrap(),
-            )?
-            .is_some();
-            let right_is_convertable = convert_sort_expr_with_filter_schema(
-                &JoinSide::Right,
-                filter,
-                hash_join.right().schema(),
-                hash_join
-                    .right()
-                    .output_ordering()
-                    .as_ref()
-                    .unwrap()
-                    .get(0)
-                    .unwrap(),
-            )?
-            .is_some();
-            let sort_expressions_supported = left_is_convertable && right_is_convertable;
-            let is_fields_supported = filter
-                .schema()
-                .fields()
-                .iter()
-                .all(|f| is_datatype_supported(f.data_type()));
-            is_expr_supported && is_fields_supported && sort_expressions_supported
+    if let Some(filter) = hash_join.filter() {
+        let left = hash_join.left();
+        if let Some(left_ordering) = left.output_ordering() {
+            let right = hash_join.right();
+            if let Some(right_ordering) = right.output_ordering() {
+                let expr: Arc<dyn PhysicalExpr> = filter.expression().clone();
+                let mut expr_supported = true;
+                expr.accept(UnsupportedPhysicalExprVisitor {
+                    supported: &mut expr_supported,
+                })?;
+                let left_convertible = convert_sort_expr_with_filter_schema(
+                    &JoinSide::Left,
+                    filter,
+                    left.schema(),
+                    &left_ordering[0],
+                )?
+                .is_some();
+                let right_convertible = convert_sort_expr_with_filter_schema(
+                    &JoinSide::Right,
+                    filter,
+                    hash_join.right().schema(),
+                    &right_ordering[0],
+                )?
+                .is_some();
+                let fields_supported = filter
+                    .schema()
+                    .fields()
+                    .iter()
+                    .all(|f| is_datatype_supported(f.data_type()));
+                return Ok(expr_supported
+                    && fields_supported
+                    && left_convertible
+                    && right_convertible);
+            }
         }
-    };
-    Ok(are_children_ordered && is_filter_supported)
+    }
+    Ok(false)
 }
 
+/// This subrule checks if one can replace a hash join with a symmetric hash
+/// join so that the pipeline does not break due to the join operation in
+/// question. If possible, it makes this replacement; otherwise, it has no
+/// effect.
 fn hash_join_convert_symmetric_subrule(
-    input: &PipelineStatePropagator,
+    input: PipelineStatePropagator,
 ) -> Option<Result<PipelineStatePropagator>> {
-    let plan = input.plan.clone();
-    let children = &input.children_unbounded;
+    let plan = input.plan;
     if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
-        let (left_unbounded, right_unbounded) = (children[0], children[1]);
+        let ub_flags = input.children_unbounded;
+        let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
         let new_plan = if left_unbounded && right_unbounded {
-            Ok(match is_suitable_for_symmetric_hash_join(hash_join) {
-                Ok(true) => Arc::new(
-                    SymmetricHashJoinExec::try_new(
-                        hash_join.left().clone(),
-                        hash_join.right().clone(),
-                        hash_join
-                            .on()
-                            .iter()
-                            .map(|(l, r)| (l.clone(), r.clone()))
-                            .collect(),
-                        hash_join.filter().unwrap().clone(),
-                        hash_join.join_type(),
-                        hash_join.null_equals_null(),
-                    )
-                    .unwrap(),
-                ),
-                Ok(false) => plan,
+            match is_suitable_for_symmetric_hash_join(hash_join) {
+                Ok(true) => SymmetricHashJoinExec::try_new(
+                    hash_join.left().clone(),
+                    hash_join.right().clone(),
+                    hash_join
+                        .on()
+                        .iter()
+                        .map(|(l, r)| (l.clone(), r.clone()))
+                        .collect(),
+                    hash_join.filter().unwrap().clone(),
+                    hash_join.join_type(),
+                    hash_join.null_equals_null(),
+                )
+                .map(|e| Arc::new(e) as _),
+                Ok(false) => Ok(plan),
                 Err(e) => return Some(Err(e)),
-            })
+            }
         } else {
             Ok(plan)
         };
-        let new_state = new_plan.map(|plan| PipelineStatePropagator {
+        Some(new_plan.map(|plan| PipelineStatePropagator {
             plan,
             unbounded: left_unbounded || right_unbounded,
-            children_unbounded: vec![left_unbounded, right_unbounded],
-        });
-        Some(new_state)
+            children_unbounded: ub_flags,
+        }))
     } else {
         None
     }
@@ -252,12 +243,12 @@ fn hash_join_convert_symmetric_subrule(
 ///
 /// ```
 fn hash_join_swap_subrule(
-    input: &PipelineStatePropagator,
+    input: PipelineStatePropagator,
 ) -> Option<Result<PipelineStatePropagator>> {
-    let plan = input.plan.clone();
-    let children = &input.children_unbounded;
+    let plan = input.plan;
     if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
-        let (left_unbounded, right_unbounded) = (children[0], children[1]);
+        let ub_flags = input.children_unbounded;
+        let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
         let new_plan = if left_unbounded && !right_unbounded {
             if matches!(
                 *hash_join.join_type(),
@@ -273,12 +264,11 @@ fn hash_join_swap_subrule(
         } else {
             Ok(plan)
         };
-        let new_state = new_plan.map(|plan| PipelineStatePropagator {
+        Some(new_plan.map(|plan| PipelineStatePropagator {
             plan,
             unbounded: left_unbounded || right_unbounded,
-            children_unbounded: vec![left_unbounded, right_unbounded],
-        });
-        Some(new_state)
+            children_unbounded: ub_flags,
+        }))
     } else {
         None
     }
@@ -315,7 +305,7 @@ fn apply_subrules_and_check_finiteness_requirements(
     physical_optimizer_subrules: &Vec<Box<PipelineFixerSubrule>>,
 ) -> Result<Option<PipelineStatePropagator>> {
     for sub_rule in physical_optimizer_subrules {
-        if let Some(value) = sub_rule(&input).transpose()? {
+        if let Some(value) = sub_rule(input.clone()).transpose()? {
             input = value;
         }
     }
@@ -694,7 +684,7 @@ mod hash_join_tests {
             children_unbounded: vec![left_unbounded, right_unbounded],
         };
         let optimized_hash_join =
-            hash_join_swap_subrule(&initial_hash_join_state).unwrap()?;
+            hash_join_swap_subrule(initial_hash_join_state).unwrap()?;
         let optimized_join_plan = optimized_hash_join.plan;
 
         // If swap did happen
