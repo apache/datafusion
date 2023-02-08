@@ -79,10 +79,7 @@ impl ExecutionPlan for MemoryExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        match self.sort_information.as_ref() {
-            None => None,
-            Some(sort) => Some(sort.as_slice()),
-        }
+        self.sort_information.as_deref()
     }
 
     fn with_new_children(

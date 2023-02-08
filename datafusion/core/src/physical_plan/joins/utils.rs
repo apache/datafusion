@@ -29,6 +29,7 @@ use futures::{ready, FutureExt};
 use parking_lot::Mutex;
 use std::cmp::max;
 use std::collections::HashSet;
+use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -222,6 +223,15 @@ pub fn cross_join_equivalence_properties(
         .collect::<Vec<_>>();
     new_properties.extend(new_right_properties);
     new_properties
+}
+
+impl Display for JoinSide {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JoinSide::Left => write!(f, "Left"),
+            JoinSide::Right => write!(f, "Right"),
+        }
+    }
 }
 
 /// Used in ColumnIndex to distinguish which side the index is for

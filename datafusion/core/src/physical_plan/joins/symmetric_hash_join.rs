@@ -271,35 +271,19 @@ impl SymmetricHashJoinExec {
             ExprIntervalGraph::try_new(filter.expression().clone())?;
 
         // Build the sorted filter expression for the left child
-        let left_filter_expression = match build_filter_input_order_v2(
+        let left_filter_expression = build_filter_input_order_v2(
             JoinSide::Left,
             &filter,
             left.schema(),
             left.output_ordering().unwrap().get(0).unwrap(),
-        )? {
-            Some(value) => value,
-            None => {
-                return Err(DataFusionError::Plan(
-                    "The left side of the join does not have an expression sorted."
-                        .to_string(),
-                ))
-            }
-        };
+        )?;
         // Build the sorted filter expression for the right child
-        let right_filter_expression = match build_filter_input_order_v2(
+        let right_filter_expression = build_filter_input_order_v2(
             JoinSide::Right,
             &filter,
             right.schema(),
             right.output_ordering().unwrap().get(0).unwrap(),
-        )? {
-            Some(value) => value,
-            None => {
-                return Err(DataFusionError::Plan(
-                    "The right side of the join does not have an expression sorted."
-                        .to_string(),
-                ))
-            }
-        };
+        )?;
 
         // Store the left and right sorted filter expressions in a vector
         let mut filter_columns = vec![left_filter_expression, right_filter_expression];
@@ -995,11 +979,8 @@ impl OneSideHashJoiner {
             &mut self.hashes_buffer,
         )?;
 
-        // Drain the hashes buffer and add them to the row_hash_values deque
-        self.hashes_buffer
-            .drain(0..)
-            .into_iter()
-            .for_each(|hash| self.row_hash_values.push_back(hash));
+        // Add the hashes buffer to the row_hash_values deque
+        self.row_hash_values.extend(self.hashes_buffer.iter());
 
         Ok(())
     }
@@ -1246,26 +1227,25 @@ impl OneSideHashJoiner {
 
 fn combine_two_batches_result(
     output_schema: SchemaRef,
-    left_batch: Result<Option<RecordBatch>>,
-    right_batch: Result<Option<RecordBatch>>,
-) -> Result<RecordBatch> {
+    left_batch: Option<RecordBatch>,
+    right_batch: Option<RecordBatch>,
+) -> Result<Option<RecordBatch>> {
     match (left_batch, right_batch) {
-        (Ok(Some(batch)), Ok(None)) | (Ok(None), Ok(Some(batch))) => {
+        (Some(batch), None) | (None, Some(batch)) => {
             // If either left_batch or right_batch is present, return that batch
-            Ok(batch)
+            Ok(Some(batch))
         }
-        (Err(e), _) | (_, Err(e)) => {
-            // If either left_batch or right_batch returns an error, return the error
-            Err(e)
-        }
-        (Ok(Some(left_batch)), Ok(Some(right_batch))) => {
+        (Some(left_batch), Some(right_batch)) => {
             // If both left_batch and right_batch are present, concatenate them
-            concat_batches(&output_schema, &[left_batch, right_batch])
-                .map_err(DataFusionError::ArrowError)
+            Some(
+                concat_batches(&output_schema, &[left_batch, right_batch])
+                    .map_err(DataFusionError::ArrowError),
+            )
+            .transpose()
         }
-        (Ok(None), Ok(None)) => {
+        (None, None) => {
             // If both left_batch and right_batch are not present, return an empty batch
-            Ok(RecordBatch::new_empty(output_schema))
+            Ok(None)
         }
     }
 }
@@ -1293,7 +1273,7 @@ impl SymmetricHashJoinStream {
                     self.right.input_buffer.schema(),
                     self.join_type,
                     &self.column_indices,
-                );
+                )?;
                 // Get right side results
                 let right_result = self.right.build_side_determined_results(
                     self.schema.clone(),
@@ -1301,20 +1281,22 @@ impl SymmetricHashJoinStream {
                     self.left.input_buffer.schema(),
                     self.join_type,
                     &self.column_indices,
-                );
+                )?;
                 self.final_result = true;
                 // Combine results
                 let result = combine_two_batches_result(
                     self.schema.clone(),
                     left_result,
                     right_result,
-                );
-                // Update the metrics
-                if let Ok(batch) = &result {
+                )?;
+                // Update the metrics if batch is some, if not, continue loop.
+                if let Some(batch) = &result {
                     self.metrics.output_batches.add(1);
                     self.metrics.output_rows.add(batch.num_rows());
+                    return Poll::Ready(Ok(result).transpose());
+                } else {
+                    continue;
                 }
-                return Poll::Ready(Some(result));
             }
 
             // Determine which stream should be polled next. The side the RecordBatch comes from becomes probe side.
@@ -1349,16 +1331,8 @@ impl SymmetricHashJoinStream {
                     probe_side_metrics.input_batches.add(1);
                     probe_side_metrics.input_rows.add(probe_batch.num_rows());
                     // Update the internal state of the hash joiner for build side
-                    match probe_hash_joiner
-                        .update_internal_state(&probe_batch, &self.random_state)
-                    {
-                        Ok(_) => {}
-                        Err(e) => {
-                            return Poll::Ready(Some(Err(DataFusionError::Internal(
-                                e.to_string(),
-                            ))))
-                        }
-                    }
+                    probe_hash_joiner
+                        .update_internal_state(&probe_batch, &self.random_state)?;
                     // Calculate filter intervals
                     calculate_filter_expr_intervals(
                         &build_hash_joiner.input_buffer,
@@ -1378,7 +1352,7 @@ impl SymmetricHashJoinStream {
                         &self.column_indices,
                         &self.random_state,
                         &self.null_equals_null,
-                    );
+                    )?;
                     // Increment the offset for the probe hash joiner
                     probe_hash_joiner.offset += probe_batch.num_rows();
                     // Prune build input buffer using the physical expression graph and filter intervals
@@ -1389,24 +1363,26 @@ impl SymmetricHashJoinStream {
                         self.join_type,
                         &self.column_indices,
                         &mut self.physical_expr_graph,
-                    );
+                    )?;
                     // Combine results
                     let result = combine_two_batches_result(
                         self.schema.clone(),
                         equal_result,
                         anti_result,
-                    );
-                    // Update the metrics
-                    if let Ok(batch) = &result {
-                        self.metrics.output_batches.add(1);
-                        self.metrics.output_rows.add(batch.num_rows());
-                    }
+                    )?;
                     // Choose next pool side. If other side is not exhausted, revert the probe side
                     // before returning the result.
                     if !build_hash_joiner.exhausted {
                         self.probe_side = build_join_side;
                     }
-                    return Poll::Ready(Some(result));
+                    // Update the metrics if batch is some, if not, continue loop.
+                    if let Some(batch) = &result {
+                        self.metrics.output_batches.add(1);
+                        self.metrics.output_rows.add(batch.num_rows());
+                        return Poll::Ready(Ok(result).transpose());
+                    } else {
+                        continue;
+                    }
                 }
                 Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
                 Poll::Ready(None) => {

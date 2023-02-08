@@ -96,20 +96,26 @@ impl PhysicalOptimizerRule for PipelineFixer {
 /// will relax as more types of [PhysicalExpr]s and [Operator]s are supported.
 /// Currently, [CastExpr], [BinaryExpr], [Column] and [Literal] is supported.
 #[derive(Debug)]
-struct UnsupportedPhysicalExprVisitor<'a> {
+struct UnsupportedPhysicalExprVisitor {
     /// Supported state
-    pub supported: &'a mut bool,
+    pub supported: bool,
 }
 
-impl PhysicalExpressionVisitor for UnsupportedPhysicalExprVisitor<'_> {
-    fn pre_visit(self, expr: Arc<dyn PhysicalExpr>) -> Result<Recursion<Self>> {
+impl UnsupportedPhysicalExprVisitor {
+    pub fn new() -> Self {
+        Self { supported: true }
+    }
+}
+
+impl PhysicalExpressionVisitor for UnsupportedPhysicalExprVisitor {
+    fn pre_visit(mut self, expr: Arc<dyn PhysicalExpr>) -> Result<Recursion<Self>> {
         if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
-            *self.supported &= is_operator_supported(binary_expr.op());
+            self.supported &= is_operator_supported(binary_expr.op());
         } else if !(expr.as_any().is::<Column>()
             || expr.as_any().is::<Literal>()
             || expr.as_any().is::<CastExpr>())
         {
-            *self.supported = false;
+            self.supported = false;
         }
         Ok(Recursion::Continue(self))
     }
@@ -126,10 +132,9 @@ fn is_suitable_for_symmetric_hash_join(hash_join: &HashJoinExec) -> Result<bool>
             let right = hash_join.right();
             if let Some(right_ordering) = right.output_ordering() {
                 let expr: Arc<dyn PhysicalExpr> = filter.expression().clone();
-                let mut expr_supported = true;
-                expr.accept(UnsupportedPhysicalExprVisitor {
-                    supported: &mut expr_supported,
-                })?;
+                let expr_supported = expr
+                    .accept(UnsupportedPhysicalExprVisitor::new())?
+                    .supported;
                 let left_convertible = convert_sort_expr_with_filter_schema(
                     &JoinSide::Left,
                     filter,

@@ -596,25 +596,25 @@ impl fmt::Debug for JoinHashMap {
 }
 
 #[derive(Debug)]
-pub struct CheckFilterExprContainsSortInformation<'a> {
+pub struct CheckFilterExprContainsSortInformation {
     /// Supported state
-    pub contains: &'a mut bool,
+    pub contains: bool,
     pub checked_expr: Arc<dyn PhysicalExpr>,
 }
 
-impl<'a> CheckFilterExprContainsSortInformation<'a> {
-    pub fn new(contains: &'a mut bool, checked_expr: Arc<dyn PhysicalExpr>) -> Self {
+impl CheckFilterExprContainsSortInformation {
+    pub fn new(checked_expr: Arc<dyn PhysicalExpr>) -> Self {
         Self {
-            contains,
+            contains: false,
             checked_expr,
         }
     }
 }
 
-impl PhysicalExpressionVisitor for CheckFilterExprContainsSortInformation<'_> {
-    fn pre_visit(self, expr: Arc<dyn PhysicalExpr>) -> Result<Recursion<Self>> {
-        *self.contains = *self.contains || self.checked_expr.eq(&expr);
-        if *self.contains {
+impl PhysicalExpressionVisitor for CheckFilterExprContainsSortInformation {
+    fn pre_visit(mut self, expr: Arc<dyn PhysicalExpr>) -> Result<Recursion<Self>> {
+        self.contains |= self.checked_expr.eq(&expr);
+        if self.contains {
             Ok(Recursion::Stop(self))
         } else {
             Ok(Recursion::Continue(self))
@@ -623,18 +623,18 @@ impl PhysicalExpressionVisitor for CheckFilterExprContainsSortInformation<'_> {
 }
 
 #[derive(Debug)]
-pub struct PhysicalExprColumnCollector<'a> {
-    pub columns: &'a mut Vec<Column>,
+pub struct PhysicalExprColumnCollector {
+    pub columns: Vec<Column>,
 }
 
-impl<'a> PhysicalExprColumnCollector<'a> {
-    pub fn new(columns: &'a mut Vec<Column>) -> Self {
-        Self { columns }
+impl PhysicalExprColumnCollector {
+    pub fn new() -> Self {
+        Self { columns: vec![] }
     }
 }
 
-impl PhysicalExpressionVisitor for PhysicalExprColumnCollector<'_> {
-    fn pre_visit(self, expr: Arc<dyn PhysicalExpr>) -> Result<Recursion<Self>> {
+impl PhysicalExpressionVisitor for PhysicalExprColumnCollector {
+    fn pre_visit(mut self, expr: Arc<dyn PhysicalExpr>) -> Result<Recursion<Self>> {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             self.columns.push(column.clone())
         }
@@ -700,9 +700,10 @@ pub fn convert_sort_expr_with_filter_schema(
         map_origin_col_to_filter_col(filter, schema, side)?;
     let expr = sort_expr.expr.clone();
     // Get main schema columns
-    let mut expr_columns = vec![];
-    expr.clone()
-        .accept(PhysicalExprColumnCollector::new(&mut expr_columns))?;
+    let expr_columns = expr
+        .clone()
+        .accept(PhysicalExprColumnCollector::new())?
+        .columns;
     // Calculation is possible with 'column_mapping_information' since sort exprs belong to a child.
     let all_columns_are_included = expr_columns
         .iter()
@@ -712,16 +713,17 @@ pub fn convert_sort_expr_with_filter_schema(
         // the sort expression into a filter expression.
         let converted_filter_expr = expr
             .transform_up(&|p| convert_filter_columns(p, &column_mapping_information))?;
-        let mut contains = false;
+
         // Search converted PhysicalExpr in filter expression
-        filter.expression().clone().accept(
-            CheckFilterExprContainsSortInformation::new(
-                &mut contains,
-                converted_filter_expr.clone(),
-            ),
-        )?;
         // If the exact match is encountered, use this sorted expression in graph traversals.
-        if contains {
+        if filter
+            .expression()
+            .clone()
+            .accept(CheckFilterExprContainsSortInformation::new(
+                converted_filter_expr.clone(),
+            ))?
+            .contains
+        {
             Ok(Some(converted_filter_expr))
         } else {
             Ok(None)
@@ -737,7 +739,7 @@ pub fn convert_sort_expr_with_filter_schema(
 /// order of columns can be used in the filter expression.
 /// If it returns a Some value, the method wraps the result in a SortedFilterExpr
 /// instance with the original sort expression, converted filter expression, and sort options.
-/// If it returns a None value, this function returns None.
+/// If it returns a None value, this function returns an error.
 ///
 /// The SortedFilterExpr instance contains information about the sort order of columns
 /// that can be used in the filter expression, which can be used to optimize the query execution process.
@@ -746,15 +748,17 @@ pub fn build_filter_input_order_v2(
     filter: &JoinFilter,
     schema: SchemaRef,
     order: &PhysicalSortExpr,
-) -> Result<Option<SortedFilterExpr>> {
+) -> Result<SortedFilterExpr> {
     match convert_sort_expr_with_filter_schema(&side, filter, schema, order)? {
-        Some(expr) => Ok(Some(SortedFilterExpr::new(
+        Some(expr) => Ok(SortedFilterExpr::new(
             side,
             order.expr.clone(),
             expr,
             order.options,
+        )),
+        None => Err(DataFusionError::Plan(format!(
+            "The {side} side of the join does not have an expression sorted."
         ))),
-        None => Ok(None),
     }
 }
 
@@ -911,27 +915,23 @@ mod tests {
     fn find_expr_inside_expr() -> Result<()> {
         let filter_expr = complicated_filter();
 
-        let mut contains1 = false;
         let expr_1 = Arc::new(Column::new("gnz", 0));
-        filter_expr
-            .clone()
-            .accept(CheckFilterExprContainsSortInformation::new(
-                &mut contains1,
-                expr_1,
-            ))?;
-        assert!(!contains1);
+        assert!(
+            !filter_expr
+                .clone()
+                .accept(CheckFilterExprContainsSortInformation::new(expr_1,))?
+                .contains
+        );
 
-        let mut contains2 = false;
         let expr_2 = Arc::new(Column::new("1", 1));
-        filter_expr
-            .clone()
-            .accept(CheckFilterExprContainsSortInformation::new(
-                &mut contains2,
-                expr_2,
-            ))?;
-        assert!(contains2);
 
-        let mut contains3 = false;
+        assert!(
+            filter_expr
+                .clone()
+                .accept(CheckFilterExprContainsSortInformation::new(expr_2,))?
+                .contains
+        );
+
         let expr_3 = Arc::new(CastExpr::new(
             Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("0", 0)),
@@ -941,24 +941,22 @@ mod tests {
             DataType::Int64,
             CastOptions { safe: false },
         ));
-        filter_expr
-            .clone()
-            .accept(CheckFilterExprContainsSortInformation::new(
-                &mut contains3,
-                expr_3,
-            ))?;
-        assert!(contains3);
 
-        let mut contains4 = false;
+        assert!(
+            filter_expr
+                .clone()
+                .accept(CheckFilterExprContainsSortInformation::new(expr_3,))?
+                .contains
+        );
+
         let expr_4 = Arc::new(Column::new("1", 42));
-        filter_expr
-            .clone()
-            .accept(CheckFilterExprContainsSortInformation::new(
-                &mut contains4,
-                expr_4,
-            ))?;
-        assert!(!contains4);
 
+        assert!(
+            !filter_expr
+                .clone()
+                .accept(CheckFilterExprContainsSortInformation::new(expr_4,))?
+                .contains
+        );
         Ok(())
     }
 
@@ -1018,8 +1016,8 @@ mod tests {
                 expr: Arc::new(Column::new("la1", 0)),
                 options: SortOptions::default(),
             }
-        )?
-        .is_some());
+        )
+        .is_ok());
         assert!(build_filter_input_order_v2(
             JoinSide::Left,
             &filter,
@@ -1028,8 +1026,8 @@ mod tests {
                 expr: Arc::new(Column::new("lt1", 3)),
                 options: SortOptions::default(),
             }
-        )?
-        .is_none());
+        )
+        .is_err());
         assert!(build_filter_input_order_v2(
             JoinSide::Right,
             &filter,
@@ -1038,8 +1036,8 @@ mod tests {
                 expr: Arc::new(Column::new("ra1", 0)),
                 options: SortOptions::default(),
             }
-        )?
-        .is_some());
+        )
+        .is_ok());
         assert!(build_filter_input_order_v2(
             JoinSide::Right,
             &filter,
@@ -1048,8 +1046,8 @@ mod tests {
                 expr: Arc::new(Column::new("rb1", 1)),
                 options: SortOptions::default(),
             }
-        )?
-        .is_none());
+        )
+        .is_err());
 
         Ok(())
     }
