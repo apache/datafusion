@@ -1380,8 +1380,6 @@ impl SymmetricHashJoinStream {
                         self.metrics.output_batches.add(1);
                         self.metrics.output_rows.add(batch.num_rows());
                         return Poll::Ready(Ok(result).transpose());
-                    } else {
-                        continue;
                     }
                 }
                 Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
@@ -1390,12 +1388,10 @@ impl SymmetricHashJoinStream {
                     probe_hash_joiner.exhausted = true;
                     // Change the probe side
                     self.probe_side = build_join_side;
-                    continue;
                 }
                 Poll::Pending => {
                     if !build_hash_joiner.exhausted {
                         self.probe_side = build_join_side;
-                        continue;
                     } else {
                         return Poll::Pending;
                     }

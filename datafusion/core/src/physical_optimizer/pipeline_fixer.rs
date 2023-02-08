@@ -90,6 +90,14 @@ impl PhysicalOptimizerRule for PipelineFixer {
     }
 }
 
+/// Indicates whether interval arithmetic is supported for the given expression.
+pub fn is_expr_supported(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    expr.as_any().is::<Column>()
+        || expr.as_any().is::<Literal>()
+        || expr.as_any().is::<CastExpr>()
+        || expr.as_any().is::<BinaryExpr>()
+}
+
 /// This object tracks the support state for [PhysicalExpr]s in the plan.
 /// Currently, we do not support all [PhysicalExpr]s for interval calculations.
 /// We do not support every type of [Operator]s either. Over time, this check
@@ -111,17 +119,13 @@ impl PhysicalExpressionVisitor for UnsupportedPhysicalExprVisitor {
     fn pre_visit(mut self, expr: Arc<dyn PhysicalExpr>) -> Result<Recursion<Self>> {
         if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
             self.supported &= is_operator_supported(binary_expr.op());
-        } else if !(expr.as_any().is::<Column>()
-            || expr.as_any().is::<Literal>()
-            || expr.as_any().is::<CastExpr>())
-        {
-            self.supported = false;
         }
+        self.supported &= is_expr_supported(&expr);
         Ok(Recursion::Continue(self))
     }
 }
 
-/// This function returns whether a given hash join is replacable by a
+/// This function returns whether a given hash join is replaceable by a
 /// symmetric hash join. Basically, the requirement is that involved
 /// [PhysicalExpr]s, [Operator]s and data types need to be supported,
 /// and order information must cover every column in the filter expression.
