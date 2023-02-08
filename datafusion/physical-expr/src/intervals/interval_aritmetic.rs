@@ -234,6 +234,33 @@ impl Interval {
     }
 }
 
+/// Indicates whether interval arithmetic is supported for the given operator.
+pub fn is_operator_supported(op: &Operator) -> bool {
+    matches!(
+        op,
+        &Operator::Plus
+            | &Operator::Minus
+            | &Operator::And
+            | &Operator::Gt
+            | &Operator::Lt
+    )
+}
+
+/// Indicates whether interval arithmetic is supported for the given data type.
+pub fn is_datatype_supported(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        &DataType::Int64
+            | &DataType::Int32
+            | &DataType::Int16
+            | &DataType::Int8
+            | &DataType::UInt64
+            | &DataType::UInt32
+            | &DataType::UInt16
+            | &DataType::UInt8
+    )
+}
+
 pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<Interval> {
     match *op {
         Operator::Eq => Ok(lhs.equal(rhs)),
@@ -261,7 +288,7 @@ fn cast_scalar_value(
 
 #[cfg(test)]
 mod tests {
-    use crate::intervals::interval_aritmetics::Interval;
+    use crate::intervals::Interval;
     use datafusion_common::{Result, ScalarValue};
 
     #[test]

@@ -30,7 +30,7 @@ use petgraph::visit::{Bfs, DfsPostOrder};
 use petgraph::Outgoing;
 
 use crate::expressions::{BinaryExpr, CastExpr, Literal};
-use crate::intervals::interval_aritmetics::{apply_operator, Interval};
+use crate::intervals::interval_aritmetic::{apply_operator, Interval};
 use crate::utils::{build_physical_expr_graph, ExprTreeNode};
 use crate::PhysicalExpr;
 
@@ -375,8 +375,7 @@ impl ExprIntervalGraph {
     ///  use datafusion_common::ScalarValue;
     ///  use datafusion_expr::Operator;
     ///  use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
-    ///  use datafusion_physical_expr::intervals::ExprIntervalGraph;
-    ///  use datafusion_physical_expr::intervals::interval_aritmetics::Interval;
+    ///  use datafusion_physical_expr::intervals::{Interval, ExprIntervalGraph};
     ///  use datafusion_physical_expr::PhysicalExpr;
     ///  let expr = Arc::new(BinaryExpr::new(
     ///             Arc::new(Column::new("gnz", 0)),

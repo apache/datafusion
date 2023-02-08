@@ -47,7 +47,7 @@ use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr, Column, Literal};
 use datafusion_physical_expr::hash_utils::create_hashes;
-use datafusion_physical_expr::intervals::interval_aritmetics::Interval;
+use datafusion_physical_expr::intervals::Interval;
 use datafusion_physical_expr::physical_expr_visitor::{
     PhysicalExprVisitable, PhysicalExpressionVisitor, Recursion,
 };

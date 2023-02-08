@@ -19,6 +19,7 @@
 //!
 
 mod cp_solver;
-pub mod interval_aritmetics;
+mod interval_aritmetic;
 
 pub use cp_solver::ExprIntervalGraph;
+pub use interval_aritmetic::*;

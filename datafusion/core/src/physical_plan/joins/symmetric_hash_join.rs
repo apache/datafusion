@@ -39,8 +39,8 @@ use hashbrown::HashSet;
 
 use datafusion_common::utils::bisect;
 use datafusion_common::ScalarValue;
-use datafusion_physical_expr::intervals::interval_aritmetics::Interval;
 use datafusion_physical_expr::intervals::ExprIntervalGraph;
+use datafusion_physical_expr::intervals::Interval;
 
 use crate::arrow::array::BooleanBufferBuilder;
 use crate::error::{DataFusionError, Result};

@@ -35,11 +35,10 @@ use crate::physical_plan::joins::{
 };
 use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::ExecutionPlan;
-use arrow::datatypes::DataType;
 use datafusion_common::DataFusionError;
 use datafusion_expr::logical_plan::JoinType;
-use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr, Column, Literal};
+use datafusion_physical_expr::intervals::{is_datatype_supported, is_operator_supported};
 use datafusion_physical_expr::physical_expr_visitor::{
     PhysicalExprVisitable, PhysicalExpressionVisitor, Recursion,
 };
@@ -89,33 +88,6 @@ impl PhysicalOptimizerRule for PipelineFixer {
     fn schema_check(&self) -> bool {
         true
     }
-}
-
-/// Interval calculations is supported by these operators. This will extend in the future.
-fn is_operator_supported(op: &Operator) -> bool {
-    matches!(
-        op,
-        &Operator::Plus
-            | &Operator::Minus
-            | &Operator::And
-            | &Operator::Gt
-            | &Operator::Lt
-    )
-}
-
-/// Currently, integer data types are supported.
-fn is_datatype_supported(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        &DataType::Int64
-            | &DataType::Int32
-            | &DataType::Int16
-            | &DataType::Int8
-            | &DataType::UInt64
-            | &DataType::UInt32
-            | &DataType::UInt16
-            | &DataType::UInt8
-    )
 }
 
 /// We do not support every type of [PhysicalExpr] for interval calculation. Also, we are not
