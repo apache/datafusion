@@ -356,7 +356,7 @@ fn build_join_indices(
 }
 
 impl NestedLoopJoinStream {
-    /// For Right/RightSemi/RightAnti joins, left is the single partition side.
+    /// For Right/RightSemi/RightAnti/Full joins, left is the single partition side.
     fn poll_next_impl_for_build_left(
         &mut self,
         cx: &mut std::task::Context<'_>,
