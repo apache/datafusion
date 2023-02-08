@@ -16,14 +16,11 @@
 // under the License.
 
 use crate::equivalence::EquivalentClass;
-use crate::expressions::Column;
-use crate::expressions::UnKnownColumn;
-use crate::expressions::{BinaryExpr, Literal};
+use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
 use crate::rewrite::TreeNodeRewritable;
-use crate::PhysicalSortExpr;
-use crate::{EquivalenceProperties, PhysicalExpr};
+use crate::{EquivalenceProperties, PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::Result;
 use datafusion_expr::Operator;
 
 use petgraph::graph::NodeIndex;
@@ -240,20 +237,6 @@ impl ExprTreeNode {
         }
     }
 }
-/// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
-pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
-    provided: Option<&[PhysicalSortExpr]>,
-    required: Option<&[PhysicalSortExpr]>,
-    equal_properties: F,
-) -> bool {
-    match (provided, required) {
-        (_, None) => true,
-        (None, Some(_)) => false,
-        (Some(provided), Some(required)) => {
-            ordering_satisfy_concrete(provided, required, equal_properties)
-        }
-    }
-}
 
 impl TreeNodeRewritable for Arc<ExprTreeNode> {
     fn map_children<F>(self, transform: F) -> Result<Self>
@@ -284,7 +267,7 @@ fn add_physical_expr_to_graph<T>(
     graph: &mut StableGraph<T, usize>,
     input_node: T,
 ) -> NodeIndex {
-    // If we visited the node before, we just return it. That means, this node will be have multiple
+    // If we visited the node before, we just return it. That means, this node will have multiple
     // parents.
     match visited
         .iter()
@@ -342,44 +325,19 @@ where
     Ok((root_tree_node.node.unwrap(), graph))
 }
 
-#[allow(clippy::too_many_arguments)]
-/// left_col (op_1) a  > right_col (op_2) b AND left_col (op_3) c < right_col (op_4) d
-pub fn filter_numeric_expr_generation(
-    left_col: Arc<dyn PhysicalExpr>,
-    right_col: Arc<dyn PhysicalExpr>,
-    op_1: Operator,
-    op_2: Operator,
-    op_3: Operator,
-    op_4: Operator,
-    a: i32,
-    b: i32,
-    c: i32,
-    d: i32,
-) -> Arc<dyn PhysicalExpr> {
-    let left_and_1 = Arc::new(BinaryExpr::new(
-        left_col.clone(),
-        op_1,
-        Arc::new(Literal::new(ScalarValue::Int32(Some(a)))),
-    ));
-    let left_and_2 = Arc::new(BinaryExpr::new(
-        right_col.clone(),
-        op_2,
-        Arc::new(Literal::new(ScalarValue::Int32(Some(b)))),
-    ));
-
-    let right_and_1 = Arc::new(BinaryExpr::new(
-        left_col.clone(),
-        op_3,
-        Arc::new(Literal::new(ScalarValue::Int32(Some(c)))),
-    ));
-    let right_and_2 = Arc::new(BinaryExpr::new(
-        right_col.clone(),
-        op_4,
-        Arc::new(Literal::new(ScalarValue::Int32(Some(d)))),
-    ));
-    let left_expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, left_and_2));
-    let right_expr = Arc::new(BinaryExpr::new(right_and_1, Operator::Lt, right_and_2));
-    Arc::new(BinaryExpr::new(left_expr, Operator::And, right_expr))
+/// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
+pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
+    provided: Option<&[PhysicalSortExpr]>,
+    required: Option<&[PhysicalSortExpr]>,
+    equal_properties: F,
+) -> bool {
+    match (provided, required) {
+        (_, None) => true,
+        (None, Some(_)) => false,
+        (Some(provided), Some(required)) => {
+            ordering_satisfy_concrete(provided, required, equal_properties)
+        }
+    }
 }
 
 pub fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(

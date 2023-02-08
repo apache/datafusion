@@ -1415,7 +1415,7 @@ mod tests {
 
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Column};
-    use datafusion_physical_expr::utils;
+    use datafusion_physical_expr::intervals::test_utils::gen_conjunctive_numeric_expr;
 
     use crate::physical_plan::collect;
     use crate::physical_plan::joins::hash_join_utils::complicated_filter;
@@ -1594,9 +1594,9 @@ mod tests {
     ) -> Arc<dyn PhysicalExpr> {
         match expr_id {
             // left_watermark + 1 > right_watermark + 5 AND left_watermark + 3 < right_watermark + 10
-            0 => utils::filter_numeric_expr_generation(
-                left_watermark.clone(),
-                right_watermark.clone(),
+            0 => gen_conjunctive_numeric_expr(
+                left_watermark,
+                right_watermark,
                 Operator::Plus,
                 Operator::Plus,
                 Operator::Plus,
@@ -1607,9 +1607,9 @@ mod tests {
                 10,
             ),
             // left_watermark - 1 > right_watermark + 5 AND left_watermark + 3 < right_watermark + 10
-            1 => utils::filter_numeric_expr_generation(
-                left_watermark.clone(),
-                right_watermark.clone(),
+            1 => gen_conjunctive_numeric_expr(
+                left_watermark,
+                right_watermark,
                 Operator::Minus,
                 Operator::Plus,
                 Operator::Plus,
@@ -1620,9 +1620,9 @@ mod tests {
                 10,
             ),
             // left_watermark - 1 > right_watermark + 5 AND left_watermark - 3 < right_watermark + 10
-            2 => utils::filter_numeric_expr_generation(
-                left_watermark.clone(),
-                right_watermark.clone(),
+            2 => gen_conjunctive_numeric_expr(
+                left_watermark,
+                right_watermark,
                 Operator::Minus,
                 Operator::Plus,
                 Operator::Minus,
@@ -1633,9 +1633,9 @@ mod tests {
                 10,
             ),
             // left_watermark - 10 > right_watermark - 5 AND left_watermark - 3 < right_watermark + 10
-            3 => utils::filter_numeric_expr_generation(
-                left_watermark.clone(),
-                right_watermark.clone(),
+            3 => gen_conjunctive_numeric_expr(
+                left_watermark,
+                right_watermark,
                 Operator::Minus,
                 Operator::Minus,
                 Operator::Minus,
@@ -1646,9 +1646,9 @@ mod tests {
                 10,
             ),
             // left_watermark - 10 > right_watermark - 5 AND left_watermark - 30 < right_watermark - 3
-            4 => utils::filter_numeric_expr_generation(
-                left_watermark.clone(),
-                right_watermark.clone(),
+            4 => gen_conjunctive_numeric_expr(
+                left_watermark,
+                right_watermark,
                 Operator::Minus,
                 Operator::Minus,
                 Operator::Minus,

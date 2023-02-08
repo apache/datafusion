@@ -547,7 +547,7 @@ impl ExprIntervalGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::filter_numeric_expr_generation;
+    use crate::intervals::test_utils::gen_conjunctive_numeric_expr;
     use itertools::Itertools;
 
     use crate::expressions::Column;
@@ -712,7 +712,7 @@ mod tests {
         let left_col = Arc::new(Column::new("left_watermark", 0));
         let right_col = Arc::new(Column::new("right_watermark", 0));
         // left_watermark + 1 > right_watermark + 11 AND left_watermark + 3 < right_watermark + 33
-        let expr = filter_numeric_expr_generation(
+        let expr = gen_conjunctive_numeric_expr(
             left_col.clone(),
             right_col.clone(),
             Operator::Plus,
@@ -751,7 +751,7 @@ mod tests {
         let left_col = Arc::new(Column::new("left_watermark", 0));
         let right_col = Arc::new(Column::new("right_watermark", 0));
         // left_watermark - 1 > right_watermark + 5 AND left_watermark + 3 < right_watermark + 10
-        let expr = filter_numeric_expr_generation(
+        let expr = gen_conjunctive_numeric_expr(
             left_col.clone(),
             right_col.clone(),
             Operator::Minus,
@@ -791,7 +791,7 @@ mod tests {
         let left_col = Arc::new(Column::new("left_watermark", 0));
         let right_col = Arc::new(Column::new("right_watermark", 0));
         // left_watermark - 1 > right_watermark + 5 AND left_watermark - 3 < right_watermark + 10
-        let expr = filter_numeric_expr_generation(
+        let expr = gen_conjunctive_numeric_expr(
             left_col.clone(),
             right_col.clone(),
             Operator::Minus,
@@ -830,7 +830,7 @@ mod tests {
         let left_col = Arc::new(Column::new("left_watermark", 0));
         let right_col = Arc::new(Column::new("right_watermark", 0));
         // left_watermark - 10 > right_watermark - 5 AND left_watermark - 3 < right_watermark + 10
-        let expr = filter_numeric_expr_generation(
+        let expr = gen_conjunctive_numeric_expr(
             left_col.clone(),
             right_col.clone(),
             Operator::Minus,
@@ -870,7 +870,7 @@ mod tests {
         let right_col = Arc::new(Column::new("right_watermark", 0));
         // left_watermark - 10 > right_watermark - 5 AND left_watermark - 30 < right_watermark - 3
 
-        let expr = filter_numeric_expr_generation(
+        let expr = gen_conjunctive_numeric_expr(
             left_col.clone(),
             right_col.clone(),
             Operator::Minus,
