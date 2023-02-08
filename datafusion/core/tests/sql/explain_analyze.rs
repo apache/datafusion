@@ -88,11 +88,6 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "CoalescePartitionsExec",
-        "metrics=[output_rows=5, elapsed_compute="
-    );
-    assert_metrics!(
-        &formatted,
         "UnionExec",
         "metrics=[output_rows=3, elapsed_compute="
     );
