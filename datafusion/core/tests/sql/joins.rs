@@ -3303,6 +3303,7 @@ async fn two_in_subquery_to_join_with_outer_filter() -> Result<()> {
 async fn right_as_inner_table_nested_loop_join() -> Result<()> {
     let ctx = create_nested_loop_join_context()?;
 
+    // Distribution: left is `UnspecifiedDistribution`, right is `SinglePartition`.
     let sql = "SELECT t1.t1_id, t2.t2_id 
                      FROM t1 INNER JOIN t2 ON t1.t1_id > t2.t2_id 
                      WHERE t1.t1_id > 10 AND t2.t2_int > 1";
@@ -3349,9 +3350,10 @@ async fn right_as_inner_table_nested_loop_join() -> Result<()> {
 }
 
 #[tokio::test]
-async fn left_as_inner_table_nested_loop_join1() -> Result<()> {
+async fn left_as_inner_table_nested_loop_join() -> Result<()> {
     let ctx = create_nested_loop_join_context()?;
 
+    // Distribution: left is `SinglePartition`, right is `UnspecifiedDistribution`.
     let sql = "SELECT t1.t1_id,t2.t2_id FROM (select t1_id from t1 where t1.t1_id > 22) as t1 
                                                  RIGHT JOIN (select t2_id from t2 where t2.t2_id > 11) as t2 
                                                  ON t1.t1_id < t2.t2_id";

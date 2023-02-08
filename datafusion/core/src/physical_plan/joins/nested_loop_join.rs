@@ -50,8 +50,27 @@ use crate::error::Result;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::coalesce_batches::concat_batches;
 
-/// Data of the left side
+/// Data of the inner table side
 type JoinLeftData = RecordBatch;
+
+/// NestedLoopJoinExec executes partitions in parallel.
+/// One input will be collected to a single partition, call it inner-table.
+/// The other side of the input is treated as outer-table, and the output Partitioning is from it.
+/// Giving an output partition number x, the execution will be:
+///
+/// ```text
+/// for outer-table-batch in outer-table-partition-x
+///     check-join(outer-table-batch, inner-table-data)
+/// ```
+///
+/// One of the inputs will become inner table, and it is decided by the join type.
+/// Following is the relation table:
+///
+/// ```text
+///       JoinType                            Distribution                         Inner-table
+/// Inner/Left/LeftSemi/LeftAnti    (UnspecifiedDistribution, SinglePartition)       right
+/// Right/RightSemi/RightAnti/Full  (SinglePartition, UnspecifiedDistribution)       left
+/// ```
 ///
 #[derive(Debug)]
 pub struct NestedLoopJoinExec {
