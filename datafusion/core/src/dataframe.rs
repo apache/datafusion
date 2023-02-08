@@ -1099,18 +1099,34 @@ mod tests {
         let join = left.join_on(
             right,
             JoinType::Inner,
-            [
-                col("a.c1").not_eq(col("b.c1")),
-                col("a.c2").not_eq(col("b.c2")),
-            ],
+            [col("a.c1").not_eq(col("b.c1")), col("a.c2").eq(col("b.c2"))],
         )?;
 
-        let expected_plan = "Inner Join:  Filter: a.c1 != b.c1 AND a.c2 != b.c2\
+        let expected_plan = "Inner Join:  Filter: a.c1 != b.c1 AND a.c2 = b.c2\
         \n  Projection: a.c1, a.c2\
         \n    TableScan: a\
         \n  Projection: b.c1, b.c2\
         \n    TableScan: b";
         assert_eq!(expected_plan, format!("{:?}", join.logical_plan()));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_ambiguous_filter() -> Result<()> {
+        let left = test_table_with_name("a")
+            .await?
+            .select_columns(&["c1", "c2"])?;
+        let right = test_table_with_name("b")
+            .await?
+            .select_columns(&["c1", "c2"])?;
+
+        let join = left
+            .join_on(right, JoinType::Inner, [col("c1").eq(col("c1"))])
+            .expect_err("join didn't fail check");
+        let expected =
+            "Error during planning: reference 'c1' is ambiguous, could be a.c1,b.c1;";
+        assert_eq!(join.to_string(), expected);
 
         Ok(())
     }
