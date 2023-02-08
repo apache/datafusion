@@ -24,13 +24,17 @@ use std::sync::Arc;
 
 pub mod user_defined;
 
-/// some tests share a common table with different names
-pub fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
-    let schema = Schema::new(vec![
+pub fn test_table_scan_fields() -> Vec<Field> {
+    vec![
         Field::new("a", DataType::UInt32, false),
         Field::new("b", DataType::UInt32, false),
         Field::new("c", DataType::UInt32, false),
-    ]);
+    ]
+}
+
+/// some tests share a common table with different names
+pub fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
+    let schema = Schema::new(test_table_scan_fields());
     table_scan(Some(name), &schema, None)?.build()
 }
 
