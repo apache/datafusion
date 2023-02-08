@@ -40,9 +40,6 @@ use datafusion_common::DataFusionError;
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr, Column, Literal};
 use datafusion_physical_expr::intervals::{is_datatype_supported, is_operator_supported};
-use datafusion_physical_expr::physical_expr_visitor::{
-    PhysicalExprVisitable, PhysicalExpressionVisitor, Recursion,
-};
 use datafusion_physical_expr::PhysicalExpr;
 
 use std::sync::Arc;
@@ -91,37 +88,16 @@ impl PhysicalOptimizerRule for PipelineFixer {
 }
 
 /// Indicates whether interval arithmetic is supported for the given expression.
-pub fn is_expr_supported(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    expr.as_any().is::<Column>()
-        || expr.as_any().is::<Literal>()
-        || expr.as_any().is::<CastExpr>()
-        || expr.as_any().is::<BinaryExpr>()
-}
-
-/// This object tracks the support state for [PhysicalExpr]s in the plan.
 /// Currently, we do not support all [PhysicalExpr]s for interval calculations.
 /// We do not support every type of [Operator]s either. Over time, this check
 /// will relax as more types of [PhysicalExpr]s and [Operator]s are supported.
 /// Currently, [CastExpr], [BinaryExpr], [Column] and [Literal] is supported.
-#[derive(Debug)]
-struct UnsupportedPhysicalExprVisitor {
-    /// Supported state
-    pub supported: bool,
-}
-
-impl UnsupportedPhysicalExprVisitor {
-    pub fn new() -> Self {
-        Self { supported: true }
-    }
-}
-
-impl PhysicalExpressionVisitor for UnsupportedPhysicalExprVisitor {
-    fn pre_visit(mut self, expr: Arc<dyn PhysicalExpr>) -> Result<Recursion<Self>> {
-        if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
-            self.supported &= is_operator_supported(binary_expr.op());
-        }
-        self.supported &= is_expr_supported(&expr);
-        Ok(Recursion::Continue(self))
+fn check_support(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    let expr_any = expr.as_any();
+    if let Some(binary_expr) = expr_any.downcast_ref::<BinaryExpr>() {
+        is_operator_supported(binary_expr.op())
+    } else {
+        expr_any.is::<Column>() || expr_any.is::<Literal>() || expr_any.is::<CastExpr>()
     }
 }
 
@@ -135,10 +111,9 @@ fn is_suitable_for_symmetric_hash_join(hash_join: &HashJoinExec) -> Result<bool>
         if let Some(left_ordering) = left.output_ordering() {
             let right = hash_join.right();
             if let Some(right_ordering) = right.output_ordering() {
-                let expr: Arc<dyn PhysicalExpr> = filter.expression().clone();
-                let expr_supported = expr
-                    .accept(UnsupportedPhysicalExprVisitor::new())?
-                    .supported;
+                let expr = filter.expression();
+                let expr_supported =
+                    check_support(expr) && expr.children().iter().all(check_support);
                 let left_convertible = convert_sort_expr_with_filter_schema(
                     &JoinSide::Left,
                     filter,
