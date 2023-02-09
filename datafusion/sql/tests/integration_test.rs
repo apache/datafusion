@@ -2399,16 +2399,6 @@ fn select_groupby_orderby() {
     quick_test(sql, expected);
 }
 
-#[test]
-fn unnest_column() {
-    let sql = r#"SELECT first_name, last_name, UNNEST(aliases) FROM unnested_test"#;
-    // expect projection with unnest call on aliases.
-    let expected =
-        "Projection: unnested_test.first_name, unnested_test.last_name, unnest(unnested_test.aliases)\
-        \n  TableScan: unnested_test";
-    quick_test(sql, expected);
-}
-
 fn logical_plan(sql: &str) -> Result<LogicalPlan> {
     logical_plan_with_options(sql, ParserOptions::default())
 }
@@ -2551,15 +2541,6 @@ impl ContextProvider for MockContextProvider {
                 Field::new("c11", DataType::Float32, false),
                 Field::new("c12", DataType::Float64, false),
                 Field::new("c13", DataType::Utf8, false),
-            ])),
-            "unnested_test" => Ok(Schema::new(vec![
-                Field::new("first_name", DataType::Utf8, false),
-                Field::new("last_name", DataType::Utf8, false),
-                Field::new(
-                    "aliases",
-                    DataType::List(Box::new(Field::new("item", DataType::Utf8, false))),
-                    false,
-                ),
             ])),
             _ => Err(DataFusionError::Plan(format!(
                 "No table named: {} found",
