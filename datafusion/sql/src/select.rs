@@ -48,8 +48,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
-        println!("select_to_plan: {select:#?}");
-
         // check for unsupported syntax first
         if !select.cluster_by.is_empty() {
             return Err(DataFusionError::NotImplemented("CLUSTER BY".to_string()));
@@ -102,7 +100,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(plan.clone(), select_exprs.clone())?;
-
         let mut combined_schema = (**projected_plan.schema()).clone();
         combined_schema.merge(plan.schema());
 
