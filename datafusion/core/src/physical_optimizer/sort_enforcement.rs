@@ -31,7 +31,7 @@
 //! by another SortExec. Therefore, this rule removes it from the physical plan.
 use crate::config::ConfigOptions;
 use crate::error::Result;
-use crate::physical_optimizer::utils::add_sort_above_child;
+use crate::physical_optimizer::utils::add_sort_above;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
@@ -371,7 +371,7 @@ fn parallelize_sorts(
             let mut prev_layer = plan.clone();
             update_child_to_remove_coalesce(&mut prev_layer, &mut coalesce_onwards[0])?;
             let sort_exprs = get_sort_exprs(&plan)?;
-            prev_layer = add_sort_above_child(&prev_layer, sort_exprs.to_vec())?;
+            add_sort_above(&mut prev_layer, sort_exprs.to_vec())?;
             let spm = SortPreservingMergeExec::new(sort_exprs.to_vec(), prev_layer);
             return Ok(Some(PlanWithCorrespondingCoalescePartitions {
                 plan: Arc::new(spm),
@@ -444,7 +444,7 @@ fn ensure_sorting(
                     // Make sure we preserve the ordering requirements:
                     update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
                     let sort_expr = required_ordering.to_vec();
-                    *child = add_sort_above_child(child, sort_expr)?;
+                    add_sort_above(child, sort_expr)?;
                     *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
                 }
                 if let Some(tree) = sort_onwards {
@@ -461,7 +461,7 @@ fn ensure_sorting(
             }
             (Some(required), None) => {
                 // Ordering requirement is not met, we should add a `SortExec` to the plan.
-                *child = add_sort_above_child(child, required.to_vec())?;
+                add_sort_above(child, required.to_vec())?;
                 *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
             }
             (None, Some(_)) => {
@@ -752,11 +752,11 @@ fn change_finer_sort_in_sub_plan(
     let plan = &sort_onwards.plan;
     // A `SortExec` is always at the bottom of the tree.
     if is_sort(plan) {
-        let prev_layer = plan.children()[0].clone();
+        let mut prev_layer = plan.children()[0].clone();
         let new_sort_expr = get_sort_exprs(plan)?[0..n_sort_expr].to_vec();
-        let updated_plan = add_sort_above_child(&prev_layer, new_sort_expr)?;
-        *sort_onwards = ExecTree::new(updated_plan.clone(), sort_onwards.idx, vec![]);
-        Ok(updated_plan)
+        add_sort_above(&mut prev_layer, new_sort_expr)?;
+        *sort_onwards = ExecTree::new(prev_layer.clone(), sort_onwards.idx, vec![]);
+        Ok(prev_layer)
     } else {
         let mut children = plan.children();
         for item in &mut sort_onwards.children {

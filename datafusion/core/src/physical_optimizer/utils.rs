@@ -49,29 +49,21 @@ pub fn optimize_children(
     }
 }
 
-/// Util function to add SortExec above child
-/// preserving the original partitioning
-pub fn add_sort_above_child(
-    child: &Arc<dyn ExecutionPlan>,
+/// This utility function adds a `SortExec` above an operator according to the
+/// given ordering requirements while preserving the original partitioning.
+pub fn add_sort_above(
+    node: &mut Arc<dyn ExecutionPlan>,
     sort_expr: Vec<PhysicalSortExpr>,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    if !ordering_satisfy(child.output_ordering(), Some(&sort_expr), || {
-        child.equivalence_properties()
+) -> Result<()> {
+    // If the ordering requirement is already satisfied, do not add a sort.
+    if !ordering_satisfy(node.output_ordering(), Some(&sort_expr), || {
+        node.equivalence_properties()
     }) {
-        let new_child = if child.output_partitioning().partition_count() > 1 {
-            Arc::new(SortExec::new_with_partitioning(
-                sort_expr,
-                child.clone(),
-                true,
-                None,
-            )) as Arc<dyn ExecutionPlan>
+        *node = Arc::new(if node.output_partitioning().partition_count() > 1 {
+            SortExec::new_with_partitioning(sort_expr, node.clone(), true, None)
         } else {
-            Arc::new(SortExec::try_new(sort_expr, child.clone(), None)?)
-                as Arc<dyn ExecutionPlan>
-        };
-        Ok(new_child)
-    } else {
-        // If Sort requirement is already satisfied do not add Sort
-        Ok(child.clone())
+            SortExec::try_new(sort_expr, node.clone(), None)?
+        }) as _
     }
+    Ok(())
 }
