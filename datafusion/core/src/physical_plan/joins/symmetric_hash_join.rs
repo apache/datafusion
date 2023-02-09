@@ -47,9 +47,11 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::logical_expr::JoinType;
 use crate::physical_plan::common::merge_batches;
+use crate::physical_plan::joins::hash_join::{
+    build_join_indices, update_hash, JoinHashMap,
+};
 use crate::physical_plan::joins::hash_join_utils::{
-    build_filter_input_order_v2, build_join_indices, update_hash, JoinHashMap,
-    SortedFilterExpr,
+    build_filter_input_order_v2, SortedFilterExpr,
 };
 use crate::physical_plan::joins::utils::build_batch_from_indices;
 use crate::physical_plan::{
@@ -293,7 +295,7 @@ impl SymmetricHashJoinExec {
         let child_node_indexes = physical_expr_graph.gather_node_indices(
             &filter_columns
                 .iter()
-                .map(|sorted_expr| sorted_expr.filter_expr())
+                .map(|sorted_expr| sorted_expr.filter_expr().clone())
                 .collect::<Vec<_>>(),
         );
 
@@ -653,8 +655,7 @@ fn calculate_filter_expr_intervals(
         // Destructure the SortedFilterExpr
         let SortedFilterExpr {
             join_side,
-            origin_expr,
-            sort_option,
+            origin_sorted_expr,
             interval,
             ..
         } = sorted_expr;
@@ -662,12 +663,14 @@ fn calculate_filter_expr_intervals(
         // Get the array of the first or last value for the expression, depending on join side
         let array = if build_side.eq(join_side) {
             // Get first value for expr
-            origin_expr
+            origin_sorted_expr
+                .expr
                 .evaluate(&build_input_buffer.slice(0, 1))?
                 .into_array(1)
         } else {
             // Get last value for expr
-            origin_expr
+            origin_sorted_expr
+                .expr
                 .evaluate(&probe_batch.slice(probe_batch.num_rows() - 1, 1))?
                 .into_array(1)
         };
@@ -679,7 +682,7 @@ fn calculate_filter_expr_intervals(
         let infinite = ScalarValue::try_from(value.get_datatype())?;
 
         // Update the interval with lower and upper bounds based on the sort option
-        *interval = if sort_option.descending {
+        *interval = if origin_sorted_expr.options.descending {
             Interval {
                 lower: infinite,
                 upper: value,
@@ -704,22 +707,26 @@ fn determine_prune_length(
         .flat_map(|sorted_expr| {
             let SortedFilterExpr {
                 join_side,
-                origin_expr,
-                sort_option,
+                origin_sorted_expr,
                 interval,
                 ..
             } = sorted_expr;
             if build_side.eq(join_side) {
-                let batch_arr = origin_expr
+                let batch_arr = origin_sorted_expr
+                    .expr
                     .evaluate(buffer)
                     .unwrap()
                     .into_array(buffer.num_rows());
-                let target = if sort_option.descending {
+                let target = if origin_sorted_expr.options.descending {
                     interval.upper.clone()
                 } else {
                     interval.lower.clone()
                 };
-                Some(bisect::<true>(&[batch_arr], &[target], &[*sort_option]))
+                Some(bisect::<true>(
+                    &[batch_arr],
+                    &[target],
+                    &[origin_sorted_expr.options],
+                ))
             } else {
                 None
             }

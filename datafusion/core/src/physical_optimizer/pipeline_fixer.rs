@@ -94,11 +94,13 @@ impl PhysicalOptimizerRule for PipelineFixer {
 /// Currently, [CastExpr], [BinaryExpr], [Column] and [Literal] is supported.
 fn check_support(expr: &Arc<dyn PhysicalExpr>) -> bool {
     let expr_any = expr.as_any();
-    if let Some(binary_expr) = expr_any.downcast_ref::<BinaryExpr>() {
+    let expr_supported = if let Some(binary_expr) = expr_any.downcast_ref::<BinaryExpr>()
+    {
         is_operator_supported(binary_expr.op())
     } else {
         expr_any.is::<Column>() || expr_any.is::<Literal>() || expr_any.is::<CastExpr>()
-    }
+    };
+    expr_supported && expr.children().iter().all(check_support)
 }
 
 /// This function returns whether a given hash join is replaceable by a
@@ -112,8 +114,7 @@ fn is_suitable_for_symmetric_hash_join(hash_join: &HashJoinExec) -> Result<bool>
             let right = hash_join.right();
             if let Some(right_ordering) = right.output_ordering() {
                 let expr = filter.expression();
-                let expr_supported =
-                    check_support(expr) && expr.children().iter().all(check_support);
+                let expr_supported = check_support(expr);
                 let left_convertible = convert_sort_expr_with_filter_schema(
                     &JoinSide::Left,
                     filter,
@@ -294,6 +295,39 @@ fn apply_subrules_and_check_finiteness_requirements(
         }
     }
     check_finiteness_requirements(input)
+}
+
+#[cfg(test)]
+mod util_tests {
+    use crate::physical_optimizer::pipeline_fixer::check_support;
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
+    use datafusion_physical_expr::PhysicalExpr;
+    use std::sync::Arc;
+
+    #[test]
+    fn check_expr_supported() {
+        let supported_expr = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("a", 0)),
+        )) as Arc<dyn PhysicalExpr>;
+        assert!(check_support(&supported_expr));
+        let supported_expr_2 = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        assert!(check_support(&supported_expr_2));
+        let unsupported_expr = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Or,
+            Arc::new(Column::new("a", 0)),
+        )) as Arc<dyn PhysicalExpr>;
+        assert!(!check_support(&unsupported_expr));
+        let unsupported_expr_2 = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Or,
+            Arc::new(NegativeExpr::new(Arc::new(Column::new("a", 0)))),
+        )) as Arc<dyn PhysicalExpr>;
+        assert!(!check_support(&unsupported_expr_2));
+    }
 }
 
 #[cfg(test)]

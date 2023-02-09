@@ -29,7 +29,6 @@ pub mod hash_utils;
 pub mod intervals;
 pub mod math_expressions;
 mod physical_expr;
-pub mod physical_expr_visitor;
 pub mod planner;
 #[cfg(feature = "regex_expressions")]
 pub mod regex_expressions;
