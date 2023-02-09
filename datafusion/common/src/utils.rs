@@ -158,25 +158,6 @@ where
     Ok(low)
 }
 
-/// This function implements a linear search algorithm to find the
-/// first row in a table that differs from the starting row e.g
-/// row at idx `low`
-pub fn search_till_change(
-    item_columns: &[ArrayRef],
-    mut low: usize,
-    high: usize,
-) -> Result<usize> {
-    let start_row = get_row_at_idx(item_columns, low)?;
-    while low < high {
-        let val = get_row_at_idx(item_columns, low)?;
-        if !start_row.eq(&val) {
-            break;
-        }
-        low += 1;
-    }
-    Ok(low)
-}
-
 #[cfg(test)]
 mod tests {
     use arrow::array::Float64Array;

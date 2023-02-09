@@ -21,7 +21,7 @@
 use arrow::array::ArrayRef;
 use arrow::compute::kernels::sort::SortOptions;
 use datafusion_common::utils::{
-    compare_rows, get_row_at_idx, search_in_slice, search_till_change,
+    compare_rows, get_row_at_idx, linear_search, search_in_slice,
 };
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
@@ -459,7 +459,7 @@ impl WindowFrameStateGroups {
     fn calculate_index_of_row<const SIDE: bool, const PRECEDING: bool>(
         &mut self,
         range_columns: &[ArrayRef],
-        _sort_options: &[SortOptions],
+        sort_options: &[SortOptions],
         idx: usize,
         delta: Option<&ScalarValue>,
         length: usize,
@@ -482,7 +482,9 @@ impl WindowFrameStateGroups {
         // Progress groups until idx is inside a group
         while idx > group_start {
             let group_row = get_row_at_idx(range_columns, group_start)?;
-            let group_end = search_till_change(range_columns, group_start, length)?;
+            // find end boundary of of the group (search right boundary)
+            let group_end =
+                linear_search::<false>(range_columns, &group_row, sort_options)?;
             self.group_start_indices.push_back((group_row, group_end));
             group_start = group_end;
         }
@@ -509,7 +511,9 @@ impl WindowFrameStateGroups {
         // Expand group_start_indices until it includes at least group_idx
         while self.group_start_indices.len() <= group_idx && group_start < length {
             let group_row = get_row_at_idx(range_columns, group_start)?;
-            let group_end = search_till_change(range_columns, group_start, length)?;
+            // find end boundary of of the group (search right boundary)
+            let group_end =
+                linear_search::<false>(range_columns, &group_row, sort_options)?;
             self.group_start_indices.push_back((group_row, group_end));
             group_start = group_end;
         }
@@ -546,5 +550,116 @@ impl WindowFrameStateGroups {
                 self.group_start_indices[group_idx].1
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::window::window_frame_state::WindowFrameStateGroups;
+    use arrow::array::{ArrayRef, Float64Array};
+    use arrow_schema::SortOptions;
+    use datafusion_common::from_slice::FromSlice;
+    use datafusion_common::Result;
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+    use std::ops::Range;
+    use std::sync::Arc;
+
+    fn get_test_data() -> (Vec<ArrayRef>, Vec<SortOptions>) {
+        let range_columns: Vec<ArrayRef> = vec![Arc::new(Float64Array::from_slice([
+            5.0, 7.0, 8.0, 8.0, 9., 10., 10., 10., 11.,
+        ]))];
+        let sort_options = vec![SortOptions {
+            descending: false,
+            nulls_first: false,
+        }];
+
+        (range_columns, sort_options)
+    }
+
+    fn assert_expected(
+        expected_results: Vec<(Range<usize>, usize)>,
+        window_frame: &Arc<WindowFrame>,
+    ) -> Result<()> {
+        let mut window_frame_groups = WindowFrameStateGroups::default();
+        let (range_columns, sort_options) = get_test_data();
+        let n_row = range_columns[0].len();
+        for (idx, (expected_range, expected_group_idx)) in
+            expected_results.into_iter().enumerate()
+        {
+            let range = window_frame_groups.calculate_range(
+                window_frame,
+                &range_columns,
+                &sort_options,
+                n_row,
+                idx,
+            )?;
+            assert_eq!(range, expected_range);
+            assert_eq!(window_frame_groups.cur_group_idx, expected_group_idx);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_window_frame_group_boundaries() -> Result<()> {
+        let window_frame = Arc::new(WindowFrame {
+            units: WindowFrameUnits::Groups,
+            start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
+            end_bound: WindowFrameBound::Following(ScalarValue::UInt64(Some(1))),
+        });
+        let expected_results = vec![
+            (Range { start: 0, end: 2 }, 0),
+            (Range { start: 0, end: 4 }, 1),
+            (Range { start: 1, end: 5 }, 2),
+            (Range { start: 1, end: 5 }, 2),
+            (Range { start: 2, end: 8 }, 3),
+            (Range { start: 4, end: 9 }, 4),
+            (Range { start: 4, end: 9 }, 4),
+            (Range { start: 4, end: 9 }, 4),
+            (Range { start: 5, end: 9 }, 5),
+        ];
+        assert_expected(expected_results, &window_frame)
+    }
+
+    #[test]
+    fn test_window_frame_group_boundaries_both_following() -> Result<()> {
+        let window_frame = Arc::new(WindowFrame {
+            units: WindowFrameUnits::Groups,
+            start_bound: WindowFrameBound::Following(ScalarValue::UInt64(Some(1))),
+            end_bound: WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
+        });
+        let expected_results = vec![
+            (Range::<usize> { start: 1, end: 4 }, 0),
+            (Range::<usize> { start: 2, end: 5 }, 1),
+            (Range::<usize> { start: 4, end: 8 }, 2),
+            (Range::<usize> { start: 4, end: 8 }, 2),
+            (Range::<usize> { start: 5, end: 9 }, 3),
+            (Range::<usize> { start: 8, end: 9 }, 4),
+            (Range::<usize> { start: 8, end: 9 }, 4),
+            (Range::<usize> { start: 8, end: 9 }, 4),
+            (Range::<usize> { start: 9, end: 9 }, 5),
+        ];
+        assert_expected(expected_results, &window_frame)
+    }
+
+    #[test]
+    fn test_window_frame_group_boundaries_both_preceding() -> Result<()> {
+        let window_frame = Arc::new(WindowFrame {
+            units: WindowFrameUnits::Groups,
+            start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(Some(2))),
+            end_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
+        });
+        let expected_results = vec![
+            (Range::<usize> { start: 0, end: 0 }, 0),
+            (Range::<usize> { start: 0, end: 1 }, 1),
+            (Range::<usize> { start: 0, end: 2 }, 2),
+            (Range::<usize> { start: 0, end: 2 }, 2),
+            (Range::<usize> { start: 1, end: 4 }, 3),
+            (Range::<usize> { start: 2, end: 5 }, 4),
+            (Range::<usize> { start: 2, end: 5 }, 4),
+            (Range::<usize> { start: 2, end: 5 }, 4),
+            (Range::<usize> { start: 4, end: 8 }, 5),
+        ];
+        assert_expected(expected_results, &window_frame)
     }
 }
