@@ -65,7 +65,7 @@ use std::{
 
 use super::{ColumnStatistics, Statistics};
 
-/// convert logical type of partition column to physical type: Dictionary(UInt16, val_type)
+/// Convert logical type of partition column to physical type: `Dictionary(UInt16, val_type)`
 pub fn partition_type_wrap(val_type: DataType) -> DataType {
     DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val_type))
 }
@@ -76,6 +76,9 @@ pub fn partition_type_wrap(val_type: DataType) -> DataType {
 pub struct FileScanConfig {
     /// Object store URL, used to get an [`ObjectStore`] instance from
     /// [`RuntimeEnv::object_store`]
+    ///
+    /// [`ObjectStore`]: object_store::ObjectStore
+    /// [`RuntimeEnv::object_store`]: crate::execution::runtime_env::RuntimeEnv::object_store
     pub object_store_url: ObjectStoreUrl,
     /// Schema before `projection` is applied. It contains the all columns that may
     /// appear in the files. It does not include table partition columns
@@ -96,7 +99,7 @@ pub struct FileScanConfig {
     /// Columns on which to project the data. Indexes that are higher than the
     /// number of columns of `file_schema` refer to `table_partition_cols`.
     pub projection: Option<Vec<usize>>,
-    /// The maximum number of records to read from this plan. If None,
+    /// The maximum number of records to read from this plan. If `None`,
     /// all records after filtering are returned.
     pub limit: Option<usize>,
     /// The partitioning columns
@@ -262,6 +265,7 @@ impl SchemaAdapter {
 
     /// Map a column index in the table schema to a column index in a particular
     /// file schema
+    ///
     /// Panics if index is not in range for the table schema
     pub(crate) fn map_column_index(
         &self,
@@ -355,8 +359,8 @@ struct PartitionColumnProjector {
 
 impl PartitionColumnProjector {
     // Create a projector to insert the partitioning columns into batches read from files
-    // - projected_schema: the target schema with both file and partitioning columns
-    // - table_partition_cols: all the partitioning column names
+    // - `projected_schema`: the target schema with both file and partitioning columns
+    // - `table_partition_cols`: all the partitioning column names
     fn new(projected_schema: SchemaRef, table_partition_cols: &[String]) -> Self {
         let mut idx_map = HashMap::new();
         for (partition_idx, partition_name) in table_partition_cols.iter().enumerate() {
@@ -377,8 +381,8 @@ impl PartitionColumnProjector {
 
     // Transform the batch read from the file by inserting the partitioning columns
     // to the right positions as deduced from `projected_schema`
-    // - file_batch: batch read from the file, with internal projection applied
-    // - partition_values: the list of partition values, one for each partition column
+    // - `file_batch`: batch read from the file, with internal projection applied
+    // - `partition_values`: the list of partition values, one for each partition column
     fn project(
         &mut self,
         file_batch: RecordBatch,
