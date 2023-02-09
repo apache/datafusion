@@ -358,28 +358,25 @@ fn parallelize_sorts(
     let mut coalesce_onwards = requirements.coalesce_onwards;
     // We know that `plan` has children, so `coalesce_onwards` is non-empty.
     if coalesce_onwards[0].is_some() {
-        if is_sort(&plan) || is_sort_preserving_merge(&plan) {
+        if (is_sort(&plan) || is_sort_preserving_merge(&plan))
             // Make sure that Sort is actually global sort
-            if plan.output_partitioning().partition_count() == 1 {
-                // If there is a connection between a `CoalescePartitionsExec` and a
-                // Global Sort that satisfy the requirements (i.e. intermediate
-                // executors  don't require single partition), then we can
-                // replace the `CoalescePartitionsExec`+ GlobalSort cascade with
-                // the `SortExec` + `SortPreservingMergeExec`
-                // cascade to parallelize sorting.
-                let mut prev_layer = plan.clone();
-                update_child_to_remove_coalesce(
-                    &mut prev_layer,
-                    &mut coalesce_onwards[0],
-                )?;
-                let sort_exprs = get_sort_exprs(&plan)?;
-                prev_layer = add_sort_above_child(&prev_layer, sort_exprs.to_vec())?;
-                let spm = SortPreservingMergeExec::new(sort_exprs.to_vec(), prev_layer);
-                return Ok(Some(PlanWithCorrespondingCoalescePartitions {
-                    plan: Arc::new(spm),
-                    coalesce_onwards: vec![None],
-                }));
-            }
+            && plan.output_partitioning().partition_count() == 1
+        {
+            // If there is a connection between a `CoalescePartitionsExec` and a
+            // Global Sort that satisfy the requirements (i.e. intermediate
+            // executors  don't require single partition), then we can
+            // replace the `CoalescePartitionsExec`+ GlobalSort cascade with
+            // the `SortExec` + `SortPreservingMergeExec`
+            // cascade to parallelize sorting.
+            let mut prev_layer = plan.clone();
+            update_child_to_remove_coalesce(&mut prev_layer, &mut coalesce_onwards[0])?;
+            let sort_exprs = get_sort_exprs(&plan)?;
+            prev_layer = add_sort_above_child(&prev_layer, sort_exprs.to_vec())?;
+            let spm = SortPreservingMergeExec::new(sort_exprs.to_vec(), prev_layer);
+            return Ok(Some(PlanWithCorrespondingCoalescePartitions {
+                plan: Arc::new(spm),
+                coalesce_onwards: vec![None],
+            }));
         } else if plan.as_any().is::<CoalescePartitionsExec>() {
             // There is an unnecessary `CoalescePartitionExec` in the plan.
             let mut prev_layer = plan.clone();
