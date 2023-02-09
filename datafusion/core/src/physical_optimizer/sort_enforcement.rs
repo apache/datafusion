@@ -65,15 +65,28 @@ impl EnforceSorting {
 /// leading to `SortExec`s.
 #[derive(Debug, Clone)]
 struct ExecTree {
+    /// The `ExecutionPlan` associated with this node
+    pub plan: Arc<dyn ExecutionPlan>,
     /// Child index of the plan in its parent
     pub idx: usize,
     /// Children of the plan that would need updating if we remove leaf executors
     pub children: Vec<ExecTree>,
-    /// The `ExecutionPlan` associated with this node
-    pub plan: Arc<dyn ExecutionPlan>,
 }
 
 impl ExecTree {
+    /// Create new Exec tree
+    pub fn new(
+        plan: Arc<dyn ExecutionPlan>,
+        idx: usize,
+        children: Vec<ExecTree>,
+    ) -> Self {
+        ExecTree {
+            plan,
+            idx,
+            children,
+        }
+    }
+
     /// This function returns the executors at the leaves of the tree.
     fn get_leaves(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         if self.children.is_empty() {
@@ -123,11 +136,7 @@ impl PlanWithCorrespondingSort {
                 // that maintain this ordering. If we just saw a order imposing
                 // operator, we reset the tree and start accumulating.
                 if is_sort(plan) {
-                    return Some(ExecTree {
-                        idx,
-                        plan: item.plan,
-                        children: vec![],
-                    });
+                    return Some(ExecTree::new(item.plan, idx, vec![]));
                 } else if is_limit(plan) {
                     // There is no sort linkage for this path, it starts at a limit.
                     return None;
@@ -155,11 +164,7 @@ impl PlanWithCorrespondingSort {
                 if !children.is_empty() {
                     // Add parent node to the tree if there is at least one
                     // child with a subtree:
-                    Some(ExecTree {
-                        idx,
-                        plan: item.plan,
-                        children,
-                    })
+                    Some(ExecTree::new(item.plan, idx, children))
                 } else {
                     // There is no sort linkage for this child, do nothing.
                     None
@@ -238,11 +243,7 @@ impl PlanWithCorrespondingCoalescePartitions {
                 // operator, we reset the tree and start accumulating.
                 let plan = item.plan;
                 if plan.as_any().is::<CoalescePartitionsExec>() {
-                    Some(ExecTree {
-                        idx,
-                        plan,
-                        children: vec![],
-                    })
+                    Some(ExecTree::new(plan, idx, vec![]))
                 } else if plan.children().is_empty() {
                     // Plan has no children, there is nothing to propagate.
                     None
@@ -263,11 +264,7 @@ impl PlanWithCorrespondingCoalescePartitions {
                     if children.is_empty() {
                         None
                     } else {
-                        Some(ExecTree {
-                            idx,
-                            plan,
-                            children,
-                        })
+                        Some(ExecTree::new(plan, idx, children))
                     }
                 }
             })
@@ -451,11 +448,7 @@ fn ensure_sorting(
                     update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
                     let sort_expr = required_ordering.to_vec();
                     *child = add_sort_above_child(child, sort_expr)?;
-                    *sort_onwards = Some(ExecTree {
-                        idx,
-                        plan: child.clone(),
-                        children: vec![],
-                    })
+                    *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
                 }
                 if let Some(tree) = sort_onwards {
                     // For window expressions, we can remove some sorts when we can
@@ -472,11 +465,7 @@ fn ensure_sorting(
             (Some(required), None) => {
                 // Ordering requirement is not met, we should add a `SortExec` to the plan.
                 *child = add_sort_above_child(child, required.to_vec())?;
-                *sort_onwards = Some(ExecTree {
-                    idx,
-                    plan: child.clone(),
-                    children: vec![],
-                })
+                *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
             }
             (None, Some(_)) => {
                 // We have a `SortExec` whose effect may be neutralized by
@@ -529,11 +518,11 @@ fn analyze_immediate_sort_removal(
                             sort_exec.expr().to_vec(),
                             sort_input,
                         ));
-                    let new_tree = ExecTree {
-                        idx: 0,
-                        plan: new_plan.clone(),
-                        children: sort_onwards.iter().flat_map(|e| e.clone()).collect(),
-                    };
+                    let new_tree = ExecTree::new(
+                        new_plan.clone(),
+                        0,
+                        sort_onwards.iter().flat_map(|e| e.clone()).collect(),
+                    );
                     PlanWithCorrespondingSort {
                         plan: new_plan,
                         sort_onwards: vec![Some(new_tree)],
@@ -769,11 +758,7 @@ fn change_finer_sort_in_sub_plan(
         let prev_layer = plan.children()[0].clone();
         let new_sort_expr = get_sort_exprs(plan)?[0..n_sort_expr].to_vec();
         let updated_plan = add_sort_above_child(&prev_layer, new_sort_expr)?;
-        *sort_onwards = ExecTree {
-            idx: sort_onwards.idx,
-            children: vec![],
-            plan: updated_plan.clone(),
-        };
+        *sort_onwards = ExecTree::new(updated_plan.clone(), sort_onwards.idx, vec![]);
         Ok(updated_plan)
     } else {
         let mut children = plan.children();
