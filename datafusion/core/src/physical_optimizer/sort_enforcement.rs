@@ -1753,7 +1753,14 @@ mod tests {
         let coalesce_partitions = Arc::new(CoalescePartitionsExec::new(repartition));
         let repartition = repartition_exec(coalesce_partitions);
         let sort_exprs = vec![sort_expr("nullable_col", &schema)];
-        let spm = sort_preserving_merge_exec(sort_exprs.clone(), repartition);
+        // Add local sort
+        let sort = Arc::new(SortExec::new_with_partitioning(
+            sort_exprs.clone(),
+            repartition,
+            true,
+            None,
+        )) as _;
+        let spm = sort_preserving_merge_exec(sort_exprs.clone(), sort);
         let sort = sort_exec(sort_exprs, spm);
 
         let physical_plan = sort.clone();
@@ -1762,10 +1769,11 @@ mod tests {
         let expected_input = vec![
             "SortExec: [nullable_col@0 ASC]",
             "  SortPreservingMergeExec: [nullable_col@0 ASC]",
-            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "      CoalescePartitionsExec",
-            "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=0",
-            "          MemoryExec: partitions=0, partition_sizes=[]",
+            "    SortExec: [nullable_col@0 ASC]",
+            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "        CoalescePartitionsExec",
+            "          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=0",
+            "            MemoryExec: partitions=0, partition_sizes=[]",
         ];
         let expected_optimized = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
