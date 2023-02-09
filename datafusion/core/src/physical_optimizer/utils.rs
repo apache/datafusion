@@ -23,6 +23,7 @@ use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion_physical_expr::utils::ordering_satisfy;
 use datafusion_physical_expr::PhysicalSortExpr;
 use std::sync::Arc;
 
@@ -54,16 +55,23 @@ pub fn add_sort_above_child(
     child: &Arc<dyn ExecutionPlan>,
     sort_expr: Vec<PhysicalSortExpr>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let new_child = if child.output_partitioning().partition_count() > 1 {
-        Arc::new(SortExec::new_with_partitioning(
-            sort_expr,
-            child.clone(),
-            true,
-            None,
-        )) as Arc<dyn ExecutionPlan>
+    if !ordering_satisfy(child.output_ordering(), Some(&sort_expr), || {
+        child.equivalence_properties()
+    }) {
+        let new_child = if child.output_partitioning().partition_count() > 1 {
+            Arc::new(SortExec::new_with_partitioning(
+                sort_expr,
+                child.clone(),
+                true,
+                None,
+            )) as Arc<dyn ExecutionPlan>
+        } else {
+            Arc::new(SortExec::try_new(sort_expr, child.clone(), None)?)
+                as Arc<dyn ExecutionPlan>
+        };
+        Ok(new_child)
     } else {
-        Arc::new(SortExec::try_new(sort_expr, child.clone(), None)?)
-            as Arc<dyn ExecutionPlan>
-    };
-    Ok(new_child)
+        // If Sort requirement is already satisfied do not add Sort
+        Ok(child.clone())
+    }
 }

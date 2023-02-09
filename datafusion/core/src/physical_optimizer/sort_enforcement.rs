@@ -361,31 +361,32 @@ fn parallelize_sorts(
     let mut coalesce_onwards = requirements.coalesce_onwards;
     // We know that `plan` has children, so `coalesce_onwards` is non-empty.
     if coalesce_onwards[0].is_some() {
-        if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-            // If there is a connection between a `CoalescePartitionsExec` and a
-            // `SortExec` that satisfy the requirements (i.e. they don't require a
-            // single partition), then we can replace the `CoalescePartitionsExec`
-            // + `SortExec` cascade with a `SortExec` + `SortPreservingMergeExec`
-            // cascade to parallelize sorting.
-            let mut prev_layer = plan.clone();
-            update_child_to_change_coalesce(
-                &mut prev_layer,
-                &mut coalesce_onwards[0],
-                Some(sort_exec),
-            )?;
-            let spm = SortPreservingMergeExec::new(sort_exec.expr().to_vec(), prev_layer);
-            return Ok(Some(PlanWithCorrespondingCoalescePartitions {
-                plan: Arc::new(spm),
-                coalesce_onwards: vec![None],
-            }));
+        if is_sort(&plan) || is_sort_preserving_merge(&plan) {
+            // Make sure that Sort is actually global sort
+            if plan.output_partitioning().partition_count() == 1 {
+                // If there is a connection between a `CoalescePartitionsExec` and a
+                // Global Sort that satisfy the requirements (i.e. intermediate
+                // executors  don't require single partition), then we can
+                // replace the `CoalescePartitionsExec`+ GlobalSort cascade with
+                // the `SortExec` + `SortPreservingMergeExec`
+                // cascade to parallelize sorting.
+                let mut prev_layer = plan.clone();
+                update_child_to_remove_coalesce(
+                    &mut prev_layer,
+                    &mut coalesce_onwards[0],
+                )?;
+                let sort_exprs = get_sort_exprs(&plan)?;
+                prev_layer = add_sort_above_child(&prev_layer, sort_exprs.to_vec())?;
+                let spm = SortPreservingMergeExec::new(sort_exprs.to_vec(), prev_layer);
+                return Ok(Some(PlanWithCorrespondingCoalescePartitions {
+                    plan: Arc::new(spm),
+                    coalesce_onwards: vec![None],
+                }));
+            }
         } else if plan.as_any().is::<CoalescePartitionsExec>() {
             // There is an unnecessary `CoalescePartitionExec` in the plan.
             let mut prev_layer = plan.clone();
-            update_child_to_change_coalesce(
-                &mut prev_layer,
-                &mut coalesce_onwards[0],
-                None,
-            )?;
+            update_child_to_remove_coalesce(&mut prev_layer, &mut coalesce_onwards[0])?;
             let new_plan = plan.with_new_children(vec![prev_layer])?;
             return Ok(Some(PlanWithCorrespondingCoalescePartitions {
                 plan: new_plan,
@@ -658,21 +659,19 @@ fn analyze_window_sort_removal(
 }
 
 /// Updates child to remove the unnecessary `CoalescePartitions` below it.
-fn update_child_to_change_coalesce(
+fn update_child_to_remove_coalesce(
     child: &mut Arc<dyn ExecutionPlan>,
     coalesce_onwards: &mut Option<ExecTree>,
-    sort_exec: Option<&SortExec>,
 ) -> Result<()> {
     if let Some(coalesce_onwards) = coalesce_onwards {
-        *child = change_corresponding_coalesce_in_sub_plan(coalesce_onwards, sort_exec)?;
+        *child = remove_corresponding_coalesce_in_sub_plan(coalesce_onwards)?;
     }
     Ok(())
 }
 
 /// Removes the `CoalescePartitions` from the plan in `coalesce_onwards`.
-fn change_corresponding_coalesce_in_sub_plan(
+fn remove_corresponding_coalesce_in_sub_plan(
     coalesce_onwards: &mut ExecTree,
-    sort_exec: Option<&SortExec>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     Ok(
         if coalesce_onwards
@@ -681,24 +680,12 @@ fn change_corresponding_coalesce_in_sub_plan(
             .is::<CoalescePartitionsExec>()
         {
             // We can safely use the 0th index since we have a `CoalescePartitionsExec`.
-            let coalesce_input = coalesce_onwards.plan.children()[0].clone();
-            if let Some(sort_exec) = sort_exec {
-                let sort_expr = sort_exec.expr();
-                if !ordering_satisfy(
-                    coalesce_input.output_ordering(),
-                    Some(sort_expr),
-                    || coalesce_input.equivalence_properties(),
-                ) {
-                    return add_sort_above_child(&coalesce_input, sort_expr.to_vec());
-                }
-            }
-            coalesce_input
+            coalesce_onwards.plan.children()[0].clone()
         } else {
             let plan = coalesce_onwards.plan.clone();
             let mut children = plan.children();
             for item in &mut coalesce_onwards.children {
-                children[item.idx] =
-                    change_corresponding_coalesce_in_sub_plan(item, sort_exec)?;
+                children[item.idx] = remove_corresponding_coalesce_in_sub_plan(item)?;
             }
             plan.with_new_children(children)?
         },
@@ -1718,8 +1705,8 @@ mod tests {
         ];
         let expected_optimized = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
-            "  FilterExec: NOT non_nullable_col@1",
-            "    SortExec: [nullable_col@0 ASC]",
+            "  SortExec: [nullable_col@0 ASC]",
+            "    FilterExec: NOT non_nullable_col@1",
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "        ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
@@ -1773,6 +1760,39 @@ mod tests {
         let second_plan = plan.clone();
 
         assert_eq!(get_plan_string(&first_plan), get_plan_string(&second_plan));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_coalesce_propagate() -> Result<()> {
+        let schema = create_test_schema()?;
+        let source = memory_exec(&schema);
+        let repartition = repartition_exec(source);
+        let coalesce_partitions = Arc::new(CoalescePartitionsExec::new(repartition));
+        let repartition = repartition_exec(coalesce_partitions);
+        let sort_exprs = vec![sort_expr("nullable_col", &schema)];
+        let spm = sort_preserving_merge_exec(sort_exprs.clone(), repartition);
+        let sort = sort_exec(sort_exprs, spm);
+
+        let physical_plan = sort.clone();
+        // Sort Parallelize rule should end Coalesce + Sort linkage when Sort is Global Sort
+        // Also input plan is not valid as it is. We need to add SortExec before SortPreservingMergeExec.
+        let expected_input = vec![
+            "SortExec: [nullable_col@0 ASC]",
+            "  SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      CoalescePartitionsExec",
+            "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=0",
+            "          MemoryExec: partitions=0, partition_sizes=[]",
+        ];
+        let expected_optimized = vec![
+            "SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "  SortExec: [nullable_col@0 ASC]",
+            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
+            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=0",
+            "        MemoryExec: partitions=0, partition_sizes=[]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())
     }
 
