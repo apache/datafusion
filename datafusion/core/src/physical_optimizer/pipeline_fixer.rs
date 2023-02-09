@@ -113,8 +113,7 @@ fn is_suitable_for_symmetric_hash_join(hash_join: &HashJoinExec) -> Result<bool>
         if let Some(left_ordering) = left.output_ordering() {
             let right = hash_join.right();
             if let Some(right_ordering) = right.output_ordering() {
-                let expr = filter.expression();
-                let expr_supported = check_support(expr);
+                let expr_supported = check_support(filter.expression());
                 let left_convertible = convert_sort_expr_with_filter_schema(
                     &JoinSide::Left,
                     filter,

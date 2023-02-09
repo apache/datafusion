@@ -90,7 +90,7 @@ use log::debug;
 use std::fmt;
 use std::task::Poll;
 
-// Maps a `u64` hash value based on the build ["on" values] to a list of indices with this key's value.
+// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 //
 // Note that the `u64` keys are not stored in the hashmap (hence the `()` as key), but are only used
 // to put the indices in a certain bucket.
@@ -680,7 +680,8 @@ impl RecordBatchStream for HashJoinStream {
     }
 }
 
-// Get build and probe indices which satisfies the on condition (include equal_conditon and filter_in_join) in the Join
+/// Gets build and probe indices which satisfy the on condition (including
+/// the equality condition and the join filter) in the join.
 #[allow(clippy::too_many_arguments)]
 pub fn build_join_indices(
     probe_batch: &RecordBatch,
@@ -695,7 +696,7 @@ pub fn build_join_indices(
     offset: Option<usize>,
     build_side: JoinSide,
 ) -> Result<(UInt64Array, UInt32Array)> {
-    // Get the indices which satisfies the equal join condition, like `left.a1 = right.a2`
+    // Get the indices that satisfy the equality condition, like `left.a1 = right.a2`
     let (build_indices, probe_indices) = build_equal_condition_join_indices(
         build_hashmap,
         build_input_buffer,
@@ -708,7 +709,7 @@ pub fn build_join_indices(
         offset,
     )?;
     if let Some(filter) = filter {
-        // Filter the indices which satisfies the non-equal join condition, like `left.b1 = 10`
+        // Filter the indices which satisfy the non-equal join condition, like `left.b1 = 10`
         apply_join_filter_to_indices(
             build_input_buffer,
             probe_batch,
@@ -722,7 +723,7 @@ pub fn build_join_indices(
     }
 }
 
-// Returns the index of equal condition join result: build_indices and probe_indices
+// Returns build/probe indices satisfying the equality condition.
 // On LEFT.b1 = RIGHT.b2
 // LEFT Table:
 //  a1  b1  c1
@@ -750,9 +751,9 @@ pub fn build_join_indices(
 // "| 13 | 10 | 130 | 12 | 10 | 120 |",
 // "| 9  | 8  | 90  | 8  | 8  | 80  |",
 // "+----+----+-----+----+----+-----+"
-// And the result of build and probe indices
-// build indices:  5, 6, 6, 4
-// probe indices: 3, 4, 5, 3
+// And the result of build and probe indices are:
+// Build indices:  5, 6, 6, 4
+// Probe indices: 3, 4, 5, 3
 #[allow(clippy::too_many_arguments)]
 pub fn build_equal_condition_join_indices(
     build_hashmap: &JoinHashMap,
@@ -814,13 +815,11 @@ pub fn build_equal_condition_join_indices(
     let build = ArrayData::builder(DataType::UInt64)
         .len(build_indices.len())
         .add_buffer(build_indices.finish())
-        .build()
-        .unwrap();
+        .build()?;
     let probe = ArrayData::builder(DataType::UInt32)
         .len(probe_indices.len())
         .add_buffer(probe_indices.finish())
-        .build()
-        .unwrap();
+        .build()?;
 
     Ok((
         PrimitiveArray::<UInt64Type>::from(build),
@@ -895,7 +894,7 @@ macro_rules! equal_rows_elem_with_string_dict {
 /// Left and right row have equal values
 /// If more data types are supported here, please also add the data types in can_hash function
 /// to generate hash join logical plan.
-pub fn equal_rows(
+fn equal_rows(
     left: usize,
     right: usize,
     left_arrays: &[ArrayRef],
@@ -1308,21 +1307,21 @@ mod tests {
 
     use super::*;
     use crate::physical_expr::expressions::BinaryExpr;
-    use crate::physical_plan::joins::hash_join::build_equal_condition_join_indices;
-    use crate::physical_plan::joins::utils::JoinSide;
     use crate::prelude::SessionContext;
     use crate::{
         assert_batches_sorted_eq,
         physical_plan::{
-            common, expressions::Column, hash_utils::create_hashes, memory::MemoryExec,
+            common,
+            expressions::Column,
+            hash_utils::create_hashes,
+            joins::{hash_join::build_equal_condition_join_indices, utils::JoinSide},
+            memory::MemoryExec,
             repartition::RepartitionExec,
         },
         test::exec::MockExec,
         test::{build_table_i32, columns},
     };
-    use arrow::array::UInt32Builder;
-    use arrow::array::UInt64Builder;
-    use arrow::array::{ArrayRef, Date32Array, Int32Array};
+    use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::Operator;
 

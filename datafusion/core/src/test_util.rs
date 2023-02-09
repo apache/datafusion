@@ -388,18 +388,19 @@ mod tests {
         assert!(PathBuf::from(res).is_dir());
     }
 }
-/// It creates unbounded sorted files for tests
+
+/// This function creates an unbounded sorted file for testing purposes.
 pub async fn test_create_unbounded_sorted_file(
     ctx: &SessionContext,
     file_path: PathBuf,
     table_name: &str,
 ) -> datafusion_common::Result<()> {
-    // Register table
+    // Create schema:
     let schema = Arc::new(Schema::new(vec![
         Field::new("a1", DataType::UInt32, false),
         Field::new("a2", DataType::UInt32, false),
     ]));
-    // The sort order is specified
+    // Specify the ordering:
     let file_sort_order = [datafusion_expr::col("a1")]
         .into_iter()
         .map(|e| {
@@ -408,20 +409,20 @@ pub async fn test_create_unbounded_sorted_file(
             e.sort(ascending, nulls_first)
         })
         .collect::<Vec<_>>();
-    // Mark infinite and provide schema
+    // Mark infinite and provide schema:
     let fifo_options = CsvReadOptions::new()
         .schema(schema.as_ref())
         .has_header(false)
         .mark_infinite(true);
-    // Get listing options
+    // Get listing options:
     let options_sort = fifo_options
         .to_listing_options(&ctx.copied_config())
         .with_file_sort_order(Some(file_sort_order));
-    // Register table
+    // Register table:
     ctx.register_listing_table(
         table_name,
         file_path.as_os_str().to_str().unwrap(),
-        options_sort.clone(),
+        options_sort,
         Some(schema),
         None,
     )

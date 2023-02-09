@@ -16,87 +16,86 @@
 // under the License.
 
 //! Hash Join related functionality used both on logical and physical plans
-//!
+
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::usize;
 
-use arrow::datatypes::DataType;
 use arrow::datatypes::SchemaRef;
 
-use crate::common::Result;
-use arrow::compute::CastOptions;
-use datafusion_common::{DataFusionError, ScalarValue};
-use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr, Column, Literal};
+use datafusion_common::DataFusionError;
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::Interval;
 use datafusion_physical_expr::rewrite::TreeNodeRewritable;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use std::collections::HashMap;
-use std::sync::Arc;
 
+use crate::common::Result;
 use crate::physical_plan::joins::utils::{JoinFilter, JoinSide};
 
 fn check_filter_expr_contains_sort_information(
     expr: &Arc<dyn PhysicalExpr>,
-    checked_expr: &Arc<dyn PhysicalExpr>,
+    reference: &Arc<dyn PhysicalExpr>,
 ) -> bool {
-    let contains = checked_expr.eq(expr);
-    contains
-        || expr.children().iter().any(|child_expr| {
-            check_filter_expr_contains_sort_information(child_expr, checked_expr)
-        })
+    expr.eq(reference)
+        || expr
+            .children()
+            .iter()
+            .any(|e| check_filter_expr_contains_sort_information(e, reference))
 }
 
-fn recursive_physical_expr_column_collector(
-    expr: &Arc<dyn PhysicalExpr>,
-    columns: &mut Vec<Column>,
-) {
+fn collect_columns_recursive(expr: &Arc<dyn PhysicalExpr>, columns: &mut Vec<Column>) {
     if let Some(column) = expr.as_any().downcast_ref::<Column>() {
         if !columns.iter().any(|c| c.eq(column)) {
             columns.push(column.clone())
         }
     }
-    expr.children().iter().for_each(|child_expr| {
-        recursive_physical_expr_column_collector(child_expr, columns)
-    })
+    expr.children()
+        .iter()
+        .for_each(|e| collect_columns_recursive(e, columns))
 }
 
-fn physical_expr_column_collector(expr: &Arc<dyn PhysicalExpr>) -> Vec<Column> {
+fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> Vec<Column> {
     let mut columns = vec![];
-    recursive_physical_expr_column_collector(expr, &mut columns);
+    collect_columns_recursive(expr, &mut columns);
     columns
 }
 
-/// Create main_col -> filter_col one to one mapping from filter column indices.
-/// A column index looks like
-///            ColumnIndex {
-//                 index: 0, -> field index in main schema
-//                 side: JoinSide::Left, -> child side
-//             },
+/// Create a one to one mapping from main columns to filter columns using
+/// filter column indices. A column index looks like:
+/// ```text
+/// ColumnIndex {
+///     index: 0, // field index in main schema
+///     side: JoinSide::Left, // child side
+/// }
+/// ```
 pub fn map_origin_col_to_filter_col(
     filter: &JoinFilter,
     schema: SchemaRef,
     side: &JoinSide,
 ) -> Result<HashMap<Column, Column>> {
+    let filter_schema = filter.schema();
     let mut col_to_col_map: HashMap<Column, Column> = HashMap::new();
     for (filter_schema_index, index) in filter.column_indices().iter().enumerate() {
         if index.side.eq(side) {
-            // Get main field from column index
+            // Get the main field from column index:
             let main_field = schema.field(index.index);
-            // Create a column PhysicalExpr
+            // Create a column expression:
             let main_col = Column::new_with_schema(main_field.name(), schema.as_ref())?;
-            // Since the filter.column_indices() order directly same with intermediate schema fields, we can
-            // get the column.
-            let filter_field = filter.schema().field(filter_schema_index);
+            // Since the order of by filter.column_indices() is the same with
+            // that of intermediate schema fields, we can get the column directly.
+            let filter_field = filter_schema.field(filter_schema_index);
             let filter_col = Column::new(filter_field.name(), filter_schema_index);
-            // Insert mapping
+            // Insert mapping:
             col_to_col_map.insert(main_col, filter_col);
         }
     }
     Ok(col_to_col_map)
 }
 
-/// This function plays an important role in the expression graph traversal process. It is necessary to analyze the `PhysicalSortExpr`
-/// because the sorting of expressions is required for join filter expressions.
+/// This function analyzes [PhysicalSortExpr] graphs with respect to monotonicity
+/// (sorting) properties. This is necessary since monotonically increasing and/or
+/// decreasing expressions are required when using join filter expressions for
+/// data pruning purposes.
 ///
 /// The method works as follows:
 /// 1. Maps the original columns to the filter columns using the `map_origin_col_to_filter_col` function.
@@ -107,13 +106,12 @@ pub fn map_origin_col_to_filter_col(
 /// 6. If an exact match is encountered, returns the converted filter expression as `Some(Arc<dyn PhysicalExpr>)`.
 /// 7. If all columns are not included or the exact match is not encountered, returns `None`.
 ///
-/// Use Cases:
+/// Examples:
 /// Consider the filter expression "a + b > c + 10 AND a + b < c + 100".
 /// 1. If the expression "a@ + d@" is sorted, it will not be accepted since the "d@" column is not part of the filter.
 /// 2. If the expression "d@" is sorted, it will not be accepted since the "d@" column is not part of the filter.
 /// 3. If the expression "a@ + b@ + c@" is sorted, all columns are represented in the filter expression. However,
 ///    there is no exact match, so this expression does not indicate pruning.
-///
 pub fn convert_sort_expr_with_filter_schema(
     side: &JoinSide,
     filter: &JoinFilter,
@@ -123,9 +121,9 @@ pub fn convert_sort_expr_with_filter_schema(
     let column_mapping_information: HashMap<Column, Column> =
         map_origin_col_to_filter_col(filter, schema, side)?;
     let expr = sort_expr.expr.clone();
-    // Get main schema columns
-    let expr_columns = physical_expr_column_collector(&expr);
-    // Calculation is possible with 'column_mapping_information' since sort exprs belong to a child.
+    // Get main schema columns:
+    let expr_columns = collect_columns(&expr);
+    // Calculation is possible with `column_mapping_information` since sort exprs belong to a child.
     let all_columns_are_included = expr_columns
         .iter()
         .all(|col| column_mapping_information.contains_key(col));
@@ -134,68 +132,69 @@ pub fn convert_sort_expr_with_filter_schema(
         // the sort expression into a filter expression.
         let converted_filter_expr = expr
             .transform_up(&|p| convert_filter_columns(p, &column_mapping_information))?;
-
-        // Search converted PhysicalExpr in filter expression
-        // If the exact match is encountered, use this sorted expression in graph traversals.
+        // Search the converted `PhysicalExpr` in filter expression; if an exact
+        // match is found, use this sorted expression in graph traversals.
         if check_filter_expr_contains_sort_information(
             filter.expression(),
             &converted_filter_expr,
         ) {
-            Ok(Some(converted_filter_expr))
-        } else {
-            Ok(None)
+            return Ok(Some(converted_filter_expr));
         }
-    } else {
-        Ok(None)
     }
+    Ok(None)
 }
 
 /// This function is used to build the filter expression based on the sort order of input columns.
 ///
-/// It first calls the convert_sort_expr_with_filter_schema method to determine if the sort
-/// order of columns can be used in the filter expression.
-/// If it returns a Some value, the method wraps the result in a SortedFilterExpr
-/// instance with the original sort expression, converted filter expression, and sort options.
-/// If it returns a None value, this function returns an error.
+/// It first calls the [convert_sort_expr_with_filter_schema] method to determine if the sort
+/// order of columns can be used in the filter expression. If it returns a [Some] value, the
+/// method wraps the result in a [SortedFilterExpr] instance with the original sort expression,
+/// converted filter expression, and sort options. Otherwise, this function returns an error.
 ///
-/// The SortedFilterExpr instance contains information about the sort order of columns
-/// that can be used in the filter expression, which can be used to optimize the query execution process.
+/// The [SortedFilterExpr] instance contains information about the sort order of columns that can
+/// be used in the filter expression, which can be used to optimize the query execution process.
 pub fn build_filter_input_order_v2(
     side: JoinSide,
     filter: &JoinFilter,
     schema: SchemaRef,
     order: &PhysicalSortExpr,
 ) -> Result<SortedFilterExpr> {
-    match convert_sort_expr_with_filter_schema(&side, filter, schema, order)? {
-        Some(expr) => Ok(SortedFilterExpr::new(side, order.clone(), expr)),
-        None => Err(DataFusionError::Plan(format!(
+    if let Some(expr) =
+        convert_sort_expr_with_filter_schema(&side, filter, schema, order)?
+    {
+        Ok(SortedFilterExpr::new(side, order.clone(), expr))
+    } else {
+        Err(DataFusionError::Plan(format!(
             "The {side} side of the join does not have an expression sorted."
-        ))),
+        )))
     }
 }
 
-/// Convert a physical expression into a filter expression using a column mapping information.
+/// Convert a physical expression into a filter expression using the given
+/// column mapping information.
 fn convert_filter_columns(
     input: Arc<dyn PhysicalExpr>,
     column_mapping_information: &HashMap<Column, Column>,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     // Attempt to downcast the input expression to a Column type.
-    if let Some(col) = input.as_any().downcast_ref::<Column>() {
-        // If the downcast is successful, retrieve the corresponding filter column.
-        let filter_col = column_mapping_information.get(col).unwrap().clone();
-        // Return the filter column as an Arc wrapped in an Option.
-        Ok(Some(Arc::new(filter_col)))
-    } else {
-        // If the downcast is not successful, return the input expression as is.
-        Ok(Some(input))
-    }
+    Ok(Some(
+        if let Some(col) = input.as_any().downcast_ref::<Column>() {
+            // If the downcast is successful, retrieve the corresponding filter column.
+            let filter_col = column_mapping_information.get(col).unwrap().clone();
+            // Return the filter column as an Arc wrapped in an Option.
+            Arc::new(filter_col)
+        } else {
+            // If the downcast fails, return the input expression as is.
+            input
+        },
+    ))
 }
 
+/// The SortedFilterExpr object is used to represent a sorted filter expression in the
+/// `SymmetricHashJoinExec` struct. It contains information about the join side, the
+/// origin expression, the filter expression, and the sort option. The object has
+/// several methods to access and modify its fields.
 #[derive(Debug, Clone)]
-/// The SortedFilterExpr struct is used to represent a sorted filter expression in the
-/// [SymmetricHashJoinExec] struct. It contains information about the join side, the origin
-/// expression, the filter expression, and the sort option.
-/// The struct has several methods to access and modify its fields.
 pub struct SortedFilterExpr {
     /// Column side
     pub join_side: JoinSide,
@@ -250,62 +249,9 @@ impl SortedFilterExpr {
         self.node_index = node_index;
     }
 }
-/// Filter expr for a + b > c + 10 AND a + b < c + 100
-#[allow(dead_code)]
-pub(crate) fn complicated_filter() -> Arc<dyn PhysicalExpr> {
-    let left_expr = BinaryExpr::new(
-        Arc::new(CastExpr::new(
-            Arc::new(BinaryExpr::new(
-                Arc::new(Column::new("0", 0)),
-                Operator::Plus,
-                Arc::new(Column::new("1", 1)),
-            )),
-            DataType::Int64,
-            CastOptions { safe: false },
-        )),
-        Operator::Gt,
-        Arc::new(BinaryExpr::new(
-            Arc::new(CastExpr::new(
-                Arc::new(Column::new("2", 2)),
-                DataType::Int64,
-                CastOptions { safe: false },
-            )),
-            Operator::Plus,
-            Arc::new(Literal::new(ScalarValue::Int64(Some(10)))),
-        )),
-    );
-
-    let right_expr = BinaryExpr::new(
-        Arc::new(CastExpr::new(
-            Arc::new(BinaryExpr::new(
-                Arc::new(Column::new("0", 0)),
-                Operator::Plus,
-                Arc::new(Column::new("1", 1)),
-            )),
-            DataType::Int64,
-            CastOptions { safe: false },
-        )),
-        Operator::Lt,
-        Arc::new(BinaryExpr::new(
-            Arc::new(CastExpr::new(
-                Arc::new(Column::new("2", 2)),
-                DataType::Int64,
-                CastOptions { safe: false },
-            )),
-            Operator::Plus,
-            Arc::new(Literal::new(ScalarValue::Int64(Some(100)))),
-        )),
-    );
-
-    Arc::new(BinaryExpr::new(
-        Arc::new(left_expr),
-        Operator::And,
-        Arc::new(right_expr),
-    ))
-}
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use crate::physical_plan::{
         expressions::Column,
@@ -314,11 +260,68 @@ mod tests {
     };
     use arrow::compute::{CastOptions, SortOptions};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr, Literal};
     use std::sync::Arc;
+
+    /// Filter expr for a + b > c + 10 AND a + b < c + 100
+    pub(crate) fn complicated_filter() -> Arc<dyn PhysicalExpr> {
+        let left_expr = BinaryExpr::new(
+            Arc::new(CastExpr::new(
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("0", 0)),
+                    Operator::Plus,
+                    Arc::new(Column::new("1", 1)),
+                )),
+                DataType::Int64,
+                CastOptions { safe: false },
+            )),
+            Operator::Gt,
+            Arc::new(BinaryExpr::new(
+                Arc::new(CastExpr::new(
+                    Arc::new(Column::new("2", 2)),
+                    DataType::Int64,
+                    CastOptions { safe: false },
+                )),
+                Operator::Plus,
+                Arc::new(Literal::new(ScalarValue::Int64(Some(10)))),
+            )),
+        );
+
+        let right_expr = BinaryExpr::new(
+            Arc::new(CastExpr::new(
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("0", 0)),
+                    Operator::Plus,
+                    Arc::new(Column::new("1", 1)),
+                )),
+                DataType::Int64,
+                CastOptions { safe: false },
+            )),
+            Operator::Lt,
+            Arc::new(BinaryExpr::new(
+                Arc::new(CastExpr::new(
+                    Arc::new(Column::new("2", 2)),
+                    DataType::Int64,
+                    CastOptions { safe: false },
+                )),
+                Operator::Plus,
+                Arc::new(Literal::new(ScalarValue::Int64(Some(100)))),
+            )),
+        );
+
+        Arc::new(BinaryExpr::new(
+            Arc::new(left_expr),
+            Operator::And,
+            Arc::new(right_expr),
+        ))
+    }
+
     #[test]
     fn test_column_collector() {
         let filter_expr = complicated_filter();
-        let columns = physical_expr_column_collector(&filter_expr);
+        let columns = collect_columns(&filter_expr);
         assert_eq!(columns.len(), 3)
     }
 

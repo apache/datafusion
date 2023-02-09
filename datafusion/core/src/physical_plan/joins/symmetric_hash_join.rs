@@ -27,43 +27,38 @@ use std::vec;
 use std::{any::Any, usize};
 
 use ahash::RandomState;
-use arrow::array::PrimitiveArray;
-use arrow::array::{ArrowPrimitiveType, NativeAdapter, PrimitiveBuilder};
+use arrow::array::{
+    ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray,
+    PrimitiveBuilder,
+};
 use arrow::compute::concat_batches;
-use arrow::datatypes::ArrowNativeType;
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use futures::{Stream, StreamExt};
-use hashbrown::raw::RawTable;
-use hashbrown::HashSet;
+use hashbrown::{raw::RawTable, HashSet};
 
-use datafusion_common::utils::bisect;
-use datafusion_common::ScalarValue;
-use datafusion_physical_expr::intervals::ExprIntervalGraph;
-use datafusion_physical_expr::intervals::Interval;
+use datafusion_common::{utils::bisect, ScalarValue};
+use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval};
 
-use crate::arrow::array::BooleanBufferBuilder;
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::logical_expr::JoinType;
-use crate::physical_plan::common::merge_batches;
-use crate::physical_plan::joins::hash_join::{
-    build_join_indices, update_hash, JoinHashMap,
-};
-use crate::physical_plan::joins::hash_join_utils::{
-    build_filter_input_order_v2, SortedFilterExpr,
-};
-use crate::physical_plan::joins::utils::build_batch_from_indices;
 use crate::physical_plan::{
+    common::merge_batches,
     expressions::Column,
     expressions::PhysicalSortExpr,
-    joins::utils::{
-        build_join_schema, check_join_is_valid, combine_join_equivalence_properties,
-        partitioned_join_output_partitioning, ColumnIndex, JoinFilter, JoinOn, JoinSide,
+    joins::{
+        hash_join::{build_join_indices, update_hash, JoinHashMap},
+        hash_join_utils::{build_filter_input_order_v2, SortedFilterExpr},
+        utils::{
+            build_batch_from_indices, build_join_schema, check_join_is_valid,
+            combine_join_equivalence_properties, partitioned_join_output_partitioning,
+            ColumnIndex, JoinFilter, JoinOn, JoinSide,
+        },
     },
     metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
-    PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 /// A symmetric hash join with range conditions is when both streams are hashed on the
@@ -100,8 +95,8 @@ use crate::physical_plan::{
 ///                        |                         |
 ///                        +-------------------------+
 ///
-/// Prune build side when the new RecordBatch comes to the probe side. We utilize interval arithmetics
-/// on JoinFilter's sorted PhysicalExprs to calculate joinable range.
+/// Prune build side when the new RecordBatch comes to the probe side. We utilize interval arithmetic
+/// on JoinFilter's sorted PhysicalExprs to calculate the joinable range.
 ///
 ///
 ///               PROBE SIDE          BUILD SIDE
@@ -150,19 +145,15 @@ use crate::physical_plan::{
 /// that the left side buffer must only keep rows where "leftTime > rightTime - 3 > 1234 - 3 > 1231" ,
 /// making the smallest value in 'left_sorted' 1231 and any rows below (since ascending)
 /// than that can be dropped from the inner buffer.
-///
-///
-///
 /// ```
-///
 pub struct SymmetricHashJoinExec {
-    /// left side stream
+    /// Left side stream
     pub(crate) left: Arc<dyn ExecutionPlan>,
-    /// right side stream
+    /// Right side stream
     pub(crate) right: Arc<dyn ExecutionPlan>,
     /// Set of common columns used to join on
     pub(crate) on: Vec<(Column, Column)>,
-    /// Filters which are applied while finding matching rows
+    /// Filters applied when finding matching rows
     pub(crate) filter: JoinFilter,
     /// How the join is performed
     pub(crate) join_type: JoinType,
@@ -184,18 +175,18 @@ pub struct SymmetricHashJoinExec {
 
 #[derive(Debug)]
 struct SymmetricHashJoinSideMetrics {
-    /// Number of right batches consumed by this operator
+    /// Number of batches consumed by this operator
     input_batches: metrics::Count,
-    /// Number of left rows consumed by this operator
+    /// Number of rows consumed by this operator
     input_rows: metrics::Count,
 }
 
 /// Metrics for HashJoinExec
 #[derive(Debug)]
 struct SymmetricHashJoinMetrics {
-    /// Number of left batches consumed by this operator
+    /// Number of left batches/rows consumed by this operator
     left: SymmetricHashJoinSideMetrics,
-    /// Number of right batches consumed by this operator
+    /// Number of right batches/rows consumed by this operator
     right: SymmetricHashJoinSideMetrics,
     /// Number of batches produced by this operator
     output_batches: metrics::Count,
@@ -238,8 +229,10 @@ impl SymmetricHashJoinMetrics {
 impl SymmetricHashJoinExec {
     /// Tries to create a new [SymmetricHashJoinExec].
     /// # Error
-    /// This function errors when it is not possible to join the left and right sides on keys `on`,
-    /// iterate and construct [SortedFilterExpr]s,and create [ExprIntervalGraph]
+    /// This function errors when:
+    /// - It is not possible to join the left and right sides on keys `on`, or
+    /// - It fails to construct [SortedFilterExpr]s, or
+    /// - It fails to create the [ExprIntervalGraph].
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -373,20 +366,14 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     }
 
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        let (left, right) = (children[0], children[1]);
-        Ok(left || right)
+        Ok(children.iter().any(|u| *u))
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         let (left_expr, right_expr) = self
             .on
             .iter()
-            .map(|(l, r)| {
-                (
-                    Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
-                    Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
-                )
-            })
+            .map(|(l, r)| (Arc::new(l.clone()) as _, Arc::new(r.clone()) as _))
             .unzip();
         // TODO: This will change when we extend collected executions.
         vec![
@@ -412,6 +399,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             left_columns_len,
         )
     }
+
     // TODO Output ordering might be kept for some cases.
     // For example if it is inner join then the stream side order can be kept
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
@@ -523,7 +511,7 @@ struct SymmetricHashJoinStream {
     right: OneSideHashJoiner,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
-    // Range Prunner.
+    // Range pruner.
     physical_expr_graph: ExprIntervalGraph,
     /// Information of filter columns
     filter_columns: Vec<SortedFilterExpr>,
@@ -533,7 +521,7 @@ struct SymmetricHashJoinStream {
     null_equals_null: bool,
     /// Metrics
     metrics: SymmetricHashJoinMetrics,
-    /// There is nothing to process anymore
+    /// Flag indicating whether there is nothing to process anymore
     final_result: bool,
     /// The current probe side. We choose build and probe side according to this attribute.
     probe_side: JoinSide,
@@ -577,31 +565,19 @@ fn prune_hash_values(
     for (hash_value, index_set) in hash_value_map.iter() {
         if let Some((_, separation_chain)) = hashmap
             .0
-            .get_mut(*hash_value, |(hash, _)| *hash_value == *hash)
+            .get_mut(*hash_value, |(hash, _)| hash_value == hash)
         {
             separation_chain.retain(|n| !index_set.contains(n));
             if separation_chain.is_empty() {
                 hashmap
                     .0
-                    .remove_entry(*hash_value, |(hash, _)| *hash_value == *hash);
+                    .remove_entry(*hash_value, |(hash, _)| hash_value == hash);
             }
         }
     }
     Ok(())
 }
 
-fn prune_visited_rows(
-    prune_length: usize,
-    visited_rows: &mut HashSet<usize>,
-    deleted_offset: usize,
-) -> Result<()> {
-    (deleted_offset..(deleted_offset + prune_length)).for_each(|row| {
-        visited_rows.remove(&row);
-    });
-    Ok(())
-}
-
-///
 /// Calculate the filter expression intervals
 ///
 /// This function updates the `interval` field of each `SortedFilterExpr` in `filter_columns` based on
@@ -614,7 +590,8 @@ fn prune_visited_rows(
 /// * `filter_columns` - A mutable list of `SortedFilterExpr` objects to update
 /// * `build_side` - The side of the join where `build_input_buffer` is used
 ///
-/// # Note
+/// ### Note
+/// ```text
 ///
 ///   Build      Probe
 ///  +-------+  +-------+
@@ -633,7 +610,7 @@ fn prune_visited_rows(
 ///  Expr2: [b, inf]
 ///  Expr3: [c, inf]
 ///  Expr4: [d, inf]
-///
+/// ```
 ///
 /// # Returns
 ///
@@ -645,12 +622,11 @@ fn calculate_filter_expr_intervals(
     filter_columns: &mut [SortedFilterExpr],
     build_side: JoinSide,
 ) -> Result<()> {
-    // If either build or probe side has no data, return early
+    // If either build or probe side has no data, return early:
     if build_input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
         return Ok(());
     }
-
-    // Iterate through each SortedFilterExpr in filter_columns
+    // Iterate through each [SortedFilterExpr] in filter_columns:
     for sorted_expr in filter_columns.iter_mut() {
         // Destructure the SortedFilterExpr
         let SortedFilterExpr {
@@ -661,26 +637,20 @@ fn calculate_filter_expr_intervals(
         } = sorted_expr;
 
         // Get the array of the first or last value for the expression, depending on join side
+        let expr = &origin_sorted_expr.expr;
         let array = if build_side.eq(join_side) {
             // Get first value for expr
-            origin_sorted_expr
-                .expr
-                .evaluate(&build_input_buffer.slice(0, 1))?
-                .into_array(1)
+            expr.evaluate(&build_input_buffer.slice(0, 1))
         } else {
             // Get last value for expr
-            origin_sorted_expr
-                .expr
-                .evaluate(&probe_batch.slice(probe_batch.num_rows() - 1, 1))?
-                .into_array(1)
-        };
+            expr.evaluate(&probe_batch.slice(probe_batch.num_rows() - 1, 1))
+        }?
+        .into_array(1);
 
-        // Convert the array to a ScalarValue
+        // Convert the array to a ScalarValue:
         let value = ScalarValue::try_from_array(&array, 0)?;
-
-        // Create a ScalarValue representing positive or negative infinity for the same data type
+        // Create a ScalarValue representing positive or negative infinity for the same data type:
         let infinite = ScalarValue::try_from(value.get_datatype())?;
-
         // Update the interval with lower and upper bounds based on the sort option
         *interval = if origin_sorted_expr.options.descending {
             Interval {
@@ -731,19 +701,18 @@ fn determine_prune_length(
                 None
             }
         })
-        .collect::<Vec<Result<usize>>>()
-        .into_iter()
         .collect::<Result<Vec<usize>>>()?
         .into_iter()
         .min()
         .unwrap())
 }
+
 /// This method determines if the result of the join should be produced in the final step or not.
 ///
 /// # Arguments
 ///
-/// * build_side - Enum indicating the side of the join used as the build side.
-/// * join_type - Enum indicating the type of join to be performed.
+/// * `build_side` - Enum indicating the side of the join used as the build side.
+/// * `join_type` - Enum indicating the type of join to be performed.
 ///
 /// # Returns
 ///
@@ -752,8 +721,8 @@ fn determine_prune_length(
 /// JoinType::Left, JoinType::LeftAnti, JoinType::Full or JoinType::LeftSemi.
 /// If the build side is JoinSide::Right, the result will be true if the join type
 /// is one of JoinType::Right, JoinType::RightAnti, JoinType::Full, or JoinType::RightSemi.
-fn need_produce_result_in_final(build_side: JoinSide, join_type: JoinType) -> bool {
-    if build_side.eq(&JoinSide::Left) {
+fn need_to_produce_result_in_final(build_side: JoinSide, join_type: JoinType) -> bool {
+    if build_side == JoinSide::Left {
         matches!(
             join_type,
             JoinType::Left | JoinType::LeftAnti | JoinType::Full | JoinType::LeftSemi
@@ -772,9 +741,9 @@ fn need_produce_result_in_final(build_side: JoinSide, join_type: JoinType) -> bo
 ///
 /// # Arguments
 ///
-/// * prune_length - The length of the pruned record batch.
-/// * deleted_offset - The offset to the indices.
-/// * visited_rows - The hash set of visited indices.
+/// * `prune_length` - The length of the pruned record batch.
+/// * `deleted_offset` - The offset to the indices.
+/// * `visited_rows` - The hash set of visited indices.
 ///
 /// # Returns
 ///
@@ -790,14 +759,14 @@ where
     let mut bitmap = BooleanBufferBuilder::new(prune_length);
     bitmap.append_n(prune_length, false);
     // mark the indices as true if they are present in the visited hash set
-    (0..prune_length).for_each(|v| {
-        let row = &(v + deleted_offset);
-        bitmap.set_bit(v, visited_rows.contains(row));
-    });
+    for v in 0..prune_length {
+        let row = v + deleted_offset;
+        bitmap.set_bit(v, visited_rows.contains(&row));
+    }
     // get the anti index
     (0..prune_length)
         .filter_map(|idx| (!bitmap.get_bit(idx)).then_some(T::Native::from_usize(idx)))
-        .collect::<PrimitiveArray<T>>()
+        .collect()
 }
 
 /// This method creates a boolean buffer from the visited rows hash set
@@ -807,13 +776,13 @@ where
 ///
 /// # Arguments
 ///
-/// * prune_length - The length of the pruned record batch.
-/// * deleted_offset - The offset to the indices.
-/// * visited_rows - The hash set of visited indices.
+/// * `prune_length` - The length of the pruned record batch.
+/// * `deleted_offset` - The offset to the indices.
+/// * `visited_rows` - The hash set of visited indices.
 ///
 /// # Returns
 ///
-/// A PrimitiveArray of the specified type T, containing the semi indices.
+/// A [PrimitiveArray] of the specified type T, containing the semi indices.
 fn get_semi_indices<T: ArrowPrimitiveType>(
     prune_length: usize,
     deleted_offset: usize,
@@ -848,8 +817,7 @@ fn record_visited_indices<T: ArrowPrimitiveType>(
     offset: usize,
     indices: &PrimitiveArray<T>,
 ) {
-    let batch_indices: &[T::Native] = indices.values();
-    for i in batch_indices {
+    for i in indices.values() {
         visited.insert(i.as_usize() + offset);
     }
 }
@@ -961,7 +929,7 @@ impl OneSideHashJoiner {
     /// * `batch` - The incoming RecordBatch to be merged with the internal input buffer
     /// * `random_state` - The random state used to hash values
     ///
-    /// # Return
+    /// # Returns
     ///
     /// Returns a Result with an empty Ok if the update was successful, otherwise returns an error.
     fn update_internal_state(
@@ -1009,8 +977,8 @@ impl OneSideHashJoiner {
     ///
     /// # Returns
     ///
-    /// A `Result` containing an optional record batch if the join type is not one of LeftAnti, RightAnti, LeftSemi or RightSemi.
-    /// If the join type is one of the above four, the function will return None.
+    /// A [Result] containing an optional record batch if the join type is not one of `LeftAnti`, `RightAnti`, `LeftSemi` or `RightSemi`.
+    /// If the join type is one of the above four, the function will return [None].
     #[allow(clippy::too_many_arguments)]
     fn join_with_probe_batch(
         &mut self,
@@ -1041,14 +1009,14 @@ impl OneSideHashJoiner {
             Some(self.deleted_offset),
             self.build_side,
         )?;
-        if need_produce_result_in_final(self.build_side, join_type) {
+        if need_to_produce_result_in_final(self.build_side, join_type) {
             record_visited_indices(
                 &mut self.visited_rows,
                 self.deleted_offset,
                 &build_side,
             );
         }
-        if need_produce_result_in_final(self.build_side.negate(), join_type) {
+        if need_to_produce_result_in_final(self.build_side.negate(), join_type) {
             record_visited_indices(probe_visited, probe_offset, &probe_side);
         }
         if matches!(
@@ -1089,7 +1057,7 @@ impl OneSideHashJoiner {
     ///
     /// # Returns
     ///
-    /// * `Option<RecordBatch>` - The final output record batch if required, otherwise `None`.
+    /// * `Option<RecordBatch>` - The final output record batch if required, otherwise [None].
     fn build_side_determined_results(
         &self,
         output_schema: SchemaRef,
@@ -1099,7 +1067,7 @@ impl OneSideHashJoiner {
         column_indices: &[ColumnIndex],
     ) -> Result<Option<RecordBatch>> {
         // Check if we need to produce a result in the final output
-        let result = if need_produce_result_in_final(self.build_side, join_type) {
+        let result = if need_to_produce_result_in_final(self.build_side, join_type) {
             // Calculate the indices for build and probe sides based on join type and build side
             let (build_indices, probe_indices) = calculate_indices_by_join_type(
                 self.build_side,
@@ -1216,11 +1184,9 @@ impl OneSideHashJoiner {
                 &mut self.row_hash_values,
                 self.deleted_offset as u64,
             )?;
-            prune_visited_rows(
-                prune_length,
-                &mut self.visited_rows,
-                self.deleted_offset,
-            )?;
+            for row in self.deleted_offset..(self.deleted_offset + prune_length) {
+                self.visited_rows.remove(&row);
+            }
             self.input_buffer = self
                 .input_buffer
                 .slice(prune_length, self.input_buffer.num_rows() - prune_length);
@@ -1423,12 +1389,13 @@ mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Column};
     use datafusion_physical_expr::intervals::test_utils::gen_conjunctive_numeric_expr;
+    use datafusion_physical_expr::PhysicalExpr;
 
-    use crate::physical_plan::collect;
-    use crate::physical_plan::joins::hash_join_utils::complicated_filter;
-    use crate::physical_plan::joins::{HashJoinExec, PartitionMode};
+    use crate::physical_plan::joins::{
+        hash_join_utils::tests::complicated_filter, HashJoinExec, PartitionMode,
+    };
     use crate::physical_plan::{
-        common, memory::MemoryExec, repartition::RepartitionExec,
+        collect, common, memory::MemoryExec, repartition::RepartitionExec,
     };
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test_util;
@@ -1472,12 +1439,12 @@ mod tests {
 
         let left_expr = on
             .iter()
-            .map(|(l, _)| Arc::new(l.clone()) as Arc<dyn PhysicalExpr>)
+            .map(|(l, _)| Arc::new(l.clone()) as _)
             .collect::<Vec<_>>();
 
         let right_expr = on
             .iter()
-            .map(|(_, r)| Arc::new(r.clone()) as Arc<dyn PhysicalExpr>)
+            .map(|(_, r)| Arc::new(r.clone()) as _)
             .collect::<Vec<_>>();
 
         let join = SymmetricHashJoinExec::try_new(
@@ -1523,12 +1490,7 @@ mod tests {
 
         let (left_expr, right_expr) = on
             .iter()
-            .map(|(l, r)| {
-                (
-                    Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
-                    Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
-                )
-            })
+            .map(|(l, r)| (Arc::new(l.clone()) as _, Arc::new(r.clone()) as _))
             .unzip();
 
         let join = HashJoinExec::try_new(

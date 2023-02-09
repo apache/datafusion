@@ -22,10 +22,11 @@
 mod unix_test {
     use arrow::array::Array;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::test_util::test_create_unbounded_sorted_file;
     use datafusion::{
         prelude::{CsvReadOptions, SessionConfig, SessionContext},
-        test_util::{aggr_test_schema, arrow_test_data},
+        test_util::{
+            aggr_test_schema, arrow_test_data, test_create_unbounded_sorted_file,
+        },
     };
     use datafusion_common::{DataFusionError, Result};
     use futures::StreamExt;
@@ -140,7 +141,7 @@ mod unix_test {
     }
 
     // This test provides a relatively realistic end-to-end scenario where
-    // we ensure that unbounded execution happened
+    // we swap join sides to accommodate a FIFO source.
     #[rstest]
     #[timeout(std::time::Duration::from_secs(30))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
@@ -224,6 +225,7 @@ mod unix_test {
         assert_eq!(interleave(&result), unbounded_file);
         Ok(())
     }
+
     #[derive(Debug, PartialEq)]
     enum JoinOperation {
         LeftUnmatched,
@@ -232,8 +234,8 @@ mod unix_test {
     }
 
     // This test provides a relatively realistic end-to-end scenario where
-    // we ensure that we change join into [SymmetricHashJoin] correctly to accommodate the FIFO sources.
-    // Creates 2 FIFO files with unbounded source.
+    // we change the join into a [SymmetricHashJoin] to accommodate two
+    // unbounded (FIFO) sources.
     #[rstest]
     #[timeout(std::time::Duration::from_secs(30))]
     #[tokio::test(flavor = "multi_thread")]
@@ -264,16 +266,15 @@ mod unix_test {
                     // Reference time to use when deciding to fail the test
                     let execution_start = Instant::now();
                     // Join filter
-                    let a1_iter = (0..TEST_DATA_SIZE).clone().map(|x| {
-                        let change = rng.gen_range(0.0..1.0);
-                        if change < 0.3 {
+                    let a1_iter = (0..TEST_DATA_SIZE).map(|x| {
+                        if rng.gen_range(0.0..1.0) < 0.3 {
                             x - 1
                         } else {
                             x
                         }
                     });
                     // Join key
-                    let a2_iter = (0..TEST_DATA_SIZE).clone().map(|x| x % 10);
+                    let a2_iter = (0..TEST_DATA_SIZE).map(|x| x % 10);
                     for (cnt, (a1, a2)) in a1_iter.zip(a2_iter).enumerate() {
                         // Wait a reading sign for unbounded execution
                         // After first batch FIFO reading, we will wait for a batch created.

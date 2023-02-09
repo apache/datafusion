@@ -228,14 +228,14 @@ pub fn cross_join_equivalence_properties(
 impl Display for JoinSide {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            JoinSide::Left => write!(f, "Left"),
-            JoinSide::Right => write!(f, "Right"),
+            JoinSide::Left => write!(f, "left"),
+            JoinSide::Right => write!(f, "right"),
         }
     }
 }
 
 /// Used in ColumnIndex to distinguish which side the index is for
-#[derive(Debug, Clone, PartialEq, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum JoinSide {
     /// Left side of the join
     Left,

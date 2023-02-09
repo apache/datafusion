@@ -218,13 +218,11 @@ impl<T: Clone> TreeNodeRewritable for ExprTreeNode<T> {
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        let children = self.children();
-        if !children.is_empty() {
-            self.child_nodes = children
-                .into_iter()
-                .map(transform)
-                .collect::<Result<Vec<_>>>()?;
-        }
+        self.child_nodes = self
+            .children()
+            .into_iter()
+            .map(transform)
+            .collect::<Result<Vec<_>>>()?;
         Ok(self)
     }
 }
