@@ -257,16 +257,6 @@ pub fn return_type(
 
         BuiltinScalarFunction::ArrowTypeof => Ok(DataType::Utf8),
 
-        BuiltinScalarFunction::Unnest => match &input_expr_types[0] {
-            // Unnest function called on
-            DataType::List(field)
-            | DataType::FixedSizeList(field, _)
-            | DataType::LargeList(field) => Ok(field.data_type().clone()),
-            _ => Err(DataFusionError::Internal(
-                "The unnest function only accepts list columns.".to_string(),
-            )),
-        },
-
         BuiltinScalarFunction::Abs
         | BuiltinScalarFunction::Acos
         | BuiltinScalarFunction::Asin
@@ -618,7 +608,6 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
             fun.volatility(),
         ),
         BuiltinScalarFunction::ArrowTypeof => Signature::any(1, fun.volatility()),
-        BuiltinScalarFunction::Unnest => Signature::any(1, fun.volatility()),
         // math expressions expect 1 argument of type f64 or f32
         // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
         // return the best approximation for it (in f64).

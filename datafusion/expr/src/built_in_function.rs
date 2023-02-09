@@ -174,8 +174,6 @@ pub enum BuiltinScalarFunction {
     Struct,
     /// arrow_typeof
     ArrowTypeof,
-    /// unnest
-    Unnest,
 }
 
 impl BuiltinScalarFunction {
@@ -263,7 +261,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Struct => Volatility::Immutable,
             BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
             BuiltinScalarFunction::ArrowTypeof => Volatility::Immutable,
-            BuiltinScalarFunction::Unnest => Volatility::Immutable,
 
             // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
@@ -315,7 +312,6 @@ impl FromStr for BuiltinScalarFunction {
 
             // array functions
             "make_array" => BuiltinScalarFunction::MakeArray,
-            "unnest" => BuiltinScalarFunction::Unnest,
 
             // string functions
             "ascii" => BuiltinScalarFunction::Ascii,
