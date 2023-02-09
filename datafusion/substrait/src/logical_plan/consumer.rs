@@ -371,16 +371,16 @@ pub async fn from_substrait_rel(
                         ));
                     }
                     1 => TableReference::Bare {
-                        table: &nt.names[0],
+                        table: (&nt.names[0]).into(),
                     },
                     2 => TableReference::Partial {
-                        schema: &nt.names[0],
-                        table: &nt.names[1],
+                        schema: (&nt.names[0]).into(),
+                        table: (&nt.names[1]).into(),
                     },
                     _ => TableReference::Full {
-                        catalog: &nt.names[0],
-                        schema: &nt.names[1],
-                        table: &nt.names[2],
+                        catalog: (&nt.names[0]).into(),
+                        schema: (&nt.names[1]).into(),
+                        table: (&nt.names[2]).into(),
                     },
                 };
                 let t = ctx.table(table_reference).await?;

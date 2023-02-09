@@ -328,7 +328,10 @@ fn mathematics_numerical_coercion(
     // same type => all good
     // TODO: remove this
     // bug: https://github.com/apache/arrow-datafusion/issues/3387
-    if lhs_type == rhs_type {
+    if lhs_type == rhs_type
+        && !(matches!(lhs_type, DataType::Dictionary(_, _))
+            || matches!(rhs_type, DataType::Dictionary(_, _)))
+    {
         return Some(lhs_type.clone());
     }
 
@@ -340,6 +343,9 @@ fn mathematics_numerical_coercion(
         }
         (Null, dec_type @ Decimal128(_, _)) | (dec_type @ Decimal128(_, _), Null) => {
             Some(dec_type.clone())
+        }
+        (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
+            mathematics_numerical_coercion(mathematics_op, lhs_value_type, rhs_value_type)
         }
         (Dictionary(key_type, value_type), _) => {
             let value_type =
