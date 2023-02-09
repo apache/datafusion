@@ -31,7 +31,7 @@ use petgraph::Outgoing;
 
 use crate::expressions::{BinaryExpr, CastExpr, Literal};
 use crate::intervals::interval_aritmetic::{apply_operator, Interval};
-use crate::utils::{build_physical_expr_graph, ExprTreeNode};
+use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 
 // Interval arithmetic provides a way to perform mathematical operations on
@@ -164,8 +164,8 @@ impl ExprIntervalGraphNode {
     /// This function creates a DAEG node from Datafusion's [ExprTreeNode]
     /// object. Literals are created with definite, singleton intervals while
     /// any other expression starts with an indefinite interval ([-∞, ∞]).
-    pub fn make_node(node: Arc<ExprTreeNode>) -> ExprIntervalGraphNode {
-        let expr = node.expr();
+    pub fn make_node(node: &ExprTreeNode<NodeIndex>) -> ExprIntervalGraphNode {
+        let expr = node.expression().clone();
         if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
             let value = literal.value();
             let interval = Interval {
@@ -272,8 +272,7 @@ pub fn propagate_comparison(
 impl ExprIntervalGraph {
     pub fn try_new(expr: Arc<dyn PhysicalExpr>) -> Result<Self> {
         // Build the full graph:
-        let (root, graph) =
-            build_physical_expr_graph(expr, &ExprIntervalGraphNode::make_node)?;
+        let (root, graph) = build_dag(expr, &ExprIntervalGraphNode::make_node)?;
         Ok(Self { graph, root })
     }
 

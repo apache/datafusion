@@ -185,144 +185,81 @@ pub fn normalize_sort_expr_with_equivalence_properties(
 }
 
 #[derive(Clone, Debug)]
-pub struct ExprTreeNode {
+pub struct ExprTreeNode<T> {
     expr: Arc<dyn PhysicalExpr>,
-    node: Option<NodeIndex>,
-    child_nodes: Vec<Arc<ExprTreeNode>>,
+    data: Option<T>,
+    child_nodes: Vec<ExprTreeNode<T>>,
 }
 
-impl PartialEq for ExprTreeNode {
-    fn eq(&self, other: &ExprTreeNode) -> bool {
-        self.expr.eq(&other.expr)
-    }
-}
-
-impl ExprTreeNode {
-    pub fn new(plan: Arc<dyn PhysicalExpr>) -> Self {
+impl<T> ExprTreeNode<T> {
+    pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
         ExprTreeNode {
-            expr: plan,
-            node: None,
+            expr,
+            data: None,
             child_nodes: vec![],
         }
     }
 
-    pub fn node(&self) -> &Option<NodeIndex> {
-        &self.node
+    pub fn expression(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.expr
     }
 
-    pub fn child_nodes(&self) -> &Vec<Arc<ExprTreeNode>> {
-        &self.child_nodes
-    }
-
-    pub fn expr(&self) -> Arc<dyn PhysicalExpr> {
-        self.expr.clone()
-    }
-
-    pub fn children(&self) -> Vec<Arc<ExprTreeNode>> {
-        let plan_children = self.expr.children();
-        let child_intervals: Vec<Arc<ExprTreeNode>> = self.child_nodes.to_vec();
-        if plan_children.len() == child_intervals.len() {
-            child_intervals
-        } else {
-            plan_children
-                .into_iter()
-                .map(|child| {
-                    Arc::new(ExprTreeNode {
-                        expr: child.clone(),
-                        node: None,
-                        child_nodes: vec![],
-                    })
-                })
-                .collect()
-        }
+    pub fn children(&self) -> Vec<ExprTreeNode<T>> {
+        self.expr
+            .children()
+            .into_iter()
+            .map(ExprTreeNode::new)
+            .collect()
     }
 }
 
-impl TreeNodeRewritable for Arc<ExprTreeNode> {
-    fn map_children<F>(self, transform: F) -> Result<Self>
+impl<T: Clone> TreeNodeRewritable for ExprTreeNode<T> {
+    fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
     {
         let children = self.children();
         if !children.is_empty() {
-            let new_children: Vec<Arc<ExprTreeNode>> = children
+            self.child_nodes = children
                 .into_iter()
                 .map(transform)
-                .collect::<Result<Vec<Arc<ExprTreeNode>>>>()
-                .unwrap();
-            Ok(Arc::new(ExprTreeNode {
-                expr: self.expr.clone(),
-                node: None,
-                child_nodes: new_children,
-            }))
-        } else {
-            Ok(self)
+                .collect::<Result<Vec<_>>>()?;
         }
+        Ok(self)
     }
 }
 
-fn add_physical_expr_to_graph<T>(
-    input: Arc<ExprTreeNode>,
-    visited: &mut Vec<(Arc<dyn PhysicalExpr>, NodeIndex)>,
-    graph: &mut StableGraph<T, usize>,
-    input_node: T,
-) -> NodeIndex {
-    // If we visited the node before, we just return it. That means, this node will have multiple
-    // parents.
-    match visited
-        .iter()
-        .find(|(visited_expr, _node)| visited_expr.eq(&input.expr()))
-    {
-        Some((_, idx)) => *idx,
-        None => {
-            let node_idx = graph.add_node(input_node);
-            visited.push((input.expr().clone(), node_idx));
-            input.child_nodes().iter().for_each(|expr_node| {
-                graph.add_edge(node_idx, expr_node.node().unwrap(), 0);
-            });
-            node_idx
-        }
-    }
-}
-
-fn post_order_tree_traverse_graph_create<T, F>(
-    input: Arc<ExprTreeNode>,
-    graph: &mut StableGraph<T, usize>,
-    constructor: F,
-    visited: &mut Vec<(Arc<dyn PhysicalExpr>, NodeIndex)>,
-) -> Result<Option<Arc<ExprTreeNode>>>
-where
-    F: Fn(Arc<ExprTreeNode>) -> T,
-{
-    let node = constructor(input.clone());
-    let node_idx = add_physical_expr_to_graph(input.clone(), visited, graph, node);
-    Ok(Some(Arc::new(ExprTreeNode {
-        expr: input.expr.clone(),
-        node: Some(node_idx),
-        child_nodes: input.child_nodes.to_vec(),
-    })))
-}
-
-pub fn build_physical_expr_graph<T, F>(
+/// This function converts the [PhysicalExpr] tree into a DAG by collecting identical
+/// expressions in one node. Caller specifies the node type in this DAG via the
+/// `constructor` argument, which constructs nodes in this DAG from the [ExprTreeNode]
+/// ancillary object.
+pub fn build_dag<T, F>(
     expr: Arc<dyn PhysicalExpr>,
     constructor: &F,
 ) -> Result<(NodeIndex, StableGraph<T, usize>)>
 where
-    F: Fn(Arc<ExprTreeNode>) -> T,
+    F: Fn(&ExprTreeNode<NodeIndex>) -> T,
 {
-    let init = Arc::new(ExprTreeNode::new(expr.clone()));
-    let mut graph: StableGraph<T, usize> = StableGraph::new();
-    let mut visited_plans: Vec<(Arc<dyn PhysicalExpr>, NodeIndex)> = vec![];
-    // Create a graph
-    let root_tree_node = init.mutable_transform_up(&mut |expr| {
-        post_order_tree_traverse_graph_create(
-            expr,
-            &mut graph,
-            constructor,
-            &mut visited_plans,
-        )
+    let init = ExprTreeNode::new(expr);
+    let mut graph = StableGraph::<T, usize>::new();
+    let mut visited_plans = Vec::<(Arc<dyn PhysicalExpr>, NodeIndex)>::new();
+    let root = init.mutable_transform_up(&mut |mut input| {
+        let expr = input.expr.clone();
+        let node_idx = match visited_plans.iter().find(|(e, _)| expr.eq(e)) {
+            Some((_, idx)) => *idx,
+            None => {
+                let node_idx = graph.add_node(constructor(&input));
+                for expr_node in input.child_nodes.iter() {
+                    graph.add_edge(node_idx, expr_node.data.unwrap(), 0);
+                }
+                visited_plans.push((expr, node_idx));
+                node_idx
+            }
+        };
+        input.data = Some(node_idx);
+        Ok(Some(input))
     })?;
-    Ok((root_tree_node.node.unwrap(), graph))
+    Ok((root.data.unwrap(), graph))
 }
 
 /// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
