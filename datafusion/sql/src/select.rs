@@ -33,7 +33,9 @@ use datafusion_expr::Expr::Alias;
 use datafusion_expr::{
     Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
 };
-use sqlparser::ast::{Expr as SQLExpr, WildcardAdditionalOptions};
+use sqlparser::ast::{
+    Expr as SQLExpr, FunctionArg, FunctionArgExpr, WildcardAdditionalOptions,
+};
 use sqlparser::ast::{Select, SelectItem, TableWithJoins};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -46,6 +48,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
+        println!("select_to_plan: {select:#?}");
+
         // check for unsupported syntax first
         if !select.cluster_by.is_empty() {
             return Err(DataFusionError::NotImplemented("CLUSTER BY".to_string()));
@@ -76,10 +80,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             &from_schema,
         )?;
 
+        // Extract unnest projection if present.
+        let (projection, unnest) = unnest_projection(select.projection)?;
+
         // process the SELECT expressions, with wildcards expanded.
         let select_exprs = self.prepare_select_exprs(
             &plan,
-            select.projection,
+            projection,
+            empty_from,
+            planner_context,
+            &from_schema,
+        )?;
+
+        let unnest_exprs = self.prepare_select_exprs(
+            &plan,
+            unnest,
             empty_from,
             planner_context,
             &from_schema,
@@ -87,6 +102,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(plan.clone(), select_exprs.clone())?;
+
         let mut combined_schema = (**projected_plan.schema()).clone();
         combined_schema.merge(plan.schema());
 
@@ -203,6 +219,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // final projection
         let plan = project(plan, select_exprs_post_aggr)?;
+
+        // Apply unnesting
+        let plan = self.unnest(plan, unnest_exprs)?;
 
         // process distinct clause
         let plan = if select.distinct {
@@ -476,6 +495,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         LogicalPlanBuilder::from(input).project(expr)?.build()
     }
 
+    /// Unnest columns from the input plan.
+    fn unnest(&self, mut input: LogicalPlan, exprs: Vec<Expr>) -> Result<LogicalPlan> {
+        if exprs.is_empty() {
+            Ok(input)
+        } else {
+            self.validate_schema_satisfies_exprs(input.schema(), &exprs)?;
+
+            for expr in exprs {
+                let Expr::Column(column) = expr else {
+                    // This should never happen as we did validation above.
+                    return Err(DataFusionError::Internal("Not a column".to_string()));
+                };
+
+                input = LogicalPlanBuilder::from(input)
+                    .unnest_column(column)?
+                    .build()?;
+            }
+
+            Ok(input)
+        }
+    }
+
     /// Create an aggregate plan.
     ///
     /// An aggregate plan consists of grouping expressions, aggregate expressions, and an
@@ -585,4 +626,51 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         Ok((plan, select_exprs_post_aggr, having_expr_post_aggr))
     }
+}
+
+/// Extract unnest calls from the projection.
+fn unnest_projection(
+    projection: Vec<SelectItem>,
+) -> Result<(Vec<SelectItem>, Vec<SelectItem>)> {
+    let mut unnest_cols = Vec::with_capacity(projection.len());
+    let projection = projection
+        .into_iter()
+        .map(|expr| match expr {
+            SelectItem::UnnamedExpr(SQLExpr::Function(ref f))
+            | SelectItem::ExprWithAlias {
+                expr: SQLExpr::Function(ref f),
+                ..
+            } => {
+                // If this is an unnest function call replace the function call with its
+                // column argument and pass the unnest column expression to the caller.
+                if f.name.to_string().to_lowercase() == "unnest" {
+                    if f.args.len() != 1 {
+                        Err(DataFusionError::Plan(
+                            "Unnest must have one column argument".to_string(),
+                        ))
+                    } else {
+                        // Extract the function column and put it in the projection.
+                        match &f.args[0] {
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(arg))
+                            | FunctionArg::Named {
+                                name: _,
+                                arg: FunctionArgExpr::Expr(arg),
+                            } => {
+                                let item = SelectItem::UnnamedExpr(arg.clone());
+                                unnest_cols.push(item.clone());
+                                Ok(item)
+                            }
+                            arg => Err(DataFusionError::Plan(format!(
+                                "Unsupported unnest argument: {arg:?}"
+                            ))),
+                        }
+                    }
+                } else {
+                    Ok(expr)
+                }
+            }
+            _ => Ok(expr),
+        })
+        .collect::<Result<Vec<SelectItem>>>()?;
+    Ok((projection, unnest_cols))
 }
