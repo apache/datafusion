@@ -177,59 +177,51 @@ impl LogicalPlan {
     /// Get a vector of references to all schemas in every node of the logical plan
     pub fn all_schemas(&self) -> Vec<&DFSchemaRef> {
         match self {
-            LogicalPlan::TableScan(TableScan {
-                projected_schema, ..
-            }) => vec![projected_schema],
-            LogicalPlan::Window(Window { input, schema, .. })
-            | LogicalPlan::Projection(Projection { input, schema, .. })
-            | LogicalPlan::Aggregate(Aggregate { input, schema, .. })
-            | LogicalPlan::Unnest(Unnest { input, schema, .. }) => {
-                let mut schemas = input.all_schemas();
-                schemas.insert(0, schema);
+            // return self and children schemas
+            LogicalPlan::Window(_)
+            | LogicalPlan::Projection(_)
+            | LogicalPlan::Aggregate(_)
+            | LogicalPlan::Unnest(_)
+            | LogicalPlan::Join(_)
+            | LogicalPlan::CrossJoin(_) => {
+                let mut schemas = vec![self.schema()];
+                self.inputs().iter().for_each(|input| {
+                    schemas.push(input.schema());
+                });
                 schemas
             }
-            LogicalPlan::Join(Join {
-                left,
-                right,
-                schema,
-                ..
-            })
-            | LogicalPlan::CrossJoin(CrossJoin {
-                left,
-                right,
-                schema,
-            }) => {
-                let mut schemas = left.all_schemas();
-                schemas.extend(right.all_schemas());
-                schemas.insert(0, schema);
-                schemas
+            // just return self.schema()
+            LogicalPlan::Explain(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::CreateExternalTable(_)
+            | LogicalPlan::CreateCatalogSchema(_)
+            | LogicalPlan::CreateCatalog(_)
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::Values(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Union(_)
+            | LogicalPlan::TableScan(_) => {
+                vec![self.schema()]
             }
-            LogicalPlan::Subquery(Subquery { subquery, .. }) => subquery.all_schemas(),
-            LogicalPlan::Extension(extension) => vec![extension.node.schema()],
-            LogicalPlan::Explain(Explain { schema, .. })
-            | LogicalPlan::Analyze(Analyze { schema, .. })
-            | LogicalPlan::EmptyRelation(EmptyRelation { schema, .. })
-            | LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. })
-            | LogicalPlan::CreateCatalogSchema(CreateCatalogSchema { schema, .. })
-            | LogicalPlan::CreateCatalog(CreateCatalog { schema, .. })
-            | LogicalPlan::Values(Values { schema, .. })
-            | LogicalPlan::SubqueryAlias(SubqueryAlias { schema, .. })
-            | LogicalPlan::Union(Union { schema, .. }) => {
-                vec![schema]
+            // return children schemas
+            LogicalPlan::Limit(_)
+            | LogicalPlan::Subquery(_)
+            | LogicalPlan::Extension(_)
+            | LogicalPlan::Repartition(_)
+            | LogicalPlan::Sort(_)
+            | LogicalPlan::CreateMemoryTable(_)
+            | LogicalPlan::CreateView(_)
+            | LogicalPlan::Filter(_)
+            | LogicalPlan::Distinct(_)
+            | LogicalPlan::Prepare(_) => {
+                self.inputs().iter().map(|p| p.schema()).collect()
             }
-            LogicalPlan::Limit(Limit { input, .. })
-            | LogicalPlan::Repartition(Repartition { input, .. })
-            | LogicalPlan::Sort(Sort { input, .. })
-            | LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
-            | LogicalPlan::CreateView(CreateView { input, .. })
-            | LogicalPlan::Filter(Filter { input, .. })
-            | LogicalPlan::Distinct(Distinct { input, .. })
-            | LogicalPlan::Prepare(Prepare { input, .. }) => input.all_schemas(),
+            // return empty
             LogicalPlan::DropTable(_)
             | LogicalPlan::DropView(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::SetVariable(_) => vec![],
-            LogicalPlan::Dml(DmlStatement { table_schema, .. }) => vec![table_schema],
         }
     }
 
