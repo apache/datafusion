@@ -1220,7 +1220,7 @@ mod tests {
             Field::new("s1_min", DataType::Utf8, true),
         )]);
 
-        // Note the statistics return binary (which can't be cast to string)
+        // Note the statistics return an invalid UTF-8 sequence which will be converted to null
         let statistics = OneContainerStats {
             min_values: Some(Arc::new(BinaryArray::from_slice([&[255u8] as &[u8]]))),
             max_values: None,
