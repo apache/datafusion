@@ -314,7 +314,7 @@ struct NestedLoopJoinStream {
     filter: Option<JoinFilter>,
     /// type of the join
     join_type: JoinType,
-    // the outer table data of the nested loop join
+    /// the outer table data of the nested loop join
     outer_table: SendableRecordBatchStream,
     // the inner table data of the nested loop join
     inner_table: OnceFut<JoinLeftData>,
