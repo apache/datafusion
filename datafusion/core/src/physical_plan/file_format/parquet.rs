@@ -66,6 +66,7 @@ mod page_filter;
 mod row_filter;
 mod row_groups;
 
+use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::file_format::parquet::page_filter::PagePruningPredicate;
 pub use metrics::ParquetFileMetrics;
 
@@ -706,45 +707,44 @@ pub async fn plan_to_parquet(
     let path = path.as_ref();
     // create directory to contain the Parquet files (one per partition)
     let fs_path = std::path::Path::new(path);
-    match fs::create_dir(fs_path) {
-        Ok(()) => {
-            let mut tasks = vec![];
-            for i in 0..plan.output_partitioning().partition_count() {
-                let plan = plan.clone();
-                let filename = format!("part-{i}.parquet");
-                let path = fs_path.join(filename);
-                let file = fs::File::create(path)?;
-                let mut writer =
-                    ArrowWriter::try_new(file, plan.schema(), writer_properties.clone())?;
-                let task_ctx = Arc::new(TaskContext::from(state));
-                let stream = plan.execute(i, task_ctx)?;
-                let handle: tokio::task::JoinHandle<Result<()>> =
-                    tokio::task::spawn(async move {
-                        stream
-                            .map(|batch| {
-                                writer
-                                    .write(&batch?)
-                                    .map_err(DataFusionError::ParquetError)
-                            })
-                            .try_collect()
-                            .await
-                            .map_err(DataFusionError::from)?;
-                        writer.close().map_err(DataFusionError::from).map(|_| ())
-                    });
-                tasks.push(handle);
-            }
-            futures::future::join_all(tasks)
-                .await
-                .into_iter()
-                .try_for_each(|result| {
-                    result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
-                })?;
-            Ok(())
-        }
-        Err(e) => Err(DataFusionError::Execution(format!(
+    if let Err(e) = fs::create_dir(fs_path) {
+        return Err(DataFusionError::Execution(format!(
             "Could not create directory {path}: {e:?}"
-        ))),
+        )));
     }
+
+    let mut tasks = vec![];
+    for i in 0..plan.output_partitioning().partition_count() {
+        let plan = plan.clone();
+        let filename = format!("part-{i}.parquet");
+        let path = fs_path.join(filename);
+        let file = fs::File::create(path)?;
+        let mut writer =
+            ArrowWriter::try_new(file, plan.schema(), writer_properties.clone())?;
+        let task_ctx = Arc::new(TaskContext::from(state));
+        let stream = plan.execute(i, task_ctx)?;
+        let handle: tokio::task::JoinHandle<Result<()>> =
+            tokio::task::spawn(async move {
+                stream
+                    .map(|batch| {
+                        writer.write(&batch?).map_err(DataFusionError::ParquetError)
+                    })
+                    .try_collect()
+                    .await
+                    .map_err(DataFusionError::from)?;
+
+                writer.close().map_err(DataFusionError::from).map(|_| ())
+            });
+        tasks.push(AbortOnDropSingle::new(handle));
+    }
+
+    futures::future::join_all(tasks)
+        .await
+        .into_iter()
+        .try_for_each(|result| {
+            result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
+        })?;
+    Ok(())
 }
 
 // Copy from the arrow-rs

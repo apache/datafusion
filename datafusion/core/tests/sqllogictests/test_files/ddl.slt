@@ -465,3 +465,73 @@ query II rowsort
 select * from table_without_values;
 ----
 10 20
+
+# Enable information_schema, so we can execute show create table
+statement ok
+set datafusion.catalog.information_schema = true;
+
+statement ok
+CREATE OR REPLACE TABLE TABLE_WITH_NORMALIZATION(FIELD1 BIGINT, FIELD2 BIGINT);
+
+# Check table name is in lowercase
+query CCCC
+show create table table_with_normalization
+----
+datafusion public table_with_normalization NULL
+
+# Check column name is in uppercase
+query CCC
+describe table_with_normalization
+----
+field1 Int64 NO
+field2 Int64 NO
+
+# Disable ident normalization
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = false;
+
+statement ok
+CREATE TABLE TABLE_WITHOUT_NORMALIZATION(FIELD1 BIGINT, FIELD2 BIGINT) AS VALUES (1,2);
+
+# Check table name is in uppercase
+query CCCC
+show create table TABLE_WITHOUT_NORMALIZATION
+----
+datafusion public TABLE_WITHOUT_NORMALIZATION NULL
+
+# Check column name is in uppercase
+query CCC
+describe TABLE_WITHOUT_NORMALIZATION
+----
+FIELD1 Int64 YES
+FIELD2 Int64 YES
+
+query R
+select 10000000000000000000.01
+----
+10000000000000000000
+
+query C
+select arrow_typeof(10000000000000000000.01)
+----
+Float64
+
+statement ok
+set datafusion.sql_parser.parse_float_as_decimal = true;
+
+query R
+select 10000000000000000000.01
+----
+10000000000000000000.01
+
+query C
+select arrow_typeof(10000000000000000000.01)
+----
+Decimal128(22, 2)
+
+# Restore those to default value again
+statement ok
+set datafusion.sql_parser.parse_float_as_decimal = false;
+
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = true;

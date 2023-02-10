@@ -100,7 +100,7 @@ pub fn coerce_types(
         Operator::And | Operator::Or => match (lhs_type, rhs_type) {
             // logical binary boolean operators can only be evaluated in bools or nulls
             (DataType::Boolean, DataType::Boolean) => Some(DataType::Boolean),
-            (DataType::Null, DataType::Null) => Some(DataType::Null),
+            (DataType::Null, DataType::Null) => Some(DataType::Boolean),
             (DataType::Boolean, DataType::Null) | (DataType::Null, DataType::Boolean) => {
                 Some(DataType::Boolean)
             }
@@ -141,7 +141,7 @@ pub fn coerce_types(
         Operator::RegexMatch
         | Operator::RegexIMatch
         | Operator::RegexNotMatch
-        | Operator::RegexNotIMatch => string_coercion(lhs_type, rhs_type),
+        | Operator::RegexNotIMatch => regex_coercion(lhs_type, rhs_type),
         // "||" operator has its own rules, and always return a string type
         Operator::StringConcat => string_concat_coercion(lhs_type, rhs_type),
         Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => {
@@ -328,7 +328,10 @@ fn mathematics_numerical_coercion(
     // same type => all good
     // TODO: remove this
     // bug: https://github.com/apache/arrow-datafusion/issues/3387
-    if lhs_type == rhs_type {
+    if lhs_type == rhs_type
+        && !(matches!(lhs_type, DataType::Dictionary(_, _))
+            || matches!(rhs_type, DataType::Dictionary(_, _)))
+    {
         return Some(lhs_type.clone());
     }
 
@@ -340,6 +343,18 @@ fn mathematics_numerical_coercion(
         }
         (Null, dec_type @ Decimal128(_, _)) | (dec_type @ Decimal128(_, _), Null) => {
             Some(dec_type.clone())
+        }
+        (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
+            mathematics_numerical_coercion(mathematics_op, lhs_value_type, rhs_value_type)
+        }
+        (Dictionary(key_type, value_type), _) => {
+            let value_type =
+                mathematics_numerical_coercion(mathematics_op, value_type, rhs_type);
+            value_type
+                .map(|value_type| Dictionary(key_type.clone(), Box::new(value_type)))
+        }
+        (_, Dictionary(_, value_type)) => {
+            mathematics_numerical_coercion(mathematics_op, lhs_type, value_type)
         }
         (Decimal128(_, _), Float32 | Float64) => Some(Float64),
         (Float32 | Float64, Decimal128(_, _)) => Some(Float64),
@@ -439,6 +454,16 @@ fn both_numeric_or_null_and_numeric(lhs_type: &DataType, rhs_type: &DataType) ->
     match (lhs_type, rhs_type) {
         (_, DataType::Null) => is_numeric(lhs_type),
         (DataType::Null, _) => is_numeric(rhs_type),
+        (
+            DataType::Dictionary(_, lhs_value_type),
+            DataType::Dictionary(_, rhs_value_type),
+        ) => is_numeric(lhs_value_type) && is_numeric(rhs_value_type),
+        (DataType::Dictionary(_, value_type), _) => {
+            is_numeric(value_type) && is_numeric(rhs_type)
+        }
+        (_, DataType::Dictionary(_, value_type)) => {
+            is_numeric(lhs_type) && is_numeric(value_type)
+        }
         _ => is_numeric(lhs_type) && is_numeric(rhs_type),
     }
 }
@@ -523,6 +548,13 @@ pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         .or_else(|| null_coercion(lhs_type, rhs_type))
 }
 
+/// coercion rules for regular expression comparison operations.
+/// This is a union of string coercion rules and dictionary coercion rules
+pub fn regex_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    string_coercion(lhs_type, rhs_type)
+        .or_else(|| dictionary_coercion(lhs_type, rhs_type, false))
+}
+
 /// Checks if the TimeUnit associated with a Time32 or Time64 type is consistent,
 /// as Time32 can only be used to Second and Millisecond accuracy, while Time64
 /// is exclusively used to Microsecond and Nanosecond accuracy
@@ -541,33 +573,30 @@ fn is_time_with_valid_unit(datatype: DataType) -> bool {
 fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (Date64, Date32) => Some(Date64),
-        (Date32, Date64) => Some(Date64),
-        (Utf8, Date32) => Some(Date32),
-        (Date32, Utf8) => Some(Date32),
-        (Utf8, Date64) => Some(Date64),
-        (Date64, Utf8) => Some(Date64),
-        (Utf8, Time32(unit)) => match is_time_with_valid_unit(Time32(unit.clone())) {
-            false => None,
-            true => Some(Time32(unit.clone())),
-        },
-        (Time32(unit), Utf8) => match is_time_with_valid_unit(Time32(unit.clone())) {
-            false => None,
-            true => Some(Time32(unit.clone())),
-        },
-        (Utf8, Time64(unit)) => match is_time_with_valid_unit(Time64(unit.clone())) {
-            false => None,
-            true => Some(Time64(unit.clone())),
-        },
-        (Time64(unit), Utf8) => match is_time_with_valid_unit(Time64(unit.clone())) {
-            false => None,
-            true => Some(Time64(unit.clone())),
-        },
-        (Timestamp(_, tz), Utf8) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
-        (Utf8, Timestamp(_, tz)) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
-        // TODO: need to investigate the result type for the comparison between timestamp and date
-        (Timestamp(_, _), Date32) => Some(Date32),
-        (Timestamp(_, _), Date64) => Some(Date64),
+        (Date64, Date32) | (Date32, Date64) => Some(Date64),
+        (Utf8, Date32) | (Date32, Utf8) => Some(Date32),
+        (Utf8, Date64) | (Date64, Utf8) => Some(Date64),
+        (Utf8, Time32(unit)) | (Time32(unit), Utf8) => {
+            match is_time_with_valid_unit(Time32(unit.clone())) {
+                false => None,
+                true => Some(Time32(unit.clone())),
+            }
+        }
+        (Utf8, Time64(unit)) | (Time64(unit), Utf8) => {
+            match is_time_with_valid_unit(Time64(unit.clone())) {
+                false => None,
+                true => Some(Time64(unit.clone())),
+            }
+        }
+        (Timestamp(_, tz), Utf8) | (Utf8, Timestamp(_, tz)) => {
+            Some(Timestamp(TimeUnit::Nanosecond, tz.clone()))
+        }
+        (Timestamp(_, None), Date32) | (Date32, Timestamp(_, None)) => {
+            Some(Timestamp(TimeUnit::Nanosecond, None))
+        }
+        (Timestamp(_, _tz), Date32) | (Date32, Timestamp(_, _tz)) => {
+            Some(Timestamp(TimeUnit::Nanosecond, None))
+        }
         (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
             let tz = match (lhs_tz, rhs_tz) {
                 // can't cast across timezones
@@ -954,6 +983,30 @@ mod tests {
             DataType::Utf8
         );
         test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            DataType::Utf8,
+            Operator::RegexMatch,
+            DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            DataType::Utf8,
+            Operator::RegexIMatch,
+            DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            DataType::Utf8,
+            Operator::RegexNotMatch,
+            DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            DataType::Utf8,
+            Operator::RegexNotIMatch,
+            DataType::Utf8
+        );
+        test_coercion_binary_rule!(
             DataType::Int16,
             DataType::Int64,
             Operator::BitwiseAnd,
@@ -1147,13 +1200,13 @@ mod tests {
             DataType::Null,
             DataType::Null,
             Operator::Or,
-            DataType::Null
+            DataType::Boolean
         );
         test_coercion_binary_rule!(
             DataType::Null,
             DataType::Null,
             Operator::And,
-            DataType::Null
+            DataType::Boolean
         );
         test_coercion_binary_rule!(
             DataType::Null,

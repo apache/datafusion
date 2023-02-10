@@ -329,12 +329,10 @@ impl WindowAggStream {
     fn compute_aggregates(&self) -> Result<RecordBatch> {
         // record compute time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
-
-        if self.batches.is_empty() {
+        let batch = concat_batches(&self.input.schema(), &self.batches)?;
+        if batch.num_rows() == 0 {
             return Ok(RecordBatch::new_empty(self.schema.clone()));
         }
-
-        let batch = concat_batches(&self.input.schema(), &self.batches)?;
 
         let partition_by_sort_keys = self
             .partition_by_sort_keys

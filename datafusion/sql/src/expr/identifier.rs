@@ -70,7 +70,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Ok(Expr::ScalarVariable(ty, var_names))
         } else {
             // only support "schema.table" type identifiers here
-            let (name, relation) = match idents_to_table_reference(ids)? {
+            let (name, relation) = match idents_to_table_reference(
+                ids,
+                self.options.enable_ident_normalization,
+            )? {
                 OwnedTableReference::Partial { schema, table } => (table, schema),
                 r @ OwnedTableReference::Bare { .. }
                 | r @ OwnedTableReference::Full { .. } => {

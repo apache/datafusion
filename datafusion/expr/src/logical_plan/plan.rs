@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expr_rewriter::{ExprRewritable, ExprRewriter};
+use crate::expr_rewriter::rewrite_expr;
 use crate::expr_visitor::inspect_expr_pre;
 use crate::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 ///! Logical plan types
 use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
+use crate::logical_plan::plan;
 use crate::utils::{
     self, exprlist_to_fields, from_plan, grouping_set_expr_count,
     grouping_set_to_exprlist,
@@ -123,6 +124,8 @@ pub enum LogicalPlan {
     Dml(DmlStatement),
     /// Describe the schema of table
     DescribeTable(DescribeTable),
+    /// Unnest a column that contains a nested list type.
+    Unnest(Unnest),
 }
 
 impl LogicalPlan {
@@ -167,6 +170,7 @@ impl LogicalPlan {
                 dummy_schema
             }
             LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
+            LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
         }
     }
 
@@ -176,10 +180,10 @@ impl LogicalPlan {
             LogicalPlan::TableScan(TableScan {
                 projected_schema, ..
             }) => vec![projected_schema],
-            LogicalPlan::Values(Values { schema, .. }) => vec![schema],
             LogicalPlan::Window(Window { input, schema, .. })
             | LogicalPlan::Projection(Projection { input, schema, .. })
-            | LogicalPlan::Aggregate(Aggregate { input, schema, .. }) => {
+            | LogicalPlan::Aggregate(Aggregate { input, schema, .. })
+            | LogicalPlan::Unnest(Unnest { input, schema, .. }) => {
                 let mut schemas = input.all_schemas();
                 schemas.insert(0, schema);
                 schemas
@@ -201,19 +205,16 @@ impl LogicalPlan {
                 schemas
             }
             LogicalPlan::Subquery(Subquery { subquery, .. }) => subquery.all_schemas(),
-            LogicalPlan::SubqueryAlias(SubqueryAlias { schema, .. }) => {
-                vec![schema]
-            }
-            LogicalPlan::Union(Union { schema, .. }) => {
-                vec![schema]
-            }
             LogicalPlan::Extension(extension) => vec![extension.node.schema()],
             LogicalPlan::Explain(Explain { schema, .. })
             | LogicalPlan::Analyze(Analyze { schema, .. })
             | LogicalPlan::EmptyRelation(EmptyRelation { schema, .. })
             | LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. })
             | LogicalPlan::CreateCatalogSchema(CreateCatalogSchema { schema, .. })
-            | LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => {
+            | LogicalPlan::CreateCatalog(CreateCatalog { schema, .. })
+            | LogicalPlan::Values(Values { schema, .. })
+            | LogicalPlan::SubqueryAlias(SubqueryAlias { schema, .. })
+            | LogicalPlan::Union(Union { schema, .. }) => {
                 vec![schema]
             }
             LogicalPlan::Limit(Limit { input, .. })
@@ -309,6 +310,9 @@ impl LogicalPlan {
             LogicalPlan::TableScan(TableScan { filters, .. }) => {
                 filters.iter().try_for_each(f)
             }
+            LogicalPlan::Unnest(Unnest { column, .. }) => {
+                f(&Expr::Column(column.clone()))
+            }
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Subquery(_)
@@ -361,6 +365,7 @@ impl LogicalPlan {
             | LogicalPlan::Prepare(Prepare { input, .. }) => {
                 vec![input]
             }
+            LogicalPlan::Unnest(Unnest { input, .. }) => vec![input],
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
@@ -560,6 +565,7 @@ impl LogicalPlan {
             LogicalPlan::Explain(explain) => explain.plan.accept(visitor)?,
             LogicalPlan::Analyze(analyze) => analyze.input.accept(visitor)?,
             LogicalPlan::Dml(write) => write.input.accept(visitor)?,
+            LogicalPlan::Unnest(Unnest { input, .. }) => input.accept(visitor)?,
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation(_)
@@ -702,15 +708,11 @@ impl LogicalPlan {
     /// corresponding values provided in the params_values
     fn replace_placeholders_with_values(
         expr: Expr,
-        param_values: &Vec<ScalarValue>,
+        param_values: &[ScalarValue],
     ) -> Result<Expr, DataFusionError> {
-        struct PlaceholderReplacer<'a> {
-            param_values: &'a Vec<ScalarValue>,
-        }
-
-        impl<'a> ExprRewriter for PlaceholderReplacer<'a> {
-            fn mutate(&mut self, expr: Expr) -> Result<Expr, DataFusionError> {
-                if let Expr::Placeholder { id, data_type } = &expr {
+        rewrite_expr(expr, |expr| {
+            match &expr {
+                Expr::Placeholder { id, data_type } => {
                     // convert id (in format $1, $2, ..) to idx (0, 1, ..)
                     let idx = id[1..].parse::<usize>().map_err(|e| {
                         DataFusionError::Internal(format!(
@@ -718,7 +720,7 @@ impl LogicalPlan {
                         ))
                     })? - 1;
                     // value at the idx-th position in param_values should be the value for the placeholder
-                    let value = self.param_values.get(idx).ok_or_else(|| {
+                    let value = param_values.get(idx).ok_or_else(|| {
                         DataFusionError::Internal(format!(
                             "No value found for placeholder with id {id}"
                         ))
@@ -733,13 +735,17 @@ impl LogicalPlan {
                     }
                     // Replace the placeholder with the value
                     Ok(Expr::Literal(value.clone()))
-                } else {
-                    Ok(expr)
                 }
+                Expr::ScalarSubquery(qry) => {
+                    let subquery = Arc::new(
+                        qry.subquery
+                            .replace_params_with_values(&param_values.to_vec())?,
+                    );
+                    Ok(Expr::ScalarSubquery(plan::Subquery { subquery }))
+                }
+                _ => Ok(expr),
             }
-        }
-
-        expr.rewrite(&mut PlaceholderReplacer { param_values })
+        })
     }
 }
 
@@ -1181,6 +1187,9 @@ impl LogicalPlan {
                     }
                     LogicalPlan::DescribeTable(DescribeTable { .. }) => {
                         write!(f, "DescribeTable")
+                    }
+                    LogicalPlan::Unnest(Unnest { column, .. }) => {
+                        write!(f, "Unnest: {column}")
                     }
                 }
             }
@@ -1977,6 +1986,17 @@ impl StringifiedPlan {
 pub trait ToStringifiedPlan {
     /// Create a stringified plan with the specified type
     fn to_stringified(&self, plan_type: PlanType) -> StringifiedPlan;
+}
+
+/// Unnest a column that contains a nested list type.
+#[derive(Debug, Clone)]
+pub struct Unnest {
+    /// The incoming logical plan
+    pub input: Arc<LogicalPlan>,
+    /// The column to unnest
+    pub column: Column,
+    /// The output schema, containing the unnested field column.
+    pub schema: DFSchemaRef,
 }
 
 #[cfg(test)]
