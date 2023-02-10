@@ -372,6 +372,7 @@ scalar_expr!(
     "returns the hexdecimal representation of an integer"
 );
 scalar_expr!(Uuid, uuid, , "Returns uuid v4 as a string value");
+scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
 // string functions
 scalar_expr!(Ascii, ascii, chr, "ASCII code value of the character");
