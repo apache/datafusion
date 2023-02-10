@@ -54,7 +54,9 @@ use datafusion_physical_expr::window::{
     PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
     WindowAggState, WindowState,
 };
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_expr::{
+    EquivalenceProperties, PhysicalExpr, PhysicalSortRequirements,
+};
 use indexmap::IndexMap;
 use log::debug;
 
@@ -123,7 +125,7 @@ impl BoundedWindowAggExec {
         let mut result = vec![];
         // All window exprs have the same partition by, so we just use the first one:
         let partition_by = self.window_expr()[0].partition_by();
-        let sort_keys = self.sort_keys.as_deref().unwrap_or(&[]);
+        let sort_keys = self.output_ordering().unwrap_or(&[]);
         for item in partition_by {
             if let Some(a) = sort_keys.iter().find(|&e| e.expr.eq(item)) {
                 result.push(a.clone());
@@ -167,9 +169,28 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self.input().output_ordering()
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
-        let sort_keys = self.sort_keys.as_deref();
-        vec![sort_keys]
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirements>>> {
+        let partition_keys = self.window_expr()[0].partition_by();
+        let requirements = self.sort_keys.as_deref().map(|ordering| {
+            ordering
+                .iter()
+                .map(|o| {
+                    let is_partition = partition_keys.iter().any(|e| e.eq(&o.expr));
+                    if is_partition {
+                        PhysicalSortRequirements {
+                            expr: o.expr.clone(),
+                            sort_options: None,
+                        }
+                    } else {
+                        PhysicalSortRequirements {
+                            expr: o.expr.clone(),
+                            sort_options: Some(o.options.clone()),
+                        }
+                    }
+                })
+                .collect::<Vec<_>>()
+        });
+        vec![requirements]
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -177,7 +198,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
             debug!("No partition defined for BoundedWindowAggExec!!!");
             vec![Distribution::SinglePartition]
         } else {
-            //TODO support PartitionCollections if there is no common partition columns in the window_expr
             vec![Distribution::HashPartitioned(self.partition_keys.clone())]
         }
     }
@@ -436,6 +456,7 @@ impl SortedPartitionByBoundedWindowStream {
     ) -> Self {
         let state = window_expr.iter().map(|_| IndexMap::new()).collect();
         let empty_batch = RecordBatch::new_empty(schema.clone());
+        println!("partition_by_sort_keys {:?}", partition_by_sort_keys);
         Self {
             schema,
             input,

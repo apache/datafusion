@@ -48,7 +48,9 @@ use crate::physical_plan::{
     Distribution, ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{
+    new_sort_requirements, EquivalenceProperties, PhysicalSortRequirements,
+};
 
 /// Sort preserving merge execution plan
 ///
@@ -127,12 +129,17 @@ impl ExecutionPlan for SortPreservingMergeExec {
         vec![Distribution::UnspecifiedDistribution]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
-        vec![Some(&self.expr)]
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirements>>> {
+        let ordering_requirements = new_sort_requirements(Some(&self.expr));
+        vec![ordering_requirements]
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        Some(&self.expr)
+        self.input.output_ordering()
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {

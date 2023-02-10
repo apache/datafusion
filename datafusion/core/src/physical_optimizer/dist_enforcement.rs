@@ -38,11 +38,11 @@ use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::expressions::NoOp;
+use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, AggregateExpr,
     PhysicalExpr,
 };
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// The EnforceDistribution rule ensures that distribution requirements are met
@@ -490,30 +490,6 @@ fn reorder_aggregate_keys(
             }
         }
     }
-}
-
-fn map_columns_before_projection(
-    parent_required: &[Arc<dyn PhysicalExpr>],
-    proj_exprs: &[(Arc<dyn PhysicalExpr>, String)],
-) -> Vec<Arc<dyn PhysicalExpr>> {
-    let mut column_mapping = HashMap::new();
-    for (expression, name) in proj_exprs.iter() {
-        if let Some(column) = expression.as_any().downcast_ref::<Column>() {
-            column_mapping.insert(name.clone(), column.clone());
-        };
-    }
-    let new_required: Vec<Arc<dyn PhysicalExpr>> = parent_required
-        .iter()
-        .filter_map(|r| {
-            if let Some(column) = r.as_any().downcast_ref::<Column>() {
-                column_mapping.get(column.name())
-            } else {
-                None
-            }
-        })
-        .map(|e| Arc::new(e.clone()) as Arc<dyn PhysicalExpr>)
-        .collect::<Vec<_>>();
-    new_required
 }
 
 fn shift_right_required(
@@ -969,7 +945,7 @@ mod tests {
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::physical_optimizer::sort_enforcement::EnforceSorting;
+    use crate::physical_optimizer::sort_enforcement2::TopDownEnforceSorting;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
@@ -1008,6 +984,27 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering,
+                infinite_source: false,
+            },
+            None,
+            None,
+        ))
+    }
+
+    fn parquet_multiple_exec() -> Arc<ParquetExec> {
+        Arc::new(ParquetExec::new(
+            FileScanConfig {
+                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+                file_schema: schema(),
+                file_groups: vec![
+                    vec![PartitionedFile::new("x".to_string(), 100)],
+                    vec![PartitionedFile::new("y".to_string(), 100)],
+                ],
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering: None,
                 infinite_source: false,
             },
             None,
@@ -1134,7 +1131,7 @@ mod tests {
             //       `EnforceSorting` and `EnfoceDistribution`.
             // TODO: Orthogonalize the tests here just to verify `EnforceDistribution` and create
             //       new tests for the cascade.
-            let optimizer = EnforceSorting {};
+            let optimizer = TopDownEnforceSorting {};
             let optimized = optimizer.optimize(optimized, &config)?;
 
             // Now format correctly
@@ -1873,7 +1870,7 @@ mod tests {
 
     #[test]
     fn multi_smj_joins() -> Result<()> {
-        let left = parquet_exec();
+        let left = parquet_multiple_exec();
         let alias_pairs: Vec<(String, String)> = vec![
             ("a".to_string(), "a1".to_string()),
             ("b".to_string(), "b1".to_string()),
@@ -1881,7 +1878,7 @@ mod tests {
             ("d".to_string(), "d1".to_string()),
             ("e".to_string(), "e1".to_string()),
         ];
-        let right = projection_exec_with_alias(parquet_exec(), alias_pairs);
+        let right = projection_exec_with_alias(parquet_multiple_exec(), alias_pairs);
 
         // SortMergeJoin does not support RightSemi and RightAnti join now
         let join_types = vec![
@@ -1912,7 +1909,7 @@ mod tests {
             )];
             let top_join = sort_merge_join_exec(
                 join.clone(),
-                parquet_exec(),
+                parquet_multiple_exec(),
                 &top_join_on,
                 &join_type,
             );
@@ -1925,33 +1922,33 @@ mod tests {
                     vec![
                         top_join_plan.as_str(),
                         join_plan.as_str(),
-                        "SortExec: [a@0 ASC]",
-                        "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-                        "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                        "SortExec: [b1@1 ASC]",
-                        "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10), input_partitions=1",
+                        "SortExec: [a@0 ASC], global=false",
+                        "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=2",
+                        "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, projection=[a, b, c, d, e]",
+                        "SortExec: [b1@1 ASC], global=false",
+                        "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10), input_partitions=2",
                         "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                        "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                        "SortExec: [c@2 ASC]",
-                        "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=1",
-                        "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                        "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, projection=[a, b, c, d, e]",
+                        "SortExec: [c@2 ASC], global=false",
+                        "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=2",
+                        "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, projection=[a, b, c, d, e]",
                     ],
                 // Should include 4 RepartitionExecs
                 _ => vec![
                         top_join_plan.as_str(),
-                        "SortExec: [a@0 ASC]",
+                        "SortExec: [a@0 ASC], global=false",
                         "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=10",
                         join_plan.as_str(),
-                        "SortExec: [a@0 ASC]",
-                        "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-                        "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                        "SortExec: [b1@1 ASC]",
-                        "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10), input_partitions=1",
+                        "SortExec: [a@0 ASC], global=false",
+                        "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=2",
+                        "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, projection=[a, b, c, d, e]",
+                        "SortExec: [b1@1 ASC], global=false",
+                        "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10), input_partitions=2",
                         "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                        "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                        "SortExec: [c@2 ASC]",
-                        "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=1",
-                        "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                        "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, projection=[a, b, c, d, e]",
+                        "SortExec: [c@2 ASC], global=false",
+                        "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=2",
+                        "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, projection=[a, b, c, d, e]",
                 ],
             };
             assert_optimized!(expected, top_join);
@@ -1966,7 +1963,7 @@ mod tests {
                     )];
                     let top_join = sort_merge_join_exec(
                         join,
-                        parquet_exec(),
+                        parquet_multiple_exec(),
                         &top_join_on,
                         &join_type,
                     );
@@ -1978,33 +1975,33 @@ mod tests {
                         JoinType::Inner | JoinType::Right => vec![
                             top_join_plan.as_str(),
                             join_plan.as_str(),
-                            "SortExec: [a@0 ASC]",
-                            "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "SortExec: [b1@1 ASC]",
-                            "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10), input_partitions=1",
+                            "SortExec: [a@0 ASC], global=false",
+                            "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=2",
+                            "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, projection=[a, b, c, d, e]",
+                            "SortExec: [b1@1 ASC], global=false",
+                            "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10), input_partitions=2",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "SortExec: [c@2 ASC]",
-                            "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=1",
-                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                            "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, projection=[a, b, c, d, e]",
+                            "SortExec: [c@2 ASC], global=false",
+                            "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=2",
+                            "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, projection=[a, b, c, d, e]",
                         ],
                         // Should include 4 RepartitionExecs and 4 SortExecs
                         _ => vec![
                             top_join_plan.as_str(),
-                            "SortExec: [b1@6 ASC]",
+                            "SortExec: [b1@6 ASC], global=false",
                             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 6 }], 10), input_partitions=10",
                             join_plan.as_str(),
-                            "SortExec: [a@0 ASC]",
-                            "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "SortExec: [b1@1 ASC]",
-                            "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10), input_partitions=1",
+                            "SortExec: [a@0 ASC], global=false",
+                            "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=2",
+                            "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, projection=[a, b, c, d, e]",
+                            "SortExec: [b1@1 ASC], global=false",
+                            "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10), input_partitions=2",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "SortExec: [c@2 ASC]",
-                            "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=1",
-                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                            "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, projection=[a, b, c, d, e]",
+                            "SortExec: [c@2 ASC], global=false",
+                            "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=2",
+                            "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, projection=[a, b, c, d, e]",
                         ],
                     };
                     assert_optimized!(expected, top_join);
@@ -2065,15 +2062,15 @@ mod tests {
         // Only two RepartitionExecs added
         let expected = &[
             "SortMergeJoin: join_type=Inner, on=[(Column { name: \"b3\", index: 1 }, Column { name: \"b2\", index: 1 }), (Column { name: \"a3\", index: 0 }, Column { name: \"a2\", index: 0 })]",
-            "SortExec: [b3@1 ASC,a3@0 ASC]",
             "ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]",
             "ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]",
+            "SortExec: [b1@0 ASC,a1@1 ASC], global=false",
             "AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 0 }, Column { name: \"a1\", index: 1 }], 10), input_partitions=1",
             "AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
-            "SortExec: [b2@1 ASC,a2@0 ASC]",
             "ProjectionExec: expr=[a@1 as a2, b@0 as b2]",
+            "SortExec: [b@0 ASC,a@1 ASC], global=false",
             "AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b\", index: 0 }, Column { name: \"a\", index: 1 }], 10), input_partitions=1",
             "AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]",
@@ -2103,8 +2100,8 @@ mod tests {
 
         // The optimizer should not add an additional SortExec as the
         // data is already sorted
+        // SortPreservingMergeExec is also removed from the final plan
         let expected = &[
-            "SortPreservingMergeExec: [a@0 ASC]",
             "CoalesceBatchesExec: target_batch_size=4096",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[a@0 ASC], projection=[a, b, c, d, e]",
         ];

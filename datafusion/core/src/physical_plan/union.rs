@@ -48,7 +48,6 @@ use crate::{
     error::Result,
     physical_plan::{expressions, metrics::BaselineMetrics},
 };
-use datafusion_physical_expr::utils::ordering_satisfy;
 use tokio::macros::support::thread_rng_n;
 
 /// `UnionExec`: `UNION ALL` execution plan.
@@ -232,22 +231,8 @@ impl ExecutionPlan for UnionExec {
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        // If the Union has an output ordering, it maintains at least one
-        // child's ordering (i.e. the meet).
-        // For instance, assume that the first child is SortExpr('a','b','c'),
-        // the second child is SortExpr('a','b') and the third child is
-        // SortExpr('a','b'). The output ordering would be SortExpr('a','b'),
-        // which is the "meet" of all input orderings. In this example, this
-        // function will return vec![false, true, true], indicating that we
-        // preserve the orderings for the 2nd and the 3rd children.
-        self.inputs()
-            .iter()
-            .map(|child| {
-                ordering_satisfy(self.output_ordering(), child.output_ordering(), || {
-                    child.equivalence_properties()
-                })
-            })
-            .collect()
+        let main_input_order = self.output_ordering().is_some();
+        vec![main_input_order; self.inputs.len()]
     }
 
     fn with_new_children(

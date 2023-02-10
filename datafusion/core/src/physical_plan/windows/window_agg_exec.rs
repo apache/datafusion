@@ -39,6 +39,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::DataFusionError;
+use datafusion_physical_expr::PhysicalSortRequirements;
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use log::debug;
@@ -114,7 +115,7 @@ impl WindowAggExec {
         let mut result = vec![];
         // All window exprs have the same partition by, so we just use the first one:
         let partition_by = self.window_expr()[0].partition_by();
-        let sort_keys = self.sort_keys.as_deref().unwrap_or(&[]);
+        let sort_keys = self.output_ordering().unwrap_or(&[]);
         for item in partition_by {
             if let Some(a) = sort_keys.iter().find(|&e| e.expr.eq(item)) {
                 result.push(a.clone());
@@ -172,9 +173,28 @@ impl ExecutionPlan for WindowAggExec {
         vec![true]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
-        let sort_keys = self.sort_keys.as_deref();
-        vec![sort_keys]
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirements>>> {
+        let partition_keys = self.window_expr()[0].partition_by();
+        let requirements = self.sort_keys.as_deref().map(|ordering| {
+            ordering
+                .iter()
+                .map(|o| {
+                    let is_partition = partition_keys.iter().any(|e| e.eq(&o.expr));
+                    if is_partition {
+                        PhysicalSortRequirements {
+                            expr: o.expr.clone(),
+                            sort_options: None,
+                        }
+                    } else {
+                        PhysicalSortRequirements {
+                            expr: o.expr.clone(),
+                            sort_options: Some(o.options.clone()),
+                        }
+                    }
+                })
+                .collect::<Vec<_>>()
+        });
+        vec![requirements]
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -182,7 +202,6 @@ impl ExecutionPlan for WindowAggExec {
             debug!("No partition defined for WindowAggExec!!!");
             vec![Distribution::SinglePartition]
         } else {
-            //TODO support PartitionCollections if there is no common partition columns in the window_expr
             vec![Distribution::HashPartitioned(self.partition_keys.clone())]
         }
     }

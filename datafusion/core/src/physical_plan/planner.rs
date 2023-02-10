@@ -1893,6 +1893,7 @@ mod tests {
         let session_state = make_session_state();
         // optimize the logical plan
         let logical_plan = session_state.optimize(logical_plan)?;
+        println!("optimized logical plan {:?}", logical_plan);
         let planner = DefaultPhysicalPlanner::default();
         planner
             .create_physical_plan(&logical_plan, &session_state)
