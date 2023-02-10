@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+use arrow::util::pretty::pretty_format_batches;
 
 #[tokio::test]
 async fn set_variable_to_value() {
@@ -412,14 +413,8 @@ async fn set_time_zone_bad_time_zone_format() {
         plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
             .await
             .unwrap();
-    let expected = vec![
-        "+-----------------------------------------------------+",
-        "| Utf8(\"2000-01-01T00:00:00\")                         |",
-        "+-----------------------------------------------------+",
-        "| 2000-01-01T00:00:00 (Unknown Time Zone '+08:00:00') |",
-        "+-----------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &result);
+    let err = pretty_format_batches(&result).err().unwrap().to_string();
+    assert_eq!(err, "Parser error: Invalid timezone \"+08:00:00\": Expected format [+-]XX:XX, [+-]XX, or [+-]XXXX");
 
     plan_and_collect(&ctx, "SET TIME ZONE = '08:00'")
         .await
@@ -430,14 +425,9 @@ async fn set_time_zone_bad_time_zone_format() {
         plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
             .await
             .unwrap();
-    let expected = vec![
-        "+-------------------------------------------------+",
-        "| Utf8(\"2000-01-01T00:00:00\")                     |",
-        "+-------------------------------------------------+",
-        "| 2000-01-01T00:00:00 (Unknown Time Zone '08:00') |",
-        "+-------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &result);
+
+    let err = pretty_format_batches(&result).err().unwrap().to_string();
+    assert_eq!(err, "Parser error: Invalid timezone \"08:00\": only offset based timezones supported without chrono-tz feature");
 
     plan_and_collect(&ctx, "SET TIME ZONE = '08'")
         .await
@@ -448,14 +438,9 @@ async fn set_time_zone_bad_time_zone_format() {
         plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
             .await
             .unwrap();
-    let expected = vec![
-        "+----------------------------------------------+",
-        "| Utf8(\"2000-01-01T00:00:00\")                  |",
-        "+----------------------------------------------+",
-        "| 2000-01-01T00:00:00 (Unknown Time Zone '08') |",
-        "+----------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &result);
+
+    let err = pretty_format_batches(&result).err().unwrap().to_string();
+    assert_eq!(err, "Parser error: Invalid timezone \"08\": only offset based timezones supported without chrono-tz feature");
 
     // we dont support named time zone yet
     plan_and_collect(&ctx, "SET TIME ZONE = 'Asia/Taipei'")
@@ -467,14 +452,9 @@ async fn set_time_zone_bad_time_zone_format() {
         plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
             .await
             .unwrap();
-    let expected = vec![
-        "+-------------------------------------------------------+",
-        "| Utf8(\"2000-01-01T00:00:00\")                           |",
-        "+-------------------------------------------------------+",
-        "| 2000-01-01T00:00:00 (Unknown Time Zone 'Asia/Taipei') |",
-        "+-------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &result);
+
+    let err = pretty_format_batches(&result).err().unwrap().to_string();
+    assert_eq!(err, "Parser error: Invalid timezone \"Asia/Taipei\": only offset based timezones supported without chrono-tz feature");
 
     // this is invalid even after we support named time zone
     plan_and_collect(&ctx, "SET TIME ZONE = 'Asia/Taipei2'")
@@ -486,12 +466,6 @@ async fn set_time_zone_bad_time_zone_format() {
         plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
             .await
             .unwrap();
-    let expected = vec![
-        "+--------------------------------------------------------+",
-        "| Utf8(\"2000-01-01T00:00:00\")                            |",
-        "+--------------------------------------------------------+",
-        "| 2000-01-01T00:00:00 (Unknown Time Zone 'Asia/Taipei2') |",
-        "+--------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &result);
+    let err = pretty_format_batches(&result).err().unwrap().to_string();
+    assert_eq!(err, "Parser error: Invalid timezone \"Asia/Taipei2\": only offset based timezones supported without chrono-tz feature");
 }

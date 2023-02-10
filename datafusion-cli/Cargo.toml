@@ -21,7 +21,7 @@ description = "Command Line Client for DataFusion query engine."
 version = "17.0.0"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 edition = "2021"
-keywords = [ "arrow", "datafusion", "query", "sql" ]
+keywords = ["arrow", "datafusion", "query", "sql"]
 license = "Apache-2.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
@@ -29,7 +29,7 @@ rust-version = "1.62"
 readme = "README.md"
 
 [dependencies]
-arrow = "32.0.0"
+arrow = "33.0.0"
 async-trait = "0.1.41"
 clap = { version = "3", features = ["derive", "cargo"] }
 datafusion = { path = "../datafusion/core", version = "17.0.0" }
@@ -41,3 +41,9 @@ parking_lot = { version = "0.12" }
 rustyline = "10.0"
 tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
 url = "2.2"
+
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "3761ac53cab55c269b06d9a13825dd81b03e0c11" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "3761ac53cab55c269b06d9a13825dd81b03e0c11" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "3761ac53cab55c269b06d9a13825dd81b03e0c11" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "3761ac53cab55c269b06d9a13825dd81b03e0c11" }
