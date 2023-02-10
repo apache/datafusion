@@ -17,6 +17,7 @@
 
 use super::*;
 use datafusion::from_slice::FromSlice;
+use datafusion_common::ScalarValue;
 use std::ops::Add;
 
 #[tokio::test]
@@ -1046,7 +1047,11 @@ async fn sub_interval_day() -> Result<()> {
 
 #[tokio::test]
 async fn cast_string_to_time() {
-    let ctx = SessionContext::new();
+    let config = SessionConfig::new().set(
+        "datafusion.optimizer.skip_failed_rules",
+        ScalarValue::Boolean(Some(false)),
+    );
+    let ctx = SessionContext::with_config(config);
 
     let sql = "select \
         time '08:09:10.123456789' as time_nano, \
@@ -1070,7 +1075,9 @@ async fn cast_string_to_time() {
     let result = try_execute_to_batches(&ctx, sql).await;
     assert_eq!(
         result.err().unwrap().to_string(),
-        "Arrow error: Cast error: Cannot cast string 'not a time' to value of Time64(Nanosecond) type"
+        "simplify_expressions\ncaused by\nInternal error: Optimizer rule 'simplify_expressions' failed due to unexpected error: \
+        Arrow error: Cast error: Cannot cast string 'not a time' to value of Time64(Nanosecond) type. \
+        This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
     );
 
     // An invalid time
@@ -1078,7 +1085,9 @@ async fn cast_string_to_time() {
     let result = try_execute_to_batches(&ctx, sql).await;
     assert_eq!(
         result.err().unwrap().to_string(),
-        "Arrow error: Cast error: Cannot cast string '24:01:02' to value of Time64(Nanosecond) type"
+        "simplify_expressions\ncaused by\nInternal error: Optimizer rule 'simplify_expressions' failed due to unexpected error: \
+         Arrow error: Cast error: Cannot cast string '24:01:02' to value of Time64(Nanosecond) type. \
+         This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
     );
 }
 
