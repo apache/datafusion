@@ -22,7 +22,10 @@ use crate::expr_rewriter::{
     normalize_cols, rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields, from_plan};
+use crate::utils::{
+    columnize_expr, compare_sort_expr, ensure_any_column_reference_is_unambiguous,
+    exprlist_to_fields, from_plan,
+};
 use crate::{and, binary_expr, Operator};
 use crate::{
     logical_plan::{
@@ -501,6 +504,25 @@ impl LogicalPlanBuilder {
                 "left_keys and right_keys were not the same length".to_string(),
             ));
         }
+
+        let filter = if let Some(expr) = filter {
+            // ambiguous check
+            ensure_any_column_reference_is_unambiguous(
+                &expr,
+                &[self.schema(), right.schema()],
+            )?;
+
+            // normalize all columns in expression
+            let using_columns = expr.to_columns()?;
+            let filter = normalize_col_with_schemas(
+                expr,
+                &[self.schema(), right.schema()],
+                &[using_columns],
+            )?;
+            Some(filter)
+        } else {
+            None
+        };
 
         let (left_keys, right_keys): (Vec<Result<Column>>, Vec<Result<Column>>) =
             join_keys
