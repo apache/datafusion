@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! In-memory data source for presenting a Vec<RecordBatch> as a data source that can be
+//! In-memory data source for presenting a `Vec<RecordBatch>` as a data source that can be
 //! queried by DataFusion. This allows data to be pre-loaded into memory and then
 //! repeatedly queried without incurring additional file I/O overhead.
 

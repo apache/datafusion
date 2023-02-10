@@ -25,8 +25,12 @@
 //!
 //! A non-realistic but easy to follow example for sort removals: Assume that we
 //! somehow get the fragment
-//! "SortExec: [nullable_col@0 ASC]",
-//! "  SortExec: [non_nullable_col@1 ASC]",
+//!
+//! ```text
+//! SortExec: [nullable_col@0 ASC]
+//!   SortExec: [non_nullable_col@1 ASC]
+//! ```
+//!
 //! in the physical plan. The first sort is unnecessary since its result is overwritten
 //! by another SortExec. Therefore, this rule removes it from the physical plan.
 use crate::config::ConfigOptions;
@@ -49,7 +53,7 @@ use itertools::{concat, izip};
 use std::iter::zip;
 use std::sync::Arc;
 
-/// This rule inspects SortExec's in the given physical plan and removes the
+/// This rule inspects `SortExec`'s in the given physical plan and removes the
 /// ones it can prove unnecessary.
 #[derive(Default)]
 pub struct EnforceSorting {}
@@ -92,7 +96,7 @@ struct PlanWithCorrespondingSort {
     // For every child, keep a subtree of `ExecutionPlan`s starting from the
     // child until the `SortExec`(s) -- could be multiple for n-ary plans like
     // Union -- that determine the output ordering of the child. If the child
-    // has no connection to any sort, simpliy store None (and not a subtree).
+    // has no connection to any sort, simply store None (and not a subtree).
     sort_onwards: Vec<Option<ExecTree>>,
 }
 

@@ -149,7 +149,7 @@ use super::options::{
 /// ```
 #[derive(Clone)]
 pub struct SessionContext {
-    /// Uuid for the session
+    /// UUID for the session
     session_id: String,
     /// Session start time
     session_start_time: DateTime<Utc>,
@@ -169,7 +169,7 @@ impl SessionContext {
         Self::with_config(SessionConfig::new())
     }
 
-    /// Finds any ListSchemaProviders and instructs them to reload tables from "disk"
+    /// Finds any [`ListingSchemaProvider`]s and instructs them to reload tables from "disk"
     pub async fn refresh_catalogs(&self) -> Result<()> {
         let cat_names = self.catalog_names().clone();
         for cat_name in cat_names.iter() {
@@ -195,7 +195,7 @@ impl SessionContext {
         Self::with_config_rt(config, runtime)
     }
 
-    /// Creates a new session context using the provided configuration and RuntimeEnv.
+    /// Creates a new session context using the provided configuration and [`RuntimeEnv`].
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let state = SessionState::with_config_rt(config, runtime);
         Self::with_state(state)
@@ -235,12 +235,12 @@ impl SessionContext {
         self.state.read().runtime_env.clone()
     }
 
-    /// Return the session_id of this Session
+    /// Return the `session_id` of this Session
     pub fn session_id(&self) -> String {
         self.session_id.clone()
     }
 
-    /// Return the enable_ident_normalization of this Session
+    /// Return the `enable_ident_normalization` of this Session
     pub fn enable_ident_normalization(&self) -> bool {
         self.state
             .read()
@@ -257,7 +257,7 @@ impl SessionContext {
 
     /// Creates a [`DataFrame`] that will execute a SQL query.
     ///
-    /// Note: This api implements DDL such as `CREATE TABLE` and `CREATE VIEW` with in memory
+    /// Note: This API implements DDL such as `CREATE TABLE` and `CREATE VIEW` with in-memory
     /// default implementations.
     ///
     /// If this is not desirable, consider using [`SessionState::create_logical_plan()`] which
@@ -661,7 +661,7 @@ impl SessionContext {
         self._read_type(table_path, options).await
     }
 
-    /// Creates a [`DataFrame`] for reading an Json data source.
+    /// Creates a [`DataFrame`] for reading an JSON data source.
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
@@ -788,7 +788,7 @@ impl SessionContext {
         Ok(())
     }
 
-    /// Registers a Json file as a table that it can be referenced
+    /// Registers a JSON file as a table that it can be referenced
     /// from SQL statements executed against this context.
     pub async fn register_json(
         &self,
@@ -906,7 +906,7 @@ impl SessionContext {
             .deregister_table(&table)
     }
 
-    /// Return true if the specified table exists in the schema provider.
+    /// Return `true` if the specified table exists in the schema provider.
     pub fn table_exist<'a>(
         &'a self,
         table_ref: impl Into<TableReference<'a>>,
@@ -1105,8 +1105,8 @@ type AnyMap =
 
 /// Hasher for [`AnyMap`].
 ///
-/// With [`TypeId`}s as keys, there's no need to hash them. They are already hashes themselves, coming from the compiler.
-/// The [`IdHasher`} just holds the [`u64`} of the [`TypeId`}, and then returns it, instead of doing any bit fiddling.
+/// With [`TypeId`]s as keys, there's no need to hash them. They are already hashes themselves, coming from the compiler.
+/// The [`IdHasher`] just holds the [`u64`] of the [`TypeId`], and then returns it, instead of doing any bit fiddling.
 #[derive(Default)]
 struct IdHasher(u64);
 
@@ -1194,7 +1194,9 @@ impl SessionConfig {
         self
     }
 
-    /// Customize [`OPT_TARGET_PARTITIONS`]
+    /// Customize [`target_partitions`]
+    ///
+    /// [`target_partitions`]: crate::config::ExecutionOptions::target_partitions
     pub fn with_target_partitions(mut self, n: usize) -> Self {
         // partition count must be greater than zero
         assert!(n > 0);
@@ -1202,7 +1204,9 @@ impl SessionConfig {
         self
     }
 
-    /// get target_partitions
+    /// Get [`target_partitions`]
+    ///
+    /// [`target_partitions`]: crate::config::ExecutionOptions::target_partitions
     pub fn target_partitions(&self) -> usize {
         self.options.execution.target_partitions
     }
@@ -1330,7 +1334,7 @@ impl SessionConfig {
     /// Note that this method will eventually be deprecated and
     /// replaced by [`config_options`].
     ///
-    /// [`config_options`]: SessionContext::config_option
+    /// [`config_options`]: Self::config_options
     pub fn to_props(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
         // copy configs from config_options
@@ -1342,15 +1346,11 @@ impl SessionConfig {
     }
 
     /// Return a handle to the configuration options.
-    ///
-    /// [`config_options`]: SessionContext::config_option
     pub fn config_options(&self) -> &ConfigOptions {
         &self.options
     }
 
     /// Return a mutable handle to the configuration options.
-    ///
-    /// [`config_options`]: SessionContext::config_option
     pub fn config_options_mut(&mut self) -> &mut ConfigOptions {
         &mut self.options
     }
@@ -1436,7 +1436,7 @@ impl From<ConfigOptions> for SessionConfig {
 /// Execution context for registering data sources and executing queries
 #[derive(Clone)]
 pub struct SessionState {
-    /// Uuid for the session
+    /// UUID for the session
     session_id: String,
     /// Responsible for optimizing a logical plan
     optimizer: Optimizer,
@@ -1691,7 +1691,7 @@ impl SessionState {
         self
     }
 
-    /// Convert a sql string into an ast Statement
+    /// Convert a SQL string into an AST Statement
     pub fn sql_to_statement(
         &self,
         sql: &str,
@@ -1710,7 +1710,7 @@ impl SessionState {
         Ok(statement)
     }
 
-    /// Convert an ast Statement into a LogicalPlan
+    /// Convert an AST Statement into a LogicalPlan
     pub async fn statement_to_plan(
         &self,
         statement: datafusion_sql::parser::Statement,
@@ -2035,12 +2035,12 @@ impl TaskContext {
         &self.session_config
     }
 
-    /// Return the session_id of this [TaskContext]
+    /// Return the `session_id` of this [TaskContext]
     pub fn session_id(&self) -> String {
         self.session_id.clone()
     }
 
-    /// Return the task_id of this [TaskContext]
+    /// Return the `task_id` of this [TaskContext]
     pub fn task_id(&self) -> Option<String> {
         self.task_id.clone()
     }

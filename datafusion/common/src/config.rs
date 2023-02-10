@@ -181,10 +181,10 @@ config_namespace! {
 config_namespace! {
     /// Options related to SQL parser
     pub struct SqlParserOptions {
-        /// When set to true, sql parser will parse float as decimal type
+        /// When set to true, SQL parser will parse float as decimal type
         pub parse_float_as_decimal: bool, default = false
 
-        /// When set to true, sql parser will normalize ident(convert ident to lowercase when not quoted)
+        /// When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
         pub enable_ident_normalization: bool, default = true
 
     }
@@ -194,7 +194,7 @@ config_namespace! {
     /// Options related to query execution
     pub struct ExecutionOptions {
         /// Default batch size while creating new batches, it's especially useful for
-        /// buffer-in-memory batches since creating tiny batches would results in too much
+        /// buffer-in-memory batches since creating tiny batches would result in too much
         /// metadata memory consumption
         pub batch_size: usize, default = 8192
 
@@ -208,12 +208,12 @@ config_namespace! {
         pub collect_statistics: bool, default = false
 
         /// Number of partitions for query execution. Increasing partitions can increase
-        /// concurrency. Defaults to the number of cpu cores on the system
+        /// concurrency. Defaults to the number of CPU cores on the system
         pub target_partitions: usize, default = num_cpus::get()
 
         /// The default time zone
         ///
-        /// Some functions, e.g. EXTRACT(HOUR from SOME_TIME), shift the underlying datetime
+        /// Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime
         /// according to this time zone, and then extract the hour
         pub time_zone: Option<String>, default = Some("+00:00".into())
 
@@ -240,7 +240,7 @@ config_namespace! {
         pub skip_metadata: bool, default = true
 
         /// If specified, the parquet reader will try and fetch the last `size_hint`
-        /// bytes of the parquet file optimistically. If not specified, two read are required:
+        /// bytes of the parquet file optimistically. If not specified, two reads are required:
         /// One read to fetch the 8-byte parquet footer and
         /// another to fetch the metadata length encoded in the footer
         pub metadata_size_hint: Option<usize>, default = None
@@ -260,7 +260,7 @@ config_namespace! {
     /// Options related to query optimization
     pub struct OptimizerOptions {
         /// When set to true, the physical plan optimizer will try to add round robin
-        /// repartition to increase parallelism to leverage more CPU cores
+        /// repartitioning to increase parallelism to leverage more CPU cores
         pub enable_round_robin_repartition: bool, default = true
 
         /// When set to true, the optimizer will insert filters before a join between
@@ -270,14 +270,14 @@ config_namespace! {
         pub filter_null_join_keys: bool, default = false
 
         /// Should DataFusion repartition data using the aggregate keys to execute aggregates
-        /// in parallel using the provided `target_partitions` level"
+        /// in parallel using the provided `target_partitions` level
         pub repartition_aggregations: bool, default = true
 
         /// Minimum total files size in bytes to perform file scan repartitioning.
         pub repartition_file_min_size: usize, default = 10 * 1024 * 1024
 
         /// Should DataFusion repartition data using the join keys to execute joins in parallel
-        /// using the provided `target_partitions` level"
+        /// using the provided `target_partitions` level
         pub repartition_joins: bool, default = true
 
         /// When set to true, file groups will be repartitioned to achieve maximum parallelism.
@@ -287,11 +287,11 @@ config_namespace! {
         pub repartition_file_scans: bool, default = false
 
         /// Should DataFusion repartition data using the partitions keys to execute window
-        /// functions in parallel using the provided `target_partitions` level"
+        /// functions in parallel using the provided `target_partitions` level
         pub repartition_windows: bool, default = true
 
         /// Should DataFusion execute sorts in a per-partition fashion and merge
-        /// afterwards instead of coalescing first and sorting globally
+        /// afterwards instead of coalescing first and sorting globally.
         /// With this flag is enabled, plans in the form below
         ///      "SortExec: [a@0 ASC]",
         ///      "  CoalescePartitionsExec",
