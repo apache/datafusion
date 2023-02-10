@@ -48,7 +48,7 @@ impl PhysicalOptimizerRule for GlobalSortSelection {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(&|plan| {
             Ok(plan
@@ -56,9 +56,9 @@ impl PhysicalOptimizerRule for GlobalSortSelection {
                 .downcast_ref::<SortExec>()
                 .and_then(|sort_exec| {
                     if sort_exec.input().output_partitioning().partition_count() > 1
-                        && sort_exec.fetch().is_some()
                         // It's already preserving the partitioning so that it can be regarded as a local sort
                         && !sort_exec.preserve_partitioning()
+                        && (sort_exec.fetch().is_some() ||  config.optimizer.repartition_sorts)
                     {
                         let sort = SortExec::new_with_partitioning(
                             sort_exec.expr().to_vec(),

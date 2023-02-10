@@ -132,6 +132,8 @@ impl PlanWithSortRequirements {
             true
         } else if self.plan.as_any().downcast_ref::<SortExec>().is_some() {
             false
+        } else if self.plan.as_any().downcast_ref::<UnionExec>().is_some() {
+            self.plan.output_ordering().is_some() && self.impact_result_ordering
         } else {
             self.plan.maintains_input_order().iter().all(|o| *o)
                 && self.impact_result_ordering
@@ -195,8 +197,24 @@ impl PhysicalOptimizerRule for TopDownEnforceSorting {
         // Execute a Top-Down process(Preorder Traversal) to ensure the sort requirements:
         let plan_requirements = PlanWithSortRequirements::init(plan);
         let adjusted = plan_requirements.transform_down(&ensure_sorting)?;
+        // Execute a Top-Down process(Preorder Traversal) to remove all the unnecessary Sort
+        let adjusted_plan = adjusted.plan.transform_down(&|plan| {
+            if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
+                if ordering_satisfy(
+                    sort_exec.input().output_ordering(),
+                    sort_exec.output_ordering(),
+                    || sort_exec.input().equivalence_properties(),
+                ) {
+                    Ok(Some(Arc::new(TombStoneExec::new(sort_exec.input().clone()))))
+                } else {
+                    Ok(None)
+                }
+            } else {
+                Ok(None)
+            }
+        })?;
         // Remove the TombStoneExec
-        let final_plan = adjusted.plan.transform_up(&|plan| {
+        let final_plan = adjusted_plan.transform_up(&|plan| {
             if let Some(tombstone_exec) = plan.as_any().downcast_ref::<TombStoneExec>() {
                 Ok(Some(tombstone_exec.input.clone()))
             } else {
@@ -243,7 +261,7 @@ fn ensure_sorting(
                 sort_exec.input().output_ordering(),
                 sort_exec.output_ordering(),
                 || sort_exec.input().equivalence_properties(),
-            ) && sort_exec.input().output_partitioning().partition_count() == 1
+            )
             {
                 println!("remove sort_exec due to child already satisfy");
                 return Ok(Some(PlanWithSortRequirements {
@@ -259,74 +277,84 @@ fn ensure_sorting(
         .as_any()
         .downcast_ref::<SortPreservingMergeExec>()
     {
-        // SortPreservingMergeExec + SortExec(local/global) is the same as the global SortExec
-        // Remove unnecessary SortPreservingMergeExec + SortExec(local/global)
-        if let Some(child_sort_exec) =
-            sort_pres_exec.input().as_any().downcast_ref::<SortExec>()
-        {
-            if sort_pres_exec.expr() == child_sort_exec.expr() {
-                if !requirements.impact_result_ordering
-                    && requirements.required_ordering.is_none()
-                {
-                    println!("remove SortPreservingMergeExec + SortExec due to no need to keep ordering");
+        if !sort_pres_exec.satisfy_distribution() {
+            // SortPreservingMergeExec + SortExec(local/global) is the same as the global SortExec
+            // Remove unnecessary SortPreservingMergeExec + SortExec(local/global)
+            if let Some(child_sort_exec) =
+                sort_pres_exec.input().as_any().downcast_ref::<SortExec>()
+            {
+                if sort_pres_exec.expr() == child_sort_exec.expr() {
+                    if !requirements.impact_result_ordering
+                        && requirements.required_ordering.is_none()
+                    {
+                        println!("remove SortPreservingMergeExec + SortExec due to no need to keep ordering");
+                        return Ok(Some(PlanWithSortRequirements {
+                            plan: Arc::new(TombStoneExec::new(
+                                child_sort_exec.input().clone(),
+                            )),
+                            impact_result_ordering: false,
+                            required_ordering: None,
+                            adjusted_request_ordering: vec![None],
+                        }));
+                    } else if ordering_satisfy(
+                        child_sort_exec.input().output_ordering(),
+                        child_sort_exec.output_ordering(),
+                        || child_sort_exec.input().equivalence_properties(),
+                    ) && child_sort_exec
+                        .input()
+                        .output_partitioning()
+                        .partition_count()
+                        == 1
+                    {
+                        println!("remove SortPreservingMergeExec + SortExec due to child already satisfy");
+                        return Ok(Some(PlanWithSortRequirements {
+                            plan: Arc::new(TombStoneExec::new(
+                                child_sort_exec.input().clone(),
+                            )),
+                            impact_result_ordering: true,
+                            required_ordering: None,
+                            adjusted_request_ordering: vec![
+                                requirements.required_ordering,
+                            ],
+                        }));
+                    }
+                }
+            } else {
+                // Remove unnecessary SortPreservingMergeExec only
+                if !requirements.impact_result_ordering {
+                    println!(
+                        "remove SortPreservingMergeExec due to no need to keep ordering"
+                    );
                     return Ok(Some(PlanWithSortRequirements {
                         plan: Arc::new(TombStoneExec::new(
-                            child_sort_exec.input().clone(),
+                            sort_pres_exec.input().clone(),
                         )),
                         impact_result_ordering: false,
                         required_ordering: None,
-                        adjusted_request_ordering: vec![None],
+                        adjusted_request_ordering: vec![requirements.required_ordering],
                     }));
                 } else if ordering_satisfy(
-                    child_sort_exec.input().output_ordering(),
-                    child_sort_exec.output_ordering(),
-                    || child_sort_exec.input().equivalence_properties(),
-                ) && child_sort_exec
+                    sort_pres_exec.input().output_ordering(),
+                    Some(sort_pres_exec.expr()),
+                    || sort_pres_exec.input().equivalence_properties(),
+                ) && sort_pres_exec
                     .input()
                     .output_partitioning()
                     .partition_count()
                     == 1
                 {
-                    println!("remove SortPreservingMergeExec + SortExec due to child already satisfy");
+                    println!(
+                        "remove SortPreservingMergeExec due to child already satisfy"
+                    );
                     return Ok(Some(PlanWithSortRequirements {
                         plan: Arc::new(TombStoneExec::new(
-                            child_sort_exec.input().clone(),
+                            sort_pres_exec.input().clone(),
                         )),
                         impact_result_ordering: true,
                         required_ordering: None,
                         adjusted_request_ordering: vec![requirements.required_ordering],
                     }));
                 }
-            }
-        } else {
-            // Remove unnecessary SortPreservingMergeExec only
-            if !requirements.impact_result_ordering {
-                println!(
-                    "remove SortPreservingMergeExec due to no need to keep ordering"
-                );
-                return Ok(Some(PlanWithSortRequirements {
-                    plan: Arc::new(TombStoneExec::new(sort_pres_exec.input().clone())),
-                    impact_result_ordering: false,
-                    required_ordering: None,
-                    adjusted_request_ordering: vec![requirements.required_ordering],
-                }));
-            } else if ordering_satisfy(
-                sort_pres_exec.input().output_ordering(),
-                Some(sort_pres_exec.expr()),
-                || sort_pres_exec.input().equivalence_properties(),
-            ) && sort_pres_exec
-                .input()
-                .output_partitioning()
-                .partition_count()
-                == 1
-            {
-                println!("remove SortPreservingMergeExec due to child already satisfy");
-                return Ok(Some(PlanWithSortRequirements {
-                    plan: Arc::new(TombStoneExec::new(sort_pres_exec.input().clone())),
-                    impact_result_ordering: true,
-                    required_ordering: None,
-                    adjusted_request_ordering: vec![requirements.required_ordering],
-                }));
             }
         }
     }

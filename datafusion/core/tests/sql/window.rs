@@ -1748,7 +1748,7 @@ async fn over_order_by_sort_keys_sorting_global_order_compacting() -> Result<()>
     let expected = {
         vec![
             "SortPreservingMergeExec: [c2@0 ASC NULLS LAST]",
-            "  SortExec: [c2@0 ASC NULLS LAST]",
+            "  SortExec: [c2@0 ASC NULLS LAST], global=false",
             "    ProjectionExec: expr=[c2@0 as c2, MAX(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as MAX(aggregate_test_100.c9), SUM(aggregate_test_100.c9) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@4 as SUM(aggregate_test_100.c9), MIN(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c2 ASC NULLS LAST, aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as MIN(aggregate_test_100.c9)]",
             "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
             "        WindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }]",
@@ -2403,7 +2403,7 @@ async fn test_window_agg_global_sort() -> Result<()> {
             "SortPreservingMergeExec: [c1@0 ASC NULLS LAST]",
             "  ProjectionExec: expr=[c1@0 as c1, ROW_NUMBER() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as rn1]",
             "    BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: \"ROW_NUMBER()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }]",
-            "      SortExec: [c1@0 ASC NULLS LAST]",
+            "      SortExec: [c1@0 ASC NULLS LAST], global=false",
             "        CoalesceBatchesExec: target_batch_size=8192",
             "          RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2), input_partitions=2",
             "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
@@ -2438,11 +2438,11 @@ async fn test_window_agg_global_sort_parallelize_sort_disabled() -> Result<()> {
     // Only 1 SortExec was added
     let expected = {
         vec![
-            "SortExec: [c1@0 ASC NULLS LAST]",
+            "SortExec: [c1@0 ASC NULLS LAST], global=true",
             "  CoalescePartitionsExec",
             "    ProjectionExec: expr=[c1@0 as c1, ROW_NUMBER() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as rn1]",
             "      BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: \"ROW_NUMBER()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }]",
-            "        SortExec: [c1@0 ASC NULLS LAST]",
+            "        SortExec: [c1@0 ASC NULLS LAST], global=false",
             "          CoalesceBatchesExec: target_batch_size=8192",
             "            RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2), input_partitions=2",
             "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
@@ -2480,16 +2480,17 @@ async fn test_window_agg_global_sort_intermediate_parallel_sort() -> Result<()> 
     // Only 1 SortExec was added
     let expected = {
         vec![
-            "SortExec: [c1@0 ASC NULLS LAST]",
-            "  ProjectionExec: expr=[c1@0 as c1, SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 3 FOLLOWING@2 as sum1, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@3 as sum2]",
-            "    BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
-            "      SortPreservingMergeExec: [c9@1 ASC NULLS LAST]",
-            "        SortExec: [c9@1 ASC NULLS LAST]",
-            "          BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(3)) }]",
-            "            SortExec: [c1@0 ASC NULLS LAST,c9@1 ASC NULLS LAST]",
-            "              CoalesceBatchesExec: target_batch_size=8192",
-            "                RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2), input_partitions=2",
-            "                  RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "SortPreservingMergeExec: [c1@0 ASC NULLS LAST]",
+            "  SortExec: [c1@0 ASC NULLS LAST], global=false",
+            "    ProjectionExec: expr=[c1@0 as c1, SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 3 FOLLOWING@2 as sum1, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@3 as sum2]",
+            "      BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
+            "        SortPreservingMergeExec: [c9@1 ASC NULLS LAST]",
+            "          SortExec: [c9@1 ASC NULLS LAST], global=false",
+            "            BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(3)) }]",
+            "              SortExec: [c1@0 ASC NULLS LAST,c9@1 ASC NULLS LAST], global=false",
+            "                CoalesceBatchesExec: target_batch_size=8192",
+            "                  RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2), input_partitions=2",
+            "                    RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
         ]
     };
 
@@ -2524,7 +2525,7 @@ async fn test_window_agg_with_global_limit() -> Result<()> {
             "  AggregateExec: mode=Final, gby=[], aggr=[ARRAYAGG(aggregate_test_100.c13)]",
             "    AggregateExec: mode=Partial, gby=[], aggr=[ARRAYAGG(aggregate_test_100.c13)]",
             "      GlobalLimitExec: skip=0, fetch=1",
-            "        SortExec: [c13@0 ASC NULLS LAST]",
+            "        SortExec: [c13@0 ASC NULLS LAST], global=true",
             "          ProjectionExec: expr=[c13@0 as c13]",
         ]
     };

@@ -693,7 +693,11 @@ fn change_corresponding_coalesce_in_sub_plan(
                     Some(sort_expr),
                     || coalesce_input.equivalence_properties(),
                 ) {
-                    return add_sort_above_child(&coalesce_input, sort_expr.to_vec(), None);
+                    return add_sort_above_child(
+                        &coalesce_input,
+                        sort_expr.to_vec(),
+                        None,
+                    );
                 }
             }
             coalesce_input

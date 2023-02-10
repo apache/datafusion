@@ -219,7 +219,7 @@ pub fn normalize_sort_requirement_with_equivalence_properties(
     }
 }
 
-/// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
+/// Checks whether the required [PhysicalSortExpr]s are satisfied by the provided [PhysicalSortExpr]s.
 pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
     provided: Option<&[PhysicalSortExpr]>,
     required: Option<&[PhysicalSortExpr]>,
@@ -269,6 +269,7 @@ fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(
     }
 }
 
+/// Checks whether the required ordering requirements are satisfied by the provided [PhysicalSortExpr]s.
 pub fn ordering_satisfy_requirement<F: FnOnce() -> EquivalenceProperties>(
     provided: Option<&[PhysicalSortExpr]>,
     required: Option<&[PhysicalSortRequirements]>,

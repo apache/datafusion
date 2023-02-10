@@ -30,6 +30,7 @@ use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::sorts::sort::SortOptions;
+use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
@@ -38,11 +39,14 @@ use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::expressions::NoOp;
-use datafusion_physical_expr::utils::map_columns_before_projection;
+use datafusion_physical_expr::utils::{
+    create_sort_expr_from_requirement, map_columns_before_projection,
+};
 use datafusion_physical_expr::{
     expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, AggregateExpr,
     PhysicalExpr,
 };
+use itertools::izip;
 use std::sync::Arc;
 
 /// The EnforceDistribution rule ensures that distribution requirements are met
@@ -80,7 +84,9 @@ impl PhysicalOptimizerRule for EnforceDistribution {
         } else {
             plan
         };
+
         // Distribution enforcement needs to be applied bottom-up.
+        let repartition_sorts = config.optimizer.repartition_sorts;
         new_plan.transform_up(&{
             |plan| {
                 let adjusted = if !top_down_join_key_reordering {
@@ -88,7 +94,11 @@ impl PhysicalOptimizerRule for EnforceDistribution {
                 } else {
                     plan
                 };
-                Ok(Some(ensure_distribution(adjusted, target_partitions)?))
+                Ok(Some(ensure_distribution(
+                    adjusted,
+                    target_partitions,
+                    repartition_sorts,
+                )?))
             }
         })
     }
@@ -819,6 +829,7 @@ fn new_join_conditions(
 fn ensure_distribution(
     plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
     target_partitions: usize,
+    repartition_sort: bool,
 ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
     if plan.children().is_empty() {
         return Ok(plan);
@@ -829,31 +840,43 @@ fn ensure_distribution(
     assert_eq!(children.len(), required_input_distributions.len());
 
     // Add RepartitionExec to guarantee output partitioning
-    let new_children: Result<Vec<Arc<dyn ExecutionPlan>>> = children
-        .into_iter()
-        .zip(required_input_distributions.into_iter())
-        .map(|(child, required)| {
-            if child
-                .output_partitioning()
-                .satisfy(required.clone(), || child.equivalence_properties())
-            {
-                Ok(child)
-            } else {
-                let new_child: Result<Arc<dyn ExecutionPlan>> = match required {
-                    Distribution::SinglePartition
-                        if child.output_partitioning().partition_count() > 1 =>
-                    {
+    let new_children: Result<Vec<Arc<dyn ExecutionPlan>>> = izip!(
+        children.into_iter(),
+        required_input_distributions.into_iter(),
+        plan.required_input_ordering().into_iter(),
+    )
+    .map(|(child, required, required_ordering)| {
+        if child
+            .output_partitioning()
+            .satisfy(required.clone(), || child.equivalence_properties())
+        {
+            Ok(child)
+        } else {
+            let new_child: Result<Arc<dyn ExecutionPlan>> = match required {
+                Distribution::SinglePartition
+                    if child.output_partitioning().partition_count() > 1 =>
+                {
+                    if repartition_sort && required_ordering.is_some() {
+                        let new_physical_ordering = create_sort_expr_from_requirement(
+                            required_ordering.unwrap().as_ref(),
+                        );
+                        Ok(Arc::new(SortPreservingMergeExec::new_for_distribuion(
+                            new_physical_ordering,
+                            child.clone(),
+                        )))
+                    } else {
                         Ok(Arc::new(CoalescePartitionsExec::new(child.clone())))
                     }
-                    _ => {
-                        let partition = required.create_partitioning(target_partitions);
-                        Ok(Arc::new(RepartitionExec::try_new(child, partition)?))
-                    }
-                };
-                new_child
-            }
-        })
-        .collect();
+                }
+                _ => {
+                    let partition = required.create_partitioning(target_partitions);
+                    Ok(Arc::new(RepartitionExec::try_new(child, partition)?))
+                }
+            };
+            new_child
+        }
+    })
+    .collect();
     with_new_children_if_necessary(plan, new_children?)
 }
 
@@ -1654,6 +1677,7 @@ mod tests {
         let bottom_left_join = ensure_distribution(
             hash_join_exec(left.clone(), right.clone(), &join_on, &JoinType::Inner),
             10,
+            false,
         )?;
 
         // Projection(a as A, a as AA, b as B, c as C)
@@ -1684,6 +1708,7 @@ mod tests {
         let bottom_right_join = ensure_distribution(
             hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner),
             10,
+            false,
         )?;
 
         // Join on (B == b1 and C == c and AA = a1)
@@ -1773,6 +1798,7 @@ mod tests {
         let bottom_left_join = ensure_distribution(
             hash_join_exec(left.clone(), right.clone(), &join_on, &JoinType::Inner),
             10,
+            false,
         )?;
 
         // Projection(a as A, a as AA, b as B, c as C)
@@ -1803,6 +1829,7 @@ mod tests {
         let bottom_right_join = ensure_distribution(
             hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner),
             10,
+            false,
         )?;
 
         // Join on (B == b1 and C == c and AA = a1)
