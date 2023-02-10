@@ -241,9 +241,8 @@ config_namespace! {
 
         /// If specified, the parquet reader will try and fetch the last `size_hint`
         /// bytes of the parquet file optimistically. If not specified, two reads are required:
-        ///
-        /// - One read to fetch the 8-byte parquet footer
-        /// - Another to fetch the metadata length encoded in the footer
+        /// One read to fetch the 8-byte parquet footer and
+        /// another to fetch the metadata length encoded in the footer
         pub metadata_size_hint: Option<usize>, default = None
 
         /// If true, filter expressions are be applied during the parquet decoding operation to
@@ -292,8 +291,7 @@ config_namespace! {
         pub repartition_windows: bool, default = true
 
         /// Should DataFusion execute sorts in a per-partition fashion and merge
-        /// afterwards instead of coalescing first and sorting globally
-        ///
+        /// afterwards instead of coalescing first and sorting globally.
         /// With this flag is enabled, plans in the form below
         ///
         /// ```text
