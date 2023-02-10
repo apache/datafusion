@@ -43,7 +43,7 @@ tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync
 url = "2.2"
 
 [patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "526100928d62e1c16ac41bbef9b966ac59b3324a"}
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "526100928d62e1c16ac41bbef9b966ac59b3324a"}
-arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "526100928d62e1c16ac41bbef9b966ac59b3324a"}
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "526100928d62e1c16ac41bbef9b966ac59b3324a"}
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "526100928d62e1c16ac41bbef9b966ac59b3324a" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "526100928d62e1c16ac41bbef9b966ac59b3324a" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "526100928d62e1c16ac41bbef9b966ac59b3324a" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "526100928d62e1c16ac41bbef9b966ac59b3324a" }
