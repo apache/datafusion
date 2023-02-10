@@ -17,6 +17,7 @@
 
 use super::*;
 use datafusion::from_slice::FromSlice;
+use datafusion_common::ScalarValue;
 use std::ops::Add;
 
 #[tokio::test]
@@ -1046,7 +1047,11 @@ async fn sub_interval_day() -> Result<()> {
 
 #[tokio::test]
 async fn cast_string_to_time() {
-    let ctx = SessionContext::new();
+    let config = SessionConfig::new().set(
+        "datafusion.optimizer.skip_failed_rules",
+        ScalarValue::Boolean(Some(false)),
+    );
+    let ctx = SessionContext::with_config(config);
 
     let sql = "select \
         time '08:09:10.123456789' as time_nano, \

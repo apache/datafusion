@@ -1892,8 +1892,7 @@ mod tests {
     fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::default());
         let config = SessionConfig::new().with_target_partitions(4);
-        // TODO we should really test that no optimizer rules are failing here
-        // let config = config.set_bool(crate::config::OPT_OPTIMIZER_SKIP_FAILED_RULES, false);
+        let config = config.set_bool("datafusion.optimizer.skip_failed_rules", false);
         SessionState::with_config_rt(config, runtime)
     }
 
