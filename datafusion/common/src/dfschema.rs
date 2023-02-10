@@ -1135,9 +1135,6 @@ mod tests {
     }
 
     fn test_metadata_n(n: usize) -> HashMap<String, String> {
-        (0..n)
-            .into_iter()
-            .map(|i| (format!("k{i}"), format!("v{i}")))
-            .collect()
+        (0..n).map(|i| (format!("k{i}"), format!("v{i}"))).collect()
     }
 }
