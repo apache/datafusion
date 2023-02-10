@@ -41,7 +41,7 @@ DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchm
   Azure Blob Storage, and Google Cloud Storage. Other storage systems are supported via the
   `ObjectStore` trait.
 - [Excellent Documentation](https://docs.rs/datafusion/latest) and a
-  [welcoming community](https://arrow.apache.org/datafusion/community/communication.html).
+  [welcoming community](https://arrow.apache.org/datafusion/contributor-guide/communication.html).
 - A state of the art query optimizer with projection and filter pushdown, sort aware optimizations,
   automatic join reordering, expression coercion, and more.
 - Permissive Apache 2.0 License, Apache Software Foundation governance
