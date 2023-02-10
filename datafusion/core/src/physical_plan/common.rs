@@ -25,10 +25,8 @@ use crate::physical_plan::{displayable, ColumnStatistics, ExecutionPlan, Statist
 use arrow::compute::concat;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
-use arrow::error::Result as ArrowResult;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
-use datafusion_physical_expr::utils::ordering_satisfy;
 use datafusion_physical_expr::PhysicalSortExpr;
 use futures::{Future, Stream, StreamExt, TryStreamExt};
 use log::debug;
@@ -68,7 +66,7 @@ impl SizedRecordBatchStream {
 }
 
 impl Stream for SizedRecordBatchStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -92,10 +90,7 @@ impl RecordBatchStream for SizedRecordBatchStream {
 
 /// Create a vector of record batches from a stream
 pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatch>> {
-    stream
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(DataFusionError::from)
+    stream.try_collect::<Vec<_>>().await
 }
 
 /// Merge two record batch references into a single record batch.
@@ -104,15 +99,16 @@ pub fn merge_batches(
     first: &RecordBatch,
     second: &RecordBatch,
     schema: SchemaRef,
-) -> ArrowResult<RecordBatch> {
+) -> Result<RecordBatch> {
     let columns = (0..schema.fields.len())
         .map(|index| {
             let first_column = first.column(index).as_ref();
             let second_column = second.column(index).as_ref();
             concat(&[first_column, second_column])
         })
-        .collect::<ArrowResult<Vec<_>>>()?;
-    RecordBatch::try_new(schema, columns)
+        .collect::<Result<Vec<_>, ArrowError>>()
+        .map_err(Into::<DataFusionError>::into)?;
+    RecordBatch::try_new(schema, columns).map_err(Into::into)
 }
 
 /// Merge a slice of record batch references into a single record batch, or
@@ -121,7 +117,7 @@ pub fn merge_batches(
 pub fn merge_multiple_batches(
     batches: &[&RecordBatch],
     schema: SchemaRef,
-) -> ArrowResult<Option<RecordBatch>> {
+) -> Result<Option<RecordBatch>> {
     Ok(if batches.is_empty() {
         None
     } else {
@@ -134,7 +130,8 @@ pub fn merge_multiple_batches(
                         .collect::<Vec<_>>(),
                 )
             })
-            .collect::<ArrowResult<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, ArrowError>>()
+            .map_err(Into::<DataFusionError>::into)?;
         Some(RecordBatch::try_new(schema, columns)?)
     })
 }
@@ -190,7 +187,7 @@ fn build_file_list_recurse(
 /// Spawns a task to the tokio threadpool and writes its outputs to the provided mpsc sender
 pub(crate) fn spawn_execution(
     input: Arc<dyn ExecutionPlan>,
-    output: mpsc::Sender<ArrowResult<RecordBatch>>,
+    output: mpsc::Sender<Result<RecordBatch>>,
     partition: usize,
     context: Arc<TaskContext>,
 ) -> JoinHandle<()> {
@@ -199,8 +196,7 @@ pub(crate) fn spawn_execution(
             Err(e) => {
                 // If send fails, plan being torn down,
                 // there is no place to send the error.
-                let arrow_error = ArrowError::ExternalError(Box::new(e));
-                output.send(Err(arrow_error)).await.ok();
+                output.send(Err(e)).await.ok();
                 debug!(
                     "Stopping execution: error executing input: {}",
                     displayable(input.as_ref()).one_line()
@@ -324,34 +320,37 @@ pub fn transpose<T>(original: Vec<Vec<T>>) -> Vec<Vec<T>> {
     }
 }
 
-/// Calculates the "meet" of children orderings
-/// The meet is the finest ordering that satisfied by all the input
+/// Calculates the "meet" of given orderings.
+/// The meet is the finest ordering that satisfied by all the given
 /// orderings, see https://en.wikipedia.org/wiki/Join_and_meet.
 pub fn get_meet_of_orderings(
-    children: &[Arc<dyn ExecutionPlan>],
+    given: &[Arc<dyn ExecutionPlan>],
 ) -> Option<&[PhysicalSortExpr]> {
-    // To find the meet, we first find the smallest input ordering.
-    let mut smallest: Option<&[PhysicalSortExpr]> = None;
-    for item in children.iter() {
-        if let Some(ordering) = item.output_ordering() {
-            smallest = match smallest {
-                None => Some(ordering),
-                Some(expr) if ordering.len() < expr.len() => Some(ordering),
-                _ => continue,
+    given
+        .iter()
+        .map(|item| item.output_ordering())
+        .collect::<Option<Vec<_>>>()
+        .and_then(get_meet_of_orderings_helper)
+}
+
+fn get_meet_of_orderings_helper(
+    orderings: Vec<&[PhysicalSortExpr]>,
+) -> Option<&[PhysicalSortExpr]> {
+    let mut idx = 0;
+    let first = orderings[0];
+    loop {
+        for ordering in orderings.iter() {
+            if idx >= ordering.len() {
+                return Some(ordering);
+            } else if ordering[idx] != first[idx] {
+                return if idx > 0 {
+                    Some(&ordering[..idx])
+                } else {
+                    None
+                };
             }
-        } else {
-            return None;
         }
-    }
-    // Check if the smallest ordering is a meet or not:
-    if children.iter().all(|child| {
-        ordering_satisfy(child.output_ordering(), smallest, || {
-            child.equivalence_properties()
-        })
-    }) {
-        smallest
-    } else {
-        None
+        idx += 1;
     }
 }
 
@@ -368,7 +367,152 @@ mod tests {
         datatypes::{DataType, Field, Schema},
         record_batch::RecordBatch,
     };
-    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr::expressions::{col, Column};
+
+    #[test]
+    fn get_meet_of_orderings_helper_common_prefix_test() -> Result<()> {
+        let input1: Vec<PhysicalSortExpr> = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                options: SortOptions::default(),
+            },
+        ];
+
+        let input2: Vec<PhysicalSortExpr> = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("y", 2)),
+                options: SortOptions::default(),
+            },
+        ];
+
+        let input3: Vec<PhysicalSortExpr> = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("x", 1)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("y", 2)),
+                options: SortOptions::default(),
+            },
+        ];
+
+        let expected = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("a", 0)),
+            options: SortOptions::default(),
+        }];
+
+        let result = get_meet_of_orderings_helper(vec![&input1, &input2, &input3]);
+        assert_eq!(result.unwrap(), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn get_meet_of_orderings_helper_subset_test() -> Result<()> {
+        let input1: Vec<PhysicalSortExpr> = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: SortOptions::default(),
+            },
+        ];
+
+        let input2: Vec<PhysicalSortExpr> = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                options: SortOptions::default(),
+            },
+        ];
+
+        let input3: Vec<PhysicalSortExpr> = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("d", 2)),
+                options: SortOptions::default(),
+            },
+        ];
+
+        let result = get_meet_of_orderings_helper(vec![&input1, &input2, &input3]);
+        assert_eq!(result.unwrap(), input1);
+        Ok(())
+    }
+
+    #[test]
+    fn get_meet_of_orderings_helper_no_overlap_test() -> Result<()> {
+        let input1: Vec<PhysicalSortExpr> = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: SortOptions::default(),
+            },
+        ];
+
+        let input2: Vec<PhysicalSortExpr> = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("x", 0)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 1)),
+                options: SortOptions::default(),
+            },
+        ];
+
+        let input3: Vec<PhysicalSortExpr> = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("y", 1)),
+                options: SortOptions::default(),
+            },
+        ];
+
+        let result = get_meet_of_orderings_helper(vec![&input1, &input2, &input3]);
+        assert!(result.is_none());
+        Ok(())
+    }
 
     #[test]
     fn test_meet_of_orderings() -> Result<()> {
@@ -524,7 +668,7 @@ impl IPCWriter {
 
     /// Finish the writer
     pub fn finish(&mut self) -> Result<()> {
-        self.writer.finish().map_err(DataFusionError::ArrowError)
+        self.writer.finish().map_err(Into::into)
     }
 
     /// Path write to

@@ -25,7 +25,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
 
-use arrow::error::Result as ArrowResult;
 use arrow::{
     datatypes::{Field, Schema, SchemaRef},
     record_batch::RecordBatch,
@@ -231,8 +230,28 @@ impl ExecutionPlan for UnionExec {
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        let main_input_order = self.output_ordering().is_some();
-        vec![main_input_order; self.inputs.len()]
+        // If the Union has an output ordering, it maintains at least one
+        // child's ordering (i.e. the meet).
+        // For instance, assume that the first child is SortExpr('a','b','c'),
+        // the second child is SortExpr('a','b') and the third child is
+        // SortExpr('a','b'). The output ordering would be SortExpr('a','b'),
+        // which is the "meet" of all input orderings. In this example, this
+        // function will return vec![false, true, true], indicating that we
+        // preserve the orderings for the 2nd and the 3rd children.
+        if let Some(output_ordering) = self.output_ordering() {
+            self.inputs()
+                .iter()
+                .map(|child| {
+                    if let Some(child_ordering) = child.output_ordering() {
+                        output_ordering.len() == child_ordering.len()
+                    } else {
+                        false
+                    }
+                })
+                .collect()
+        } else {
+            vec![false; self.inputs().len()]
+        }
     }
 
     fn with_new_children(
@@ -343,7 +362,7 @@ impl RecordBatchStream for CombinedRecordBatchStream {
 }
 
 impl Stream for CombinedRecordBatchStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -411,7 +430,7 @@ impl RecordBatchStream for ObservedStream {
 }
 
 impl futures::Stream for ObservedStream {
-    type Item = arrow::error::Result<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,

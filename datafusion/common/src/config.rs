@@ -179,6 +179,18 @@ config_namespace! {
 }
 
 config_namespace! {
+    /// Options related to SQL parser
+    pub struct SqlParserOptions {
+        /// When set to true, sql parser will parse float as decimal type
+        pub parse_float_as_decimal: bool, default = false
+
+        /// When set to true, sql parser will normalize ident(convert ident to lowercase when not quoted)
+        pub enable_ident_normalization: bool, default = true
+
+    }
+}
+
+config_namespace! {
     /// Options related to query execution
     pub struct ExecutionOptions {
         /// Default batch size while creating new batches, it's especially useful for
@@ -261,13 +273,34 @@ config_namespace! {
         /// in parallel using the provided `target_partitions` level"
         pub repartition_aggregations: bool, default = true
 
+        /// Minimum total files size in bytes to perform file scan repartitioning.
+        pub repartition_file_min_size: usize, default = 10 * 1024 * 1024
+
         /// Should DataFusion repartition data using the join keys to execute joins in parallel
         /// using the provided `target_partitions` level"
         pub repartition_joins: bool, default = true
 
+        /// When set to true, file groups will be repartitioned to achieve maximum parallelism.
+        /// Currently supported only for Parquet format in which case
+        /// multiple row groups from the same file may be read concurrently. If false then each
+        /// row group is read serially, though different files may be read in parallel.
+        pub repartition_file_scans: bool, default = false
+
         /// Should DataFusion repartition data using the partitions keys to execute window
         /// functions in parallel using the provided `target_partitions` level"
         pub repartition_windows: bool, default = true
+
+        /// Should DataFusion execute sorts in a per-partition fashion and merge
+        /// afterwards instead of coalescing first and sorting globally
+        /// With this flag is enabled, plans in the form below
+        ///      "SortExec: [a@0 ASC]",
+        ///      "  CoalescePartitionsExec",
+        ///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        /// would turn into the plan below which performs better in multithreaded environments
+        ///      "SortPreservingMergeExec: [a@0 ASC]",
+        ///      "  SortExec: [a@0 ASC]",
+        ///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        pub repartition_sorts: bool, default = true
 
         /// When set to true, the logical plan optimizer will produce warning
         /// messages if any optimization rules produce errors and then proceed to the next
@@ -325,6 +358,8 @@ pub struct ConfigOptions {
     pub execution: ExecutionOptions,
     /// Optimizer options
     pub optimizer: OptimizerOptions,
+    /// SQL parser options
+    pub sql_parser: SqlParserOptions,
     /// Explain options
     pub explain: ExplainOptions,
     /// Optional extensions registered using [`Extensions::insert`]
@@ -340,6 +375,7 @@ impl ConfigField for ConfigOptions {
             "execution" => self.execution.set(rem, value),
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
+            "sql_parser" => self.sql_parser.set(rem, value),
             _ => Err(DataFusionError::Internal(format!(
                 "Config value \"{key}\" not found on ConfigOptions"
             ))),
@@ -351,6 +387,7 @@ impl ConfigField for ConfigOptions {
         self.execution.visit(v, "datafusion.execution", "");
         self.optimizer.visit(v, "datafusion.optimizer", "");
         self.explain.visit(v, "datafusion.explain", "");
+        self.sql_parser.visit(v, "datafusion.sql_parser", "");
     }
 }
 

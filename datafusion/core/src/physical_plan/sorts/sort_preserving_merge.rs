@@ -23,12 +23,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::error::ArrowError;
 use arrow::row::{RowConverter, SortField};
 use arrow::{
     array::{make_array as make_arrow_array, MutableArrayData},
     datatypes::SchemaRef,
-    error::Result as ArrowResult,
     record_batch::RecordBatch,
 };
 use futures::stream::{Fuse, FusedStream};
@@ -404,7 +402,7 @@ impl SortPreservingMergeStream {
         &mut self,
         cx: &mut Context<'_>,
         idx: usize,
-    ) -> Poll<ArrowResult<()>> {
+    ) -> Poll<Result<()>> {
         if self.cursors[idx]
             .as_ref()
             .map(|cursor| !cursor.is_finished())
@@ -439,9 +437,7 @@ impl SortPreservingMergeStream {
                         let rows = match self.row_converter.convert_columns(&cols) {
                             Ok(rows) => rows,
                             Err(e) => {
-                                return Poll::Ready(Err(ArrowError::ExternalError(
-                                    Box::new(e),
-                                )));
+                                return Poll::Ready(Err(DataFusionError::ArrowError(e)));
                             }
                         };
 
@@ -469,7 +465,7 @@ impl SortPreservingMergeStream {
     /// Drains the in_progress row indexes, and builds a new RecordBatch from them
     ///
     /// Will then drop any batches for which all rows have been yielded to the output
-    fn build_record_batch(&mut self) -> ArrowResult<RecordBatch> {
+    fn build_record_batch(&mut self) -> Result<RecordBatch> {
         // Mapping from stream index to the index of the first buffer from that stream
         let mut buffer_idx = 0;
         let mut stream_to_buffer_idx = Vec::with_capacity(self.batches.len());
@@ -551,12 +547,12 @@ impl SortPreservingMergeStream {
             }
         }
 
-        RecordBatch::try_new(self.schema.clone(), columns)
+        RecordBatch::try_new(self.schema.clone(), columns).map_err(Into::into)
     }
 }
 
 impl Stream for SortPreservingMergeStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -572,7 +568,7 @@ impl SortPreservingMergeStream {
     fn poll_next_inner(
         self: &mut Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<ArrowResult<RecordBatch>>> {
+    ) -> Poll<Option<Result<RecordBatch>>> {
         if self.aborted {
             return Poll::Ready(None);
         }
@@ -628,7 +624,7 @@ impl SortPreservingMergeStream {
     fn init_loser_tree(
         self: &mut Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<ArrowResult<()>> {
+    ) -> Poll<Result<()>> {
         let num_streams = self.streams.num_streams();
 
         if !self.loser_tree.is_empty() {
@@ -681,7 +677,7 @@ impl SortPreservingMergeStream {
     fn update_loser_tree(
         self: &mut Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<ArrowResult<()>> {
+    ) -> Poll<Result<()>> {
         if self.loser_tree_adjusted {
             return Poll::Ready(Ok(()));
         }

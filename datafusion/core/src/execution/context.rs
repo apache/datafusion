@@ -65,7 +65,7 @@ use crate::logical_expr::{
     SetVariable, TableSource, TableType, UNNAMED_TABLE,
 };
 use crate::optimizer::OptimizerRule;
-use datafusion_sql::{ResolvedTableReference, TableReference};
+use datafusion_sql::{planner::ParserOptions, ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::repartition::Repartition;
@@ -222,7 +222,12 @@ impl SessionContext {
         batch: RecordBatch,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-        self.register_table(TableReference::Bare { table: table_name }, Arc::new(table))
+        self.register_table(
+            TableReference::Bare {
+                table: table_name.into(),
+            },
+            Arc::new(table),
+        )
     }
 
     /// Return the [RuntimeEnv] used to run queries with this [SessionContext]
@@ -233,6 +238,16 @@ impl SessionContext {
     /// Return the session_id of this Session
     pub fn session_id(&self) -> String {
         self.session_id.clone()
+    }
+
+    /// Return the enable_ident_normalization of this Session
+    pub fn enable_ident_normalization(&self) -> bool {
+        self.state
+            .read()
+            .config
+            .options
+            .sql_parser
+            .enable_ident_normalization
     }
 
     /// Return a copied version of config for this Session
@@ -546,19 +561,20 @@ impl SessionContext {
         table_type: TableType,
     ) -> Result<bool> {
         let table_ref = table_ref.into();
+        let table = table_ref.table().to_owned();
         let maybe_schema = {
             let state = self.state.read();
             let resolved = state.resolve_table_ref(table_ref);
             state
                 .catalog_list
-                .catalog(resolved.catalog)
-                .and_then(|c| c.schema(resolved.schema))
+                .catalog(&resolved.catalog)
+                .and_then(|c| c.schema(&resolved.schema))
         };
 
         if let Some(schema) = maybe_schema {
-            if let Some(table_provider) = schema.table(table_ref.table()).await {
+            if let Some(table_provider) = schema.table(&table).await {
                 if table_provider.table_type() == table_type {
-                    schema.deregister_table(table_ref.table())?;
+                    schema.deregister_table(&table)?;
                     return Ok(true);
                 }
             }
@@ -743,7 +759,10 @@ impl SessionContext {
             .with_listing_options(options)
             .with_schema(resolved_schema);
         let table = ListingTable::try_new(config)?.with_definition(sql_definition);
-        self.register_table(TableReference::Bare { table: name }, Arc::new(table))?;
+        self.register_table(
+            TableReference::Bare { table: name.into() },
+            Arc::new(table),
+        )?;
         Ok(())
     }
 
@@ -865,10 +884,11 @@ impl SessionContext {
         provider: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref = table_ref.into();
+        let table = table_ref.table().to_owned();
         self.state
             .read()
             .schema_for_ref(table_ref)?
-            .register_table(table_ref.table().to_owned(), provider)
+            .register_table(table, provider)
     }
 
     /// Deregisters the given table.
@@ -879,10 +899,11 @@ impl SessionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref = table_ref.into();
+        let table = table_ref.table().to_owned();
         self.state
             .read()
             .schema_for_ref(table_ref)?
-            .deregister_table(table_ref.table())
+            .deregister_table(&table)
     }
 
     /// Return true if the specified table exists in the schema provider.
@@ -891,11 +912,12 @@ impl SessionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<bool> {
         let table_ref = table_ref.into();
+        let table = table_ref.table().to_owned();
         Ok(self
             .state
             .read()
             .schema_for_ref(table_ref)?
-            .table_exist(table_ref.table()))
+            .table_exist(&table))
     }
 
     /// Retrieves a [`DataFrame`] representing a table previously
@@ -910,9 +932,10 @@ impl SessionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<DataFrame> {
         let table_ref = table_ref.into();
+        let table = table_ref.table().to_owned();
         let provider = self.table_provider(table_ref).await?;
         let plan = LogicalPlanBuilder::scan(
-            table_ref.table(),
+            &table,
             provider_as_source(Arc::clone(&provider)),
             None,
         )?
@@ -926,13 +949,11 @@ impl SessionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn TableProvider>> {
         let table_ref = table_ref.into();
+        let table = table_ref.table().to_owned();
         let schema = self.state.read().schema_for_ref(table_ref)?;
-        match schema.table(table_ref.table()).await {
+        match schema.table(&table).await {
             Some(ref provider) => Ok(Arc::clone(provider)),
-            _ => Err(DataFusionError::Plan(format!(
-                "No table named '{}'",
-                table_ref.table()
-            ))),
+            _ => Err(DataFusionError::Plan(format!("No table named '{table}'"))),
         }
     }
 
@@ -950,7 +971,7 @@ impl SessionContext {
             .state
             .read()
             // a bare reference will always resolve to the default catalog and schema
-            .schema_for_ref(TableReference::Bare { table: "" })?
+            .schema_for_ref(TableReference::Bare { table: "".into() })?
             .table_names()
             .iter()
             .cloned()
@@ -1212,6 +1233,12 @@ impl SessionConfig {
         self.options.optimizer.repartition_windows
     }
 
+    /// Do we execute sorts in a per-partition fashion and merge afterwards,
+    /// or do we coalesce partitions first and sort globally?
+    pub fn repartition_sorts(&self) -> bool {
+        self.options.optimizer.repartition_sorts
+    }
+
     /// Are statistics collected during execution?
     pub fn collect_statistics(&self) -> bool {
         self.options.execution.collect_statistics
@@ -1252,9 +1279,27 @@ impl SessionConfig {
         self
     }
 
+    /// Sets minimum file range size for repartitioning scans
+    pub fn with_repartition_file_min_size(mut self, size: usize) -> Self {
+        self.options.optimizer.repartition_file_min_size = size;
+        self
+    }
+
+    /// Enables or disables the use of repartitioning for file scans
+    pub fn with_repartition_file_scans(mut self, enabled: bool) -> Self {
+        self.options.optimizer.repartition_file_scans = enabled;
+        self
+    }
+
     /// Enables or disables the use of repartitioning for window functions to improve parallelism
     pub fn with_repartition_windows(mut self, enabled: bool) -> Self {
         self.options.optimizer.repartition_windows = enabled;
+        self
+    }
+
+    /// Enables or disables the use of per-partition sorting to improve parallelism
+    pub fn with_repartition_sorts(mut self, enabled: bool) -> Self {
+        self.options.optimizer.repartition_sorts = enabled;
         self
     }
 
@@ -1580,14 +1625,14 @@ impl SessionState {
         }
 
         self.catalog_list
-            .catalog(resolved_ref.catalog)
+            .catalog(&resolved_ref.catalog)
             .ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "failed to resolve catalog: {}",
                     resolved_ref.catalog
                 ))
             })?
-            .schema(resolved_ref.schema)
+            .schema(&resolved_ref.schema)
             .ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "failed to resolve schema: {}",
@@ -1736,19 +1781,31 @@ impl SessionState {
             tables: HashMap::with_capacity(relations.len()),
         };
 
+        let enable_ident_normalization =
+            self.config.options.sql_parser.enable_ident_normalization;
+        let parse_float_as_decimal =
+            self.config.options.sql_parser.parse_float_as_decimal;
         for relation in relations {
-            let reference = object_name_to_table_reference(relation)?;
+            let reference =
+                object_name_to_table_reference(relation, enable_ident_normalization)?;
+            let table = reference.table();
             let resolved = self.resolve_table_ref(reference.as_table_reference());
             if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
                 if let Ok(schema) = self.schema_for_ref(resolved) {
-                    if let Some(table) = schema.table(resolved.table).await {
+                    if let Some(table) = schema.table(table).await {
                         v.insert(provider_as_source(table));
                     }
                 }
             }
         }
 
-        let query = SqlToRel::new(&provider);
+        let query = SqlToRel::new_with_options(
+            &provider,
+            ParserOptions {
+                parse_float_as_decimal,
+                enable_ident_normalization,
+            },
+        );
         query.statement_to_plan(statement)
     }
 

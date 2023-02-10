@@ -31,7 +31,6 @@ use crate::physical_plan::{
 };
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
-use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
 use super::expressions::PhysicalSortExpr;
@@ -412,7 +411,7 @@ impl LimitStream {
     fn poll_and_skip(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<ArrowResult<RecordBatch>>> {
+    ) -> Poll<Option<Result<RecordBatch>>> {
         let input = self.input.as_mut().unwrap();
         loop {
             let poll = input.poll_next_unpin(cx);
@@ -469,7 +468,7 @@ impl LimitStream {
 }
 
 impl Stream for LimitStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,

@@ -144,6 +144,26 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, project_plan))
     }
 
+    /// Expand each list element of a column to multiple rows.
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let df = df.unnest_column("a")?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn unnest_column(self, column: &str) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .unnest_column(column)?
+            .build()?;
+        Ok(DataFrame::new(self.session_state, plan))
+    }
+
     /// Filter a DataFrame to only include rows that match the specified filter expression.
     ///
     /// ```
@@ -338,6 +358,55 @@ impl DataFrame {
                 join_type,
                 (left_cols.to_vec(), right_cols.to_vec()),
                 filter,
+            )?
+            .build()?;
+        Ok(DataFrame::new(self.session_state, plan))
+    }
+
+    /// Join this DataFrame with another DataFrame using the specified expressions.
+    ///
+    /// Simply a thin wrapper over [`join`](Self::join) where the join keys are not provided,
+    /// and the provided expressions are AND'ed together to form the filter expression.
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let left = ctx
+    ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?;
+    /// let right = ctx
+    ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?
+    ///     .select(vec![
+    ///         col("a").alias("a2"),
+    ///         col("b").alias("b2"),
+    ///         col("c").alias("c2"),
+    ///     ])?;
+    /// let join_on = left.join_on(
+    ///     right,
+    ///     JoinType::Inner,
+    ///     [col("a").not_eq(col("a2")), col("b").not_eq(col("b2"))],
+    /// )?;
+    /// let batches = join_on.collect().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn join_on(
+        self,
+        right: DataFrame,
+        join_type: JoinType,
+        on_exprs: impl IntoIterator<Item = Expr>,
+    ) -> Result<DataFrame> {
+        let expr = on_exprs.into_iter().reduce(Expr::and);
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .join(
+                right.plan,
+                join_type,
+                (Vec::<Column>::new(), Vec::<Column>::new()),
+                expr,
             )?
             .build()?;
         Ok(DataFrame::new(self.session_state, plan))
@@ -1016,6 +1085,49 @@ mod tests {
         assert_eq!(100, left_rows.iter().map(|x| x.num_rows()).sum::<usize>());
         assert_eq!(100, right_rows.iter().map(|x| x.num_rows()).sum::<usize>());
         assert_eq!(2008, join_rows.iter().map(|x| x.num_rows()).sum::<usize>());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_on() -> Result<()> {
+        let left = test_table_with_name("a")
+            .await?
+            .select_columns(&["c1", "c2"])?;
+        let right = test_table_with_name("b")
+            .await?
+            .select_columns(&["c1", "c2"])?;
+        let join = left.join_on(
+            right,
+            JoinType::Inner,
+            [col("a.c1").not_eq(col("b.c1")), col("a.c2").eq(col("b.c2"))],
+        )?;
+
+        let expected_plan = "Inner Join:  Filter: a.c1 != b.c1 AND a.c2 = b.c2\
+        \n  Projection: a.c1, a.c2\
+        \n    TableScan: a\
+        \n  Projection: b.c1, b.c2\
+        \n    TableScan: b";
+        assert_eq!(expected_plan, format!("{:?}", join.logical_plan()));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_ambiguous_filter() -> Result<()> {
+        let left = test_table_with_name("a")
+            .await?
+            .select_columns(&["c1", "c2"])?;
+        let right = test_table_with_name("b")
+            .await?
+            .select_columns(&["c1", "c2"])?;
+
+        let join = left
+            .join_on(right, JoinType::Inner, [col("c1").eq(col("c1"))])
+            .expect_err("join didn't fail check");
+        let expected =
+            "Error during planning: reference 'c1' is ambiguous, could be a.c1,b.c1;";
+        assert_eq!(join.to_string(), expected);
+
         Ok(())
     }
 

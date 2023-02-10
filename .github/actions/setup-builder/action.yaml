@@ -46,3 +46,7 @@ runs:
     - name: Enable backtraces
       shell: bash
       run: echo "RUST_BACKTRACE=1" >> $GITHUB_ENV
+    - name: Fixup git permissions
+      # https://github.com/actions/checkout/issues/766
+      shell: bash
+      run: git config --global --add safe.directory "$GITHUB_WORKSPACE"

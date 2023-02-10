@@ -161,21 +161,10 @@ macro_rules! typed_sum_delta_batch {
     }};
 }
 
-// TODO implement this in arrow-rs with simd
-// https://github.com/apache/arrow-rs/issues/1010
 fn sum_decimal_batch(values: &ArrayRef, precision: u8, scale: i8) -> Result<ScalarValue> {
     let array = downcast_value!(values, Decimal128Array);
-
-    if array.null_count() == array.len() {
-        return Ok(ScalarValue::Decimal128(None, precision, scale));
-    }
-
-    let result = array.into_iter().fold(0_i128, |s, element| match element {
-        Some(v) => s + v,
-        None => s,
-    });
-
-    Ok(ScalarValue::Decimal128(Some(result), precision, scale))
+    let result = compute::sum(array);
+    Ok(ScalarValue::Decimal128(result, precision, scale))
 }
 
 // sums the array and returns a ScalarValue of its corresponding type.

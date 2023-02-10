@@ -27,7 +27,6 @@ use crate::error::Result;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 
 use arrow::datatypes::SchemaRef;
-use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
 pub use datafusion_expr::Accumulator;
@@ -44,7 +43,7 @@ use std::task::{Context, Poll};
 use std::{any::Any, pin::Pin};
 
 /// Trait for types that stream [arrow::record_batch::RecordBatch]
-pub trait RecordBatchStream: Stream<Item = ArrowResult<RecordBatch>> {
+pub trait RecordBatchStream: Stream<Item = Result<RecordBatch>> {
     /// Returns the schema of this `RecordBatchStream`.
     ///
     /// Implementation of this trait should guarantee that all `RecordBatch`'s returned by this
@@ -76,7 +75,7 @@ impl RecordBatchStream for EmptyRecordBatchStream {
 }
 
 impl Stream for EmptyRecordBatchStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         self: Pin<&mut Self>,
@@ -661,6 +660,7 @@ pub mod stream;
 pub mod streaming;
 pub mod udaf;
 pub mod union;
+pub mod unnest;
 pub mod values;
 pub mod windows;
 
