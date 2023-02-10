@@ -293,20 +293,13 @@ config_namespace! {
         /// Should DataFusion execute sorts in a per-partition fashion and merge
         /// afterwards instead of coalescing first and sorting globally.
         /// With this flag is enabled, plans in the form below
-        ///
-        /// ```text
-        /// SortExec: [a@0 ASC]
-        ///   CoalescePartitionsExec
-        ///     RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-        /// ```
-        ///
+        ///      "SortExec: [a@0 ASC]",
+        ///      "  CoalescePartitionsExec",
+        ///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
         /// would turn into the plan below which performs better in multithreaded environments
-        ///
-        /// ```text
-        /// SortPreservingMergeExec: [a@0 ASC]
-        ///   SortExec: [a@0 ASC]
-        ///     RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-        /// ```
+        ///      "SortPreservingMergeExec: [a@0 ASC]",
+        ///      "  SortExec: [a@0 ASC]",
+        ///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
         pub repartition_sorts: bool, default = true
 
         /// When set to true, the logical plan optimizer will produce warning
