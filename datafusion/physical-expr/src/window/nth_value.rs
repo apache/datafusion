@@ -237,7 +237,6 @@ mod tests {
         let result = ranges
             .iter()
             .map(|range| evaluator.evaluate_inside_range(&values, range))
-            .into_iter()
             .collect::<Result<Vec<ScalarValue>>>()?;
         let result = ScalarValue::iter_to_array(result.into_iter())?;
         let result = as_int32_array(&result)?;

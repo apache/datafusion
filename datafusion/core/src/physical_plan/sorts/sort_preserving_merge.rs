@@ -191,7 +191,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 // Use tokio only if running from a tokio context (#2201)
                 let receivers = match tokio::runtime::Handle::try_current() {
                     Ok(_) => (0..input_partitions)
-                        .into_iter()
                         .map(|part_i| {
                             let (sender, receiver) = mpsc::channel(1);
                             let join_handle = spawn_execution(
@@ -355,10 +354,7 @@ impl SortPreservingMergeStream {
         batch_size: usize,
     ) -> Result<Self> {
         let stream_count = streams.len();
-        let batches = (0..stream_count)
-            .into_iter()
-            .map(|_| VecDeque::new())
-            .collect();
+        let batches = (0..stream_count).map(|_| VecDeque::new()).collect();
         tracking_metrics.init_mem_used(streams.iter().map(|s| s.mem_used).sum());
         let wrappers = streams.into_iter().map(|s| s.stream.fuse()).collect();
 
@@ -380,7 +376,7 @@ impl SortPreservingMergeStream {
             aborted: false,
             in_progress: vec![],
             next_batch_id: 0,
-            cursors: (0..stream_count).into_iter().map(|_| None).collect(),
+            cursors: (0..stream_count).map(|_| None).collect(),
             loser_tree: Vec::with_capacity(stream_count),
             loser_tree_adjusted: false,
             batch_size,
@@ -1060,7 +1056,6 @@ mod tests {
 
         // Split the sorted RecordBatch into multiple
         (0..batches)
-            .into_iter()
             .map(|batch_idx| {
                 let columns = (0..sorted.num_columns())
                     .map(|column_idx| {
