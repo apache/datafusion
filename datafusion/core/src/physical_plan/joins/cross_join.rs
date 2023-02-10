@@ -23,7 +23,6 @@ use futures::{Stream, TryStreamExt};
 use std::{any::Any, sync::Arc, task::Poll};
 
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
 use crate::execution::context::TaskContext;
@@ -345,7 +344,7 @@ fn build_batch(
     batch: &RecordBatch,
     left_data: &RecordBatch,
     schema: &Schema,
-) -> ArrowResult<RecordBatch> {
+) -> Result<RecordBatch> {
     // Repeat value on the left n times
     let arrays = left_data
         .columns()
@@ -364,11 +363,12 @@ fn build_batch(
             .cloned()
             .collect(),
     )
+    .map_err(Into::into)
 }
 
 #[async_trait]
 impl Stream for CrossJoinStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -384,7 +384,7 @@ impl CrossJoinStream {
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<ArrowResult<RecordBatch>>> {
+    ) -> std::task::Poll<Option<Result<RecordBatch>>> {
         let left_data = match ready!(self.left_fut.get(cx)) {
             Ok(left_data) => left_data,
             Err(e) => return Poll::Ready(Some(Err(e))),

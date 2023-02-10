@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-sql"
 description = "DataFusion SQL Query Planner"
-version = "17.0.0"
+version = "18.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "README.md"
@@ -37,11 +37,13 @@ default = ["unicode_expressions"]
 unicode_expressions = []
 
 [dependencies]
-arrow-schema = "31.0.0"
-datafusion-common = { path = "../common", version = "17.0.0" }
-datafusion-expr = { path = "../expr", version = "17.0.0" }
+arrow-schema = "32.0.0"
+datafusion-common = { path = "../common", version = "18.0.0" }
+datafusion-expr = { path = "../expr", version = "18.0.0" }
 log = "^0.4"
 sqlparser = "0.30"
 
 [dev-dependencies]
-rstest = "*"
+ctor = "0.1.22"
+env_logger = "0.10"
+rstest = "0.16"

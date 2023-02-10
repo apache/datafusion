@@ -54,7 +54,7 @@ select arrow_typeof(c1), arrow_typeof(c5) from decimal_simple where c1 > c5 limi
 Decimal128(10, 6) Decimal128(12, 7)
 
 
-query R
+query R rowsort
 SELECT c1 from decimal_simple;
 ----
 0.00001
@@ -74,7 +74,7 @@ SELECT c1 from decimal_simple;
 0.00005
 
 
-query R
+query R rowsort
 select c1 from decimal_simple where c1 > 0.000030;
 ----
 0.00004
@@ -88,7 +88,7 @@ select c1 from decimal_simple where c1 > 0.000030;
 0.00005
 
 
-query RRI?R
+query RRI?R rowsort
 select * from decimal_simple where c1 > c5;
 ----
 0.00002 0.000000000002 3 false 0.000019
@@ -124,29 +124,29 @@ select arrow_typeof(avg(c1)), avg(c1) from decimal_simple;
 Decimal128(14, 10) 0.0000366666
 
 
-query RRI?R
+query RRI?R rowsort
 select * from decimal_simple where c1=CAST(0.00002 as Decimal(10,8));
 ----
 0.00002 0.000000000002 2 true 0.000025
 0.00002 0.000000000002 3 false 0.000019
 
 
-query RI
+query RI rowsort
 select c2,c3 from decimal_simple where c1!=0.00002;
 ----
 0.000000000001 1
 0.000000000003 4
 0.000000000003 5
 0.000000000003 5
-0.000000000004 5
 0.000000000004 12
 0.000000000004 14
+0.000000000004 5
 0.000000000004 8
-0.000000000005 9
+0.000000000005 1
+0.000000000005 100
 0.000000000005 4
 0.000000000005 8
-0.000000000005 100
-0.000000000005 1
+0.000000000005 9
 
 
 query RRI?R
@@ -155,7 +155,7 @@ select * from decimal_simple where 0.00002 > c1;
 0.00001 0.000000000001 1 true 0.000014
 
 
-query RRI?R
+query RRI?R rowsort
 select * from decimal_simple where c1 <= 0.00002;
 ----
 0.00001 0.000000000001 1 true 0.000014
@@ -163,24 +163,24 @@ select * from decimal_simple where c1 <= 0.00002;
 0.00002 0.000000000002 3 false 0.000019
 
 
-query RRI?R
+query RRI?R rowsort
 select * from decimal_simple where c1 > 0.00002;
 ----
 0.00003 0.000000000003 4 true 0.000032
 0.00003 0.000000000003 5 false 0.000035
 0.00003 0.000000000003 5 true 0.000011
-0.00004 0.000000000004 5 true 0.000044
 0.00004 0.000000000004 12 false 0.00004
 0.00004 0.000000000004 14 true 0.00004
+0.00004 0.000000000004 5 true 0.000044
 0.00004 0.000000000004 8 false 0.000044
-0.00005 0.000000000005 9 true 0.000052
+0.00005 0.000000000005 1 false 0.0001
+0.00005 0.000000000005 100 true 0.000068
 0.00005 0.000000000005 4 true 0.000078
 0.00005 0.000000000005 8 false 0.000033
-0.00005 0.000000000005 100 true 0.000068
-0.00005 0.000000000005 1 false 0.0001
+0.00005 0.000000000005 9 true 0.000052
 
 
-query RRI?R
+query RRI?R rowsort
 select * from decimal_simple where c1 >= 0.00002;
 ----
 0.00002 0.000000000002 2 true 0.000025
@@ -188,15 +188,15 @@ select * from decimal_simple where c1 >= 0.00002;
 0.00003 0.000000000003 4 true 0.000032
 0.00003 0.000000000003 5 false 0.000035
 0.00003 0.000000000003 5 true 0.000011
-0.00004 0.000000000004 5 true 0.000044
 0.00004 0.000000000004 12 false 0.00004
 0.00004 0.000000000004 14 true 0.00004
+0.00004 0.000000000004 5 true 0.000044
 0.00004 0.000000000004 8 false 0.000044
-0.00005 0.000000000005 9 true 0.000052
+0.00005 0.000000000005 1 false 0.0001
+0.00005 0.000000000005 100 true 0.000068
 0.00005 0.000000000005 4 true 0.000078
 0.00005 0.000000000005 8 false 0.000033
-0.00005 0.000000000005 100 true 0.000068
-0.00005 0.000000000005 1 false 0.0001
+0.00005 0.000000000005 9 true 0.000052
 
 
 query ?
@@ -205,7 +205,7 @@ select arrow_typeof(c1+1) from decimal_simple limit 1;
 Decimal128(27, 6)
 
 
-query R
+query R rowsort
 select c1+1 from decimal_simple;
 ----
 1.00001
@@ -232,23 +232,23 @@ select arrow_typeof(c1+c5) from decimal_simple limit 1;
 Decimal128(13, 7)
 
 
-query R
+query R rowsort
 select c1+c5 from decimal_simple;
 ----
 0.000024
-0.000045
 0.000039
+0.000041
+0.000045
 0.000062
 0.000065
-0.000041
+0.00008
+0.00008
+0.000083
 0.000084
-0.00008
-0.00008
 0.000084
 0.000102
-0.000128
-0.000083
 0.000118
+0.000128
 0.00015
 
 
@@ -258,24 +258,24 @@ select arrow_typeof(c1-1) from decimal_simple limit 1;
 Decimal128(27, 6)
 
 
-query R
+query R rowsort
 select c1-1 from decimal_simple;
 ----
+-0.99995
+-0.99995
+-0.99995
+-0.99995
+-0.99995
+-0.99996
+-0.99996
+-0.99996
+-0.99996
+-0.99997
+-0.99997
+-0.99997
+-0.99998
+-0.99998
 -0.99999
--0.99998
--0.99998
--0.99997
--0.99997
--0.99997
--0.99996
--0.99996
--0.99996
--0.99996
--0.99995
--0.99995
--0.99995
--0.99995
--0.99995
 
 
 query ?
@@ -284,24 +284,24 @@ select arrow_typeof(c1-c5) from decimal_simple limit 1;
 Decimal128(13, 7)
 
 
-query R
+query R rowsort
 select c1-c5 from decimal_simple;
 ----
+-0.000002
+-0.000002
+-0.000004
+-0.000004
 -0.000004
 -0.000005
-0.000001
--0.000002
 -0.000005
-0.000019
--0.000004
-0
-0
--0.000004
--0.000002
--0.000028
-0.000017
 -0.000018
+-0.000028
 -0.00005
+0
+0
+0.000001
+0.000017
+0.000019
 
 
 query ?
@@ -310,7 +310,7 @@ select arrow_typeof(c1*20) from decimal_simple limit 1;
 Decimal128(31, 6)
 
 
-query R
+query R rowsort
 select c1*20 from decimal_simple;
 ----
 0.0002
@@ -336,23 +336,23 @@ select arrow_typeof(c1*c5) from decimal_simple limit 1;
 Decimal128(23, 13)
 
 
-query R
+query R rowsort
 select c1*c5 from decimal_simple;
 ----
 0.00000000014
-0.0000000005
+0.00000000033
 0.00000000038
+0.0000000005
 0.00000000096
 0.00000000105
-0.00000000033
+0.0000000016
+0.0000000016
+0.00000000165
 0.00000000176
-0.0000000016
-0.0000000016
 0.00000000176
 0.0000000026
-0.0000000039
-0.00000000165
 0.0000000034
+0.0000000039
 0.000000005
 
 
@@ -362,7 +362,7 @@ select arrow_typeof(c1/cast(0.00001 as decimal(5,5))) from decimal_simple limit 
 Decimal128(21, 12)
 
 
-query R
+query R rowsort
 select c1/cast(0.00001 as decimal(5,5)) from decimal_simple;
 ----
 1
@@ -388,24 +388,24 @@ select arrow_typeof(c1/c5) from decimal_simple limit 1;
 Decimal128(30, 19)
 
 
-query R
+query R rowsort
 select c1/c5 from decimal_simple;
 ----
-0.714285714286
-0.8
-1.052631578947
-0.9375
-0.857142857143
-2.727272727273
-0.909090909091
-1
-1
-0.909090909091
-0.961538461538
-0.641025641026
-1.515151515152
-0.735294117647
 0.5
+0.641025641026
+0.714285714286
+0.735294117647
+0.8
+0.857142857143
+0.909090909091
+0.909090909091
+0.9375
+0.961538461538
+1
+1
+1.052631578947
+1.515151515152
+2.727272727273
 
 
 query ?
@@ -414,24 +414,24 @@ select arrow_typeof(c5%cast(0.00001 as decimal(5,5))) from decimal_simple limit 
 Decimal128(7, 7)
 
 
-query R
+query R rowsort
 select c5%cast(0.00001 as decimal(5,5)) from decimal_simple;
 ----
-0.000004
-0.000005
-0.000009
-0.000002
-0.000005
+0
+0
+0
 0.000001
-0.000004
-0
-0
-0.000004
 0.000002
-0.000008
+0.000002
 0.000003
+0.000004
+0.000004
+0.000004
+0.000005
+0.000005
 0.000008
-0
+0.000008
+0.000009
 
 
 query ?
@@ -440,22 +440,22 @@ select arrow_typeof(c1%c5) from decimal_simple limit 1;
 Decimal128(11, 7)
 
 
-query R
+query R rowsort
 select c1%c5 from decimal_simple;
 ----
-0.00001
-0.00002
+0
+0
 0.000001
-0.00003
-0.00003
 0.000008
-0.00004
-0
-0
-0.00004
-0.00005
-0.00005
+0.00001
 0.000017
+0.00002
+0.00003
+0.00003
+0.00004
+0.00004
+0.00005
+0.00005
 0.00005
 0.00005
 
@@ -466,7 +466,7 @@ select arrow_typeof(abs(c1)) from decimal_simple limit 1;
 Float64
 
 
-query R
+query R rowsort
 SELECT abs(c1) from decimal_simple;
 ----
 0.00001

@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_substrait::consumer;
-use datafusion_substrait::producer;
+use datafusion_substrait::logical_plan::{consumer, producer};
 
 #[cfg(test)]
 mod tests {
@@ -184,6 +183,11 @@ mod tests {
             \n    TableScan: data projection=[a]",
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn roundtrip_inlist() -> Result<()> {
+        roundtrip("SELECT * FROM data WHERE a IN (1, 2, 3)").await
     }
 
     #[tokio::test]

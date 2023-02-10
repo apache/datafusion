@@ -26,7 +26,7 @@ use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, Distinct, Extension, Filter, Join,
     Limit, Partitioning, Prepare, Projection, Repartition, Sort as SortPlan, Subquery,
-    SubqueryAlias, Union, Values, Window,
+    SubqueryAlias, Union, Unnest, Values, Window,
 };
 use crate::{
     BinaryExpr, Cast, DmlStatement, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
@@ -37,7 +37,7 @@ use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 ///  The value to which `COUNT(*)` is expanded to in
@@ -739,6 +739,35 @@ pub fn from_plan(
             Ok(plan.clone())
         }
         LogicalPlan::DescribeTable(_) => Ok(plan.clone()),
+        LogicalPlan::Unnest(Unnest { column, schema, .. }) => {
+            // Update schema with unnested column type.
+            let input = Arc::new(inputs[0].clone());
+            let nested_field = input.schema().field_from_column(column)?;
+            let unnested_field = schema.field_from_column(column)?;
+            let fields = input
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| {
+                    if f == nested_field {
+                        unnested_field.clone()
+                    } else {
+                        f.clone()
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            let schema = Arc::new(DFSchema::new_with_metadata(
+                fields,
+                input.schema().metadata().clone(),
+            )?);
+
+            Ok(LogicalPlan::Unnest(Unnest {
+                input,
+                column: column.clone(),
+                schema,
+            }))
+        }
     }
 }
 
@@ -992,6 +1021,65 @@ pub fn find_valid_equijoin_key_pair(
     };
 
     Ok(join_key_pair)
+}
+
+/// Ensure any column reference of the expression is unambiguous.
+/// Assume we have two schema:
+/// schema1: a, b ,c
+/// schema2: a, d, e
+///
+/// `schema1.a + schema2.a` is unambiguous.
+/// `a + d` is ambiguous, because `a` may come from schema1 or schema2.
+pub fn ensure_any_column_reference_is_unambiguous(
+    expr: &Expr,
+    schemas: &[&DFSchema],
+) -> Result<()> {
+    if schemas.len() == 1 {
+        return Ok(());
+    }
+    // all referenced columns in the expression that don't have relation
+    let referenced_cols = expr.to_columns()?;
+    let mut no_relation_cols = referenced_cols
+        .iter()
+        .filter_map(|col| {
+            if col.relation.is_none() {
+                Some((col.name.as_str(), 0))
+            } else {
+                None
+            }
+        })
+        .collect::<HashMap<&str, u8>>();
+    // find the name of the column existing in multi schemas.
+    let ambiguous_col_name = schemas
+        .iter()
+        .flat_map(|schema| schema.fields())
+        .map(|field| field.name())
+        .find(|col_name| {
+            no_relation_cols.entry(col_name).and_modify(|v| *v += 1);
+            matches!(
+                no_relation_cols.get_key_value(col_name.as_str()),
+                Some((_, 2..))
+            )
+        });
+
+    if let Some(col_name) = ambiguous_col_name {
+        let maybe_field = schemas
+            .iter()
+            .flat_map(|schema| {
+                schema
+                    .field_with_unqualified_name(col_name)
+                    .map(|f| f.qualified_name())
+                    .ok()
+            })
+            .collect::<Vec<_>>();
+        Err(DataFusionError::Plan(format!(
+            "reference \'{}\' is ambiguous, could be {};",
+            col_name,
+            maybe_field.join(","),
+        )))
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

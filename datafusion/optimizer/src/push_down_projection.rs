@@ -291,6 +291,10 @@ fn optimize_plan(
         // scans:
         // * remove un-used columns from the scan projection
         LogicalPlan::TableScan(scan) => {
+            // filter expr may not exist in expr in projection.
+            // like: TableScan: t1 projection=[bool_col, int_col], full_filters=[t1.id = Int32(1)]
+            // projection=[bool_col, int_col] don't contain `ti.id`.
+            exprlist_to_columns(&scan.filters, &mut new_required_columns)?;
             push_down_scan(scan, &new_required_columns, has_projection)
         }
         LogicalPlan::Explain { .. } => Err(DataFusionError::Internal(
@@ -412,6 +416,7 @@ fn optimize_plan(
         | LogicalPlan::DescribeTable(_)
         | LogicalPlan::CrossJoin(_)
         | LogicalPlan::Dml(_)
+        | LogicalPlan::Unnest(_)
         | LogicalPlan::Extension { .. }
         | LogicalPlan::Prepare(_) => {
             let expr = plan.expressions();

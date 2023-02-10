@@ -30,6 +30,9 @@ use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use postgres_types::Type;
 use rust_decimal::Decimal;
 use tokio_postgres::{Column, Row};
+use types::PgRegtype;
+
+mod types;
 
 // default connect string, can be overridden by the `PG_URL` environment variable
 const PG_URI: &str = "postgresql://postgres@127.0.0.1/test";
@@ -245,6 +248,7 @@ fn cell_to_string(row: &Row, column: &Column, idx: usize) -> String {
         }
         Type::FLOAT4 => make_string!(row, idx, f32, f32_to_str),
         Type::FLOAT8 => make_string!(row, idx, f64, f64_to_str),
+        Type::REGTYPE => make_string!(row, idx, PgRegtype),
         _ => unimplemented!("Unsupported type: {}", column.type_().name()),
     }
 }

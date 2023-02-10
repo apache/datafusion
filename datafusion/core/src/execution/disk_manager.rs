@@ -139,6 +139,9 @@ fn create_local_dirs(local_dirs: Vec<PathBuf>) -> Result<Vec<TempDir>> {
     local_dirs
         .iter()
         .map(|root| {
+            if !std::path::Path::new(root).exists() {
+                std::fs::create_dir(root)?;
+            }
             Builder::new()
                 .prefix("datafusion-")
                 .tempdir_in(root)
@@ -212,6 +215,16 @@ mod tests {
             manager.create_tmp_file("Testing").unwrap_err().to_string(),
             "Resources exhausted: Memory Exhausted while Testing (DiskManager is disabled)",
         )
+    }
+
+    #[test]
+    fn test_disk_manager_create_spill_folder() {
+        let config = DiskManagerConfig::new_specified(vec!["DOESNT_EXIST".into()]);
+
+        DiskManager::try_new(config)
+            .unwrap()
+            .create_tmp_file("Testing")
+            .unwrap();
     }
 
     /// Asserts that `file_path` is found anywhere in any of `dir` directories

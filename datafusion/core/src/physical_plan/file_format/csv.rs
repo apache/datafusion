@@ -21,7 +21,6 @@ use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::{SessionState, TaskContext};
 use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::file_format::delimited_stream::newline_delimited_stream;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -35,12 +34,16 @@ use arrow::datatypes::SchemaRef;
 
 use bytes::Buf;
 
+use crate::physical_plan::common::AbortOnDropSingle;
+use bytes::Bytes;
+use futures::ready;
 use futures::{StreamExt, TryStreamExt};
 use object_store::{GetResult, ObjectStore};
 use std::any::Any;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::task::Poll;
 use tokio::task::{self, JoinHandle};
 
 use super::{get_output_ordering, FileScanConfig};
@@ -196,18 +199,32 @@ struct CsvConfig {
 }
 
 impl CsvConfig {
-    fn open<R: std::io::Read>(&self, reader: R, first_chunk: bool) -> csv::Reader<R> {
+    fn open<R: std::io::Read>(&self, reader: R) -> csv::Reader<R> {
         let datetime_format = None;
         csv::Reader::new(
             reader,
             Arc::clone(&self.file_schema),
-            self.has_header && first_chunk,
+            self.has_header,
             Some(self.delimiter),
             self.batch_size,
             None,
             self.file_projection.clone(),
             datetime_format,
         )
+    }
+
+    fn builder(&self) -> csv::ReaderBuilder {
+        let mut builder = csv::ReaderBuilder::new()
+            .with_schema(self.file_schema.clone())
+            .with_delimiter(self.delimiter)
+            .with_batch_size(self.batch_size)
+            .has_header(self.has_header);
+
+        if let Some(proj) = &self.file_projection {
+            builder = builder.with_projection(proj.clone());
+        }
+
+        builder
     }
 }
 
@@ -224,20 +241,38 @@ impl FileOpener for CsvOpener {
             match config.object_store.get(file_meta.location()).await? {
                 GetResult::File(file, _) => {
                     let decoder = file_compression_type.convert_read(file)?;
-                    Ok(futures::stream::iter(config.open(decoder, true)).boxed())
+                    Ok(futures::stream::iter(config.open(decoder)).boxed())
                 }
                 GetResult::Stream(s) => {
-                    let mut first_chunk = true;
-                    let s = s.map_err(Into::<DataFusionError>::into);
-                    let decoder = file_compression_type.convert_stream(s)?;
-                    Ok(newline_delimited_stream(decoder)
-                        .map_ok(move |bytes| {
-                            let reader = config.open(bytes.reader(), first_chunk);
-                            first_chunk = false;
-                            futures::stream::iter(reader)
-                        })
-                        .try_flatten()
-                        .boxed())
+                    let mut decoder = config.builder().build_decoder();
+                    let s = s.map_err(DataFusionError::from);
+                    let mut input = file_compression_type.convert_stream(s)?.fuse();
+                    let mut buffered = Bytes::new();
+
+                    let s = futures::stream::poll_fn(move |cx| {
+                        loop {
+                            if buffered.is_empty() {
+                                match ready!(input.poll_next_unpin(cx)) {
+                                    Some(Ok(b)) => buffered = b,
+                                    Some(Err(e)) => {
+                                        return Poll::Ready(Some(Err(e.into())))
+                                    }
+                                    None => {}
+                                };
+                            }
+                            let decoded = match decoder.decode(buffered.as_ref()) {
+                                // Note: the decoder needs to be called with an empty
+                                // array to delimt the final record
+                                Ok(0) => break,
+                                Ok(decoded) => decoded,
+                                Err(e) => return Poll::Ready(Some(Err(e))),
+                            };
+                            buffered.advance(decoded);
+                        }
+
+                        Poll::Ready(decoder.flush().transpose())
+                    });
+                    Ok(s.boxed())
                 }
             }
         }))
@@ -252,38 +287,39 @@ pub async fn plan_to_csv(
     let path = path.as_ref();
     // create directory to contain the CSV files (one per partition)
     let fs_path = Path::new(path);
-    match fs::create_dir(fs_path) {
-        Ok(()) => {
-            let mut tasks = vec![];
-            for i in 0..plan.output_partitioning().partition_count() {
-                let plan = plan.clone();
-                let filename = format!("part-{i}.csv");
-                let path = fs_path.join(filename);
-                let file = fs::File::create(path)?;
-                let mut writer = csv::Writer::new(file);
-                let task_ctx = Arc::new(TaskContext::from(state));
-                let stream = plan.execute(i, task_ctx)?;
-                let handle: JoinHandle<Result<()>> = task::spawn(async move {
-                    stream
-                        .map(|batch| writer.write(&batch?))
-                        .try_collect()
-                        .await
-                        .map_err(DataFusionError::from)
-                });
-                tasks.push(handle);
-            }
-            futures::future::join_all(tasks)
-                .await
-                .into_iter()
-                .try_for_each(|result| {
-                    result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
-                })?;
-            Ok(())
-        }
-        Err(e) => Err(DataFusionError::Execution(format!(
+    if let Err(e) = fs::create_dir(fs_path) {
+        return Err(DataFusionError::Execution(format!(
             "Could not create directory {path}: {e:?}"
-        ))),
+        )));
     }
+
+    let mut tasks = vec![];
+    for i in 0..plan.output_partitioning().partition_count() {
+        let plan = plan.clone();
+        let filename = format!("part-{i}.csv");
+        let path = fs_path.join(filename);
+        let file = fs::File::create(path)?;
+        let mut writer = csv::Writer::new(file);
+        let task_ctx = Arc::new(TaskContext::from(state));
+        let stream = plan.execute(i, task_ctx)?;
+
+        let handle: JoinHandle<Result<()>> = task::spawn(async move {
+            stream
+                .map(|batch| writer.write(&batch?))
+                .try_collect()
+                .await
+                .map_err(DataFusionError::from)
+        });
+        tasks.push(AbortOnDropSingle::new(handle));
+    }
+
+    futures::future::join_all(tasks)
+        .await
+        .into_iter()
+        .try_for_each(|result| {
+            result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
+        })?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -452,7 +488,7 @@ mod tests {
         let err = it.next().await.unwrap().unwrap_err().to_string();
         assert_eq!(
             err,
-            "Csv error: incorrect number of fields for line 1, expected 14 got 13"
+            "Arrow error: Csv error: incorrect number of fields for line 1, expected 14 got 13"
         );
         Ok(())
     }
@@ -612,6 +648,38 @@ mod tests {
             )),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn test_no_trailing_delimiter() {
+        let session_ctx = SessionContext::new();
+        let store = object_store::memory::InMemory::new();
+
+        let data = bytes::Bytes::from("a,b\n1,2\n3,4");
+        let path = object_store::path::Path::from("a.csv");
+        store.put(&path, data).await.unwrap();
+
+        session_ctx
+            .runtime_env()
+            .register_object_store("memory", "", Arc::new(store));
+
+        let df = session_ctx
+            .read_csv("memory:///", CsvReadOptions::new())
+            .await
+            .unwrap();
+
+        let result = df.collect().await.unwrap();
+
+        let expected = vec![
+            "+---+---+",
+            "| a | b |",
+            "+---+---+",
+            "| 1 | 2 |",
+            "| 3 | 4 |",
+            "+---+---+",
+        ];
+
+        crate::assert_batches_eq!(expected, &result);
     }
 
     #[tokio::test]

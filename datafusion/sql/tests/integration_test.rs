@@ -36,6 +36,12 @@ use datafusion_sql::planner::{ContextProvider, ParserOptions, SqlToRel};
 
 use rstest::rstest;
 
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    let _ = env_logger::try_init();
+}
+
 #[test]
 fn parse_decimals() {
     let test_data = [
@@ -58,8 +64,41 @@ fn parse_decimals() {
             &expected,
             ParserOptions {
                 parse_float_as_decimal: true,
+                enable_ident_normalization: false,
             },
         );
+    }
+}
+
+#[test]
+fn parse_ident_normalization() {
+    let test_data = [
+        (
+            "SELECT age FROM person",
+            "Ok(Projection: person.age\n  TableScan: person)",
+            true,
+        ),
+        (
+            "SELECT AGE FROM PERSON",
+            "Ok(Projection: person.age\n  TableScan: person)",
+            true,
+        ),
+        (
+            "SELECT AGE FROM PERSON",
+            "Err(Plan(\"No table named: PERSON found\"))",
+            false,
+        ),
+    ];
+
+    for (sql, expected, enable_ident_normalization) in test_data {
+        let plan = logical_plan_with_options(
+            sql,
+            ParserOptions {
+                parse_float_as_decimal: false,
+                enable_ident_normalization,
+            },
+        );
+        assert_eq!(expected, format!("{plan:?}"));
     }
 }
 
@@ -165,11 +204,58 @@ fn plan_insert() {
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
     let plan = r#"
 Dml: op=[Insert] table=[person]
-  Projection: CAST(column1 AS id AS UInt32), column2 AS first_name, column3 AS last_name
+  Projection: CAST(column1 AS UInt32) AS id, column2 AS first_name, column3 AS last_name
     Values: (Int64(1), Utf8("Alan"), Utf8("Turing"))
     "#
     .trim();
     quick_test(sql, plan);
+}
+
+#[test]
+fn plan_insert_no_target_columns() {
+    let sql = "INSERT INTO test_decimal VALUES (1, 2), (3, 4)";
+    let plan = r#"
+Dml: op=[Insert] table=[test_decimal]
+  Projection: CAST(column1 AS Int32) AS id, CAST(column2 AS Decimal128(10, 2)) AS price
+    Values: (Int64(1), Int64(2)), (Int64(3), Int64(4))
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[rstest]
+#[case::duplicate_columns(
+    "INSERT INTO test_decimal (id, price, price) VALUES (1, 2, 3), (4, 5, 6)",
+    "Schema error: Schema contains duplicate unqualified field name 'price'"
+)]
+#[case::non_existing_column(
+    "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
+    "Schema error: No field named 'nonexistent'. Valid fields are 'id', 'price'."
+)]
+#[case::type_mismatch(
+    "INSERT INTO test_decimal SELECT '2022-01-01', to_timestamp('2022-01-01T12:00:00')",
+    "Error during planning: Cannot automatically convert Timestamp(Nanosecond, None) to Decimal128(10, 2)"
+)]
+#[case::target_column_count_mismatch(
+    "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2)",
+    "Error during planning: Column count doesn't match insert query!"
+)]
+#[case::source_column_count_mismatch(
+    "INSERT INTO person VALUES ($1, $2)",
+    "Error during planning: Column count doesn't match insert query!"
+)]
+#[case::extra_placeholder(
+    "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2, $3, $4)",
+    "Error during planning: Placeholder $4 refers to a non existent column"
+)]
+#[case::placeholder_type_unresolved(
+    "INSERT INTO person (id, first_name, last_name) VALUES ($2, $4, $6)",
+    "Error during planning: Placeholder type could not be resolved"
+)]
+#[test]
+fn test_insert_schema_errors(#[case] sql: &str, #[case] error: &str) {
+    let err = logical_plan(sql).unwrap_err();
+    assert_eq!(err.to_string(), error)
 }
 
 #[test]
@@ -429,7 +515,7 @@ fn select_with_ambiguous_column() {
     let sql = "SELECT id FROM person a, person b";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Internal(\"column reference id is ambiguous\")",
+        "Plan(\"column reference id is ambiguous\")",
         format!("{err:?}")
     );
 }
@@ -445,6 +531,16 @@ fn join_with_ambiguous_column() {
                         \n    SubqueryAlias: b\
                         \n      TableScan: person";
     quick_test(sql, expected);
+}
+
+#[test]
+fn where_selection_with_ambiguous_column() {
+    let sql = "SELECT * FROM person a, person b WHERE id = id + 1";
+    let err = logical_plan(sql).expect_err("query should have failed");
+    assert_eq!(
+        "Plan(\"column reference id is ambiguous\")",
+        format!("{err:?}")
+    );
 }
 
 #[test]
@@ -2261,6 +2357,48 @@ fn select_multibyte_column() {
     quick_test(sql, expected);
 }
 
+#[test]
+fn select_groupby_orderby() {
+    // ensure that references are correctly resolved in the order by clause
+    // see https://github.com/apache/arrow-datafusion/issues/4854
+    let sql = r#"SELECT
+  avg(age) AS "value",
+  date_trunc('month', birth_date) AS "birth_date"
+  FROM person GROUP BY birth_date ORDER BY birth_date;
+"#;
+    // expect that this is not an ambiguous reference
+    let expected =
+        "Sort: birth_date ASC NULLS LAST\
+         \n  Projection: AVG(person.age) AS value, datetrunc(Utf8(\"month\"), person.birth_date) AS birth_date\
+         \n    Aggregate: groupBy=[[person.birth_date]], aggr=[[AVG(person.age)]]\
+         \n      TableScan: person";
+    quick_test(sql, expected);
+
+    // Use fully qualified `person.birth_date` as argument to date_trunc, plan should be the same
+    let sql = r#"SELECT
+  avg(age) AS "value",
+  date_trunc('month', person.birth_date) AS "birth_date"
+  FROM person GROUP BY birth_date ORDER BY birth_date;
+"#;
+    quick_test(sql, expected);
+
+    // Use fully qualified `person.birth_date` as group by, plan should be the same
+    let sql = r#"SELECT
+  avg(age) AS "value",
+  date_trunc('month', birth_date) AS "birth_date"
+  FROM person GROUP BY person.birth_date ORDER BY birth_date;
+"#;
+    quick_test(sql, expected);
+
+    // Use fully qualified `person.birth_date` in both group and date_trunc, plan should be the same
+    let sql = r#"SELECT
+  avg(age) AS "value",
+  date_trunc('month', person.birth_date) AS "birth_date"
+  FROM person GROUP BY person.birth_date ORDER BY birth_date;
+"#;
+    quick_test(sql, expected);
+}
+
 fn logical_plan(sql: &str) -> Result<LogicalPlan> {
     logical_plan_with_options(sql, ParserOptions::default())
 }
@@ -3390,6 +3528,47 @@ Projection: person.id, person.age
 }
 
 #[test]
+fn test_prepare_statement_infer_types_subquery() {
+    let sql = "SELECT id, age FROM person WHERE age = (select max(age) from person where id = $1)";
+
+    let expected_plan = r#"
+Projection: person.id, person.age
+  Filter: person.age = (<subquery>)
+    Subquery:
+      Projection: MAX(person.age)
+        Aggregate: groupBy=[[]], aggr=[[MAX(person.age)]]
+          Filter: person.id = $1
+            TableScan: person
+    TableScan: person
+        "#
+    .trim();
+
+    let expected_dt = "[Int32]";
+    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([("$1".to_string(), Some(DataType::UInt32))]);
+    assert_eq!(actual_types, expected_types);
+
+    // replace params with values
+    let param_values = vec![ScalarValue::UInt32(Some(10))];
+    let expected_plan = r#"
+Projection: person.id, person.age
+  Filter: person.age = (<subquery>)
+    Subquery:
+      Projection: MAX(person.age)
+        Aggregate: groupBy=[[]], aggr=[[MAX(person.age)]]
+          Filter: person.id = UInt32(10)
+            TableScan: person
+    TableScan: person
+        "#
+    .trim();
+    let plan = plan.replace_params_with_values(&param_values).unwrap();
+
+    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+}
+
+#[test]
 fn test_prepare_statement_update_infer() {
     let sql = "update person set age=$1 where id=$2";
 
@@ -3462,36 +3641,6 @@ Dml: op=[Insert] table=[person]
     let plan = plan.replace_params_with_values(&param_values).unwrap();
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
-}
-
-#[test]
-#[should_panic(expected = "Placeholder $4 refers to a non existent column")]
-fn test_prepare_statement_insert_infer_gt() {
-    let sql = "insert into person (id, first_name, last_name) values ($1, $2, $3, $4)";
-
-    let expected_plan = r#""#.trim();
-    let expected_dt = "[Int32]";
-    let _ = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
-}
-
-#[test]
-#[should_panic(expected = "value: Plan(\"Column count doesn't match insert query!\")")]
-fn test_prepare_statement_insert_infer_lt() {
-    let sql = "insert into person (id, first_name, last_name) values ($1, $2)";
-
-    let expected_plan = r#""#.trim();
-    let expected_dt = "[Int32]";
-    let _ = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
-}
-
-#[test]
-#[should_panic(expected = "value: Plan(\"Placeholder type could not be resolved\")")]
-fn test_prepare_statement_insert_infer_gap() {
-    let sql = "insert into person (id, first_name, last_name) values ($2, $4, $6)";
-
-    let expected_plan = r#""#.trim();
-    let expected_dt = "[Int32]";
-    let _ = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 }
 
 #[test]

@@ -47,7 +47,7 @@ use arrow::{
 };
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, Cast, TryCast};
-use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
+use datafusion_expr::expr_rewriter::rewrite_expr;
 use datafusion_expr::{binary_expr, cast, try_cast, ExprSchemable};
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr::expressions::Literal;
@@ -631,23 +631,9 @@ fn rewrite_column_expr(
     column_old: &Column,
     column_new: &Column,
 ) -> Result<Expr> {
-    struct ColumnReplacer<'a> {
-        old: &'a Column,
-        new: &'a Column,
-    }
-
-    impl<'a> ExprRewriter for ColumnReplacer<'a> {
-        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-            match expr {
-                Expr::Column(c) if c == *self.old => Ok(Expr::Column(self.new.clone())),
-                _ => Ok(expr),
-            }
-        }
-    }
-
-    e.rewrite(&mut ColumnReplacer {
-        old: column_old,
-        new: column_new,
+    rewrite_expr(e, |expr| match expr {
+        Expr::Column(c) if c == *column_old => Ok(Expr::Column(column_new.clone())),
+        _ => Ok(expr),
     })
 }
 
