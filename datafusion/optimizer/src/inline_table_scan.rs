@@ -24,7 +24,7 @@ use datafusion_common::Result;
 use datafusion_expr::{logical_plan::LogicalPlan, Expr, LogicalPlanBuilder, TableScan};
 
 /// Optimization rule that inlines TableScan that provide a [LogicalPlan]
-/// ([DataFrame] / [ViewTable])
+/// (DataFrame / ViewTable)
 #[derive(Default)]
 pub struct InlineTableScan;
 

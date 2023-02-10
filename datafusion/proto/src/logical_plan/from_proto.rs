@@ -113,13 +113,13 @@ impl Error {
 pub trait FromOptionalField<T> {
     /// Converts an optional protobuf field to an option of a different type
     ///
-    /// Returns None if the option is None, otherwise calls [`FromField::field`]
+    /// Returns None if the option is None, otherwise calls [`TryInto::try_into`]
     /// on the contained data, returning any error encountered
     fn optional(self) -> Result<Option<T>, Error>;
 
     /// Converts an optional protobuf field to a different type, returning an error if None
     ///
-    /// Returns `Error::MissingRequiredField` if None, otherwise calls [`FromField::field`]
+    /// Returns `Error::MissingRequiredField` if None, otherwise calls [`TryInto::try_into`]
     /// on the contained data, returning any error encountered
     fn required(self, field: impl Into<String>) -> Result<T, Error>;
 }
