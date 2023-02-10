@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Hash Join related functionality used both on logical and physical plans
+//! Symmetric and regular Hash Join related functionality used in join calculations and optimization
+//! rules.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -148,12 +149,12 @@ pub fn convert_sort_expr_with_filter_schema(
 ///
 /// It first calls the [convert_sort_expr_with_filter_schema] method to determine if the sort
 /// order of columns can be used in the filter expression. If it returns a [Some] value, the
-/// method wraps the result in a [SortedFilterExpr] instance with the original sort expression,
-/// converted filter expression, and sort options. Otherwise, this function returns an error.
+/// method wraps the result in a [SortedFilterExpr] instance with the original sort expression and
+/// converted filter expression. Otherwise, this function returns an error.
 ///
 /// The [SortedFilterExpr] instance contains information about the sort order of columns that can
 /// be used in the filter expression, which can be used to optimize the query execution process.
-pub fn build_filter_input_order_v2(
+pub fn build_filter_input_order(
     side: JoinSide,
     filter: &JoinFilter,
     schema: SchemaRef,
@@ -162,7 +163,7 @@ pub fn build_filter_input_order_v2(
     if let Some(expr) =
         convert_sort_expr_with_filter_schema(&side, filter, schema, order)?
     {
-        Ok(SortedFilterExpr::new(side, order.clone(), expr))
+        Ok(SortedFilterExpr::new(order.clone(), expr))
     } else {
         Err(DataFusionError::Plan(format!(
             "The {side} side of the join does not have an expression sorted."
@@ -191,33 +192,29 @@ fn convert_filter_columns(
 }
 
 /// The SortedFilterExpr object is used to represent a sorted filter expression in the
-/// `SymmetricHashJoinExec` struct. It contains information about the join side, the
+/// `SymmetricHashJoinExec` struct. It contains information about the
 /// origin expression, the filter expression, and the sort option. The object has
 /// several methods to access and modify its fields.
 #[derive(Debug, Clone)]
 pub struct SortedFilterExpr {
-    /// Column side
-    pub join_side: JoinSide,
     /// Sorted expr from a particular join side (child)
-    pub origin_sorted_expr: PhysicalSortExpr,
+    origin_sorted_expr: PhysicalSortExpr,
     /// For interval calculations, one to one mapping of the columns according to filter expression,
     /// and column indices.
-    pub filter_expr: Arc<dyn PhysicalExpr>,
+    filter_expr: Arc<dyn PhysicalExpr>,
     /// Interval
-    pub interval: Interval,
+    interval: Interval,
     /// NodeIndex in Graph
-    pub node_index: usize,
+    node_index: usize,
 }
 
 impl SortedFilterExpr {
     /// Constructor
     pub fn new(
-        join_side: JoinSide,
         origin_sorted_expr: PhysicalSortExpr,
         filter_expr: Arc<dyn PhysicalExpr>,
     ) -> Self {
         Self {
-            join_side,
             origin_sorted_expr,
             filter_expr,
             interval: Interval::default(),
@@ -414,7 +411,7 @@ pub mod tests {
 
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
-        assert!(build_filter_input_order_v2(
+        assert!(build_filter_input_order(
             JoinSide::Left,
             &filter,
             left_schema.clone(),
@@ -424,7 +421,7 @@ pub mod tests {
             }
         )
         .is_ok());
-        assert!(build_filter_input_order_v2(
+        assert!(build_filter_input_order(
             JoinSide::Left,
             &filter,
             left_schema,
@@ -434,7 +431,7 @@ pub mod tests {
             }
         )
         .is_err());
-        assert!(build_filter_input_order_v2(
+        assert!(build_filter_input_order(
             JoinSide::Right,
             &filter,
             right_schema.clone(),
@@ -444,7 +441,7 @@ pub mod tests {
             }
         )
         .is_ok());
-        assert!(build_filter_input_order_v2(
+        assert!(build_filter_input_order(
             JoinSide::Right,
             &filter,
             right_schema,

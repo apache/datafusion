@@ -312,8 +312,9 @@ mod unix_test {
             };
             operations.push(op);
         }
-        // It check if the right unmatches or left unmatches generated at the end of the file, which
-        // should not in unbounded mode.
+        // It check if the right unmatches or left unmatches generated at the end of the file and only once
+        // in hash join executor. SymmetricHashJoin exec produce it without waiting the end of the file
+        // and produce it more than once.
         assert!(
             operations
                 .iter()

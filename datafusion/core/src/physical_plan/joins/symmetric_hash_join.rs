@@ -15,8 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines the join plan for executing partitions in parallel and then joining the results
-//! into a set of partitions.
+//! The code implements the symmetric hash join algorithm for executing partitions in parallel
+//! streams and buffering with range-condition pruning.
+//!
+//! A Symmetric Hash Join plan consumes two sorted children plan and produces
+//! joined output by given join type and other options.
+//!
+//! It includes OneSideHashJoiner struct constructed for both childs and calculates joins.
+//!
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -49,7 +55,7 @@ use crate::physical_plan::{
     expressions::PhysicalSortExpr,
     joins::{
         hash_join::{build_join_indices, update_hash, JoinHashMap},
-        hash_join_utils::{build_filter_input_order_v2, SortedFilterExpr},
+        hash_join_utils::{build_filter_input_order, SortedFilterExpr},
         utils::{
             build_batch_from_indices, build_join_schema, check_join_is_valid,
             combine_join_equivalence_properties, partitioned_join_output_partitioning,
@@ -157,8 +163,12 @@ pub struct SymmetricHashJoinExec {
     pub(crate) filter: JoinFilter,
     /// How the join is performed
     pub(crate) join_type: JoinType,
-    /// Order information of filter columns
-    filter_columns: Vec<SortedFilterExpr>,
+    /// Order information of filter expressions
+    sorted_filter_exprs: Vec<SortedFilterExpr>,
+    /// Left required sort
+    left_required_sort_exprs: Vec<PhysicalSortExpr>,
+    /// Right required sort
+    right_required_sort_exprs: Vec<PhysicalSortExpr>,
     /// Expression graph for interval calculations
     physical_expr_graph: ExprIntervalGraph,
     /// The schema once the join is applied
@@ -265,36 +275,48 @@ impl SymmetricHashJoinExec {
         let mut physical_expr_graph =
             ExprIntervalGraph::try_new(filter.expression().clone())?;
 
+        let (left_required_sort_exprs, right_required_sort_exprs): (Vec<_>, Vec<_>) =
+            left.output_ordering()
+                .unwrap()
+                .iter()
+                .zip(right.output_ordering().unwrap())
+                .take(1)
+                .map(|(l, r)| (l.clone(), r.clone()))
+                .unzip();
+
         // Build the sorted filter expression for the left child
-        let left_filter_expression = build_filter_input_order_v2(
+        let left_filter_expression = build_filter_input_order(
             JoinSide::Left,
             &filter,
             left.schema(),
-            left.output_ordering().unwrap().get(0).unwrap(),
+            &left_required_sort_exprs[0],
         )?;
+
         // Build the sorted filter expression for the right child
-        let right_filter_expression = build_filter_input_order_v2(
+        let right_filter_expression = build_filter_input_order(
             JoinSide::Right,
             &filter,
             right.schema(),
-            right.output_ordering().unwrap().get(0).unwrap(),
+            &right_required_sort_exprs[0],
         )?;
 
         // Store the left and right sorted filter expressions in a vector
-        let mut filter_columns = vec![left_filter_expression, right_filter_expression];
+        let mut sorted_filter_exprs =
+            vec![left_filter_expression, right_filter_expression];
 
         // Gather node indices of converted filter expressions in SortedFilterExpr
         // using the filter columns vector
         let child_node_indexes = physical_expr_graph.gather_node_indices(
-            &filter_columns
+            &sorted_filter_exprs
                 .iter()
                 .map(|sorted_expr| sorted_expr.filter_expr().clone())
                 .collect::<Vec<_>>(),
         );
 
         // Inject calculated node indexes into SortedFilterExpr
-        for (sorted_expr, (_, index)) in
-            filter_columns.iter_mut().zip(child_node_indexes.iter())
+        for (sorted_expr, (_, index)) in sorted_filter_exprs
+            .iter_mut()
+            .zip(child_node_indexes.iter())
         {
             sorted_expr.set_node_index(*index);
         }
@@ -305,7 +327,9 @@ impl SymmetricHashJoinExec {
             on,
             filter,
             join_type: *join_type,
-            filter_columns,
+            sorted_filter_exprs,
+            left_required_sort_exprs,
+            right_required_sort_exprs,
             physical_expr_graph,
             schema: Arc::new(schema),
             random_state,
@@ -362,7 +386,10 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
-        vec![None, None]
+        vec![
+            Some(&self.left_required_sort_exprs),
+            Some(&self.right_required_sort_exprs),
+        ]
     }
 
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
@@ -401,7 +428,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     }
 
     // TODO Output ordering might be kept for some cases.
-    // For example if it is inner join then the stream side order can be kept
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
@@ -465,11 +491,18 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     ) -> Result<SendableRecordBatchStream> {
         let on_left = self.on.iter().map(|on| on.0.clone()).collect::<Vec<_>>();
         let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
-        // TODO: Currently, working on partitioned left and right. We can also coalesce.
-        let left_side_joiner =
-            OneSideHashJoiner::new(JoinSide::Left, on_left, self.left.clone());
-        let right_side_joiner =
-            OneSideHashJoiner::new(JoinSide::Right, on_right, self.right.clone());
+        let left_side_joiner = OneSideHashJoiner::new(
+            JoinSide::Left,
+            self.sorted_filter_exprs[0].clone(),
+            on_left,
+            self.left.clone(),
+        );
+        let right_side_joiner = OneSideHashJoiner::new(
+            JoinSide::Right,
+            self.sorted_filter_exprs[1].clone(),
+            on_right,
+            self.right.clone(),
+        );
         let left_stream = self.left.execute(partition, context.clone())?;
         let right_stream = self.right.execute(partition, context)?;
 
@@ -486,7 +519,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             metrics: SymmetricHashJoinMetrics::new(partition, &self.metrics),
             physical_expr_graph: self.physical_expr_graph.clone(),
             null_equals_null: self.null_equals_null,
-            filter_columns: self.filter_columns.clone(),
             final_result: false,
             probe_side: JoinSide::Left,
         }))
@@ -513,8 +545,6 @@ struct SymmetricHashJoinStream {
     column_indices: Vec<ColumnIndex>,
     // Range pruner.
     physical_expr_graph: ExprIntervalGraph,
-    /// Information of filter columns
-    filter_columns: Vec<SortedFilterExpr>,
     /// Random state used for hashing initialization
     random_state: RandomState,
     /// If null_equals_null is true, null == null else null != null
@@ -580,15 +610,15 @@ fn prune_hash_values(
 
 /// Calculate the filter expression intervals
 ///
-/// This function updates the `interval` field of each `SortedFilterExpr` in `filter_columns` based on
+/// This function updates the `interval` field of each `SortedFilterExpr` based on
 /// the first or last value of the expression in `build_input_buffer` or `probe_batch`.
 ///
 /// # Arguments
 ///
 /// * `build_input_buffer` - The RecordBatch on the build side of the join
+/// * `build_sorted_filter_expr` - Build side `SortedFilterExpr` to update.
 /// * `probe_batch` - The RecordBatch on the probe side of the join
-/// * `filter_columns` - A mutable list of `SortedFilterExpr` objects to update
-/// * `build_side` - The side of the join where `build_input_buffer` is used
+/// * `probe_sorted_filter_expr` - Probe side `SortedFilterExpr` to update.
 ///
 /// ### Note
 /// ```text
@@ -606,105 +636,114 @@ fn prune_hash_values(
 ///  |   |   |  ||c |d ||
 ///  |   |   |  |+--|--+|
 ///  +-------+  +-------+
-///  Expr1: [a, inf]
-///  Expr2: [b, inf]
-///  Expr3: [c, inf]
-///  Expr4: [d, inf]
+///
+///     FV -> First value
+///     LV -> Last value
+///
+/// Interval arithmetic is used to calculate the range of possible join key values for
+/// build-side pruning. This is done by first creating intervals for the join filter values
+/// in the build side of the join, which is first value of the side and infinity since the stream is also infinite.
+/// If the expression is descending, interval becomes [-∞, FV] and if ascending,
+/// interval becomes [FV, ∞]. For the probe side, the last of value of the RecordBatch is used
+/// for interval calculation. This time we use the last value of the batch,
+/// if the expression is descending, the interval becomes [-∞, LV] and if it is ascending,
+/// it becomes [LV, ∞].
+///
+/// In our case:
+///     Expr1: [a(FV), inf]
+///     Expr2: [b(FV), inf]
+///     Expr3: [c(LV), inf]
+///     Expr4: [d(LV), inf]
 /// ```
 ///
-/// # Returns
-///
-/// Result object indicating success or failure
 ///
 fn calculate_filter_expr_intervals(
     build_input_buffer: &RecordBatch,
+    build_sorted_filter_expr: &mut SortedFilterExpr,
     probe_batch: &RecordBatch,
-    filter_columns: &mut [SortedFilterExpr],
-    build_side: JoinSide,
+    probe_sorted_filter_expr: &mut SortedFilterExpr,
 ) -> Result<()> {
     // If either build or probe side has no data, return early:
     if build_input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
         return Ok(());
     }
-    // Iterate through each [SortedFilterExpr] in filter_columns:
-    for sorted_expr in filter_columns.iter_mut() {
-        // Destructure the SortedFilterExpr
-        let SortedFilterExpr {
-            join_side,
-            origin_sorted_expr,
-            interval,
-            ..
-        } = sorted_expr;
-
-        // Get the array of the first or last value for the expression, depending on join side
-        let expr = &origin_sorted_expr.expr;
-        let array = if build_side.eq(join_side) {
-            // Get first value for expr
-            expr.evaluate(&build_input_buffer.slice(0, 1))
-        } else {
-            // Get last value for expr
-            expr.evaluate(&probe_batch.slice(probe_batch.num_rows() - 1, 1))
-        }?
+    // Evaluate build side filter expression and convert the result to an array
+    let build_array = build_sorted_filter_expr
+        .origin_sorted_expr()
+        .expr
+        .evaluate(&build_input_buffer.slice(0, 1))?
+        .into_array(1);
+    // Evaluate probe side filter expression and convert the result to an array
+    let probe_array = probe_sorted_filter_expr
+        .origin_sorted_expr()
+        .expr
+        .evaluate(&probe_batch.slice(probe_batch.num_rows() - 1, 1))?
         .into_array(1);
 
+    // Update intervals for both build and probe side filter expressions
+    for (array, sorted_expr) in vec![
+        (build_array, build_sorted_filter_expr),
+        (probe_array, probe_sorted_filter_expr),
+    ] {
         // Convert the array to a ScalarValue:
         let value = ScalarValue::try_from_array(&array, 0)?;
         // Create a ScalarValue representing positive or negative infinity for the same data type:
         let infinite = ScalarValue::try_from(value.get_datatype())?;
         // Update the interval with lower and upper bounds based on the sort option
-        *interval = if origin_sorted_expr.options.descending {
-            Interval {
-                lower: infinite,
-                upper: value,
-            }
-        } else {
-            Interval {
-                lower: value,
-                upper: infinite,
-            }
-        };
+        sorted_expr.set_interval(
+            if sorted_expr.origin_sorted_expr().options.descending {
+                Interval {
+                    lower: infinite,
+                    upper: value,
+                }
+            } else {
+                Interval {
+                    lower: value,
+                    upper: infinite,
+                }
+            },
+        );
     }
     Ok(())
 }
 
+/// Determine the length of the record batch to be pruned.
+///
+/// This function evaluates the build side filter expression, converts the result into an array and
+/// determines the length of the record batch to be pruned by performing a binary search on the array.
+///
+/// # Parameters
+///
+/// * `buffer`: The record batch to be pruned.
+/// * `build_side_filter_expr`: The filter expression on the build side used to determine the length
+/// of the record batch to be pruned.
+///
+/// # Returns
+///
+/// A Result object that contains the length of the record batch to be pruned. An error will be
+/// returned if there is an issue evaluating the build side filter expression.
 fn determine_prune_length(
     buffer: &RecordBatch,
-    filter_columns: &[SortedFilterExpr],
-    build_side: JoinSide,
+    build_side_filter_expr: &SortedFilterExpr,
 ) -> Result<usize> {
-    Ok(filter_columns
-        .iter()
-        .flat_map(|sorted_expr| {
-            let SortedFilterExpr {
-                join_side,
-                origin_sorted_expr,
-                interval,
-                ..
-            } = sorted_expr;
-            if build_side.eq(join_side) {
-                let batch_arr = origin_sorted_expr
-                    .expr
-                    .evaluate(buffer)
-                    .unwrap()
-                    .into_array(buffer.num_rows());
-                let target = if origin_sorted_expr.options.descending {
-                    interval.upper.clone()
-                } else {
-                    interval.lower.clone()
-                };
-                Some(bisect::<true>(
-                    &[batch_arr],
-                    &[target],
-                    &[origin_sorted_expr.options],
-                ))
-            } else {
-                None
-            }
-        })
-        .collect::<Result<Vec<usize>>>()?
-        .into_iter()
-        .min()
-        .unwrap())
+    let origin_sorted_expr = build_side_filter_expr.origin_sorted_expr();
+    let interval = build_side_filter_expr.interval();
+    // Evaluate the build side filter expression and convert it into an array
+    let batch_arr = origin_sorted_expr
+        .expr
+        .evaluate(buffer)
+        .unwrap()
+        .into_array(buffer.num_rows());
+
+    // Get the lower or upper interval based on the sort direction
+    let target = if origin_sorted_expr.options.descending {
+        interval.upper.clone()
+    } else {
+        interval.lower.clone()
+    };
+
+    // Perform binary search on the array to determine the length of the record batch to be pruned
+    bisect::<true>(&[batch_arr], &[target], &[origin_sorted_expr.options])
 }
 
 /// This method determines if the result of the join should be produced in the final step or not.
@@ -882,6 +921,8 @@ where
 struct OneSideHashJoiner {
     // Build side
     build_side: JoinSide,
+    /// Build side filter sort information
+    sorted_filter_expr: SortedFilterExpr,
     /// Inout record batch buffer
     input_buffer: RecordBatch,
     /// columns from the side
@@ -905,6 +946,7 @@ struct OneSideHashJoiner {
 impl OneSideHashJoiner {
     pub fn new(
         build_side: JoinSide,
+        sorted_filter_expr: SortedFilterExpr,
         on: Vec<Column>,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Self {
@@ -915,6 +957,7 @@ impl OneSideHashJoiner {
             hashmap: JoinHashMap(RawTable::with_capacity(10_000)),
             row_hash_values: VecDeque::new(),
             hashes_buffer: vec![],
+            sorted_filter_expr,
             visited_rows: HashSet::new(),
             offset: 0,
             deleted_offset: 0,
@@ -1099,15 +1142,15 @@ impl OneSideHashJoiner {
 
     /// Prunes the internal buffer.
     ///
-    /// The input record batch, `probe_batch`, is used to update the intervals of the sorted filter expressions in `sorted_filter_exprs`.
-    /// The updated intervals are then used to determine the length of the build side rows to prune.
+    /// The input record batch and `probe_batch`, is used to update the intervals of the sorted filter expressions.
+    /// The updated build interval is then used to determine the length of the build side rows to prune.
     /// If there are rows to prune, they are pruned and the result is returned.
     ///
     /// # Arguments
     ///
     /// * `schema` - The schema of the final output record batch
     /// * `probe_batch` - Incoming RecordBatch of the probe side.
-    /// * `sorted_filter_exprs` - A mutable vector of sorted filter expressions that are used to update the intervals.
+    /// * `probe_side_sorted_filter_expr` - Probe side mutable sorted filter expression.
     /// * `join_type` - The type of join (e.g. inner, left, right, etc.).
     /// * `column_indices` - A vector of column indices that specifies which columns from the
     ///     build side should be included in the output.
@@ -1122,7 +1165,7 @@ impl OneSideHashJoiner {
         &mut self,
         schema: SchemaRef,
         probe_batch: &RecordBatch,
-        sorted_filter_exprs: &mut [SortedFilterExpr],
+        probe_side_sorted_filter_expr: &mut SortedFilterExpr,
         join_type: JoinType,
         column_indices: &[ColumnIndex],
         physical_expr_graph: &mut ExprIntervalGraph,
@@ -1134,37 +1177,29 @@ impl OneSideHashJoiner {
 
         // Convert the sorted filter expressions into a vector of (node_index, interval) tuples
         // for use in updating the interval graph
-        let mut filter_intervals = sorted_filter_exprs
-            .iter()
-            .map(|sorted_expr| (sorted_expr.node_index(), sorted_expr.interval().clone()))
-            .collect::<Vec<_>>();
-
-        // Use the filter intervals to update the physical expression graph
+        let mut filter_intervals = vec![
+            (
+                self.sorted_filter_expr.node_index(),
+                self.sorted_filter_expr.interval().clone(),
+            ),
+            (
+                probe_side_sorted_filter_expr.node_index(),
+                probe_side_sorted_filter_expr.interval().clone(),
+            ),
+        ];
+        // Use the join filter intervals to update the physical expression graph
         physical_expr_graph.update_intervals(&mut filter_intervals)?;
 
-        // A vector to track changes in the intervals of the sorted filter expressions
-        let mut change_track = Vec::with_capacity(filter_intervals.len());
-
-        // Update the intervals of the sorted filter expressions and track any changes
-        for (sorted_expr, (_, interval)) in sorted_filter_exprs
-            .iter_mut()
-            .zip(filter_intervals.into_iter())
-        {
-            if interval.eq(sorted_expr.interval()) {
-                change_track.push(false);
-            } else {
-                sorted_expr.set_interval(interval.clone());
-                change_track.push(true);
-            }
-        }
+        // Calculated join filter interval for build side.
+        let new_build_side_sorted_filter_expr = filter_intervals.remove(0).1;
 
         // Determine the length of the rows to prune if there was a change in the intervals
-        let prune_length = if change_track.iter().any(|x| *x) {
-            determine_prune_length(
-                &self.input_buffer,
-                sorted_filter_exprs,
-                self.build_side,
-            )?
+        let prune_length = if !new_build_side_sorted_filter_expr
+            .eq(self.sorted_filter_expr.interval())
+        {
+            self.sorted_filter_expr
+                .set_interval(new_build_side_sorted_filter_expr);
+            determine_prune_length(&self.input_buffer, &self.sorted_filter_expr)?
         } else {
             0
         };
@@ -1309,9 +1344,9 @@ impl SymmetricHashJoinStream {
                     // Calculate filter intervals
                     calculate_filter_expr_intervals(
                         &build_hash_joiner.input_buffer,
+                        &mut build_hash_joiner.sorted_filter_expr,
                         &probe_batch,
-                        &mut self.filter_columns,
-                        build_join_side,
+                        &mut probe_hash_joiner.sorted_filter_expr,
                     )?;
                     // Join the two sides, with
                     let equal_result = build_hash_joiner.join_with_probe_batch(
@@ -1332,7 +1367,7 @@ impl SymmetricHashJoinStream {
                     let anti_result = build_hash_joiner.prune_with_probe_batch(
                         self.schema.clone(),
                         &probe_batch,
-                        &mut self.filter_columns,
+                        &mut probe_hash_joiner.sorted_filter_expr,
                         self.join_type,
                         &self.column_indices,
                         &mut self.physical_expr_graph,
