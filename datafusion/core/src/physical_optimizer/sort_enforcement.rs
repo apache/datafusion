@@ -39,7 +39,7 @@ use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::UnionExec;
-use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
+use crate::physical_plan::windows::{BoundedWindowAggExec, PartitionSearchMode, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{reverse_sort_options, DataFusionError};
@@ -556,18 +556,22 @@ fn analyze_window_sort_removal(
     sort_tree: &mut ExecTree,
     window_exec: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
-    let (window_expr, partition_keys) = if let Some(exec) =
+    let (window_expr, partition_keys, sort_keys, partition_by_sort_keys) = if let Some(exec) =
         window_exec.as_any().downcast_ref::<BoundedWindowAggExec>()
     {
-        (exec.window_expr(), &exec.partition_keys)
+        (exec.window_expr(), &exec.partition_keys, &exec.sort_keys, exec.partition_by_sort_keys()?)
     } else if let Some(exec) = window_exec.as_any().downcast_ref::<WindowAggExec>() {
-        (exec.window_expr(), &exec.partition_keys)
+        (exec.window_expr(), &exec.partition_keys, &exec.sort_keys, exec.partition_by_sort_keys()?)
     } else {
         return Err(DataFusionError::Plan(
             "Expects to receive either WindowAggExec of BoundedWindowAggExec".to_string(),
         ));
     };
 
+    println!("sort_keys: {:?}", sort_keys);
+    println!("partition_keys: {:?}", partition_keys);
+    println!("partition_by_sort_keys: {:?}", partition_by_sort_keys);
+    let n_partition_by_keys = partition_by_sort_keys.len();
     let mut first_should_reverse = None;
     let mut physical_ordering_common = vec![];
     for sort_any in sort_tree.get_leaves() {
@@ -585,6 +589,8 @@ fn analyze_window_sort_removal(
         let required_ordering = sort_output_ordering.ok_or_else(|| {
             DataFusionError::Plan("A SortExec should have output ordering".to_string())
         })?;
+        let required_ordering = &required_ordering[n_partition_by_keys..];
+        println!("required_ordering:{:?}", required_ordering);
         if let Some(physical_ordering) = physical_ordering {
             if physical_ordering_common.is_empty()
                 || physical_ordering.len() < physical_ordering_common.len()
@@ -642,6 +648,7 @@ fn analyze_window_sort_removal(
                 new_schema,
                 partition_keys.to_vec(),
                 Some(physical_ordering_common),
+                PartitionSearchMode::Linear,
             )?) as _
         } else {
             Arc::new(WindowAggExec::try_new(

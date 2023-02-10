@@ -371,6 +371,11 @@ pub struct PartitionBatchState {
     pub record_batch: RecordBatch,
     /// flag indicating whether we have received all data for this partition
     pub is_end: bool,
+    /// Indices where entries in this partition comes from
+    /// should have the same size with record_batch
+    pub indices: Vec<usize>,
+    /// number of rows emitted for each partition
+    pub n_out_row: usize,
 }
 
 /// key for IndexMap for each unique partition

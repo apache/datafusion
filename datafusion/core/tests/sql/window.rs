@@ -2584,8 +2584,9 @@ fn write_test_data_to_parquet(tmpdir: &TempDir, n_file: usize) -> Result<()> {
     let ts_field = Field::new("ts", DataType::Int32, false);
     let inc_field = Field::new("inc_col", DataType::Int32, false);
     let desc_field = Field::new("desc_col", DataType::Int32, false);
+    let low_card_field = Field::new("low_card_col", DataType::Int32, false);
 
-    let schema = Arc::new(Schema::new(vec![ts_field, inc_field, desc_field]));
+    let schema = Arc::new(Schema::new(vec![ts_field, inc_field, desc_field, low_card_field]));
 
     let batch = RecordBatch::try_new(
         schema,
@@ -2616,6 +2617,13 @@ fn write_test_data_to_parquet(tmpdir: &TempDir, n_file: usize) -> Result<()> {
                 -95, -98, -101, -105, -106, -111, -114, -116, -120, -125, -128, -129,
                 -134, -139, -142, -143, -146, -150, -154, -158, -163, -168, -172, -176,
                 -181, -184, -189, -193, -196, -201, -203, -208, -210, -213,
+            ])),
+            Arc::new(Int32Array::from_slice([
+                0, 3, 4, 3, 2, 2, 0, 1, 1, 3, 4, 1, 0, 1, 3, 2, 1, 4, 4, 1, 4, 3,
+                4, 4, 0, 4, 1, 2, 4, 3, 2, 1, 4, 2, 2, 4, 2, 4, 1, 0, 1, 1, 4, 4,
+                2, 1, 4, 1, 4, 1, 1, 3, 4, 4, 3, 0, 4, 0, 3, 0, 4, 4, 0, 0, 4, 3,
+                1, 0, 3, 3, 1, 1, 0, 4, 3, 3, 0, 0, 4, 2, 1, 3, 2, 2, 1, 3, 1, 4,
+                1, 3, 3, 1, 2, 0, 1, 0, 3, 2, 1, 2
             ])),
         ],
     )?;
@@ -2933,6 +2941,148 @@ mod tests {
             "| 1            | 26           | 20          | 1           | 5          |",
             "| 1            | 29           | 21          | 1           | 5          |",
             "+--------------+--------------+-------------+-------------+------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_source_unsorted_partition_by() -> Result<()> {
+        let tmpdir = TempDir::new().unwrap();
+        let ctx = get_test_context(&tmpdir).await?;
+
+        let sql = "SELECT inc_col, low_card_col,
+        SUM(inc_col) OVER(PARTITION BY low_card_col ORDER BY ts ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum1,
+        SUM(inc_col) OVER(PARTITION BY low_card_col ORDER BY ts ASC ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING) as sum2
+           FROM annotated_data
+           ORDER BY inc_col ASC";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let expected = {
+            vec![
+                "SortExec: [inc_col@0 ASC NULLS LAST]",
+                "  ProjectionExec: expr=[inc_col@1 as inc_col, low_card_col@2 as low_card_col, SUM(annotated_data.inc_col) PARTITION BY [annotated_data.low_card_col] ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@3 as sum1, SUM(annotated_data.inc_col) PARTITION BY [annotated_data.low_card_col] ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING@4 as sum2]",
+                "    BoundedWindowAggExec: wdw=[SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(3)), end_bound: Following(UInt64(1)) }]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        let actual_len = actual.len();
+        let actual_trim_last = &actual[..actual_len - 1];
+        assert_eq!(
+            expected, actual_trim_last,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+---------+--------------+------+------+",
+            "| inc_col | low_card_col | sum1 | sum2 |",
+            "+---------+--------------+------+------+",
+            "| 1       | 0            | 27   | 27   |",
+            "| 5       | 3            | 20   | 20   |",
+            "| 10      | 4            | 47   | 47   |",
+            "| 15      | 3            | 53   | 53   |",
+            "| 20      | 2            | 41   | 41   |",
+            "| 21      | 2            | 90   | 90   |",
+            "| 26      | 0            | 70   | 70   |",
+            "| 29      | 1            | 59   | 59   |",
+            "| 30      | 1            | 99   | 99   |",
+            "| 33      | 3            | 98   | 98   |",
+            "| 37      | 4            | 100  | 100  |",
+            "| 40      | 1            | 143  | 143  |",
+            "| 43      | 0            | 153  | 153  |",
+            "| 44      | 1            | 165  | 194  |",
+            "| 45      | 3            | 163  | 168  |",
+            "| 49      | 2            | 181  | 181  |",
+            "| 51      | 1            | 196  | 226  |",
+            "| 53      | 4            | 158  | 158  |",
+            "| 58      | 4            | 213  | 223  |",
+            "| 61      | 1            | 246  | 286  |",
+            "| 65      | 4            | 251  | 288  |",
+            "| 70      | 3            | 245  | 260  |",
+            "| 75      | 4            | 276  | 329  |",
+            "| 78      | 4            | 306  | 364  |",
+            "| 83      | 0            | 281  | 282  |",
+            "| 88      | 4            | 336  | 401  |",
+            "| 90      | 1            | 307  | 351  |",
+            "| 91      | 2            | 261  | 281  |",
+            "| 95      | 4            | 370  | 445  |",
+            "| 97      | 3            | 371  | 404  |",
+            "| 100     | 2            | 351  | 372  |",
+            "| 105     | 1            | 382  | 433  |",
+            "| 109     | 4            | 411  | 489  |",
+            "| 111     | 2            | 417  | 466  |",
+            "| 115     | 2            | 446  | 537  |",
+            "| 119     | 4            | 447  | 535  |",
+            "| 120     | 2            | 490  | 590  |",
+            "| 124     | 4            | 492  | 587  |",
+            "| 126     | 1            | 452  | 513  |",
+            "| 129     | 0            | 425  | 451  |",
+            "| 131     | 1            | 497  | 587  |",
+            "| 135     | 1            | 539  | 644  |",
+            "| 140     | 4            | 526  | 635  |",
+            "| 143     | 4            | 555  | 674  |",
+            "| 144     | 2            | 616  | 727  |",
+            "| 147     | 1            | 562  | 688  |",
+            "| 148     | 4            | 582  | 706  |",
+            "| 149     | 1            | 586  | 717  |",
+            "| 151     | 4            | 602  | 742  |",
+            "| 155     | 1            | 607  | 742  |",
+            "| 156     | 1            | 663  | 810  |",
+            "| 159     | 3            | 491  | 536  |",
+            "| 160     | 4            | 622  | 765  |",
+            "| 163     | 4            | 646  | 794  |",
+            "| 165     | 3            | 602  | 672  |",
+            "| 170     | 0            | 559  | 602  |",
+            "| 172     | 4            | 681  | 832  |",
+            "| 177     | 0            | 658  | 741  |",
+            "| 181     | 3            | 704  | 801  |",
+            "| 182     | 0            | 721  | 850  |",
+            "| 186     | 4            | 708  | 868  |",
+            "| 187     | 4            | 742  | 905  |",
+            "| 192     | 0            | 747  | 917  |",
+            "| 196     | 0            | 777  | 954  |",
+            "| 197     | 4            | 791  | 963  |",
+            "| 199     | 3            | 754  | 913  |",
+            "| 203     | 1            | 728  | 877  |",
+            "| 207     | 0            | 814  | 996  |",
+            "| 209     | 3            | 802  | 967  |",
+            "| 213     | 3            | 843  | 1024 |",
+            "| 214     | 1            | 789  | 944  |",
+            "| 216     | 1            | 875  | 1031 |",
+            "| 219     | 0            | 848  | 1040 |",
+            "| 221     | 4            | 841  | 1027 |",
+            "| 222     | 3            | 869  | 1068 |",
+            "| 225     | 3            | 905  | 1114 |",
+            "| 226     | 0            | 883  | 1079 |",
+            "| 231     | 0            | 959  | 1166 |",
+            "| 236     | 4            | 915  | 1102 |",
+            "| 237     | 2            | 748  | 863  |",
+            "| 242     | 1            | 925  | 1128 |",
+            "| 245     | 3            | 946  | 1159 |",
+            "| 247     | 2            | 876  | 996  |",
+            "| 248     | 2            | 1010 | 1154 |",
+            "| 253     | 1            | 970  | 1184 |",
+            "| 254     | 3            | 993  | 1215 |",
+            "| 259     | 1            | 1020 | 1236 |",
+            "| 261     | 4            | 718  | 915  |",
+            "| 266     | 1            | 1053 | 1295 |",
+            "| 269     | 3            | 1040 | 1265 |",
+            "| 272     | 3            | 1086 | 1331 |",
+            "| 275     | 1            | 1086 | 1339 |",
+            "| 278     | 2            | 1069 | 1306 |",
+            "| 283     | 0            | 1029 | 1248 |",
+            "| 286     | 1            | 1128 | 1387 |",
+            "| 289     | 0            | 803  | 1029 |",
+            "| 291     | 3            | 832  | 1086 |",
+            "| 296     | 2            | 1127 | 1374 |",
+            "| 301     | 1            | 862  | 1128 |",
+            "| 305     | 2            | 879  | 1127 |",
+            "+---------+--------------+------+------+",
         ];
         assert_batches_eq!(expected, &actual);
         Ok(())

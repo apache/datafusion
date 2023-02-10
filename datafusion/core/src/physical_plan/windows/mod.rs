@@ -41,8 +41,10 @@ use std::sync::Arc;
 
 mod bounded_window_agg_exec;
 mod window_agg_exec;
+mod linear_stream;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
+pub use bounded_window_agg_exec::PartitionSearchMode;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
