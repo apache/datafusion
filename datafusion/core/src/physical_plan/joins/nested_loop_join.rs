@@ -66,11 +66,10 @@ type JoinLeftData = RecordBatch;
 /// One of the inputs will become inner table, and it is decided by the join type.
 /// Following is the relation table:
 ///
-/// ```text
-///       JoinType                            Distribution                         Inner-table
-/// Inner/Left/LeftSemi/LeftAnti    (UnspecifiedDistribution, SinglePartition)       right
-/// Right/RightSemi/RightAnti/Full  (SinglePartition, UnspecifiedDistribution)       left
-/// ```
+/// | JoinType                       | Distribution (left, right)                 | Inner-table |
+/// |--------------------------------|--------------------------------------------|-------------|
+/// | Inner/Left/LeftSemi/LeftAnti   | (UnspecifiedDistribution, SinglePartition) | right       |
+/// | Right/RightSemi/RightAnti/Full | (SinglePartition, UnspecifiedDistribution) | left        |
 ///
 #[derive(Debug)]
 pub struct NestedLoopJoinExec {
