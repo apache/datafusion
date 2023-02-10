@@ -26,14 +26,14 @@
 //! chunks called pipelines. Each pipeline may consist of one or more nodes from the
 //! [`ExecutionPlan`] tree.
 //!
-//! The scheduler then maintains a list of pending [`Task`], that identify a partition within
+//! The scheduler then maintains a list of pending `Task`s, that identify a partition within
 //! a particular pipeline that may be able to make progress on some "morsel" of data. These
-//! [`Task`] are then scheduled on the worker pool, with a preference for scheduling work
+//! `Task`s are then scheduled on the worker pool, with a preference for scheduling work
 //! on a given "morsel" on the same thread that produced it.
 //!
 //! # Rayon
 //!
-//! Under-the-hood these [`Task`] are scheduled by [rayon], which is a lightweight, work-stealing
+//! Under-the-hood these `Task`s are scheduled by [rayon], which is a lightweight, work-stealing
 //! scheduler optimised for CPU-bound workloads. Pipelines may exploit this fact, and use [rayon]'s
 //! structured concurrency primitives to express additional parallelism that may be exploited
 //! if there are idle threads available at runtime
@@ -100,7 +100,7 @@ pub struct SchedulerBuilder {
 }
 
 impl SchedulerBuilder {
-    /// Create a new [`SchedulerConfig`] with the provided number of threads
+    /// Create a new [`SchedulerBuilder`] with the provided number of threads
     pub fn new(num_threads: usize) -> Self {
         let builder = ThreadPoolBuilder::new()
             .num_threads(num_threads)
@@ -144,6 +144,8 @@ impl Scheduler {
     ///
     /// Returns a [`ExecutionResults`] that can be used to receive results as they are produced,
     /// as a [`futures::Stream`] of [`RecordBatch`]
+    ///
+    /// [`RecordBatch`]: arrow::record_batch::RecordBatch
     pub fn schedule(
         &self,
         plan: Arc<dyn ExecutionPlan>,

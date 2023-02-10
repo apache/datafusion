@@ -72,6 +72,10 @@ pub fn is_date(dt: &DataType) -> bool {
     matches!(dt, DataType::Date32 | DataType::Date64)
 }
 
+pub fn is_uft8(dt: &DataType) -> bool {
+    matches!(dt, DataType::Utf8)
+}
+
 pub mod aggregates;
 pub mod binary;
 pub mod functions;
