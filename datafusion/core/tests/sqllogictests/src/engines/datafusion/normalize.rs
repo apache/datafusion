@@ -17,7 +17,9 @@
 
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
 use datafusion::error::DataFusionError;
-use sqllogictest::{ColumnType, DBOutput};
+use sqllogictest::DBOutput;
+
+use crate::output::{DFColumnType, DFOutput};
 
 use super::super::conversion::*;
 use super::error::{DFSqlLogicTestError, Result};
@@ -26,7 +28,7 @@ use super::error::{DFSqlLogicTestError, Result};
 ///
 /// Assumes empty record batches are a successful statement completion
 ///
-pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<DBOutput> {
+pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<DFOutput> {
     if batches.is_empty() {
         // DataFusion doesn't report number of rows complete
         return Ok(DBOutput::StatementComplete(0));
@@ -36,7 +38,7 @@ pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<DBOutput> {
 
     // TODO: report the the actual types of the result
     // https://github.com/apache/arrow-datafusion/issues/4499
-    let types = vec![ColumnType::Any; batches[0].num_columns()];
+    let types = vec![DFColumnType::Any; batches[0].num_columns()];
 
     let mut rows = vec![];
     for batch in batches {
