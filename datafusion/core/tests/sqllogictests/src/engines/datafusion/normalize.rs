@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
-use datafusion::error::DataFusionError;
 use sqllogictest::DBOutput;
 
 use crate::output::{DFColumnType, DFOutput};
@@ -34,8 +33,6 @@ pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<DFOutput> {
         return Ok(DBOutput::StatementComplete(0));
     }
 
-    let schema = batches[0].schema();
-
     // TODO: report the the actual types of the result
     // https://github.com/apache/arrow-datafusion/issues/4499
     let types = vec![DFColumnType::Any; batches[0].num_columns()];
@@ -43,15 +40,6 @@ pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<DFOutput> {
     let mut rows = vec![];
     for batch in batches {
         // Verify schema
-        if schema != batch.schema() {
-            return Err(DFSqlLogicTestError::DataFusion(DataFusionError::Internal(
-                format!(
-                    "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
-                    schema,
-                    batch.schema()
-                ),
-            )));
-        }
         rows.append(&mut convert_batch(batch)?);
     }
 
