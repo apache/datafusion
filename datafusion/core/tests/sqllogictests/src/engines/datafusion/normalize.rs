@@ -59,7 +59,8 @@ pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<DFOutput> {
     Ok(DBOutput::Rows { types, rows })
 }
 
-pub fn equivalent_names_and_types(schema: &SchemaRef, other: SchemaRef) -> bool {
+/// Check two schemas for being equal for field names/types
+fn equivalent_names_and_types(schema: &SchemaRef, other: SchemaRef) -> bool {
     if schema.fields().len() != other.fields().len() {
         return false;
     }
