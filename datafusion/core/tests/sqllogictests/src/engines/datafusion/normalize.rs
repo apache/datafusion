@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::datatypes::SchemaRef;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
+use datafusion_common::DataFusionError;
 use sqllogictest::DBOutput;
 
 use crate::output::{DFColumnType, DFOutput};
@@ -33,6 +35,8 @@ pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<DFOutput> {
         return Ok(DBOutput::StatementComplete(0));
     }
 
+    let schema = batches[0].schema();
+
     // TODO: report the the actual types of the result
     // https://github.com/apache/arrow-datafusion/issues/4499
     let types = vec![DFColumnType::Any; batches[0].num_columns()];
@@ -40,10 +44,30 @@ pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<DFOutput> {
     let mut rows = vec![];
     for batch in batches {
         // Verify schema
+        if !equivalent_names_and_types(&schema, batch.schema()) {
+            return Err(DFSqlLogicTestError::DataFusion(DataFusionError::Internal(
+                format!(
+                    "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
+                    &schema,
+                    batch.schema()
+                ),
+            )));
+        }
         rows.append(&mut convert_batch(batch)?);
     }
 
     Ok(DBOutput::Rows { types, rows })
+}
+
+pub fn equivalent_names_and_types(schema: &SchemaRef, other: SchemaRef) -> bool {
+    if schema.fields().len() != other.fields().len() {
+        return false;
+    }
+    let self_fields = schema.fields().iter();
+    let other_fields = other.fields().iter();
+    self_fields
+        .zip(other_fields)
+        .all(|(f1, f2)| f1.name() == f2.name() && f1.data_type() == f2.data_type())
 }
 
 /// Convert a single batch to a `Vec<Vec<String>>` for comparison
