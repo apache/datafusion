@@ -250,18 +250,27 @@ impl sqllogictest::AsyncDB for Postgres {
         }
         let rows = self.client.query(sql, &[]).await?;
 
-        if rows.is_empty() {
-            return Ok(DBOutput::StatementComplete(0));
+        let types: Vec<Type> = if rows.is_empty() {
+            self.client
+                .prepare(sql)
+                .await?
+                .columns()
+                .iter()
+                .map(|c| c.type_().clone())
+                .collect()
         } else {
-            let types = convert_types(
-                rows[0]
-                    .columns()
-                    .iter()
-                    .map(|c| c.type_().clone())
-                    .collect(),
-            );
+            rows[0]
+                .columns()
+                .iter()
+                .map(|c| c.type_().clone())
+                .collect()
+        };
+
+        if rows.is_empty() && types.is_empty() {
+            Ok(DBOutput::StatementComplete(0))
+        } else {
             Ok(DBOutput::Rows {
-                types,
+                types: convert_types(types),
                 rows: convert_rows(rows),
             })
         }

@@ -15,45 +15,37 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::SchemaRef;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
 use datafusion::error::DataFusionError;
-use sqllogictest::DBOutput;
+use datafusion_common::DFField;
 
-use crate::engines::output::{DFColumnType, DFOutput};
+use crate::engines::output::DFColumnType;
 
 use super::super::conversion::*;
 use super::error::{DFSqlLogicTestError, Result};
 
-/// Converts `batches` to a DBOutput as expected by sqllogicteset.
-///
-/// Assumes empty record batches are a successful statement completion
-///
-pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<DFOutput> {
+/// Converts `batches` to a result as expected by sqllogicteset.
+pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
     if batches.is_empty() {
-        // DataFusion doesn't report number of rows complete
-        return Ok(DBOutput::StatementComplete(0));
-    }
-
-    let schema = batches[0].schema();
-    let types = convert_schema_to_types(&schema);
-
-    let mut rows = vec![];
-    for batch in batches {
-        // Verify schema
-        if schema != batch.schema() {
-            return Err(DFSqlLogicTestError::DataFusion(DataFusionError::Internal(
-                format!(
-                    "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
-                    schema,
-                    batch.schema()
-                ),
-            )));
+        Ok(vec![])
+    } else {
+        let schema = batches[0].schema();
+        let mut rows = vec![];
+        for batch in batches {
+            // Verify schema
+            if schema != batch.schema() {
+                return Err(DFSqlLogicTestError::DataFusion(DataFusionError::Internal(
+                    format!(
+                        "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
+                        schema,
+                        batch.schema()
+                    ),
+                )));
+            }
+            rows.append(&mut convert_batch(batch)?);
         }
-        rows.append(&mut convert_batch(batch)?);
+        Ok(rows)
     }
-
-    Ok(DBOutput::Rows { types, rows })
 }
 
 /// Convert a single batch to a `Vec<Vec<String>>` for comparison
@@ -124,9 +116,9 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
     }
 }
 
-fn convert_schema_to_types(schema: &SchemaRef) -> Vec<DFColumnType> {
-    schema
-        .fields()
+/// Converts columns to a result as expected by sqllogicteset.
+pub fn convert_schema_to_types(columns: &[DFField]) -> Vec<DFColumnType> {
+    columns
         .iter()
         .map(|f| f.data_type())
         .map(|data_type| match data_type {

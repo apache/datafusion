@@ -78,13 +78,10 @@ async fn run_test_file_with_postgres(
     relative_path: PathBuf,
 ) -> Result<(), Box<dyn Error>> {
     info!("Running with Postgres runner: {}", path.display());
-
     let postgres_client = Postgres::connect(relative_path).await?;
-
-    sqllogictest::Runner::new(postgres_client)
-        .run_file_async(path)
-        .await?;
-
+    let mut runner = sqllogictest::Runner::new(postgres_client);
+    runner.with_column_validator(strict_column_validator);
+    runner.run_file_async(path).await?;
     Ok(())
 }
 
