@@ -54,14 +54,14 @@ SELECT id FROM alltypes_plain ORDER BY int_col, double_col
 
 
 # test_order_by_agg_expr
-query F
+query R
 SELECT MIN(c12) FROM aggregate_test_100 ORDER BY MIN(c12)
 ----
 0.014793053078
 
 # test_nulls_first_asc
 
-query IS
+query IT
 SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num
 ----
 1 one
@@ -70,7 +70,7 @@ NULL three
 
 # test_nulls_first_desc()
 
-query IS
+query IT
 SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC
 ----
 NULL three
@@ -79,7 +79,7 @@ NULL three
 
 # test_specific_nulls_last_desc
 
-query IS
+query IT
 SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC NULLS LAST
 ----
 2 two
@@ -87,7 +87,7 @@ SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter)
 NULL three
 
 # test_specific_nulls_first_asc
-query IS
+query IT
 SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num ASC NULLS FIRST
 ----
 NULL three
@@ -101,7 +101,7 @@ CREATE EXTERNAL TABLE test (c1 int, c2 bigint, c3 boolean)
 STORED AS CSV LOCATION 'tests/data/partitioned_csv';
 
 # Demonstrate types
-query SSS
+query TTT
 SELECT arrow_typeof(c1), arrow_typeof(c2), arrow_typeof(c3) FROM test LIMIT 1;
 ----
 Int32 Int64 Boolean
@@ -229,7 +229,7 @@ create or replace table t as select column1 as value, column2 as time from (sele
 ) as sq) as sq
 
 
-query IT rowsort
+query IP rowsort
 select
   sum(value) AS "value",
   date_trunc('hour',time) AS "time"
@@ -241,7 +241,7 @@ GROUP BY time;
 3 2022-01-02T00:00:00
 
 # should work fine
-query IT
+query IP
 select
   sum(value) AS "value",
   date_trunc('minute',time) AS "time"

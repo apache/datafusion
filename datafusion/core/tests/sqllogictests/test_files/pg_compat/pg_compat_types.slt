@@ -16,23 +16,23 @@
 # under the License.
 
 
-query S
+query T
 select null::VARCHAR
 ----
 NULL
 
-query SS
+query TT
 select 'a'::VARCHAR, ''::VARCHAR
 ----
 a  (empty)
 
 skipif postgres
-query SS
+query TT
 select 'a'::CHAR, ''::CHAR
 ----
 a  (empty)
 
-query SS
+query TT
 select 'a'::TEXT, ''::TEXT
 ----
 a  (empty)
@@ -80,23 +80,23 @@ select 1::BIGINT UNSIGNED
 ----
 1
 
-query FFFFF
+query RRRRR
 select 1.0::FLOAT, 1.023::FLOAT, 'NaN'::FLOAT,'+Inf'::FLOAT,'-Inf'::FLOAT
 ----
 1 1.023 NaN Infinity -Infinity
 
-query FFFFF
+query RRRRR
 select 1.0::REAL, 1.023::REAL, 'NaN'::REAL,'+Inf'::REAL,'-Inf'::REAL
 ----
 1 1.023 NaN Infinity -Infinity
 
 skipif postgres
-query FFFFF
+query RRRRR
 select 1.0::DOUBLE, 1.023::DOUBLE, 'NaN'::DOUBLE,'+Inf'::DOUBLE,'-Inf'::DOUBLE
 ----
 1 1.023 NaN Infinity -Infinity
 
-query FFF
+query RRR
 select 1.0::DECIMAL(5,3) as one, 2.023::DECIMAL(5,3) as two, 3.023::DECIMAL(5,2) as three
 ----
 1 2.023 3.02
@@ -111,7 +111,7 @@ select '12:00:01'::TIME
 ----
 12:00:01
 
-query T
+query P
 select '2018-01-01 12:00:00'::TIMESTAMP
 ----
 2018-01-01T12:00:00

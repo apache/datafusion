@@ -40,7 +40,7 @@ CREATE TABLE t2(
 ;
 
 # union with EXCEPT(JOIN)
-query S rowsort
+query T rowsort
 (   
     SELECT name FROM t1
     EXCEPT
@@ -57,7 +57,7 @@ Alice
 John
 
 # union with type coercion
-query IS rowsort
+query IT rowsort
 (   
     SELECT * FROM t1
     EXCEPT
@@ -158,7 +158,7 @@ SELECT 1 UNION SELECT 2
 2
 
 # union_with_except_input
-query S rowsort
+query T rowsort
 (
     SELECT name FROM t1
     EXCEPT
@@ -175,7 +175,7 @@ Alice
 John
 
 # union_with_type_coercion
-query IS rowsort
+query IT rowsort
 (
     SELECT id, name FROM t1
     EXCEPT

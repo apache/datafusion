@@ -118,7 +118,7 @@ CREATE EXTERNAL TABLE IF NOT EXISTS supplier (
 
 
 # q1
-query SSFFFFFFFI
+query TTRRRRRRRI
 select
     l_returnflag,
     l_linestatus,
@@ -275,7 +275,7 @@ order by
 
 
 # q6
-query F
+query R
 select
     sum(l_extendedprice * l_discount) as revenue
 from
@@ -535,7 +535,7 @@ order by
 0 9
 
 # q14
-query F
+query R
 select
             100.00 * sum(case
                              when p_type like 'PROMO%'
@@ -626,7 +626,7 @@ order by
 
 
 # q17
-query F
+query R
 select
         sum(l_extendedprice) / 7.0 as avg_yearly
 from
@@ -684,7 +684,7 @@ order by
 
 
 # q19
-query F
+query R
 select
     sum(l_extendedprice* (1 - l_discount)) as revenue
 from
@@ -809,7 +809,7 @@ order by
 
 
 # q22
-query SIF
+query TIR
 select
     cntrycode,
     count(*) as numcust,

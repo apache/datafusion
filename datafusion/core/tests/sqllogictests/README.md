@@ -108,9 +108,9 @@ query <type_string> <sort_mode>
   - 'B' - **B**oolean,
   - 'D' - **D**atetime,
   - 'I' - **I**nteger,
-  - 'F' - **F**loating-point results,
-  - 'S' - **S**string,
-  - 'T' - **T**imestamp,
+  - 'P' - timestam**P**,
+  - 'R' - floating-point results,
+  - 'T' - **T**ext,
   - "?" - any other types
 - `expected_result`: In the results section, some values are converted according to some rules:
   - floating point values are rounded to the scale of "12",

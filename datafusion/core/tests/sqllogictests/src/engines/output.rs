@@ -22,8 +22,8 @@ pub enum DFColumnType {
     Boolean,
     DateTime,
     Integer,
-    FloatingPoint,
-    String,
+    Float,
+    Text,
     Timestamp,
     Another,
 }
@@ -34,9 +34,9 @@ impl ColumnType for DFColumnType {
             'B' => Some(Self::Boolean),
             'D' => Some(Self::DateTime),
             'I' => Some(Self::Integer),
-            'F' => Some(Self::FloatingPoint),
-            'S' => Some(Self::String),
-            'T' => Some(Self::Timestamp),
+            'P' => Some(Self::Timestamp),
+            'R' => Some(Self::Float),
+            'T' => Some(Self::Text),
             _ => Some(Self::Another),
         }
     }
@@ -46,9 +46,9 @@ impl ColumnType for DFColumnType {
             Self::Boolean => 'B',
             Self::DateTime => 'D',
             Self::Integer => 'I',
-            Self::FloatingPoint => 'F',
-            Self::String => 'S',
-            Self::Timestamp => 'T',
+            Self::Timestamp => 'P',
+            Self::Float => 'R',
+            Self::Text => 'T',
             Self::Another => '?',
         }
     }

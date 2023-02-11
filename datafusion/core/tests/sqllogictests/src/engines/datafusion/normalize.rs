@@ -135,8 +135,8 @@ pub fn convert_schema_to_types(columns: &[DFField]) -> Vec<DFColumnType> {
             | DataType::Float32
             | DataType::Float64
             | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _) => DFColumnType::FloatingPoint,
-            DataType::Utf8 | DataType::LargeUtf8 => DFColumnType::String,
+            | DataType::Decimal256(_, _) => DFColumnType::Float,
+            DataType::Utf8 | DataType::LargeUtf8 => DFColumnType::Text,
             DataType::Date32
             | DataType::Date64
             | DataType::Time32(_)

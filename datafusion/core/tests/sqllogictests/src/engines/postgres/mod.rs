@@ -342,8 +342,8 @@ fn convert_types(types: Vec<Type>) -> Vec<DFColumnType> {
         .map(|t| match t {
             Type::BOOL => DFColumnType::Boolean,
             Type::INT2 | Type::INT4 | Type::INT8 => DFColumnType::Integer,
-            Type::BPCHAR | Type::VARCHAR | Type::TEXT => DFColumnType::String,
-            Type::FLOAT4 | Type::FLOAT8 | Type::NUMERIC => DFColumnType::FloatingPoint,
+            Type::BPCHAR | Type::VARCHAR | Type::TEXT => DFColumnType::Text,
+            Type::FLOAT4 | Type::FLOAT8 | Type::NUMERIC => DFColumnType::Float,
             Type::DATE | Type::TIME => DFColumnType::DateTime,
             Type::TIMESTAMP => DFColumnType::Timestamp,
             _ => DFColumnType::Another,

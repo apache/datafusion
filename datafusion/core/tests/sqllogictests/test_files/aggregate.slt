@@ -76,37 +76,37 @@ SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
 # csv_query_avg_multi_batch
 
 # csv_query_avg
-query F
+query R
 SELECT avg(c12) FROM aggregate_test_100
 ----
 0.508972509913
 
 # csv_query_covariance_1
-query F
+query R
 SELECT covar_pop(c2, c12) FROM aggregate_test_100
 ----
 -0.079169322354
 
 # csv_query_covariance_2
-query F
+query R
 SELECT covar(c2, c12) FROM aggregate_test_100
 ----
 -0.079969012479
 
 # single_row_query_covar_1
-query F
+query R
 select covar_samp(sq.column1, sq.column2) from (values (1.1, 2.2)) as sq
 ----
 NULL
 
 # single_row_query_covar_2
-query F
+query R
 select covar_pop(sq.column1, sq.column2) from (values (1.1, 2.2)) as sq
 ----
 0
 
 # all_nulls_query_covar
-query FF
+query RR
 with data as (
   select null::int as f, null::int as b
   union all
@@ -118,7 +118,7 @@ from data
 NULL NULL
 
 # covar_query_with_nulls
-query FF
+query RR
 with data as (
   select 1 as f,       4 as b
   union all
@@ -138,19 +138,19 @@ from data
 1 0.666666666667
 
 # csv_query_correlation
-query F
+query R
 SELECT corr(c2, c12) FROM aggregate_test_100
 ----
 -0.190645441906
 
 # single_row_query_correlation
-query F
+query R
 select corr(sq.column1, sq.column2) from (values (1.1, 2.2)) as sq
 ----
 0
 
 # all_nulls_query_correlation
-query F
+query R
 with data as (
   select null::int as f, null::int as b
   union all
@@ -162,7 +162,7 @@ from data
 NULL
 
 # correlation_query_with_nulls
-query F
+query R
 with data as (
   select 1 as f,       4 as b
   union all
@@ -182,67 +182,67 @@ from data
 1
 
 # csv_query_variance_1
-query F
+query R
 SELECT var_pop(c2) FROM aggregate_test_100
 ----
 1.8675
 
 # csv_query_variance_2
-query F
+query R
 SELECT var_pop(c6) FROM aggregate_test_100
 ----
 26156334342021890000000000000000000000
 
 # csv_query_variance_3
-query F
+query R
 SELECT var_pop(c12) FROM aggregate_test_100
 ----
 0.092342237216
 
 # csv_query_variance_4
-query F
+query R
 SELECT var(c2) FROM aggregate_test_100
 ----
 1.886363636364
 
 # csv_query_variance_5
-query F
+query R
 SELECT var_samp(c2) FROM aggregate_test_100
 ----
 1.886363636364
 
 # csv_query_stddev_1
-query F
+query R
 SELECT stddev_pop(c2) FROM aggregate_test_100
 ----
 1.366565036872
 
 # csv_query_stddev_2
-query F
+query R
 SELECT stddev_pop(c6) FROM aggregate_test_100
 ----
 5114326382039172000
 
 # csv_query_stddev_3
-query F
+query R
 SELECT stddev_pop(c12) FROM aggregate_test_100
 ----
 0.303878655413
 
 # csv_query_stddev_4
-query F
+query R
 SELECT stddev(c12) FROM aggregate_test_100
 ----
 0.305409539941
 
 # csv_query_stddev_5
-query F
+query R
 SELECT stddev_samp(c12) FROM aggregate_test_100
 ----
 0.305409539941
 
 # csv_query_stddev_6
-query F
+query R
 select stddev(sq.column1) from (values (1.1), (2.0), (3.0)) as sq
 ----
 0.950438495292
@@ -260,7 +260,7 @@ SELECT approx_median(c6) FROM aggregate_test_100
 1146409980542786560
 
 # csv_query_approx_median_3
-query F
+query R
 SELECT approx_median(c12) FROM aggregate_test_100
 ----
 0.555006541052
@@ -278,7 +278,7 @@ SELECT median(c6) FROM aggregate_test_100
 1125553990140691277
 
 # csv_query_median_3
-query F
+query R
 SELECT median(c12) FROM aggregate_test_100
 ----
 0.551390054439
@@ -332,25 +332,25 @@ SELECT median(a) FROM median_u64
 50
 
 # median_f32
-query F
+query R
 SELECT median(a) FROM median_f32
 ----
 3.3
 
 # median_f64
-query F
+query R
 SELECT median(a) FROM median_f64
 ----
 3.3
 
 # median_f64_nan
-query F
+query R
 SELECT median(a) FROM median_f64_nan
 ----
 NaN
 
 # approx_median_f64_nan
-query F
+query R
 SELECT approx_median(a) FROM median_f64_nan
 ----
 NaN
@@ -365,13 +365,13 @@ create table cpu (host string, usage float) as select * from (values
 ('host1', 90.4)
 );
 
-query SF rowsort
+query TR rowsort
 select host, median(usage) from cpu group by host;
 ----
 host0 90.1
 host1 90.3
 
-query F
+query R
 select median(usage) from cpu;
 ----
 90.2
@@ -395,7 +395,7 @@ create table cpu (host string, usage float) as select * from (values
   ('host1', 89.3)
 );
 
-query SF rowsort
+query TR rowsort
 select host, median(usage) from cpu group by host;
 ----
 host0 90.2
@@ -410,7 +410,7 @@ drop table cpu;
 statement ok
 create table cpu (host string, usage float) as select * from (values ('host0', 90.2), ('host1', 90.1), ('host1', 90.5), ('host0', 90.5), ('host1', 90.0), ('host1', 90.3), ('host1', 90.2), ('host1', 90.3));
 
-query SF rowsort
+query TR rowsort
 select host, median(usage) from cpu group by host;
 ----
 host0 90.35
@@ -659,7 +659,7 @@ SELECT (ABS(1 - CAST(approx_percentile_cont(c11, 0.9) AS DOUBLE) / 0.834) < 0.05
 true
 
 # csv_query_cube_avg
-query SIF
+query TIR
 SELECT c1, c2, AVG(c3) FROM aggregate_test_100_by_sql GROUP BY CUBE (c1, c2) ORDER BY c1, c2
 ----
 a 1 -17.6
@@ -700,7 +700,7 @@ NULL 5 -13.857142857143
 NULL NULL 7.81
 
 # csv_query_rollup_avg
-query SIIF
+query TIIR
 SELECT c1, c2, c3, AVG(c4) FROM aggregate_test_100_by_sql WHERE c1 IN ('a', 'b', NULL) GROUP BY ROLLUP (c1, c2, c3) ORDER BY c1, c2, c3
 ----
 a 1 -85 -15154
@@ -757,7 +757,7 @@ b NULL NULL 7732.315789473684
 NULL NULL NULL 3833.525
 
 # csv_query_approx_percentile_cont_with_weight
-query SI
+query TI
 SELECT c1, approx_percentile_cont(c3, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a 73
@@ -767,7 +767,7 @@ d 124
 e 115
 
 # csv_query_approx_percentile_cont_with_weight (2)
-query SI
+query TI
 SELECT c1, approx_percentile_cont_with_weight(c3, 1, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a 73
@@ -777,7 +777,7 @@ d 124
 e 115
 
 # csv_query_approx_percentile_cont_with_histogram_bins
-query SI
+query TI
 SELECT c1, approx_percentile_cont(c3, 0.95, 200) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a 73
@@ -786,7 +786,7 @@ c 122
 d 124
 e 115
 
-query SI
+query TI
 SELECT c1, approx_percentile_cont_with_weight(c3, c2, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a 74
@@ -796,7 +796,7 @@ d 124
 e 115
 
 # csv_query_sum_crossjoin
-query SSI
+query TTI
 SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY a.c1, b.c1 ORDER BY a.c1, b.c1
 ----
 a a 1260
@@ -826,7 +826,7 @@ e d 1134
 e e 1323
 
 # csv_query_cube_sum_crossjoin
-query SSI
+query TTI
 SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY CUBE (a.c1, b.c1) ORDER BY a.c1, b.c1
 ----
 a    a    1260
@@ -867,7 +867,7 @@ NULL e    5985
 NULL NULL 28500
 
 # csv_query_cube_distinct_count
-query SII
+query TII
 SELECT c1, c2, COUNT(DISTINCT c3) FROM aggregate_test_100 GROUP BY CUBE (c1,c2) ORDER BY c1,c2
 ----
 a    1    5
@@ -908,7 +908,7 @@ NULL 5    14
 NULL NULL 80
 
 # csv_query_rollup_distinct_count
-query SII
+query TII
 SELECT c1, c2, COUNT(DISTINCT c3) FROM aggregate_test_100 GROUP BY ROLLUP (c1,c2) ORDER BY c1,c2
 ----
 a    1    5
@@ -944,7 +944,7 @@ e    NULL 18
 NULL NULL 80
 
 # csv_query_rollup_sum_crossjoin
-query SSI
+query TTI
 SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY ROLLUP (a.c1, b.c1) ORDER BY a.c1, b.c1
 ----
 a    a    1260
@@ -1004,7 +1004,7 @@ SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 
 [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm]
 
 # csv_query_array_agg_with_overflow
-query IIFIII
+query IIRIII
 select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by c2 order by c2
 ----
 1 367 16.681818181818 125 -99 22
@@ -1018,7 +1018,7 @@ select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count
 # SELECT array_agg(c13 ORDER BY c1) FROM aggregate_test_100;
 
 # csv_query_array_cube_agg_with_overflow
-query SIIFIII
+query TIIRIII
 select c1, c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by CUBE (c1,c2) order by c1, c2
 ----
 a 1 -88 -17.6 83 -85 5
@@ -1095,33 +1095,33 @@ NULL NULL 781 7.81 125 -117 100
 # TODO: aggregate_timestamps_avg
 
 # aggregate_time_min_and_max
-query SS
+query TT
 select min(t), max(t) from  (select '00:00:00' as t union select '00:00:01' union select '00:00:02')
 ----
 00:00:00 00:00:02
 
 # aggregate_decimal_min
-query F
+query R
 select min(c1) from d_table
 ----
 -100.009
 
 # aggregate_decimal_max
-query F
+query R
 select max(c1) from d_table
 ----
 110.009
 
 # FIX: doesn't check datatype
 # aggregate_decimal_sum
-query F
+query R
 select sum(c1) from d_table
 ----
 100
 
 # FIX: doesn't check datatype
 # aggregate_decimal_avg
-query F
+query R
 select avg(c1) from d_table
 ----
 5
@@ -1168,7 +1168,7 @@ select avg(c1) from d_table
 # TODO: simple_mean
 
 # query_sum_distinct - 2 different aggregate functions: avg and sum(distinct)
-query FI
+query RI
 SELECT AVG(c1), SUM(DISTINCT c2) FROM test
 ----
 1.75 3
@@ -1206,7 +1206,7 @@ SELECT COUNT(DISTINCT c1) FROM test
 # [[1]]
 
 # test_approx_percentile_cont_decimal_support
-query SI
+query TI
 SELECT c1, approx_percentile_cont(c2, cast(0.85 as decimal(10,2))) apc FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a 4
@@ -1230,13 +1230,13 @@ SELECT ARRAY_AGG([1]);
 [[1]]
 
 # variance_single_value
-query FFFF
+query RRRR
 select var(sq.column1), var_pop(sq.column1), stddev(sq.column1), stddev_pop(sq.column1) from (values (1.0)) as sq;
 ----
 NULL 0 NULL 0
 
 # variance_two_values
-query FFFF
+query RRRR
 select var(sq.column1), var_pop(sq.column1), stddev(sq.column1), stddev_pop(sq.column1) from (values (1.0), (3.0)) as sq;
 ----
 2 1 1.414213562373 1
@@ -1261,7 +1261,7 @@ NULL 1
 NULL 2
 
 # avg should be null
-query FI
+query RI
 SELECT avg(column1), column2 from the_nulls group by column2 order by column2;
 ----
 NULL 1

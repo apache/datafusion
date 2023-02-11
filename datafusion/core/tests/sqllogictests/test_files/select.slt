@@ -50,7 +50,7 @@ VALUES (1),(2)
 2
 
 # multiple rows and columns from VALUES
-query IS rowsort
+query IT rowsort
 VALUES (1,'a'),(2,'b')
 ----
 1   a

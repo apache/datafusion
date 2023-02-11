@@ -36,7 +36,7 @@ CREATE TABLE t2(t2_id INT, t2_name TEXT, t2_int INT) AS VALUES
 
 
 # in_subquery_to_join_with_correlated_outer_filter
-query ISI rowsort
+query ITI rowsort
 select t1.t1_id,
        t1.t1_name,
        t1.t1_int
@@ -50,7 +50,7 @@ where t1.t1_id + 12 in (
 44 d 4
 
 # not_in_subquery_to_join_with_correlated_outer_filter
-query ISI rowsort
+query ITI rowsort
 select t1.t1_id,
        t1.t1_name,
        t1.t1_int

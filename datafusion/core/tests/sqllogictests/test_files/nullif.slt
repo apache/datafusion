@@ -53,7 +53,7 @@ true
 true
 
 
-query S rowsort
+query T rowsort
 SELECT NULLIF(text_field, 'zxc') FROM test;
 ----
 NULL
