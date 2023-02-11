@@ -118,7 +118,7 @@ CREATE EXTERNAL TABLE IF NOT EXISTS supplier (
 
 
 # q1
-query T
+query SSFFFFFFFI
 select
     l_returnflag,
     l_linestatus,
@@ -147,7 +147,7 @@ R F 94 100854.52 92931.39 92931.39 47 50427.26 0.08 2
 
 
 # q2
-query T
+statement ok
 select
     s_acctbal,
     s_name,
@@ -191,11 +191,10 @@ order by
     n_name,
     s_name,
     p_partkey;
-----
 
 
 # q3
-query T
+statement ok
 select
     l_orderkey,
     sum(l_extendedprice * (1 - l_discount)) as revenue,
@@ -218,11 +217,10 @@ group by
 order by
     revenue desc,
     o_orderdate;
-----
 
 
 # q4
-query T
+statement ok
 select
     l_orderkey,
     sum(l_extendedprice * (1 - l_discount)) as revenue,
@@ -245,12 +243,11 @@ group by
 order by
     revenue desc,
     o_orderdate;
-----
 
 
 
 # q5
-query T
+statement ok
 select
     n_name,
     sum(l_extendedprice * (1 - l_discount)) as revenue
@@ -275,11 +272,10 @@ group by
     n_name
 order by
     revenue desc;
-----
 
 
 # q6
-query T
+query F
 select
     sum(l_extendedprice * l_discount) as revenue
 from
@@ -294,7 +290,7 @@ NULL
 
 
 # q7
-query T
+statement ok
 select
     supp_nation,
     cust_nation,
@@ -334,11 +330,10 @@ order by
     supp_nation,
     cust_nation,
     l_year;
-----
 
 
 # q8
-query T
+statement ok
 select
     o_year,
     sum(case
@@ -376,11 +371,10 @@ group by
     o_year
 order by
     o_year;
-----
 
 
 # q9
-query T
+statement ok
 select
     nation,
     o_year,
@@ -413,11 +407,10 @@ group by
 order by
     nation,
     o_year desc;
-----
 
 
 # q10
-query T
+statement ok
 select
     c_custkey,
     c_name,
@@ -449,11 +442,10 @@ group by
     c_comment
 order by
     revenue desc;
-----
 
 
 # q11
-query T
+statement ok
 select
     ps_partkey,
     sum(ps_supplycost * ps_availqty) as value
@@ -481,11 +473,10 @@ group by
     )
 order by
     value desc;
-----
 
 
 # q12
-query T
+statement ok
 select
     l_shipmode,
     sum(case
@@ -516,11 +507,10 @@ group by
     l_shipmode
 order by
     l_shipmode;
-----
 
 
 # q13
-query T
+query II
 select
     c_count,
     count(*) as custdist
@@ -545,7 +535,7 @@ order by
 0 9
 
 # q14
-query T
+query F
 select
             100.00 * sum(case
                              when p_type like 'PROMO%'
@@ -576,7 +566,7 @@ create view revenue0 (supplier_no, total_revenue) as
 		l_suppkey;
 
 # q15
-query T
+statement ok
 select
 	s_suppkey,
 	s_name,
@@ -596,14 +586,13 @@ where
 	)
 order by
 	s_suppkey;
-----
 
 statement ok
 drop view revenue0;
 
 
 # q16
-query T
+statement ok
 select
     p_brand,
     p_type,
@@ -634,11 +623,10 @@ order by
     p_brand,
     p_type,
     p_size;
-----
 
 
 # q17
-query T
+query F
 select
         sum(l_extendedprice) / 7.0 as avg_yearly
 from
@@ -660,7 +648,7 @@ where
 NULL
 
 # q18
-query T
+statement ok
 select
     c_name,
     c_custkey,
@@ -693,11 +681,10 @@ group by
 order by
     o_totalprice desc,
     o_orderdate;
-----
 
 
 # q19
-query T
+query F
 select
     sum(l_extendedprice* (1 - l_discount)) as revenue
 from
@@ -738,7 +725,7 @@ NULL
 
 
 # q20
-query T
+statement ok
 select
     s_name,
     s_address
@@ -776,11 +763,10 @@ where
   and n_name = 'CANADA'
 order by
     s_name;
-----
 
 
 # q21
-query T
+statement ok
 select
     s_name,
     count(*) as numwait
@@ -820,11 +806,10 @@ group by
 order by
     numwait desc,
     s_name;
-----
 
 
 # q22
-query T
+query SIF
 select
     cntrycode,
     count(*) as numcust,

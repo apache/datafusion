@@ -19,6 +19,7 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 
 use log::info;
+use sqllogictest::strict_column_validator;
 
 use datafusion::prelude::{SessionConfig, SessionContext};
 
@@ -26,7 +27,6 @@ use crate::engines::datafusion::DataFusion;
 use crate::engines::postgres::Postgres;
 
 mod engines;
-mod output;
 mod setup;
 mod utils;
 
@@ -68,6 +68,7 @@ async fn run_test_file(
     info!("Running with DataFusion runner: {}", path.display());
     let ctx = context_for_test_file(&relative_path).await;
     let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, relative_path));
+    runner.with_column_validator(strict_column_validator);
     runner.run_file_async(path).await?;
     Ok(())
 }

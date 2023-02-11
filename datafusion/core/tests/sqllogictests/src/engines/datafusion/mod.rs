@@ -18,7 +18,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::output::{DFColumnType, DFOutput};
+use crate::engines::output::{DFColumnType, DFOutput};
 
 use self::error::{DFSqlLogicTestError, Result};
 use async_trait::async_trait;

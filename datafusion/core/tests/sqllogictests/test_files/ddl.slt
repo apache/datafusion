@@ -209,7 +209,7 @@ CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as
 statement ok
 CREATE TABLE my_table AS SELECT * FROM aggregate_simple
 
-query II rowsort
+query FFB rowsort
 SELECT * FROM my_table order by c1 LIMIT 1
 ----
 0.00001 0.000000000001 true
@@ -234,7 +234,7 @@ DROP TABLE non_existent_table;
 statement ok
 CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) AS SELECT *,c3 as c4_tmp FROM aggregate_simple;
 
-query II rowsort
+query FFBS rowsort
 SELECT * FROM my_table order by c1 LIMIT 1
 ----
 0.00001 0.000000000001 true 1
@@ -254,7 +254,7 @@ CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) AS SELECT * F
 statement ok
 CREATE TABLE my_table(c1 int, c2 float, c3 varchar) AS VALUES(1, 2, 'hello')
 
-query II rowsort
+query IFS rowsort
 SELECT * FROM my_table;
 ----
 1 2 hello
@@ -326,7 +326,7 @@ STORED AS CSV
 WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv';
 
-query IIIIIIIIIIIII
+query SIIIIIIIIIFFS
 SELECT c1, c2, c3, c4, c5, c6, c7, c8, c9, 10, c11, c12, c13 FROM aggregate_test_100 LIMIT 1;
 ----
 c 2 1 18109 2033001162 -6513304855495910254 25 43062 1491205016 10 0.110830784 0.929409733247 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW
@@ -340,7 +340,7 @@ name VARCHAR,
 ts TIMESTAMP
 ) STORED AS CSV LOCATION 'tests/data/timestamps.csv';
 
-query CC
+query ST
 SELECT * from csv_with_timestamps
 ----
 Jorge 2018-12-13T12:12:10.011
@@ -366,7 +366,7 @@ STORED AS CSV
 PARTITIONED BY (c_date)
 LOCATION 'tests/data/partitioned_table';
 
-query CCC
+query ST?
 SELECT * from csv_with_timestamps where c_date='2018-11-13'
 ----
 Jorge 2018-12-13T12:12:10.011 2018-11-13
@@ -406,12 +406,12 @@ statement ok
 CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW DELIMITER '|' LOCATION 'tests/data/aggregate_simple_pipe.csv';
 
 
-query CCC
+query FFB
 SELECT * FROM aggregate_simple order by c1 LIMIT 1;
 ----
 0.00001 0.000000000001 true
 
-query CCC
+query FFB
 SELECT * FROM aggregate_simple order by c1 DESC LIMIT 1;
 ----
 0.00005 0.000000000005 true
@@ -474,13 +474,13 @@ statement ok
 CREATE OR REPLACE TABLE TABLE_WITH_NORMALIZATION(FIELD1 BIGINT, FIELD2 BIGINT);
 
 # Check table name is in lowercase
-query CCCC
+query SSSS
 show create table table_with_normalization
 ----
 datafusion public table_with_normalization NULL
 
 # Check column name is in uppercase
-query CCC
+query SSS
 describe table_with_normalization
 ----
 field1 Int64 NO
@@ -494,24 +494,24 @@ statement ok
 CREATE TABLE TABLE_WITHOUT_NORMALIZATION(FIELD1 BIGINT, FIELD2 BIGINT) AS VALUES (1,2);
 
 # Check table name is in uppercase
-query CCCC
+query SSSS
 show create table TABLE_WITHOUT_NORMALIZATION
 ----
 datafusion public TABLE_WITHOUT_NORMALIZATION NULL
 
 # Check column name is in uppercase
-query CCC
+query SSS
 describe TABLE_WITHOUT_NORMALIZATION
 ----
 FIELD1 Int64 YES
 FIELD2 Int64 YES
 
-query R
+query F
 select 10000000000000000000.01
 ----
 10000000000000000000
 
-query C
+query S
 select arrow_typeof(10000000000000000000.01)
 ----
 Float64
@@ -519,12 +519,12 @@ Float64
 statement ok
 set datafusion.sql_parser.parse_float_as_decimal = true;
 
-query R
+query F
 select 10000000000000000000.01
 ----
 10000000000000000000.01
 
-query C
+query S
 select arrow_typeof(10000000000000000000.01)
 ----
 Decimal128(22, 2)

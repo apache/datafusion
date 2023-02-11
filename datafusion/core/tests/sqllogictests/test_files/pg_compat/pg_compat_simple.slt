@@ -73,7 +73,7 @@ LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
 
 
-query RRRRR
+query FFFFF
 SELECT
   abs(-1.1) as abs,
   exp(2.0) as exp,
@@ -96,7 +96,7 @@ SELECT 1 as num;
 1
 
 
-query IIT
+query IIS
 SELECT
   c2,
   c3,
@@ -206,7 +206,7 @@ ORDER BY c2 ASC, c3 DESC, c10;
 5 -101 2243924747182709810
 
 
-query IIT
+query IIS
 SELECT
     c5,
     c4,
@@ -316,7 +316,7 @@ ORDER BY c5 ASC, c4 DESC, c10;
 2143473091 -14704 4602675983996931623
 
 
-query IRII rowsort
+query IFII rowsort
 SELECT * FROM
 (VALUES (1,2.0,-3,1+1),(10,20.0,-30,2+2))
 AS tbl(int_col, float_col, negative_col, summation);
@@ -325,7 +325,7 @@ AS tbl(int_col, float_col, negative_col, summation);
 10 20 -30 4
 
 
-query IIRIII
+query IIFIII
 SELECT
   count(*) AS count_all,
   count(c3) AS count_c3,
@@ -338,7 +338,7 @@ FROM aggregate_test_100_by_sql;
 100 100 7.81 781 125 -117
 
 
-query IIRIII
+query IIFIII
 select
   c2,
   sum(c3) sum_c3,
@@ -467,7 +467,7 @@ ORDER BY result;
 4268716378
 
 
-query TIIIIIIIITRRT
+query SIIIIIIIISFFS
 select * from aggregate_test_100_by_sql
 order by c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13;
 ----

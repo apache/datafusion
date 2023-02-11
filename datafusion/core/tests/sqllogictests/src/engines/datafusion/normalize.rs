@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::datatypes::SchemaRef;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
 use datafusion::error::DataFusionError;
 use sqllogictest::DBOutput;
 
-use crate::output::{DFColumnType, DFOutput};
+use crate::engines::output::{DFColumnType, DFOutput};
 
 use super::super::conversion::*;
 use super::error::{DFSqlLogicTestError, Result};
@@ -35,10 +36,7 @@ pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<DFOutput> {
     }
 
     let schema = batches[0].schema();
-
-    // TODO: report the the actual types of the result
-    // https://github.com/apache/arrow-datafusion/issues/4499
-    let types = vec![DFColumnType::Any; batches[0].num_columns()];
+    let types = convert_schema_to_types(&schema);
 
     let mut rows = vec![];
     for batch in batches {
@@ -124,4 +122,35 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
         }
         .map_err(DFSqlLogicTestError::Arrow)
     }
+}
+
+fn convert_schema_to_types(schema: &SchemaRef) -> Vec<DFColumnType> {
+    schema
+        .fields()
+        .iter()
+        .map(|f| f.data_type())
+        .map(|data_type| match data_type {
+            DataType::Boolean => DFColumnType::Boolean,
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => DFColumnType::Integer,
+            DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _) => DFColumnType::FloatingPoint,
+            DataType::Utf8 | DataType::LargeUtf8 => DFColumnType::String,
+            DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_) => DFColumnType::DateTime,
+            DataType::Timestamp(_, _) => DFColumnType::Timestamp,
+            _ => DFColumnType::Another,
+        })
+        .collect()
 }

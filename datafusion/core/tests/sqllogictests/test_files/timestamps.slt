@@ -22,7 +22,7 @@
 statement ok
 create table foo (val int, ts timestamp) as values (1, '2000-01-01T00:00:00'::timestamp), (2, '2000-02-01T00:00:00'::timestamp), (3, '2000-03-01T00:00:00'::timestamp);
 
-query C rowsort
+query IT rowsort
 select * from foo;
 ----
 1 2000-01-01T00:00:00
@@ -30,36 +30,36 @@ select * from foo;
 3 2000-03-01T00:00:00
 
 # Test that we can compare a timestamp to a casted string
-query C rowsort
+query IT rowsort
 select * from foo where ts > '2000-01-01T00:00:00'::timestamp;
 ----
 2 2000-02-01T00:00:00
 3 2000-03-01T00:00:00
 
 # Test that we can compare a timestamp to a string and it will be coerced
-query C rowsort
+query IT rowsort
 select * from foo where ts > '2000-01-01T00:00:00';
 ----
 2 2000-02-01T00:00:00
 3 2000-03-01T00:00:00
 
-query C rowsort
+query IT rowsort
 select * from foo where ts < '2000-02-01T00:00:00';
 ----
 1 2000-01-01T00:00:00
 
-query C rowsort
+query IT rowsort
 select * from foo where ts <= '2000-02-01T00:00:00';
 ----
 1 2000-01-01T00:00:00
 2 2000-02-01T00:00:00
 
-query C rowsort
+query IT rowsort
 select * from foo where ts = '2000-02-01T00:00:00';
 ----
 2 2000-02-01T00:00:00
 
-query C rowsort
+query IT rowsort
 select * from foo where ts != '2000-02-01T00:00:00';
 ----
 1 2000-01-01T00:00:00
@@ -122,7 +122,7 @@ SELECT DATE_BIN(INTERVAL '7 days', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '
 
 
 # demonstrates array values (rather than scalar) for the source argument
-query T rowsort
+query TF rowsort
 SELECT
   DATE_BIN(INTERVAL '15' minute, time, TIMESTAMP '2001-01-01T00:00:00Z') AS time,
   val

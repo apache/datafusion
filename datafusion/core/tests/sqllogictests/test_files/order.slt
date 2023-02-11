@@ -54,14 +54,14 @@ SELECT id FROM alltypes_plain ORDER BY int_col, double_col
 
 
 # test_order_by_agg_expr
-query R
+query F
 SELECT MIN(c12) FROM aggregate_test_100 ORDER BY MIN(c12)
 ----
 0.014793053078
 
 # test_nulls_first_asc
 
-query RC
+query IS
 SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num
 ----
 1 one
@@ -70,7 +70,7 @@ NULL three
 
 # test_nulls_first_desc()
 
-query RC
+query IS
 SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC
 ----
 NULL three
@@ -79,7 +79,7 @@ NULL three
 
 # test_specific_nulls_last_desc
 
-query RC
+query IS
 SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC NULLS LAST
 ----
 2 two
@@ -87,7 +87,7 @@ SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter)
 NULL three
 
 # test_specific_nulls_first_asc
-query RT
+query IS
 SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num ASC NULLS FIRST
 ----
 NULL three
@@ -101,13 +101,13 @@ CREATE EXTERNAL TABLE test (c1 int, c2 bigint, c3 boolean)
 STORED AS CSV LOCATION 'tests/data/partitioned_csv';
 
 # Demonstrate types
-query RC
+query SSS
 SELECT arrow_typeof(c1), arrow_typeof(c2), arrow_typeof(c3) FROM test LIMIT 1;
 ----
 Int32 Int64 Boolean
 
 
-query RC
+query II
 SELECT c1, c2 FROM test ORDER BY c1 DESC, c2 ASC
 ----
 3 0
@@ -160,9 +160,8 @@ SELECT c1, c2 FROM test ORDER BY c1 DESC, c2 ASC
 # sort_empty
 # The predicate on this query purposely generates no results
 
-query RC
+statement ok
 SELECT c1, c2 FROM test WHERE c1 > 100000 ORDER BY c1 DESC, c2 ASC
-----
 
 #####
 # Sorting and Grouping
@@ -170,42 +169,42 @@ SELECT c1, c2 FROM test WHERE c1 > 100000 ORDER BY c1 DESC, c2 ASC
 statement ok
 create table foo as values (1, 2), (3, 4), (5, 6);
 
-query ok rowsort
+query II rowsort
 select * from foo
 ----
 1 2
 3 4
 5 6
 
-query ok
+query I
 select column1 from foo order by column2;
 ----
 1
 3
 5
 
-query ok
+query I
 select column1 from foo order by column1 + column2;
 ----
 1
 3
 5
 
-query ok
+query I
 select column1 from foo order by column1 + column2;
 ----
 1
 3
 5
 
-query ok rowsort
+query I rowsort
 select column1 + column2 from foo group by column1, column2;
 ----
 11
 3
 7
 
-query ok
+query I
 select column1 + column2 from foo group by column1, column2 ORDER BY column2 desc;
 ----
 11
@@ -230,7 +229,7 @@ create or replace table t as select column1 as value, column2 as time from (sele
 ) as sq) as sq
 
 
-query I,I rowsort
+query IT rowsort
 select
   sum(value) AS "value",
   date_trunc('hour',time) AS "time"
@@ -242,7 +241,7 @@ GROUP BY time;
 3 2022-01-02T00:00:00
 
 # should work fine
-query I,I
+query IT
 select
   sum(value) AS "value",
   date_trunc('minute',time) AS "time"
