@@ -96,7 +96,7 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
         let lines: Vec<_> = cell.split('\n').collect();
 
         // no newlines in last cell
-        if lines.is_empty() {
+        if lines.len() < 2 {
             row.push(cell);
             return Either::Left(once(row));
         }
