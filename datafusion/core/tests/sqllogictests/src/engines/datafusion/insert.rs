@@ -16,8 +16,7 @@
 // under the License.
 
 use super::error::Result;
-use crate::engines::datafusion::util::LogicTestContextProvider;
-use crate::engines::output::DFOutput;
+use crate::{engines::datafusion::util::LogicTestContextProvider, output::DFOutput};
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
