@@ -45,7 +45,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
-use arrow::row::{Row, RowConverter, SortField};
+use arrow::row::{OwnedRow, Row, RowConverter, SortField};
 use datafusion_physical_expr::EquivalenceProperties;
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::{debug, error};
@@ -293,24 +293,22 @@ fn in_mem_partial_sort(
             tracking_metrics,
         )))
     } else {
-        let (sorted_arrays, batches): (Vec<Vec<ArrayRef>>, Vec<RecordBatch>) =
-            buffered_batches
-                .drain(..)
-                .into_iter()
-                .map(|b| {
-                    let BatchWithSortArray {
-                        sort_arrays,
-                        sorted_batch: batch,
-                    } = b;
-                    (sort_arrays, batch)
-                })
-                .unzip();
-
+        let (batches, sort_data): (Vec<_>, Vec<_>) = buffered_batches
+            .drain(..)
+            .into_iter()
+            .map(|b| {
+                let BatchWithSortArray {
+                    sort_data,
+                    sorted_batch,
+                } = b;
+                (sorted_batch, sort_data)
+            })
+            .unzip();
         let sorted_iter = {
             // NB timer records time taken on drop, so there are no
             // calls to `timer.done()` below.
             let _timer = tracking_metrics.elapsed_compute().timer();
-            get_sorted_iter(&sorted_arrays, expressions, batch_size, fetch)?
+            get_sorted_iter(&sort_data, expressions, batch_size, fetch)?
         };
         Ok(Box::pin(SortedSizedRecordBatchStream::new(
             schema,
@@ -327,18 +325,18 @@ struct CompositeIndex {
     row_idx: u32,
 }
 
-/// Get sorted iterator by sort concatenated `SortColumn`s
+/// Get sorted iterator using each sorted batches `SortData`
 fn get_sorted_iter(
-    sort_arrays: &[Vec<ArrayRef>],
+    sort_data: &[SortData],
     expr: &[PhysicalSortExpr],
     batch_size: usize,
     fetch: Option<usize>,
 ) -> Result<SortedIterator> {
-    let row_indices = sort_arrays
+    let row_indices = sort_data
         .iter()
         .enumerate()
-        .flat_map(|(i, arrays)| {
-            (0..arrays[0].len()).map(move |r| CompositeIndex {
+        .flat_map(|(i, data)| {
+            (0..data.arrays[0].len()).map(move |r| CompositeIndex {
                 // since we original use UInt32Array to index the combined mono batch,
                 // component record batches won't overflow as well,
                 // use u32 here for space efficiency.
@@ -347,22 +345,54 @@ fn get_sorted_iter(
             })
         })
         .collect::<Vec<CompositeIndex>>();
-
-    let sort_columns = expr
+    let batch_rows: Option<Vec<Vec<Row>>> = sort_data
         .iter()
-        .enumerate()
-        .map(|(i, expr)| {
-            let columns_i = sort_arrays
-                .iter()
-                .map(|cs| cs[i].as_ref())
-                .collect::<Vec<&dyn Array>>();
-            Ok(SortColumn {
-                values: concat(columns_i.as_slice())?,
-                options: Some(expr.options),
-            })
+        .map(|data| {
+            data.rows
+                .as_ref()
+                .map(|rows| rows.iter().map(|r| r.row()).collect())
         })
-        .collect::<Result<Vec<_>>>()?;
-    let indices = lexsort_to_indices(&sort_columns, fetch)?;
+        .collect();
+    let (indices, _rows) = match batch_rows {
+        Some(rows) => {
+            let mut to_sort: Vec<(usize, Row)> =
+                rows.into_iter().flatten().enumerate().collect();
+            assert_eq!(
+                to_sort.len(),
+                row_indices.len(),
+                "one or more batches unexectedly did not use row encoding"
+            );
+            to_sort.sort_unstable_by(|(_, row_a), (_, row_b)| row_a.cmp(row_b));
+            let limit = match fetch {
+                Some(lim) => lim.min(to_sort.len()),
+                None => to_sort.len(),
+            };
+            let (indices, new_rows): (Vec<usize>, Vec<Row>) =
+                to_sort.into_iter().take(limit).unzip();
+            let indices = UInt32Array::from_iter(indices.into_iter().map(|i| i as u32));
+            (indices, Some(new_rows))
+        }
+        None => {
+            let sort_columns = expr
+                .iter()
+                .enumerate()
+                .map(|(i, expr)| {
+                    let columns_i = sort_data
+                        .iter()
+                        .map(|d| {
+                            let cs = &d.arrays;
+                            cs[i].as_ref()
+                        })
+                        .collect::<Vec<&dyn Array>>();
+                    Ok(SortColumn {
+                        values: concat(columns_i.as_slice())?,
+                        options: Some(expr.options),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            (lexsort_to_indices(&sort_columns, fetch)?, None)
+        }
+    };
 
     // Calculate composite index based on sorted indices
     let row_indices = indices
@@ -804,9 +834,15 @@ impl ExecutionPlan for SortExec {
         self.input.statistics()
     }
 }
+/// preserved data used for sorting a single batch
+struct SortData {
+    arrays: Vec<ArrayRef>,
+    /// None if row encoding was not used to sort batch
+    rows: Option<Vec<OwnedRow>>,
+}
 
 struct BatchWithSortArray {
-    sort_arrays: Vec<ArrayRef>,
+    sort_data: SortData,
     sorted_batch: RecordBatch,
 }
 
@@ -821,8 +857,8 @@ fn sort_batch(
         .map(|e| e.evaluate_to_sort_column(&batch))
         .collect::<Result<Vec<SortColumn>>>()?;
 
-    let indices = if sort_columns.len() == 1 {
-        lexsort_to_indices(&sort_columns, fetch)?
+    let (indices, sorted_rows) = if sort_columns.len() == 1 {
+        (lexsort_to_indices(&sort_columns, fetch)?, None)
     } else {
         let sort_fields = sort_columns
             .iter()
@@ -842,7 +878,16 @@ fn sort_batch(
             Some(lim) => lim.min(to_sort.len()),
             None => to_sort.len(),
         };
-        UInt32Array::from_iter(to_sort.into_iter().take(limit).map(|(idx, _)| idx as u32))
+
+        let indices = UInt32Array::from_iter(
+            to_sort.iter().take(limit).map(|(idx, _)| *idx as u32),
+        );
+        let rows = to_sort
+            .iter()
+            .take(limit)
+            .map(|(_, row)| row.owned())
+            .collect::<Vec<_>>();
+        (indices, Some(rows))
     };
 
     // reorder all rows based on sorted indices
@@ -879,7 +924,10 @@ fn sort_batch(
         .collect::<Result<Vec<_>>>()?;
 
     Ok(BatchWithSortArray {
-        sort_arrays,
+        sort_data: SortData {
+            rows: sorted_rows,
+            arrays: sort_arrays,
+        },
         sorted_batch,
     })
 }
