@@ -117,14 +117,14 @@ fn is_suitable_for_symmetric_hash_join(hash_join: &HashJoinExec) -> Result<bool>
                 let left_convertible = convert_sort_expr_with_filter_schema(
                     &JoinSide::Left,
                     filter,
-                    left.schema(),
+                    &left.schema(),
                     &left_ordering[0],
                 )?
                 .is_some();
                 let right_convertible = convert_sort_expr_with_filter_schema(
                     &JoinSide::Right,
                     filter,
-                    hash_join.right().schema(),
+                    &right.schema(),
                     &right_ordering[0],
                 )?
                 .is_some();

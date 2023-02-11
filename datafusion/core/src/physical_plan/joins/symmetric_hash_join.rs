@@ -15,14 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! The code implements the symmetric hash join algorithm for executing partitions in parallel
-//! streams and buffering with range-condition pruning.
+//! This file implements the symmetric hash join algorithm with range-based
+//! data pruning to join two (potentially infinite) streams.
 //!
-//! A Symmetric Hash Join plan consumes two sorted children plan and produces
-//! joined output by given join type and other options.
+//! A [SymmetricHashJoinExec] plan takes two children plan (with appropriate
+//! output ordering) and produces the join output according to the given join
+//! type and other options.
 //!
-//! It includes OneSideHashJoiner struct constructed for both childs and calculates joins.
-//!
+//! This plan uses the [OneSideHashJoiner] object to facilitate join calculations
+//! for both its children.
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -275,37 +276,42 @@ impl SymmetricHashJoinExec {
         let mut physical_expr_graph =
             ExprIntervalGraph::try_new(filter.expression().clone())?;
 
-        let (left_required_sort_exprs, right_required_sort_exprs): (Vec<_>, Vec<_>) =
-            left.output_ordering()
-                .unwrap()
-                .iter()
-                .zip(right.output_ordering().unwrap())
-                .take(1)
-                .map(|(l, r)| (l.clone(), r.clone()))
-                .unzip();
+        let (left_ordering, right_ordering) = match (
+            left.output_ordering(),
+            right.output_ordering(),
+        ) {
+            (Some([left_ordering, ..]), Some([right_ordering, ..])) => {
+                (left_ordering, right_ordering)
+            }
+            _ => {
+                return Err(DataFusionError::Plan(
+                    "Symmetric hash join requires its children to have an output ordering".to_string(),
+                ));
+            }
+        };
 
-        // Build the sorted filter expression for the left child
+        // Build the sorted filter expression for the left child:
         let left_filter_expression = build_filter_input_order(
             JoinSide::Left,
             &filter,
-            left.schema(),
-            &left_required_sort_exprs[0],
+            &left.schema(),
+            left_ordering,
         )?;
 
-        // Build the sorted filter expression for the right child
+        // Build the sorted filter expression for the right child:
         let right_filter_expression = build_filter_input_order(
             JoinSide::Right,
             &filter,
-            right.schema(),
-            &right_required_sort_exprs[0],
+            &right.schema(),
+            right_ordering,
         )?;
 
         // Store the left and right sorted filter expressions in a vector
         let mut sorted_filter_exprs =
             vec![left_filter_expression, right_filter_expression];
 
-        // Gather node indices of converted filter expressions in SortedFilterExpr
-        // using the filter columns vector
+        // Gather node indices of converted filter expressions in `SortedFilterExpr`
+        // using the filter columns vector:
         let child_node_indexes = physical_expr_graph.gather_node_indices(
             &sorted_filter_exprs
                 .iter()
@@ -313,13 +319,16 @@ impl SymmetricHashJoinExec {
                 .collect::<Vec<_>>(),
         );
 
-        // Inject calculated node indexes into SortedFilterExpr
+        // Inject calculated node indices into SortedFilterExpr:
         for (sorted_expr, (_, index)) in sorted_filter_exprs
             .iter_mut()
             .zip(child_node_indexes.iter())
         {
             sorted_expr.set_node_index(*index);
         }
+
+        let left_required_sort_exprs = vec![left_ordering.clone()];
+        let right_required_sort_exprs = vec![right_ordering.clone()];
 
         Ok(SymmetricHashJoinExec {
             left,
@@ -615,39 +624,36 @@ fn prune_hash_values(
 ///
 /// # Arguments
 ///
-/// * `build_input_buffer` - The RecordBatch on the build side of the join
-/// * `build_sorted_filter_expr` - Build side `SortedFilterExpr` to update.
-/// * `probe_batch` - The RecordBatch on the probe side of the join
+/// * `build_input_buffer` - The [RecordBatch] on the build side of the join.
+/// * `build_sorted_filter_expr` - Build side [SortedFilterExpr] to update.
+/// * `probe_batch` - The `RecordBatch` on the probe side of the join.
 /// * `probe_sorted_filter_expr` - Probe side `SortedFilterExpr` to update.
 ///
 /// ### Note
 /// ```text
 ///
-///   Build      Probe
-///  +-------+  +-------+
-///  |+-----+|  |   |   |
-///  ||a |b ||  |   |   |
-///  |+--|--+|  |   |   |
-///  |   |   |  |   |   |
-///  |   |   |  |   |   |
-///  |   |   |  |   |   |
-///  |   |   |  |   |   |
-///  |   |   |  |+-----+|
-///  |   |   |  ||c |d ||
-///  |   |   |  |+--|--+|
-///  +-------+  +-------+
+///         Build      Probe
+///       +-------+  +-------+
+///       |+-----+|  |   |   |
+///  FV   ||a |b ||  |   |   |
+///       |+--|--+|  |   |   |
+///       |   |   |  |   |   |
+///       |   |   |  |   |   |
+///       |   |   |  |   |   |
+///       |   |   |  |   |   |
+///       |   |   |  |+-----+|
+///       |   |   |  ||c |d ||  LV
+///       |   |   |  |+--|--+|
+///       +-------+  +-------+
 ///
-///     FV -> First value
-///     LV -> Last value
-///
-/// Interval arithmetic is used to calculate the range of possible join key values for
-/// build-side pruning. This is done by first creating intervals for the join filter values
-/// in the build side of the join, which is first value of the side and infinity since the stream is also infinite.
-/// If the expression is descending, interval becomes [-∞, FV] and if ascending,
-/// interval becomes [FV, ∞]. For the probe side, the last of value of the RecordBatch is used
-/// for interval calculation. This time we use the last value of the batch,
-/// if the expression is descending, the interval becomes [-∞, LV] and if it is ascending,
-/// it becomes [LV, ∞].
+/// Interval arithmetic is used to calculate viable join ranges for build-side
+/// pruning. This is done by first creating an interval for join filter values in
+/// the build side of the join, which spans [-∞, FV] or [FV, ∞] depending on the
+/// ordering (descending/ascending) of the filter expression. Here, FV denotes the
+/// first value on the build side. This range is then compared with the probe side
+/// interval, which either spans [-∞, LV] or [LV, ∞] depending on the ordering
+/// (ascending/descending) of the probe side. Here, LV denotes the last value on
+/// the probe side.
 ///
 /// In our case:
 ///     Expr1: [a(FV), inf]
@@ -655,8 +661,6 @@ fn prune_hash_values(
 ///     Expr3: [c(LV), inf]
 ///     Expr4: [d(LV), inf]
 /// ```
-///
-///
 fn calculate_filter_expr_intervals(
     build_input_buffer: &RecordBatch,
     build_sorted_filter_expr: &mut SortedFilterExpr,
@@ -707,21 +711,22 @@ fn calculate_filter_expr_intervals(
     Ok(())
 }
 
-/// Determine the length of the record batch to be pruned.
+/// Determine the pruning length for `buffer`.
 ///
-/// This function evaluates the build side filter expression, converts the result into an array and
-/// determines the length of the record batch to be pruned by performing a binary search on the array.
+/// This function evaluates the build side filter expression, converts the
+/// result into an array and determines the pruning length by performing a
+/// binary search on the array.
 ///
-/// # Parameters
+/// # Arguments
 ///
 /// * `buffer`: The record batch to be pruned.
-/// * `build_side_filter_expr`: The filter expression on the build side used to determine the length
-/// of the record batch to be pruned.
+/// * `build_side_filter_expr`: The filter expression on the build side used
+/// to determine the pruning length.
 ///
 /// # Returns
 ///
-/// A Result object that contains the length of the record batch to be pruned. An error will be
-/// returned if there is an issue evaluating the build side filter expression.
+/// A [Result] object that contains the pruning length. The function will return
+/// an error if there is an issue evaluating the build side filter expression.
 fn determine_prune_length(
     buffer: &RecordBatch,
     build_side_filter_expr: &SortedFilterExpr,
@@ -731,8 +736,7 @@ fn determine_prune_length(
     // Evaluate the build side filter expression and convert it into an array
     let batch_arr = origin_sorted_expr
         .expr
-        .evaluate(buffer)
-        .unwrap()
+        .evaluate(buffer)?
         .into_array(buffer.num_rows());
 
     // Get the lower or upper interval based on the sort direction
@@ -919,13 +923,13 @@ where
 }
 
 struct OneSideHashJoiner {
-    // Build side
+    /// Build side
     build_side: JoinSide,
     /// Build side filter sort information
     sorted_filter_expr: SortedFilterExpr,
-    /// Inout record batch buffer
+    /// Input record batch buffer
     input_buffer: RecordBatch,
-    /// columns from the side
+    /// Columns from the side
     on: Vec<Column>,
     /// Hashmap
     hashmap: JoinHashMap,
@@ -965,29 +969,26 @@ impl OneSideHashJoiner {
         }
     }
 
-    /// Updates the internal state of the OneSideHashJoiner with the incoming batch.
+    /// Updates the internal state of the [OneSideHashJoiner] with the incoming batch.
     ///
     /// # Arguments
     ///
-    /// * `batch` - The incoming RecordBatch to be merged with the internal input buffer
+    /// * `batch` - The incoming [RecordBatch] to be merged with the internal input buffer
     /// * `random_state` - The random state used to hash values
     ///
     /// # Returns
     ///
-    /// Returns a Result with an empty Ok if the update was successful, otherwise returns an error.
+    /// Returns a [Result] encapsulating any intermediate errors.
     fn update_internal_state(
         &mut self,
         batch: &RecordBatch,
         random_state: &RandomState,
     ) -> Result<()> {
-        // Merge the incoming batch with the existing input buffer
-        self.input_buffer =
-            merge_batches(&self.input_buffer, batch, batch.schema()).unwrap();
-
-        // Resize the hashes buffer to the number of rows in the incoming batch
+        // Merge the incoming batch with the existing input buffer:
+        self.input_buffer = merge_batches(&self.input_buffer, batch, batch.schema())?;
+        // Resize the hashes buffer to the number of rows in the incoming batch:
         self.hashes_buffer.resize(batch.num_rows(), 0);
-
-        // Update the hashmap with the join key values and hashes of the incoming batch
+        // Update the hashmap with the join key values and hashes of the incoming batch:
         update_hash(
             &self.on,
             batch,
@@ -996,14 +997,12 @@ impl OneSideHashJoiner {
             random_state,
             &mut self.hashes_buffer,
         )?;
-
-        // Add the hashes buffer to the row_hash_values deque
+        // Add the hashes buffer to the hash value deque:
         self.row_hash_values.extend(self.hashes_buffer.iter());
-
         Ok(())
     }
 
-    /// This method performs a join between the build side input buffer and probe side RecordBatch.
+    /// This method performs a join between the build side input buffer and the probe side batch.
     ///
     /// # Arguments
     ///
@@ -1012,11 +1011,11 @@ impl OneSideHashJoiner {
     /// * `on_probe` - An array of columns on which the join will be performed. The columns are from the probe side of the join.
     /// * `filter` - An optional filter on the join condition.
     /// * `probe_batch` - The second record batch to be joined.
-    /// * `probe_visited` - A hashset to store the visited indices from the probe batch.
+    /// * `probe_visited` - A hash set to store the visited indices from the probe batch.
     /// * `probe_offset` - The offset of the probe side for visited indices calculations.
     /// * `column_indices` - An array of columns to be selected for the result of the join.
     /// * `random_state` - The random state for the join.
-    /// * `null_equals_null` - A boolean indicating whether null values should be treated as equal when joining.
+    /// * `null_equals_null` - A boolean indicating whether NULL values should be treated as equal when joining.
     ///
     /// # Returns
     ///
@@ -1025,7 +1024,7 @@ impl OneSideHashJoiner {
     #[allow(clippy::too_many_arguments)]
     fn join_with_probe_batch(
         &mut self,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         join_type: JoinType,
         on_probe: &[Column],
         filter: &JoinFilter,
@@ -1037,9 +1036,9 @@ impl OneSideHashJoiner {
         null_equals_null: &bool,
     ) -> Result<Option<RecordBatch>> {
         if self.input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
-            return Ok(Some(RecordBatch::new_empty(schema)));
+            return Ok(Some(RecordBatch::new_empty(schema.clone())));
         }
-        let (build_side, probe_side) = build_join_indices(
+        let (build_indices, probe_indices) = build_join_indices(
             probe_batch,
             &self.hashmap,
             &self.input_buffer,
@@ -1056,11 +1055,11 @@ impl OneSideHashJoiner {
             record_visited_indices(
                 &mut self.visited_rows,
                 self.deleted_offset,
-                &build_side,
+                &build_indices,
             );
         }
         if need_to_produce_result_in_final(self.build_side.negate(), join_type) {
-            record_visited_indices(probe_visited, probe_offset, &probe_side);
+            record_visited_indices(probe_visited, probe_offset, &probe_indices);
         }
         if matches!(
             join_type,
@@ -1071,30 +1070,30 @@ impl OneSideHashJoiner {
         ) {
             Ok(None)
         } else {
-            let res = build_batch_from_indices(
-                schema.as_ref(),
+            build_batch_from_indices(
+                schema,
                 &self.input_buffer,
                 probe_batch,
-                build_side.clone(),
-                probe_side.clone(),
+                build_indices,
+                probe_indices,
                 column_indices,
                 self.build_side,
-            )?;
-            Ok(Some(res))
+            )
+            .map(Some)
         }
     }
 
-    /// Function to produce the unmatched record results based on the build side,
+    /// This function produces unmatched record results based on the build side,
     /// join type and other parameters.
     ///
-    /// The method use first 'prune_length' rows from the build side input buffer to
-    /// produce results.
+    /// The method uses first `prune_length` rows from the build side input buffer
+    /// to produce results.
     ///
     /// # Arguments
     ///
     /// * `output_schema` - The schema of the final output record batch.
     /// * `prune_length` - The length of the determined prune length.
-    /// * `probe_schema` - The schema of the probe RecordBatch.
+    /// * `probe_schema` - The schema of the probe [RecordBatch].
     /// * `join_type` - The type of join to be performed.
     /// * `column_indices` - Indices of columns that are being joined.
     ///
@@ -1103,15 +1102,15 @@ impl OneSideHashJoiner {
     /// * `Option<RecordBatch>` - The final output record batch if required, otherwise [None].
     fn build_side_determined_results(
         &self,
-        output_schema: SchemaRef,
+        output_schema: &SchemaRef,
         prune_length: usize,
         probe_schema: SchemaRef,
         join_type: JoinType,
         column_indices: &[ColumnIndex],
     ) -> Result<Option<RecordBatch>> {
-        // Check if we need to produce a result in the final output
-        let result = if need_to_produce_result_in_final(self.build_side, join_type) {
-            // Calculate the indices for build and probe sides based on join type and build side
+        // Check if we need to produce a result in the final output:
+        if need_to_produce_result_in_final(self.build_side, join_type) {
+            // Calculate the indices for build and probe sides based on join type and build side:
             let (build_indices, probe_indices) = calculate_indices_by_join_type(
                 self.build_side,
                 prune_length,
@@ -1120,11 +1119,10 @@ impl OneSideHashJoiner {
                 join_type,
             )?;
 
-            // Create an empty probe record batch
+            // Create an empty probe record batch:
             let empty_probe_batch = RecordBatch::new_empty(probe_schema);
-
-            // Build the final result from the indices of build and probe sides
-            Some(build_batch_from_indices(
+            // Build the final result from the indices of build and probe sides:
+            build_batch_from_indices(
                 output_schema.as_ref(),
                 &self.input_buffer,
                 &empty_probe_batch,
@@ -1132,19 +1130,20 @@ impl OneSideHashJoiner {
                 probe_indices,
                 column_indices,
                 self.build_side,
-            )?)
+            )
+            .map(Some)
         } else {
             // If we don't need to produce a result, return None
-            None
-        };
-        Ok(result)
+            Ok(None)
+        }
     }
 
     /// Prunes the internal buffer.
     ///
-    /// The input record batch and `probe_batch`, is used to update the intervals of the sorted filter expressions.
-    /// The updated build interval is then used to determine the length of the build side rows to prune.
-    /// If there are rows to prune, they are pruned and the result is returned.
+    /// Argument `probe_batch` is used to update the intervals of the sorted
+    /// filter expressions. The updated build interval determines the new length
+    /// of the build side. If there are rows to prune, they are removed from the
+    /// internal buffer.
     ///
     /// # Arguments
     ///
@@ -1158,25 +1157,23 @@ impl OneSideHashJoiner {
     ///
     /// # Returns
     ///
-    /// If there are no rows in the input buffer, returns `Ok(None)`.
     /// If there are rows to prune, returns the pruned build side record batch wrapped in an `Ok` variant.
     /// Otherwise, returns `Ok(None)`.
     fn prune_with_probe_batch(
         &mut self,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         probe_batch: &RecordBatch,
         probe_side_sorted_filter_expr: &mut SortedFilterExpr,
         join_type: JoinType,
         column_indices: &[ColumnIndex],
         physical_expr_graph: &mut ExprIntervalGraph,
     ) -> Result<Option<RecordBatch>> {
-        // Return None if there are no rows in the input buffer
+        // Check if the input buffer is empty:
         if self.input_buffer.num_rows() == 0 {
             return Ok(None);
         }
-
-        // Convert the sorted filter expressions into a vector of (node_index, interval) tuples
-        // for use in updating the interval graph
+        // Convert the sorted filter expressions into a vector of (node_index, interval)
+        // tuples for use when updating the interval graph.
         let mut filter_intervals = vec![
             (
                 self.sorted_filter_expr.node_index(),
@@ -1187,72 +1184,66 @@ impl OneSideHashJoiner {
                 probe_side_sorted_filter_expr.interval().clone(),
             ),
         ];
-        // Use the join filter intervals to update the physical expression graph
+        // Use the join filter intervals to update the physical expression graph:
         physical_expr_graph.update_intervals(&mut filter_intervals)?;
-
-        // Calculated join filter interval for build side.
+        // Get the new join filter interval for build side:
         let new_build_side_sorted_filter_expr = filter_intervals.remove(0).1;
-
-        // Determine the length of the rows to prune if there was a change in the intervals
-        let prune_length = if !new_build_side_sorted_filter_expr
-            .eq(self.sorted_filter_expr.interval())
-        {
-            self.sorted_filter_expr
-                .set_interval(new_build_side_sorted_filter_expr);
-            determine_prune_length(&self.input_buffer, &self.sorted_filter_expr)?
-        } else {
-            0
-        };
-
-        // If there are rows to prune, prune them and return the result
-        if prune_length > 0 {
-            let result = self.build_side_determined_results(
-                schema,
-                prune_length,
-                probe_batch.schema(),
-                join_type,
-                column_indices,
-            );
-            prune_hash_values(
-                prune_length,
-                &mut self.hashmap,
-                &mut self.row_hash_values,
-                self.deleted_offset as u64,
-            )?;
-            for row in self.deleted_offset..(self.deleted_offset + prune_length) {
-                self.visited_rows.remove(&row);
-            }
-            self.input_buffer = self
-                .input_buffer
-                .slice(prune_length, self.input_buffer.num_rows() - prune_length);
-            self.deleted_offset += prune_length;
-            result
-        } else {
-            Ok(None)
+        // Check if the intervals changed, exit early if not:
+        if new_build_side_sorted_filter_expr.eq(self.sorted_filter_expr.interval()) {
+            return Ok(None);
         }
+        // Determine the pruning length if there was a change in the intervals:
+        self.sorted_filter_expr
+            .set_interval(new_build_side_sorted_filter_expr);
+        let prune_length =
+            determine_prune_length(&self.input_buffer, &self.sorted_filter_expr)?;
+        // If we can not prune, exit early:
+        if prune_length == 0 {
+            return Ok(None);
+        }
+        // Compute the result, and perform pruning if there are rows to prune:
+        let result = self.build_side_determined_results(
+            schema,
+            prune_length,
+            probe_batch.schema(),
+            join_type,
+            column_indices,
+        );
+        prune_hash_values(
+            prune_length,
+            &mut self.hashmap,
+            &mut self.row_hash_values,
+            self.deleted_offset as u64,
+        )?;
+        for row in self.deleted_offset..(self.deleted_offset + prune_length) {
+            self.visited_rows.remove(&row);
+        }
+        self.input_buffer = self
+            .input_buffer
+            .slice(prune_length, self.input_buffer.num_rows() - prune_length);
+        self.deleted_offset += prune_length;
+        result
     }
 }
 
-fn combine_two_batches_result(
-    output_schema: SchemaRef,
+fn combine_two_batches(
+    output_schema: &SchemaRef,
     left_batch: Option<RecordBatch>,
     right_batch: Option<RecordBatch>,
 ) -> Result<Option<RecordBatch>> {
     match (left_batch, right_batch) {
         (Some(batch), None) | (None, Some(batch)) => {
-            // If either left_batch or right_batch is present, return that batch
+            // If only one of the batches are present, return it:
             Ok(Some(batch))
         }
         (Some(left_batch), Some(right_batch)) => {
-            // If both left_batch and right_batch are present, concatenate them
-            Some(
-                concat_batches(&output_schema, &[left_batch, right_batch])
-                    .map_err(DataFusionError::ArrowError),
-            )
-            .transpose()
+            // If both batches are present, concatenate them:
+            concat_batches(output_schema, &[left_batch, right_batch])
+                .map_err(DataFusionError::ArrowError)
+                .map(Some)
         }
         (None, None) => {
-            // If both left_batch and right_batch are not present, return an empty batch
+            // If neither is present, return an empty batch:
             Ok(None)
         }
     }
@@ -1261,43 +1252,42 @@ fn combine_two_batches_result(
 impl SymmetricHashJoinStream {
     /// Polls the next result of the join operation.
     ///
-    /// If the result of the join is ready, it returns the next record batch. If the join has completed and there are no more results,
-    /// it returns `Poll::Ready(None)`. If the join operation is not complete but the current stream is not ready yet, it returns `Poll::Pending`.
+    /// If the result of the join is ready, it returns the next record batch.
+    /// If the join has completed and there are no more results, it returns
+    /// `Poll::Ready(None)`. If the join operation is not complete, but the
+    /// current stream is not ready yet, it returns `Poll::Pending`.
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
-            // If the final result has already been obtained, return `Poll::Ready(None)`
+            // If the final result has already been obtained, return `Poll::Ready(None)`:
             if self.final_result {
                 return Poll::Ready(None);
             }
-            // If both streams have been exhausted, return the final result
+            // If both streams have been exhausted, return the final result:
             if self.right.exhausted && self.left.exhausted {
-                // Get left side results
+                // Get left side results:
                 let left_result = self.left.build_side_determined_results(
-                    self.schema.clone(),
+                    &self.schema,
                     self.left.input_buffer.num_rows(),
                     self.right.input_buffer.schema(),
                     self.join_type,
                     &self.column_indices,
                 )?;
-                // Get right side results
+                // Get right side results:
                 let right_result = self.right.build_side_determined_results(
-                    self.schema.clone(),
+                    &self.schema,
                     self.right.input_buffer.num_rows(),
                     self.left.input_buffer.schema(),
                     self.join_type,
                     &self.column_indices,
                 )?;
                 self.final_result = true;
-                // Combine results
-                let result = combine_two_batches_result(
-                    self.schema.clone(),
-                    left_result,
-                    right_result,
-                )?;
-                // Update the metrics if batch is some, if not, continue loop.
+                // Combine results:
+                let result =
+                    combine_two_batches(&self.schema, left_result, right_result)?;
+                // Update the metrics if we have a batch; otherwise, continue the loop.
                 if let Some(batch) = &result {
                     self.metrics.output_batches.add(1);
                     self.metrics.output_rows.add(batch.num_rows());
@@ -1307,7 +1297,8 @@ impl SymmetricHashJoinStream {
                 }
             }
 
-            // Determine which stream should be polled next. The side the RecordBatch comes from becomes probe side.
+            // Determine which stream should be polled next. The side the
+            // RecordBatch comes from becomes the probe side.
             let (
                 input_stream,
                 probe_hash_joiner,
@@ -1331,26 +1322,26 @@ impl SymmetricHashJoinStream {
                     &mut self.metrics.right,
                 )
             };
-            // Poll the next batch from `input_stream`
+            // Poll the next batch from `input_stream`:
             match input_stream.poll_next_unpin(cx) {
                 // Batch is available
                 Poll::Ready(Some(Ok(probe_batch))) => {
-                    // Update the metrics for the stream that was polled
+                    // Update the metrics for the stream that was polled:
                     probe_side_metrics.input_batches.add(1);
                     probe_side_metrics.input_rows.add(probe_batch.num_rows());
-                    // Update the internal state of the hash joiner for build side
+                    // Update the internal state of the hash joiner for the build side:
                     probe_hash_joiner
                         .update_internal_state(&probe_batch, &self.random_state)?;
-                    // Calculate filter intervals
+                    // Calculate filter intervals:
                     calculate_filter_expr_intervals(
                         &build_hash_joiner.input_buffer,
                         &mut build_hash_joiner.sorted_filter_expr,
                         &probe_batch,
                         &mut probe_hash_joiner.sorted_filter_expr,
                     )?;
-                    // Join the two sides, with
+                    // Join the two sides:
                     let equal_result = build_hash_joiner.join_with_probe_batch(
-                        self.schema.clone(),
+                        &self.schema,
                         self.join_type,
                         &probe_hash_joiner.on,
                         &self.filter,
@@ -1361,29 +1352,27 @@ impl SymmetricHashJoinStream {
                         &self.random_state,
                         &self.null_equals_null,
                     )?;
-                    // Increment the offset for the probe hash joiner
+                    // Increment the offset for the probe hash joiner:
                     probe_hash_joiner.offset += probe_batch.num_rows();
-                    // Prune build input buffer using the physical expression graph and filter intervals
+                    // Prune the build side input buffer using the expression
+                    // DAG and filter intervals:
                     let anti_result = build_hash_joiner.prune_with_probe_batch(
-                        self.schema.clone(),
+                        &self.schema,
                         &probe_batch,
                         &mut probe_hash_joiner.sorted_filter_expr,
                         self.join_type,
                         &self.column_indices,
                         &mut self.physical_expr_graph,
                     )?;
-                    // Combine results
-                    let result = combine_two_batches_result(
-                        self.schema.clone(),
-                        equal_result,
-                        anti_result,
-                    )?;
-                    // Choose next pool side. If other side is not exhausted, revert the probe side
-                    // before returning the result.
+                    // Combine results:
+                    let result =
+                        combine_two_batches(&self.schema, equal_result, anti_result)?;
+                    // Choose next poll side. If the other side is not exhausted,
+                    // switch the probe side before returning the result.
                     if !build_hash_joiner.exhausted {
                         self.probe_side = build_join_side;
                     }
-                    // Update the metrics if batch is some, if not, continue loop.
+                    // Update the metrics if we have a batch; otherwise, continue the loop.
                     if let Some(batch) = &result {
                         self.metrics.output_batches.add(1);
                         self.metrics.output_rows.add(batch.num_rows());
@@ -1392,9 +1381,9 @@ impl SymmetricHashJoinStream {
                 }
                 Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
                 Poll::Ready(None) => {
-                    // Update probe side is exhausted.
+                    // Mark the probe side exhausted:
                     probe_hash_joiner.exhausted = true;
-                    // Change the probe side
+                    // Change the probe side:
                     self.probe_side = build_join_side;
                 }
                 Poll::Pending => {

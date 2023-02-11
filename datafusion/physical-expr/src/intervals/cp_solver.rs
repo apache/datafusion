@@ -341,8 +341,7 @@ impl ExprIntervalGraph {
             .collect::<Vec<_>>();
         while let Some(node) = bfs.next(graph) {
             // Get the plan corresponding to this node:
-            let input = graph.index(node);
-            let expr = input.expr.clone();
+            let expr = &graph.index(node).expr;
             // If the current expression is among `exprs`, slate its children
             // for removal:
             if let Some(value) = exprs.iter().position(|e| expr.eq(e)) {
@@ -450,15 +449,14 @@ impl ExprIntervalGraph {
     ) -> Result<PropagationResult> {
         let mut bfs = Bfs::new(&self.graph, self.root);
         while let Some(node) = bfs.next(&self.graph) {
-            // Get plan
-            let input = self.graph.index(node);
-            // Get calculated interval. BinaryExpr will propagate the interval according to
-            // this.
-            let node_interval = input.interval().clone();
             let index = node.index();
+            // Get the expression DAG node:
+            let input = self.graph.index(node);
+            // Get the associated interval, which will used for propagation:
+            let node_interval = input.interval();
             if let Some((_, interval)) = expr_stats.iter_mut().find(|(e, _)| *e == index)
             {
-                *interval = node_interval;
+                *interval = node_interval.clone();
                 continue;
             }
 
@@ -477,10 +475,10 @@ impl ExprIntervalGraph {
                 if let (Some(new_left_interval), Some(new_right_interval)) =
                     if op.is_logic_operator() {
                         // TODO: Currently, this implementation only supports the AND operator
-                        //  and does not require any further propagation.
-                        //  In the future, upon adding support for additional logical operators,
-                        //  this method will require modification to support propagating
-                        //  the changes accordingly.
+                        //       and does not require any further propagation. In the future,
+                        //       upon adding support for additional logical operators, this
+                        //       method will require modification to support propagating the
+                        //       changes accordingly.
                         continue;
                     } else if op.is_comparison_operator() {
                         if let Interval {
@@ -489,8 +487,8 @@ impl ExprIntervalGraph {
                         } = node_interval
                         {
                             // TODO: The optimization of handling strictly false clauses through
-                            //  conversion to equivalent comparison operators (e.g. GT to LE, LT to GE)
-                            //  can be implemented once support for open/closed intervals is added.
+                            //       conversion to equivalent comparison operators (e.g. GT to LE, LT to GE)
+                            //       can be implemented once open/closed intervals are supported.
                             continue;
                         }
                         // Propagate the comparison operator.
@@ -499,7 +497,7 @@ impl ExprIntervalGraph {
                         // Propagate the arithmetic operator.
                         propagate_arithmetic(
                             op,
-                            &node_interval,
+                            node_interval,
                             left_interval,
                             right_interval,
                         )?

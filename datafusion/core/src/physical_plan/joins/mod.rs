@@ -19,9 +19,7 @@
 
 pub use cross_join::CrossJoinExec;
 pub use hash_join::HashJoinExec;
-pub use hash_join_utils::{
-    convert_sort_expr_with_filter_schema, map_origin_col_to_filter_col, SortedFilterExpr,
-};
+pub use hash_join_utils::convert_sort_expr_with_filter_schema;
 pub use nested_loop_join::NestedLoopJoinExec;
 // Note: SortMergeJoin is not used in plans yet
 pub use sort_merge_join::SortMergeJoinExec;

@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Symmetric and regular Hash Join related functionality used in join calculations and optimization
-//! rules.
+//! This file contains common subroutines for regular and symmetric hash join
+//! related functionality, used both in join calculations and optimization rules.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -71,7 +71,7 @@ fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> Vec<Column> {
 /// ```
 pub fn map_origin_col_to_filter_col(
     filter: &JoinFilter,
-    schema: SchemaRef,
+    schema: &SchemaRef,
     side: &JoinSide,
 ) -> Result<HashMap<Column, Column>> {
     let filter_schema = filter.schema();
@@ -116,23 +116,21 @@ pub fn map_origin_col_to_filter_col(
 pub fn convert_sort_expr_with_filter_schema(
     side: &JoinSide,
     filter: &JoinFilter,
-    schema: SchemaRef,
+    schema: &SchemaRef,
     sort_expr: &PhysicalSortExpr,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-    let column_mapping_information: HashMap<Column, Column> =
-        map_origin_col_to_filter_col(filter, schema, side)?;
+    let column_map = map_origin_col_to_filter_col(filter, schema, side)?;
     let expr = sort_expr.expr.clone();
     // Get main schema columns:
     let expr_columns = collect_columns(&expr);
-    // Calculation is possible with `column_mapping_information` since sort exprs belong to a child.
-    let all_columns_are_included = expr_columns
-        .iter()
-        .all(|col| column_mapping_information.contains_key(col));
+    // Calculation is possible with `column_map` since sort exprs belong to a child.
+    let all_columns_are_included =
+        expr_columns.iter().all(|col| column_map.contains_key(col));
     if all_columns_are_included {
         // Since we are sure that one to one column mapping includes all columns, we convert
         // the sort expression into a filter expression.
-        let converted_filter_expr = expr
-            .transform_up(&|p| convert_filter_columns(p, &column_mapping_information))?;
+        let converted_filter_expr =
+            expr.transform_up(&|p| convert_filter_columns(p, &column_map))?;
         // Search the converted `PhysicalExpr` in filter expression; if an exact
         // match is found, use this sorted expression in graph traversals.
         if check_filter_expr_contains_sort_information(
@@ -150,14 +148,14 @@ pub fn convert_sort_expr_with_filter_schema(
 /// It first calls the [convert_sort_expr_with_filter_schema] method to determine if the sort
 /// order of columns can be used in the filter expression. If it returns a [Some] value, the
 /// method wraps the result in a [SortedFilterExpr] instance with the original sort expression and
-/// converted filter expression. Otherwise, this function returns an error.
+/// the converted filter expression. Otherwise, this function returns an error.
 ///
 /// The [SortedFilterExpr] instance contains information about the sort order of columns that can
 /// be used in the filter expression, which can be used to optimize the query execution process.
 pub fn build_filter_input_order(
     side: JoinSide,
     filter: &JoinFilter,
-    schema: SchemaRef,
+    schema: &SchemaRef,
     order: &PhysicalSortExpr,
 ) -> Result<SortedFilterExpr> {
     if let Some(expr) =
@@ -175,36 +173,32 @@ pub fn build_filter_input_order(
 /// column mapping information.
 fn convert_filter_columns(
     input: Arc<dyn PhysicalExpr>,
-    column_mapping_information: &HashMap<Column, Column>,
+    column_map: &HashMap<Column, Column>,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     // Attempt to downcast the input expression to a Column type.
-    Ok(Some(
-        if let Some(col) = input.as_any().downcast_ref::<Column>() {
-            // If the downcast is successful, retrieve the corresponding filter column.
-            let filter_col = column_mapping_information.get(col).unwrap().clone();
-            // Return the filter column as an Arc wrapped in an Option.
-            Arc::new(filter_col)
-        } else {
-            // If the downcast fails, return the input expression as is.
-            input
-        },
-    ))
+    Ok(if let Some(col) = input.as_any().downcast_ref::<Column>() {
+        // If the downcast is successful, retrieve the corresponding filter column.
+        column_map.get(col).map(|c| Arc::new(c.clone()) as _)
+    } else {
+        // If the downcast fails, return the input expression as is.
+        Some(input)
+    })
 }
 
-/// The SortedFilterExpr object is used to represent a sorted filter expression in the
-/// `SymmetricHashJoinExec` struct. It contains information about the
-/// origin expression, the filter expression, and the sort option. The object has
-/// several methods to access and modify its fields.
+/// The [SortedFilterExpr] object represents a sorted filter expression. It
+/// contains the following information: The origin expression, the filter
+/// expression, an interval encapsulating expression bounds, and a stable
+/// index identifying the expression in the expression DAG.
 #[derive(Debug, Clone)]
 pub struct SortedFilterExpr {
-    /// Sorted expr from a particular join side (child)
+    /// Sorted expression from a join side (i.e. a child of the join)
     origin_sorted_expr: PhysicalSortExpr,
-    /// For interval calculations, one to one mapping of the columns according to filter expression,
-    /// and column indices.
+    /// For interval calculations, one to one mapping of the columns
+    /// according to filter expression and column indices.
     filter_expr: Arc<dyn PhysicalExpr>,
-    /// Interval
+    /// Interval containing expression bounds
     interval: Interval,
-    /// NodeIndex in Graph
+    /// Node index in the expression DAG
     node_index: usize,
 }
 
@@ -222,8 +216,8 @@ impl SortedFilterExpr {
         }
     }
     /// Get origin expr information
-    pub fn origin_sorted_expr(&self) -> PhysicalSortExpr {
-        self.origin_sorted_expr.clone()
+    pub fn origin_sorted_expr(&self) -> &PhysicalSortExpr {
+        &self.origin_sorted_expr
     }
     /// Get filter expr information
     pub fn filter_expr(&self) -> &Arc<dyn PhysicalExpr> {
@@ -414,7 +408,7 @@ pub mod tests {
         assert!(build_filter_input_order(
             JoinSide::Left,
             &filter,
-            left_schema.clone(),
+            &left_schema,
             &PhysicalSortExpr {
                 expr: Arc::new(Column::new("la1", 0)),
                 options: SortOptions::default(),
@@ -424,7 +418,7 @@ pub mod tests {
         assert!(build_filter_input_order(
             JoinSide::Left,
             &filter,
-            left_schema,
+            &left_schema,
             &PhysicalSortExpr {
                 expr: Arc::new(Column::new("lt1", 3)),
                 options: SortOptions::default(),
@@ -434,7 +428,7 @@ pub mod tests {
         assert!(build_filter_input_order(
             JoinSide::Right,
             &filter,
-            right_schema.clone(),
+            &right_schema,
             &PhysicalSortExpr {
                 expr: Arc::new(Column::new("ra1", 0)),
                 options: SortOptions::default(),
@@ -444,7 +438,7 @@ pub mod tests {
         assert!(build_filter_input_order(
             JoinSide::Right,
             &filter,
-            right_schema,
+            &right_schema,
             &PhysicalSortExpr {
                 expr: Arc::new(Column::new("rb1", 1)),
                 options: SortOptions::default(),
@@ -500,7 +494,7 @@ pub mod tests {
         let res = convert_sort_expr_with_filter_schema(
             &JoinSide::Left,
             &filter,
-            schema,
+            &schema,
             &sorted,
         )?;
         assert!(res.is_none());
