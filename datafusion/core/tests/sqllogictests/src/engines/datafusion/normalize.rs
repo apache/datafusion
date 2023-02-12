@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::datatypes::SchemaRef;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
-use datafusion::error::DataFusionError;
+use datafusion_common::DataFusionError;
 use sqllogictest::DBOutput;
 
 use crate::output::{DFColumnType, DFOutput};
@@ -43,11 +44,11 @@ pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<DFOutput> {
     let mut rows = vec![];
     for batch in batches {
         // Verify schema
-        if schema != batch.schema() {
+        if !equivalent_names_and_types(&schema, batch.schema()) {
             return Err(DFSqlLogicTestError::DataFusion(DataFusionError::Internal(
                 format!(
                     "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
-                    schema,
+                    &schema,
                     batch.schema()
                 ),
             )));
@@ -56,6 +57,18 @@ pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<DFOutput> {
     }
 
     Ok(DBOutput::Rows { types, rows })
+}
+
+/// Check two schemas for being equal for field names/types
+fn equivalent_names_and_types(schema: &SchemaRef, other: SchemaRef) -> bool {
+    if schema.fields().len() != other.fields().len() {
+        return false;
+    }
+    let self_fields = schema.fields().iter();
+    let other_fields = other.fields().iter();
+    self_fields
+        .zip(other_fields)
+        .all(|(f1, f2)| f1.name() == f2.name() && f1.data_type() == f2.data_type())
 }
 
 /// Convert a single batch to a `Vec<Vec<String>>` for comparison
