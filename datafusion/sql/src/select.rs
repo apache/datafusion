@@ -100,7 +100,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         )?;
 
         // Apply unnesting
-        let plan = self.unnest(plan.clone(), unnest_exprs.clone())?;
+        let plan = self.unnest(plan.clone(), unnest_exprs)?;
 
         // having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(plan.clone(), select_exprs.clone())?;
