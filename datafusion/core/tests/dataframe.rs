@@ -24,7 +24,6 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion::from_slice::FromSlice;
-use datafusion_common::DataFusionError;
 use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
@@ -146,18 +145,29 @@ async fn sort_on_distinct_unprojected_columns() -> Result<()> {
 
     let ctx = SessionContext::new();
     ctx.register_batch("t", batch).unwrap();
+    let df = ctx
+        .table("t")
+        .await
+        .unwrap()
+        .select(vec![col("a")])
+        .unwrap()
+        .distinct()
+        .unwrap()
+        .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))])
+        .unwrap();
+    let results = df.collect().await.unwrap();
 
-    assert!(matches!(
-        ctx.table("t")
-            .await
-            .unwrap()
-            .select(vec![col("a")])
-            .unwrap()
-            .distinct()
-            .unwrap()
-            .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))]),
-        Err(DataFusionError::Plan(_))
-    ));
+    #[rustfmt::skip]
+    let expected = vec![
+        "+-----+",
+        "| a   |",
+        "+-----+",
+        "| 100 |",
+        "| 10  |",
+        "| 1   |",
+        "+-----+",
+    ];
+    assert_batches_eq!(expected, &results);
     Ok(())
 }
 
