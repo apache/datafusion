@@ -917,6 +917,23 @@ pub(crate) fn get_anti_indices(
         .collect::<UInt32Array>()
 }
 
+/// Get unmatched and deduplicated indices
+pub(crate) fn get_anti_u64_indices(
+    row_count: usize,
+    input_indices: &UInt64Array,
+) -> UInt64Array {
+    let mut bitmap = BooleanBufferBuilder::new(row_count);
+    bitmap.append_n(row_count, false);
+    input_indices.iter().flatten().for_each(|v| {
+        bitmap.set_bit(v as usize, true);
+    });
+
+    // get the anti index
+    (0..row_count)
+        .filter_map(|idx| (!bitmap.get_bit(idx)).then_some(idx as u64))
+        .collect::<UInt64Array>()
+}
+
 /// Get matched and deduplicated indices
 pub(crate) fn get_semi_indices(
     row_count: usize,
@@ -932,6 +949,23 @@ pub(crate) fn get_semi_indices(
     (0..row_count)
         .filter_map(|idx| (bitmap.get_bit(idx)).then_some(idx as u32))
         .collect::<UInt32Array>()
+}
+
+/// Get matched and deduplicated indices
+pub(crate) fn get_semi_u64_indices(
+    row_count: usize,
+    input_indices: &UInt64Array,
+) -> UInt64Array {
+    let mut bitmap = BooleanBufferBuilder::new(row_count);
+    bitmap.append_n(row_count, false);
+    input_indices.iter().flatten().for_each(|v| {
+        bitmap.set_bit(v as usize, true);
+    });
+
+    // get the semi index
+    (0..row_count)
+        .filter_map(|idx| (bitmap.get_bit(idx)).then_some(idx as u64))
+        .collect::<UInt64Array>()
 }
 
 #[cfg(test)]
