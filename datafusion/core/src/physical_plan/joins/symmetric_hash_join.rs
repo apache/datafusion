@@ -436,7 +436,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         )
     }
 
-    // TODO Output ordering might be kept for some cases.
+    // TODO: Output ordering might be kept for some cases.
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
@@ -1185,7 +1185,7 @@ impl OneSideHashJoiner {
             ),
         ];
         // Use the join filter intervals to update the physical expression graph:
-        physical_expr_graph.update_intervals(&mut filter_intervals)?;
+        physical_expr_graph.update_ranges(&mut filter_intervals)?;
         // Get the new join filter interval for build side:
         let new_build_side_sorted_filter_expr = filter_intervals.remove(0).1;
         // Check if the intervals changed, exit early if not:

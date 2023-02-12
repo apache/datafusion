@@ -184,6 +184,56 @@ pub fn normalize_sort_expr_with_equivalence_properties(
     }
 }
 
+/// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
+pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
+    provided: Option<&[PhysicalSortExpr]>,
+    required: Option<&[PhysicalSortExpr]>,
+    equal_properties: F,
+) -> bool {
+    match (provided, required) {
+        (_, None) => true,
+        (None, Some(_)) => false,
+        (Some(provided), Some(required)) => {
+            ordering_satisfy_concrete(provided, required, equal_properties)
+        }
+    }
+}
+
+pub fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(
+    provided: &[PhysicalSortExpr],
+    required: &[PhysicalSortExpr],
+    equal_properties: F,
+) -> bool {
+    if required.len() > provided.len() {
+        false
+    } else if required
+        .iter()
+        .zip(provided.iter())
+        .all(|(order1, order2)| order1.eq(order2))
+    {
+        true
+    } else if let eq_classes @ [_, ..] = equal_properties().classes() {
+        let normalized_required_exprs = required
+            .iter()
+            .map(|e| {
+                normalize_sort_expr_with_equivalence_properties(e.clone(), eq_classes)
+            })
+            .collect::<Vec<_>>();
+        let normalized_provided_exprs = provided
+            .iter()
+            .map(|e| {
+                normalize_sort_expr_with_equivalence_properties(e.clone(), eq_classes)
+            })
+            .collect::<Vec<_>>();
+        normalized_required_exprs
+            .iter()
+            .zip(normalized_provided_exprs.iter())
+            .all(|(order1, order2)| order1.eq(order2))
+    } else {
+        false
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ExprTreeNode<T> {
     expr: Arc<dyn PhysicalExpr>,
@@ -242,7 +292,7 @@ where
     let mut graph = StableGraph::<T, usize>::new();
     let mut visited_plans = Vec::<(Arc<dyn PhysicalExpr>, NodeIndex)>::new();
     let root = init.mutable_transform_up(&mut |mut input| {
-        let expr = input.expr.clone();
+        let expr = &input.expr;
         let node_idx = match visited_plans.iter().find(|(e, _)| expr.eq(e)) {
             Some((_, idx)) => *idx,
             None => {
@@ -250,7 +300,7 @@ where
                 for expr_node in input.child_nodes.iter() {
                     graph.add_edge(node_idx, expr_node.data.unwrap(), 0);
                 }
-                visited_plans.push((expr, node_idx));
+                visited_plans.push((expr.clone(), node_idx));
                 node_idx
             }
         };
@@ -258,56 +308,6 @@ where
         Ok(Some(input))
     })?;
     Ok((root.data.unwrap(), graph))
-}
-
-/// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
-pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
-    provided: Option<&[PhysicalSortExpr]>,
-    required: Option<&[PhysicalSortExpr]>,
-    equal_properties: F,
-) -> bool {
-    match (provided, required) {
-        (_, None) => true,
-        (None, Some(_)) => false,
-        (Some(provided), Some(required)) => {
-            ordering_satisfy_concrete(provided, required, equal_properties)
-        }
-    }
-}
-
-pub fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(
-    provided: &[PhysicalSortExpr],
-    required: &[PhysicalSortExpr],
-    equal_properties: F,
-) -> bool {
-    if required.len() > provided.len() {
-        false
-    } else if required
-        .iter()
-        .zip(provided.iter())
-        .all(|(order1, order2)| order1.eq(order2))
-    {
-        true
-    } else if let eq_classes @ [_, ..] = equal_properties().classes() {
-        let normalized_required_exprs = required
-            .iter()
-            .map(|e| {
-                normalize_sort_expr_with_equivalence_properties(e.clone(), eq_classes)
-            })
-            .collect::<Vec<_>>();
-        let normalized_provided_exprs = provided
-            .iter()
-            .map(|e| {
-                normalize_sort_expr_with_equivalence_properties(e.clone(), eq_classes)
-            })
-            .collect::<Vec<_>>();
-        normalized_required_exprs
-            .iter()
-            .zip(normalized_provided_exprs.iter())
-            .all(|(order1, order2)| order1.eq(order2))
-    } else {
-        false
-    }
 }
 
 #[cfg(test)]

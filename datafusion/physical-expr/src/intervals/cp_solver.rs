@@ -25,7 +25,7 @@ use arrow_schema::DataType;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
 use petgraph::graph::NodeIndex;
-use petgraph::stable_graph::StableGraph;
+use petgraph::stable_graph::{DefaultIx, StableGraph};
 use petgraph::visit::{Bfs, DfsPostOrder};
 use petgraph::Outgoing;
 
@@ -120,7 +120,7 @@ pub struct ExprIntervalGraph {
     root: NodeIndex,
 }
 
-/// Result corresponding the 'update_interval' call.
+/// This object encapsulates all possible constraint propagation results.
 #[derive(PartialEq, Debug)]
 pub enum PropagationResult {
     CannotPropagate,
@@ -341,14 +341,13 @@ impl ExprIntervalGraph {
             .collect::<Vec<_>>();
         while let Some(node) = bfs.next(graph) {
             // Get the plan corresponding to this node:
-            let expr = &graph.index(node).expr;
+            let expr = &graph[node].expr;
             // If the current expression is among `exprs`, slate its children
             // for removal:
             if let Some(value) = exprs.iter().position(|e| expr.eq(e)) {
                 // Update the node index of the associated `PhysicalExpr`:
                 expr_node_indices[value].1 = node.index();
-                let mut edges = graph.neighbors_directed(node, Outgoing).detach();
-                while let Some(n_index) = edges.next_node(graph) {
+                for n_index in graph.neighbors_directed(node, Outgoing) {
                     // Slate the child for removal, do not remove immediately.
                     removals.push(n_index);
                 }
@@ -360,11 +359,31 @@ impl ExprIntervalGraph {
         expr_node_indices
     }
 
+    /// This function assigns given ranges to expressions in the DAEG.
+    /// The argument `assignments` associates indices of sought expressions
+    /// with their corresponding new ranges.
+    pub fn assign_intervals(&mut self, assignments: &[(usize, Interval)]) {
+        for (index, interval) in assignments {
+            let node_index = NodeIndex::from(*index as DefaultIx);
+            self.graph[node_index].interval = interval.clone();
+        }
+    }
+
+    /// This function fetches ranges of expressions from the DAEG. The argument
+    /// `assignments` associates indices of sought expressions with their ranges,
+    /// which this function modifies to reflect the intervals in the DAEG.
+    pub fn update_intervals(&self, assignments: &mut [(usize, Interval)]) {
+        for (index, interval) in assignments.iter_mut() {
+            let node_index = NodeIndex::from(*index as DefaultIx);
+            *interval = self.graph[node_index].interval.clone();
+        }
+    }
+
     /// Computes bounds for an expression using interval arithmetic via a
     /// bottom-up traversal.
     ///
     /// # Arguments
-    /// * `expr_stats` - &[(usize, Interval)]. Provide NodeIndex, Interval tuples for leaf variables.
+    /// * `leaf_bounds` - &[(usize, Interval)]. Provide NodeIndex, Interval tuples for leaf variables.
     ///
     /// # Examples
     ///
@@ -394,82 +413,68 @@ impl ExprIntervalGraph {
     ///         },
     ///     )];
     ///  // Evaluate bounds for the composite expression:
+    ///  graph.assign_intervals(&intervals);
     ///  assert_eq!(
-    ///     graph.evaluate_bounds(&intervals).unwrap(),
-    ///     Interval {
+    ///     graph.evaluate_bounds().unwrap(),
+    ///     &Interval {
     ///         lower: ScalarValue::Int32(Some(20)),
     ///         upper: ScalarValue::Int32(Some(30))
     ///     }
     ///  )
     ///
     /// ```
-    pub fn evaluate_bounds(
-        &mut self,
-        expr_stats: &[(usize, Interval)],
-    ) -> Result<Interval> {
+    pub fn evaluate_bounds(&mut self) -> Result<&Interval> {
         let mut dfs = DfsPostOrder::new(&self.graph, self.root);
         while let Some(node) = dfs.next(&self.graph) {
-            // Get outgoing edges (i.e. children):
-            let mut edges = self.graph.neighbors_directed(node, Outgoing).detach();
-            // If the current expression is a leaf expression, it should have
-            // externally-given intervals. Use this information if available:
-            let index = node.index();
-            if let Some((_, interval)) = expr_stats.iter().find(|(e, _)| *e == index) {
-                self.graph[node].interval = interval.clone();
+            let neighbors = self.graph.neighbors_directed(node, Outgoing);
+            let children = neighbors.collect::<Vec<_>>();
+            // If the current expression is a leaf, its interval should already
+            // be set externally, just continue with the evaluation procedure:
+            if children.is_empty() {
                 continue;
             }
             let expr_any = self.graph[node].expr.as_any();
             if let Some(binary) = expr_any.downcast_ref::<BinaryExpr>() {
                 // Get children intervals:
-                let left_child_idx = edges.next_node(&self.graph).unwrap();
-                let right_child_idx = edges.next_node(&self.graph).unwrap();
-                let left_interval = self.graph.index(right_child_idx).interval();
-                let right_interval = self.graph.index(left_child_idx).interval();
+                let left_child_idx = children[1];
+                let right_child_idx = children[0];
+                let left_interval = self.graph[left_child_idx].interval();
+                let right_interval = self.graph[right_child_idx].interval();
                 // Calculate and replace current node's interval:
                 self.graph[node].interval =
                     apply_operator(binary.op(), left_interval, right_interval)?;
             } else if let Some(cast_expr) = expr_any.downcast_ref::<CastExpr>() {
                 let cast_type = cast_expr.cast_type();
                 let cast_options = cast_expr.cast_options();
-                let child_index = edges.next_node(&self.graph).unwrap();
-                let child = self.graph.index(child_index);
+                let child = self.graph.index(children[0]);
                 // Cast current node's interval to the right type:
                 self.graph[node].interval =
                     child.interval.cast_to(cast_type, cast_options)?;
             }
         }
-        Ok(self.graph.index(self.root).interval.clone())
+        Ok(&self.graph[self.root].interval)
     }
 
     /// Updates/shrinks bounds for leaf expressions using interval arithmetic
     /// via a top-down traversal.
-    fn propagate_constraints(
-        &mut self,
-        expr_stats: &mut [(usize, Interval)],
-    ) -> Result<PropagationResult> {
+    fn propagate_constraints(&mut self) -> Result<PropagationResult> {
         let mut bfs = Bfs::new(&self.graph, self.root);
         while let Some(node) = bfs.next(&self.graph) {
-            let index = node.index();
-            // Get the expression DAG node:
-            let input = self.graph.index(node);
-            // Get the associated interval, which will used for propagation:
-            let node_interval = input.interval();
-            if let Some((_, interval)) = expr_stats.iter_mut().find(|(e, _)| *e == index)
-            {
-                *interval = node_interval.clone();
+            let neighbors = self.graph.neighbors_directed(node, Outgoing);
+            let children = neighbors.collect::<Vec<_>>();
+            // If the current expression is a leaf, its range is now final.
+            // So, just continue with the propagation procedure:
+            if children.is_empty() {
                 continue;
             }
-
-            // Get outgoing edges (i.e. children):
-            let mut edges = self.graph.neighbors_directed(node, Outgoing).detach();
-
-            let expr_any = input.expr.as_any();
+            let node_interval = self.graph[node].interval();
+            let expr_any = self.graph[node].expr.as_any();
             if let Some(binary) = expr_any.downcast_ref::<BinaryExpr>() {
-                // Get children intervals (note that we traverse in reverse):
-                let right_child_idx = edges.next_node(&self.graph).unwrap();
-                let right_interval = self.graph.index(right_child_idx).interval();
-                let left_child_idx = edges.next_node(&self.graph).unwrap();
-                let left_interval = self.graph.index(left_child_idx).interval();
+                // Get children intervals:
+                let left_child_idx = children[1];
+                let right_child_idx = children[0];
+                let left_interval = self.graph[left_child_idx].interval();
+                let right_interval = self.graph[right_child_idx].interval();
 
                 let op = binary.op();
                 if let (Some(new_left_interval), Some(new_right_interval)) =
@@ -509,7 +514,7 @@ impl ExprIntervalGraph {
                     return Ok(PropagationResult::Infeasible);
                 };
             } else if let Some(cast) = expr_any.downcast_ref::<CastExpr>() {
-                let child_index = edges.next_node(&self.graph).unwrap();
+                let child_index = children[0];
                 let child = self.graph.index(child_index);
                 // Get child's data type:
                 let cast_type = child.interval().get_datatype();
@@ -522,22 +527,26 @@ impl ExprIntervalGraph {
 
     /// Updates intervals for all expressions in the DAEG by successive
     /// bottom-up and top-down traversals.
-    pub fn update_intervals(
+    pub fn update_ranges(
         &mut self,
-        expr_stats: &mut [(usize, Interval)],
+        leaf_bounds: &mut [(usize, Interval)],
     ) -> Result<PropagationResult> {
-        self.evaluate_bounds(expr_stats)
-            .and_then(|interval| match interval {
-                Interval {
-                    upper: ScalarValue::Boolean(Some(true)),
-                    ..
-                } => self.propagate_constraints(expr_stats),
-                Interval {
-                    lower: ScalarValue::Boolean(Some(false)),
-                    ..
-                } => Ok(PropagationResult::Infeasible),
-                _ => Ok(PropagationResult::CannotPropagate),
-            })
+        self.assign_intervals(leaf_bounds);
+        match self.evaluate_bounds()? {
+            Interval {
+                lower: ScalarValue::Boolean(Some(false)),
+                upper: ScalarValue::Boolean(Some(false)),
+            } => Ok(PropagationResult::Infeasible),
+            Interval {
+                lower: ScalarValue::Boolean(Some(false)),
+                upper: ScalarValue::Boolean(Some(true)),
+            } => {
+                let result = self.propagate_constraints();
+                self.update_intervals(leaf_bounds);
+                result
+            }
+            _ => Ok(PropagationResult::CannotPropagate),
+        }
     }
 }
 
@@ -609,7 +618,7 @@ mod tests {
             .map(|((_, interval), (_, index))| (*index, interval.clone()))
             .collect_vec();
 
-        let exp_result = graph.update_intervals(&mut col_stat_nodes[..])?;
+        let exp_result = graph.update_ranges(&mut col_stat_nodes[..])?;
         assert_eq!(exp_result, result);
         col_stat_nodes
             .iter()
