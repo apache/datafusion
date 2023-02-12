@@ -174,7 +174,7 @@ impl LogicalPlan {
         }
     }
 
-    /// Get a vector of references to all schemas in every node of the logical plan
+    /// Get all meaningful schemas of a plan and its children plan.
     pub fn all_schemas(&self) -> Vec<&DFSchemaRef> {
         match self {
             // return self and children schemas
