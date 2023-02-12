@@ -34,7 +34,7 @@ use datafusion_expr::{
     Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, FunctionArg, FunctionArgExpr, WildcardAdditionalOptions,
+    Expr as SQLExpr, Function, FunctionArg, FunctionArgExpr, WildcardAdditionalOptions,
 };
 use sqlparser::ast::{Select, SelectItem, TableWithJoins};
 use std::collections::HashSet;
@@ -64,6 +64,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // process `from` clause
         let plan = self.plan_from_tables(select.from, planner_context)?;
+
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
         // build from schema for unqualifier column ambiguous check
         // we should get only one field for unqualifier column from schema.
@@ -98,8 +99,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             &from_schema,
         )?;
 
+        // Apply unnesting
+        let plan = self.unnest(plan.clone(), unnest_exprs.clone())?;
+
         // having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(plan.clone(), select_exprs.clone())?;
+
         let mut combined_schema = (**projected_plan.schema()).clone();
         combined_schema.merge(plan.schema());
 
@@ -216,9 +221,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // final projection
         let plan = project(plan, select_exprs_post_aggr)?;
-
-        // Apply unnesting
-        let plan = self.unnest(plan, unnest_exprs)?;
 
         // process distinct clause
         let plan = if select.distinct {
@@ -633,41 +635,76 @@ fn unnest_projection(
     let projection = projection
         .into_iter()
         .map(|expr| match expr {
-            SelectItem::UnnamedExpr(SQLExpr::Function(ref f))
-            | SelectItem::ExprWithAlias {
-                expr: SQLExpr::Function(ref f),
-                ..
-            } => {
-                // If this is an unnest function call replace the function call with its
-                // column argument and pass the unnest column expression to the caller.
-                if f.name.to_string().to_lowercase() == "unnest" {
-                    if f.args.len() != 1 {
-                        Err(DataFusionError::Plan(
-                            "Unnest must have one column argument".to_string(),
-                        ))
-                    } else {
-                        // Extract the function column and put it in the projection.
-                        match &f.args[0] {
-                            FunctionArg::Unnamed(FunctionArgExpr::Expr(arg))
-                            | FunctionArg::Named {
-                                name: _,
-                                arg: FunctionArgExpr::Expr(arg),
-                            } => {
-                                let item = SelectItem::UnnamedExpr(arg.clone());
-                                unnest_cols.push(item.clone());
-                                Ok(item)
-                            }
-                            arg => Err(DataFusionError::Plan(format!(
-                                "Unsupported unnest argument: {arg:?}"
-                            ))),
-                        }
-                    }
-                } else {
-                    Ok(expr)
-                }
-            }
+            SelectItem::UnnamedExpr(expr) => Ok(SelectItem::UnnamedExpr(extract_unnest(
+                expr,
+                &mut unnest_cols,
+            )?)),
+            SelectItem::ExprWithAlias { expr, alias } => Ok(SelectItem::ExprWithAlias {
+                expr: extract_unnest(expr, &mut unnest_cols)?,
+                alias,
+            }),
             _ => Ok(expr),
         })
         .collect::<Result<Vec<SelectItem>>>()?;
+
     Ok((projection, unnest_cols))
+}
+
+fn extract_unnest(expr: SQLExpr, unnest_cols: &mut Vec<SelectItem>) -> Result<SQLExpr> {
+    match expr {
+        SQLExpr::Nested(expr) => Ok(SQLExpr::Nested(Box::new(extract_unnest(
+            *expr,
+            unnest_cols,
+        )?))),
+        SQLExpr::Function(f) => {
+            let mut args = f
+                .args
+                .into_iter()
+                .map(|arg| match arg {
+                    FunctionArg::Named { name, arg } => match arg {
+                        FunctionArgExpr::Expr(expr) => Ok(FunctionArg::Named {
+                            name,
+                            arg: FunctionArgExpr::Expr(extract_unnest(
+                                expr,
+                                unnest_cols,
+                            )?),
+                        }),
+                        _ => Ok(FunctionArg::Named { name, arg }),
+                    },
+                    FunctionArg::Unnamed(arg) => match arg {
+                        FunctionArgExpr::Expr(expr) => Ok(FunctionArg::Unnamed(
+                            FunctionArgExpr::Expr(extract_unnest(expr, unnest_cols)?),
+                        )),
+                        _ => Ok(FunctionArg::Unnamed(arg)),
+                    },
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let expr = if f.name.to_string().to_lowercase() == "unnest" {
+                if args.len() != 1 {
+                    return Err(DataFusionError::Plan(
+                        "Unnest must have one column argument".to_string(),
+                    ));
+                } else {
+                    match args.pop().unwrap() {
+                        FunctionArg::Named { arg, .. } | FunctionArg::Unnamed(arg) => {
+                            if let FunctionArgExpr::Expr(expr) = arg {
+                                unnest_cols.push(SelectItem::UnnamedExpr(expr.clone()));
+                                expr
+                            } else {
+                                return Err(DataFusionError::Plan(
+                                    "Invalid unnest argument".to_string(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            } else {
+                SQLExpr::Function(Function { args, ..f })
+            };
+
+            Ok(expr)
+        }
+        _ => Ok(expr),
+    }
 }
