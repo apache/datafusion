@@ -16,7 +16,7 @@
 # under the License.
 
 #############
-## Scalar Tests
+## Scalar Function Tests
 #############
 
 statement ok
@@ -61,3 +61,10 @@ query IT rowsort
 select log(null, null) a, log(null) b
 ----
 NULL NULL
+
+# log scalar ops with zero edgecases
+# please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
+query IT rowsort
+select log(0) a, log(1, 64) b
+----
+-Infinity Infinity
