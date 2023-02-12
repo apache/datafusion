@@ -170,6 +170,10 @@ required-features = ["jit"]
 harness = false
 name = "merge"
 
+[[bench]]
+harness = false
+name = "sort"
+
 [[test]]
 harness = false
 name = "sqllogictests"
