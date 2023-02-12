@@ -134,7 +134,7 @@ pub(crate) fn is_not_distinct_from_null(
 }
 
 fn make_boolean_array(length: usize, value: bool) -> Result<BooleanArray> {
-    Ok((0..length).into_iter().map(|_| Some(value)).collect())
+    Ok((0..length).map(|_| Some(value)).collect())
 }
 
 pub(crate) fn is_not_distinct_from_utf8<OffsetSize: OffsetSizeTrait>(

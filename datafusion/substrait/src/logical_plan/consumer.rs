@@ -440,16 +440,14 @@ fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
             join_rel::JoinType::Outer => Ok(JoinType::Full),
             join_rel::JoinType::Anti => Ok(JoinType::LeftAnti),
             join_rel::JoinType::Semi => Ok(JoinType::LeftSemi),
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "unsupported join type {substrait_join_type:?}"
-                )))
-            }
+            _ => Err(DataFusionError::Internal(format!(
+                "unsupported join type {substrait_join_type:?}"
+            ))),
         }
     } else {
-        return Err(DataFusionError::Internal(format!(
+        Err(DataFusionError::Internal(format!(
             "invalid join type variant {join_type:?}"
-        )));
+        )))
     }
 }
 
@@ -671,12 +669,10 @@ pub async fn from_substrait_rex(
                 Some(LiteralType::Null(ntype)) => {
                     Ok(Arc::new(Expr::Literal(from_substrait_null(ntype)?)))
                 }
-                _ => {
-                    return Err(DataFusionError::NotImplemented(format!(
-                        "Unsupported literal_type: {:?}",
-                        lit.literal_type
-                    )))
-                }
+                _ => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported literal_type: {:?}",
+                    lit.literal_type
+                ))),
             }
         }
         _ => Err(DataFusionError::NotImplemented(

@@ -52,25 +52,30 @@ mod registry;
 /// // Convert it to an opaque form
 /// let bytes = expr.to_bytes().unwrap();
 ///
-/// // Decode bytes from somewhere (over network, etc.
+/// // Decode bytes from somewhere (over network, etc.)
 /// let decoded_expr = Expr::from_bytes(&bytes).unwrap();
 /// assert_eq!(expr, decoded_expr);
 /// ```
 pub trait Serializeable: Sized {
-    /// Convert `self` to an opaque byt stream
+    /// Convert `self` to an opaque byte stream
     fn to_bytes(&self) -> Result<Bytes>;
 
-    /// Convert `bytes` (the output of [`to_bytes`] back into an
+    /// Convert `bytes` (the output of [`to_bytes`]) back into an
     /// object. This will error if the serialized bytes contain any
     /// user defined functions, in which case use
     /// [`from_bytes_with_registry`]
+    ///
+    /// [`to_bytes`]: Self::to_bytes
+    /// [`from_bytes_with_registry`]: Self::from_bytes_with_registry
     fn from_bytes(bytes: &[u8]) -> Result<Self> {
         Self::from_bytes_with_registry(bytes, &registry::NoRegistry {})
     }
 
-    /// Convert `bytes` (the output of [`to_bytes`] back into an
+    /// Convert `bytes` (the output of [`to_bytes`]) back into an
     /// object resolving user defined functions with the specified
     /// `registry`
+    ///
+    /// [`to_bytes`]: Self::to_bytes
     fn from_bytes_with_registry(
         bytes: &[u8],
         registry: &dyn FunctionRegistry,
@@ -149,7 +154,7 @@ pub fn logical_plan_to_bytes(plan: &LogicalPlan) -> Result<Bytes> {
     logical_plan_to_bytes_with_extension_codec(plan, &extension_codec)
 }
 
-/// Serialize a LogicalPlan as json
+/// Serialize a LogicalPlan as JSON
 #[cfg(feature = "json")]
 pub fn logical_plan_to_json(plan: &LogicalPlan) -> Result<String> {
     let extension_codec = DefaultLogicalExtensionCodec {};
@@ -176,7 +181,7 @@ pub fn logical_plan_to_bytes_with_extension_codec(
     Ok(buffer.into())
 }
 
-/// Deserialize a LogicalPlan from json
+/// Deserialize a LogicalPlan from JSON
 #[cfg(feature = "json")]
 pub fn logical_plan_from_json(json: &str, ctx: &SessionContext) -> Result<LogicalPlan> {
     let back: protobuf::LogicalPlanNode = serde_json::from_str(json)
@@ -212,7 +217,7 @@ pub fn physical_plan_to_bytes(plan: Arc<dyn ExecutionPlan>) -> Result<Bytes> {
     physical_plan_to_bytes_with_extension_codec(plan, &extension_codec)
 }
 
-/// Serialize a PhysicalPlan as json
+/// Serialize a PhysicalPlan as JSON
 #[cfg(feature = "json")]
 pub fn physical_plan_to_json(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
     let extension_codec = DefaultPhysicalExtensionCodec {};
@@ -239,7 +244,7 @@ pub fn physical_plan_to_bytes_with_extension_codec(
     Ok(buffer.into())
 }
 
-/// Deserialize a PhysicalPlan from json
+/// Deserialize a PhysicalPlan from JSON
 #[cfg(feature = "json")]
 pub fn physical_plan_from_json(
     json: &str,

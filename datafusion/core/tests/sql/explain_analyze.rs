@@ -675,42 +675,6 @@ async fn test_physical_plan_display_indent_multi_children() {
 
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
-async fn csv_explain() {
-    // This test uses the execute function that create full plan cycle: logical, optimized logical, and physical,
-    // then execute the physical plan and return the final explain results
-    let ctx = SessionContext::with_config(SessionConfig::new().with_batch_size(4096));
-    register_aggregate_csv_by_sql(&ctx).await;
-    let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > cast(10 as int)";
-    let actual = execute(&ctx, sql).await;
-    let actual = normalize_vec_for_explain(actual);
-
-    // Note can't use `assert_batches_eq` as the plan needs to be
-    // normalized for filenames and number of cores
-    let expected = vec![
-        vec![
-            "logical_plan",
-            "Projection: aggregate_test_100.c1\
-             \n  Filter: aggregate_test_100.c2 > Int8(10)\
-             \n    TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]",
-        ],
-        vec!["physical_plan",
-            "ProjectionExec: expr=[c1@0 as c1]\
-              \n  CoalesceBatchesExec: target_batch_size=4096\
-              \n    FilterExec: c2@1 > 10\
-              \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1\
-              \n        CsvExec: files={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1, c2]\
-              \n",
-        ]];
-    assert_eq!(expected, actual);
-
-    let sql = "explain SELECT c1 FROM aggregate_test_100 where c2 > 10";
-    let actual = execute(&ctx, sql).await;
-    let actual = normalize_vec_for_explain(actual);
-    assert_eq!(expected, actual);
-}
-
-#[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
 async fn csv_explain_analyze() {
     // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
     let ctx = SessionContext::new();
@@ -818,19 +782,4 @@ async fn explain_physical_plan_only() {
         \n",
     ]];
     assert_eq!(expected, actual);
-}
-
-#[tokio::test]
-async fn explain_nested() {
-    async fn test_nested_explain(explain_phy_plan_flag: bool) {
-        let mut config = ConfigOptions::new();
-        config.explain.physical_plan_only = explain_phy_plan_flag;
-        let ctx = SessionContext::with_config(config.into());
-        let sql = "EXPLAIN explain select 1";
-        let err = ctx.sql(sql).await.unwrap_err();
-        assert!(err.to_string().contains("Explain must be root of the plan"));
-    }
-
-    test_nested_explain(true).await;
-    test_nested_explain(false).await;
 }

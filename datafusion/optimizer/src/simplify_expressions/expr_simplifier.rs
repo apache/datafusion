@@ -48,6 +48,8 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// Create a new `ExprSimplifier` with the given `info` such as an
     /// instance of [`SimplifyContext`]. See
     /// [`simplify`](Self::simplify) for an example.
+    ///
+    /// [`SimplifyContext`]: crate::simplify_expressions::context::SimplifyContext
     pub fn new(info: S) -> Self {
         Self { info }
     }
@@ -143,8 +145,8 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
 /// Note it does not handle algebraic rewrites such as `(a or false)`
 /// --> `a`, which is handled by [`Simplifier`]
 struct ConstEvaluator<'a> {
-    /// can_evaluate is used during the depth-first-search of the
-    /// Expr tree to track if any siblings (or their descendants) were
+    /// `can_evaluate` is used during the depth-first-search of the
+    /// `Expr` tree to track if any siblings (or their descendants) were
     /// non evaluatable (e.g. had a column reference or volatile
     /// function)
     ///
@@ -152,9 +154,9 @@ struct ConstEvaluator<'a> {
     /// traversal when we are N levels deep in the tree, one entry for
     /// this Expr and each of its parents.
     ///
-    /// After visiting all siblings if can_evauate.top() is true, that
+    /// After visiting all siblings if `can_evauate.top()`` is true, that
     /// means there were no non evaluatable siblings (or their
-    /// descendants) so this Expr can be evaluated
+    /// descendants) so this `Expr` can be evaluated
     can_evaluate: Vec<bool>,
 
     execution_props: &'a ExecutionProps,

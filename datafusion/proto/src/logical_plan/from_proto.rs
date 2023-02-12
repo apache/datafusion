@@ -37,7 +37,7 @@ use datafusion_expr::{
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
     date_part, date_trunc, digest, exp,
     expr::{self, Sort, WindowFunction},
-    floor, from_unixtime, left, ln, log10, log2,
+    floor, from_unixtime, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, now, nullif, octet_length, power, random, regexp_match,
     regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
@@ -113,13 +113,13 @@ impl Error {
 pub trait FromOptionalField<T> {
     /// Converts an optional protobuf field to an option of a different type
     ///
-    /// Returns None if the option is None, otherwise calls [`FromField::field`]
+    /// Returns None if the option is None, otherwise calls [`TryInto::try_into`]
     /// on the contained data, returning any error encountered
     fn optional(self) -> Result<Option<T>, Error>;
 
     /// Converts an optional protobuf field to a different type, returning an error if None
     ///
-    /// Returns `Error::MissingRequiredField` if None, otherwise calls [`FromField::field`]
+    /// Returns `Error::MissingRequiredField` if None, otherwise calls [`TryInto::try_into`]
     /// on the contained data, returning any error encountered
     fn required(self, field: impl Into<String>) -> Result<T, Error>;
 }
@@ -1300,6 +1300,10 @@ pub fn parse_expr(
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
                 ScalarFunction::Power => Ok(power(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::Log => Ok(log(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),

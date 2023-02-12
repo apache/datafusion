@@ -943,7 +943,6 @@ mod tests {
         let array: ArrayRef = Arc::new(
             std::iter::repeat::<Option<i128>>(None)
                 .take(0)
-                .into_iter()
                 .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
@@ -971,7 +970,6 @@ mod tests {
         let array: ArrayRef = Arc::new(
             std::iter::repeat::<Option<i128>>(None)
                 .take(6)
-                .into_iter()
                 .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
@@ -1031,7 +1029,6 @@ mod tests {
         let array: ArrayRef = Arc::new(
             std::iter::repeat::<Option<i128>>(None)
                 .take(0)
-                .into_iter()
                 .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
@@ -1074,7 +1071,6 @@ mod tests {
         let array: ArrayRef = Arc::new(
             std::iter::repeat::<Option<i128>>(None)
                 .take(6)
-                .into_iter()
                 .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );

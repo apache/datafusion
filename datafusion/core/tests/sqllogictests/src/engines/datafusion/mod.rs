@@ -18,7 +18,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use sqllogictest::DBOutput;
+use crate::output::{DFColumnType, DFOutput};
 
 use self::error::{DFSqlLogicTestError, Result};
 use async_trait::async_trait;
@@ -49,8 +49,9 @@ impl DataFusion {
 #[async_trait]
 impl sqllogictest::AsyncDB for DataFusion {
     type Error = DFSqlLogicTestError;
+    type ColumnType = DFColumnType;
 
-    async fn run(&mut self, sql: &str) -> Result<DBOutput> {
+    async fn run(&mut self, sql: &str) -> Result<DFOutput> {
         println!(
             "[{}] Running query: \"{}\"",
             self.relative_path.display(),
@@ -75,7 +76,7 @@ impl sqllogictest::AsyncDB for DataFusion {
     }
 }
 
-async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DBOutput> {
+async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DFOutput> {
     let sql = sql.into();
     // Check if the sql is `insert`
     if let Ok(mut statements) = DFParser::parse_sql(&sql) {

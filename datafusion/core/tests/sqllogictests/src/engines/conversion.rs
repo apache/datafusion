@@ -34,7 +34,7 @@ pub fn varchar_to_str(value: &str) -> String {
     if value.is_empty() {
         "(empty)".to_string()
     } else {
-        value.to_string()
+        value.trim_end_matches('\n').to_string()
     }
 }
 
