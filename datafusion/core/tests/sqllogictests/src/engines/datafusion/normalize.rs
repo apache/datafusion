@@ -18,6 +18,7 @@
 use arrow::datatypes::SchemaRef;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
 use datafusion_common::DataFusionError;
+use lazy_static::lazy_static;
 use sqllogictest::DBOutput;
 use std::path::PathBuf;
 
