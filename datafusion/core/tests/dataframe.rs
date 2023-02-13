@@ -205,24 +205,19 @@ async fn select_with_alias_overwrite() -> Result<()> {
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![Arc::new(Int32Array::from_slice([1, 10, 10, 100]))],
-    )
-    .unwrap();
+    )?;
 
     let ctx = SessionContext::new();
     ctx.register_batch("t", batch).unwrap();
 
     let df = ctx
         .table("t")
-        .await
-        .unwrap()
-        .select(vec![col("a").alias("a")])
-        .unwrap()
-        .select(vec![(col("a").eq(lit(10))).alias("a")])
-        .unwrap()
-        .select(vec![col("a")])
-        .unwrap();
+        .await?
+        .select(vec![col("a").alias("a")])?
+        .select(vec![(col("a").eq(lit(10))).alias("a")])?
+        .select(vec![col("a")])?;
 
-    let results = df.collect().await.unwrap();
+    let results = df.collect().await?;
 
     #[rustfmt::skip]
         let expected = vec![
