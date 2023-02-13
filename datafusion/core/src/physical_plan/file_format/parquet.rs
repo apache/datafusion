@@ -836,7 +836,8 @@ mod tests {
 
     /// round-trip record batches by writing each individual RecordBatch to
     /// a parquet file and then reading that parquet file with the specified
-    /// options
+    /// options. If page_index_predicate is set to `true`, all RecordBatches
+    /// are written into a parquet file instead.
     #[derive(Debug, Default)]
     struct RoundTrip {
         projection: Option<Vec<usize>>,

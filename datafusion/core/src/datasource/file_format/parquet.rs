@@ -552,9 +552,10 @@ pub(crate) mod test_util {
 
     /// Writes `batches` to a temporary parquet file
     ///
-    /// If multi_page is set to `true`, the parquet file is written
+    /// If multi_page is set to `true`, all batches are written into 
+    /// one temporary parquet file and the parquet file is written
     /// with 2 rows per data page (used to test page filtering and
-    /// boundaries)
+    /// boundaries).
     pub async fn store_parquet(
         batches: Vec<RecordBatch>,
         multi_page: bool,
