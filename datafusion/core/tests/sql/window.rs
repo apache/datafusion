@@ -1495,13 +1495,13 @@ async fn window_frame_creation_type_checking() -> Result<()> {
         Ok(())
     }
 
-    // error is return from physical plan
+    // Error is returned from the physical plan.
     check_query(
         true,
         "Internal error: Operator - is not implemented for types UInt32(1) and Utf8(\"1 DAY\")."
     ).await?;
 
-    // error is return from logical plan
+    // Error is returned from the logical plan.
     check_query(
         false,
         "Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: Arrow error: Cast error: Cannot cast string '1 DAY' to value of UInt32 type"
