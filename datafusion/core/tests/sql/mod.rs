@@ -101,6 +101,7 @@ pub mod select;
 pub mod timestamp;
 pub mod udf;
 pub mod union;
+pub mod unnest;
 pub mod wildcard;
 pub mod window;
 
