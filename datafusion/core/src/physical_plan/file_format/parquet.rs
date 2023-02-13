@@ -836,8 +836,7 @@ mod tests {
 
     /// round-trip record batches by writing each individual RecordBatch to
     /// a parquet file and then reading that parquet file with the specified
-    /// options. If page_index_predicate is set to `true`, all RecordBatches
-    /// are written into a parquet file instead.
+    /// options.
     #[derive(Debug, Default)]
     struct RoundTrip {
         projection: Option<Vec<usize>>,
@@ -1635,27 +1634,38 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_page_index_exec_metrics() {
-        let c1: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
-        let c2: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), Some(4), Some(5)]));
+        let c1: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(2),
+            Some(3),
+            Some(4),
+            Some(5),
+        ]));
         let batch1 = create_batch(vec![("int", c1.clone())]);
-        let batch2 = create_batch(vec![("int", c2.clone())]);
 
         let filter = col("int").eq(lit(4_i32));
 
         let rt = RoundTrip::new()
             .with_predicate(filter)
             .with_page_index_predicate()
-            .round_trip(vec![batch1, batch2])
+            .round_trip(vec![batch1])
             .await;
 
         let metrics = rt.parquet_exec.metrics().unwrap();
 
         // assert the batches and some metrics
+        #[rustfmt::skip]
         let expected = vec![
-            "+-----+", "| int |", "+-----+", "| 3   |", "| 4   |", "| 5   |", "+-----+",
+            "+-----+",
+            "| int |",
+            "+-----+",
+            "| 4   |",
+            "| 5   |",
+            "+-----+",
         ];
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
-        assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 3);
+        assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 4);
         assert!(
             get_value(&metrics, "page_index_eval_time") > 0,
             "no eval time in metrics: {metrics:#?}"
