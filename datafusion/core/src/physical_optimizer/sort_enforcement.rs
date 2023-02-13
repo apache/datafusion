@@ -27,7 +27,7 @@
 //! somehow get the fragment
 //!
 //! ```text
-//! SortExec: [nullable_col@0 ASC]
+//! SortExec: [nullable_co  l@0 ASC]
 //!   SortExec: [non_nullable_col@1 ASC]
 //! ```
 //!
@@ -1180,6 +1180,34 @@ mod tests {
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  SortExec: [nullable_col@0 ASC], global=true",
             "    MemoryExec: partitions=0, partition_sizes=[]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_remove_unnecessary_sort1() -> Result<()> {
+        let schema = create_test_schema()?;
+        let source = memory_exec(&schema);
+        let sort_exprs = vec![sort_expr("nullable_col", &schema)];
+        let sort = sort_exec(sort_exprs.clone(), source);
+        let spm = sort_preserving_merge_exec(sort_exprs, sort);
+
+        let sort_exprs = vec![sort_expr("nullable_col", &schema)];
+        let sort = sort_exec(sort_exprs.clone(), spm);
+        let physical_plan = sort_preserving_merge_exec(sort_exprs, sort);
+        let expected_input = vec![
+            "SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "  SortExec: [nullable_col@0 ASC], global=true",
+            "    SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "      SortExec: [nullable_col@0 ASC], global=true",
+            "        MemoryExec: partitions=0, partition_sizes=[]",
+        ];
+        let expected_optimized = vec![
+            "SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "  SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "    SortExec: [nullable_col@0 ASC], global=true",
+            "      MemoryExec: partitions=0, partition_sizes=[]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())
