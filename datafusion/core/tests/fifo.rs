@@ -312,10 +312,11 @@ mod unix_test {
             };
             operations.push(op);
         }
-        // This check ensures that the right unmatched or left unmatched results are not generated
-        // only once by the hash join executor at the end of the file. This is a valid check because
-        // the SymmetricHashJoin executor produces these results without waiting for the end of
-        // the file, and will produce them more than once.
+
+        // The SymmetricHashJoin executor produces FULL join results at the each prune,
+        // which happens earlier than the end of the file and more than once.
+        // We provide partially joinable data on both sides to ensure that the right unmatched and left unmatched
+        // results are generated more than once.
         assert!(
             operations
                 .iter()
