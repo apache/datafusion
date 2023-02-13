@@ -1333,8 +1333,15 @@ mod tests {
     #[tokio::test]
     async fn evolved_schema_disjoint_schema_with_page_index_pushdown() {
         let c1: ArrayRef = Arc::new(StringArray::from(vec![
-            // Page 1 (can't prune as c2 is null)
+            // Page 1
             Some("Foo"),
+            Some("Bar"),
+            // Page 2
+            Some("Foo2"),
+            Some("Bar2"),
+            // Page 3
+            Some("Foo3"),
+            Some("Bar3"),
         ]));
 
         let c2: ArrayRef = Arc::new(Int64Array::from(vec![
@@ -1350,10 +1357,16 @@ mod tests {
         ]));
 
         // batch1: c1(string)
-        let batch1 = create_batch(vec![("c1", c1)]);
+        let batch1 = create_batch(vec![("c1", c1.clone())]);
 
         // batch2: c2(int64)
-        let batch2 = create_batch(vec![("c2", c2)]);
+        let batch2 = create_batch(vec![("c2", c2.clone())]);
+
+        // batch3 (has c2, c1) -- both columns, should still prune
+        let batch3 = create_batch(vec![("c1", c1.clone()), ("c2", c2.clone())]);
+
+        // batch4 (has c2, c1) -- different column order, should still prune
+        let batch4 = create_batch(vec![("c2", c2), ("c1", c1)]);
 
         let filter = col("c2").eq(lit(1_i64));
 
@@ -1361,22 +1374,34 @@ mod tests {
         let rt = RoundTrip::new()
             .with_predicate(filter)
             .with_page_index_predicate()
-            .round_trip(vec![batch1, batch2])
+            .round_trip(vec![batch1, batch2, batch3, batch4])
             .await;
 
         let expected = vec![
-            "+-----+----+",
-            "| c1  | c2 |",
-            "+-----+----+",
-            "|     | 1  |",
-            "|     | 2  |",
-            "| Foo |    |",
-            "+-----+----+",
+            "+------+----+",
+            "| c1   | c2 |",
+            "+------+----+",
+            "|      | 1  |",
+            "|      | 2  |",
+            "| Bar  |    |",
+            "| Bar  | 2  |",
+            "| Bar  | 2  |",
+            "| Bar2 |    |",
+            "| Bar3 |    |",
+            "| Foo  |    |",
+            "| Foo  | 1  |",
+            "| Foo  | 1  |",
+            "| Foo2 |    |",
+            "| Foo3 |    |",
+            "+------+----+",
         ];
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
         let metrics = rt.parquet_exec.metrics().unwrap();
-        // Note there are were 4 rows pruned in total (across two pages)
-        assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 4);
+
+        // There are 4 rows pruned in each of batch2, batch3, and
+        // batch4 for a total of 12. batch1 had no pruning as c2 was
+        // filled in as null
+        assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 12);
     }
 
     #[tokio::test]
