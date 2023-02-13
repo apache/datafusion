@@ -15,14 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module provides utilities for window frame index calculations depending on the window frame mode:
-//! RANGE, ROWS, GROUPS.
+//! This module provides utilities for window frame index calculations
+//! depending on the window frame mode: RANGE, ROWS, GROUPS.
 
 use arrow::array::ArrayRef;
 use arrow::compute::kernels::sort::SortOptions;
-use datafusion_common::utils::{
-    compare_rows, get_row_at_idx, linear_search, search_in_slice,
-};
+use datafusion_common::utils::{compare_rows, get_row_at_idx, search_in_slice};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use std::cmp::min;
@@ -77,8 +75,9 @@ impl<'a> WindowFrameContext<'a> {
             WindowFrameContext::Rows(window_frame) => {
                 Self::calculate_range_rows(window_frame, length, idx)
             }
-            // sort_options is used in RANGE mode calculations because the ordering and the position of the nulls
-            // have impact on the range calculations and comparison of the rows.
+            // Sort options is used in RANGE mode calculations because the
+            // ordering or position of NULLs impact range calculations and
+            // comparison of rows.
             WindowFrameContext::Range {
                 window_frame,
                 ref mut state,
@@ -90,18 +89,13 @@ impl<'a> WindowFrameContext<'a> {
                 idx,
                 last_range,
             ),
-            // sort_options is not used in GROUPS mode calculations as the inequality of two rows is the indicator
-            // of a group change, and the ordering and the position of the nulls do not have impact on inequality.
+            // Sort options is not used in GROUPS mode calculations as the
+            // inequality of two rows indicates a group change, and ordering
+            // or position of NULLs do not impact inequality.
             WindowFrameContext::Groups {
                 window_frame,
                 ref mut state,
-            } => state.calculate_range(
-                window_frame,
-                range_columns,
-                sort_options,
-                length,
-                idx,
-            ),
+            } => state.calculate_range(window_frame, range_columns, length, idx),
         }
     }
 
@@ -281,7 +275,11 @@ impl WindowFrameStateRange {
         let end_range = if let Some(delta) = delta {
             let is_descending: bool = sort_options
                 .first()
-                .ok_or_else(|| DataFusionError::Internal("Array is empty".to_string()))?
+                .ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "Sort options unexpectedly absent in a window frame".to_string(),
+                    )
+                })?
                 .descending;
 
             current_row_values
@@ -291,7 +289,7 @@ impl WindowFrameStateRange {
                         return Ok(value.clone());
                     }
                     if SEARCH_SIDE == is_descending {
-                        // TODO: Handle positive overflows
+                        // TODO: Handle positive overflows.
                         value.add(delta)
                     } else if value.is_unsigned() && value < delta {
                         // NOTE: This gets a polymorphic zero without having long coercion code for ScalarValue.
@@ -299,7 +297,7 @@ impl WindowFrameStateRange {
                         //       change the following statement to use that.
                         value.sub(value)
                     } else {
-                        // TODO: Handle negative overflows
+                        // TODO: Handle negative overflows.
                         value.sub(delta)
                     }
                 })
@@ -346,19 +344,12 @@ impl WindowFrameStateRange {
 // scan groups of data while processing window frames.
 #[derive(Debug, Default)]
 pub struct WindowFrameStateGroups {
-    // Stores the tuple where first element is the row group contains
-    // second value is the index where group ends
-    // For instance,
-    // [
-    // [1,1],
-    // [1,1],
-    // [2,1],
-    // [2,1],
-    // ]
-    // would produce VecDeque::from([([1,1], 2), ([2,1], 4)]);
+    /// A tuple containing group values and the row index where the group ends.
+    /// Example: [[1, 1], [1, 1], [2, 1], [2, 1], ...] would correspond to
+    ///          [([1, 1], 2), ([2, 1], 4), ...].
     group_start_indices: VecDeque<(Vec<ScalarValue>, usize)>,
-    // Keeps the groups index that row index belongs
-    cur_group_idx: usize,
+    /// The group index to which the row index belongs.
+    current_group_idx: usize,
 }
 
 impl WindowFrameStateGroups {
@@ -366,7 +357,6 @@ impl WindowFrameStateGroups {
         &mut self,
         window_frame: &Arc<WindowFrame>,
         range_columns: &[ArrayRef],
-        sort_options: &[SortOptions],
         length: usize,
         idx: usize,
     ) -> Result<Range<usize>> {
@@ -383,7 +373,6 @@ impl WindowFrameStateGroups {
                 } else {
                     self.calculate_index_of_row::<true, true>(
                         range_columns,
-                        sort_options,
                         idx,
                         Some(n),
                         length,
@@ -396,7 +385,6 @@ impl WindowFrameStateGroups {
                 } else {
                     self.calculate_index_of_row::<true, true>(
                         range_columns,
-                        sort_options,
                         idx,
                         None,
                         length,
@@ -406,7 +394,6 @@ impl WindowFrameStateGroups {
             WindowFrameBound::Following(ref n) => self
                 .calculate_index_of_row::<true, false>(
                     range_columns,
-                    sort_options,
                     idx,
                     Some(n),
                     length,
@@ -416,7 +403,6 @@ impl WindowFrameStateGroups {
             WindowFrameBound::Preceding(ref n) => self
                 .calculate_index_of_row::<false, true>(
                     range_columns,
-                    sort_options,
                     idx,
                     Some(n),
                     length,
@@ -427,7 +413,6 @@ impl WindowFrameStateGroups {
                 } else {
                     self.calculate_index_of_row::<false, false>(
                         range_columns,
-                        sort_options,
                         idx,
                         None,
                         length,
@@ -441,7 +426,6 @@ impl WindowFrameStateGroups {
                 } else {
                     self.calculate_index_of_row::<false, false>(
                         range_columns,
-                        sort_options,
                         idx,
                         Some(n),
                         length,
@@ -454,97 +438,109 @@ impl WindowFrameStateGroups {
 
     /// This function does the heavy lifting when finding range boundaries. It is meant to be
     /// called twice, in succession, to get window frame start and end indices (with `SIDE`
-    /// supplied as true and false, respectively) `PRECEDING` determines sign of the delta (
-    /// where true represents negative, false represents positive)
-    fn calculate_index_of_row<const SIDE: bool, const PRECEDING: bool>(
+    /// supplied as true and false, respectively). Generic argument `SEARCH_SIDE` determines
+    /// the sign of `delta` (where true/false represents negative/positive respectively).
+    fn calculate_index_of_row<const SIDE: bool, const SEARCH_SIDE: bool>(
         &mut self,
         range_columns: &[ArrayRef],
-        sort_options: &[SortOptions],
         idx: usize,
         delta: Option<&ScalarValue>,
         length: usize,
     ) -> Result<usize> {
         let delta = if let Some(delta) = delta {
-            match delta {
-                ScalarValue::UInt64(Some(val)) => Ok(*val as usize),
-                _ => Err(DataFusionError::Execution("expects uint64".to_string())),
+            if let ScalarValue::UInt64(Some(value)) = delta {
+                *value as usize
+            } else {
+                return Err(DataFusionError::Internal(
+                    "Unexpectedly got a non-UInt64 value in a GROUPS mode window frame"
+                        .to_string(),
+                ));
             }
         } else {
-            Ok(0)
-        }?;
+            0
+        };
         let mut group_start = 0;
         let last_group = self.group_start_indices.back();
-        if let Some((_last_group, group_end)) = last_group {
-            // Start searching from last group boundary
+        if let Some((_, group_end)) = last_group {
+            // Start searching from the last group boundary:
             group_start = *group_end;
         }
 
-        // Progress groups until idx is inside a group
+        // Advance groups until `idx` is inside a group:
         while idx > group_start {
             let group_row = get_row_at_idx(range_columns, group_start)?;
-            // find end boundary of of the group (search right boundary)
-            let group_end =
-                linear_search::<false>(range_columns, &group_row, sort_options)?;
+            // Find end boundary of the group (search right boundary):
+            let group_end = search_in_slice(
+                range_columns,
+                &group_row,
+                check_equality,
+                group_start,
+                length,
+            )?;
             self.group_start_indices.push_back((group_row, group_end));
             group_start = group_end;
         }
 
-        // Update the group index `idx` belongs.
-        while self.cur_group_idx < self.group_start_indices.len() {
-            if idx >= self.group_start_indices[self.cur_group_idx].1 {
-                self.cur_group_idx += 1;
-            } else {
-                break;
-            }
+        // Update the group index `idx` belongs to:
+        while self.current_group_idx < self.group_start_indices.len()
+            && idx >= self.group_start_indices[self.current_group_idx].1
+        {
+            self.current_group_idx += 1;
         }
-        // Group idx of the frame boundary
-        let group_idx = if PRECEDING {
-            if self.cur_group_idx > delta {
-                self.cur_group_idx - delta
+
+        // Find the group index of the frame boundary:
+        let group_idx = if SEARCH_SIDE {
+            if self.current_group_idx > delta {
+                self.current_group_idx - delta
             } else {
                 0
             }
         } else {
-            self.cur_group_idx + delta
+            self.current_group_idx + delta
         };
 
-        // Expand group_start_indices until it includes at least group_idx
+        // Extend `group_start_indices` until it includes at least `group_idx`:
         while self.group_start_indices.len() <= group_idx && group_start < length {
             let group_row = get_row_at_idx(range_columns, group_start)?;
-            // find end boundary of of the group (search right boundary)
-            let group_end =
-                linear_search::<false>(range_columns, &group_row, sort_options)?;
+            // Find end boundary of the group (search right boundary):
+            let group_end = search_in_slice(
+                range_columns,
+                &group_row,
+                check_equality,
+                group_start,
+                length,
+            )?;
             self.group_start_indices.push_back((group_row, group_end));
             group_start = group_end;
         }
 
-        // calculates index of the group boundary
-        Ok(match (SIDE, PRECEDING) {
-            // window frame start
+        // Calculate index of the group boundary:
+        Ok(match (SIDE, SEARCH_SIDE) {
+            // Window frame start:
             (true, _) => {
                 let group_idx = min(group_idx, self.group_start_indices.len());
                 if group_idx > 0 {
-                    // window frame start is: end boundary of previous group
+                    // Normally, start at the boundary of the previous group.
                     self.group_start_indices[group_idx - 1].1
                 } else {
-                    // If previous group is out of table, window frame start is 0
+                    // If previous group is out of the table, start at zero.
                     0
                 }
             }
-            // window frame end, PRECEDING n
+            // Window frame end, PRECEDING n
             (false, true) => {
-                if self.cur_group_idx >= delta {
-                    let group_idx = self.cur_group_idx - delta;
+                if self.current_group_idx >= delta {
+                    let group_idx = self.current_group_idx - delta;
                     self.group_start_indices[group_idx].1
                 } else {
-                    // group is out of table hence end of window frame is 0
+                    // Group is out of the table, therefore end at zero.
                     0
                 }
             }
-            // window frame end, FOLLOWING n
+            // Window frame end, FOLLOWING n
             (false, false) => {
                 let group_idx = min(
-                    self.cur_group_idx + delta,
+                    self.current_group_idx + delta,
                     self.group_start_indices.len() - 1,
                 );
                 self.group_start_indices[group_idx].1
@@ -553,14 +549,17 @@ impl WindowFrameStateGroups {
     }
 }
 
+fn check_equality(current: &[ScalarValue], target: &[ScalarValue]) -> Result<bool> {
+    Ok(current == target)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::window::window_frame_state::WindowFrameStateGroups;
     use arrow::array::{ArrayRef, Float64Array};
     use arrow_schema::SortOptions;
     use datafusion_common::from_slice::FromSlice;
-    use datafusion_common::Result;
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
     use std::ops::Range;
     use std::sync::Arc;
@@ -582,7 +581,7 @@ mod tests {
         window_frame: &Arc<WindowFrame>,
     ) -> Result<()> {
         let mut window_frame_groups = WindowFrameStateGroups::default();
-        let (range_columns, sort_options) = get_test_data();
+        let (range_columns, _) = get_test_data();
         let n_row = range_columns[0].len();
         for (idx, (expected_range, expected_group_idx)) in
             expected_results.into_iter().enumerate()
@@ -590,12 +589,11 @@ mod tests {
             let range = window_frame_groups.calculate_range(
                 window_frame,
                 &range_columns,
-                &sort_options,
                 n_row,
                 idx,
             )?;
             assert_eq!(range, expected_range);
-            assert_eq!(window_frame_groups.cur_group_idx, expected_group_idx);
+            assert_eq!(window_frame_groups.current_group_idx, expected_group_idx);
         }
         Ok(())
     }
