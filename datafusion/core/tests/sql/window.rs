@@ -2586,7 +2586,12 @@ fn write_test_data_to_parquet(tmpdir: &TempDir, n_file: usize) -> Result<()> {
     let desc_field = Field::new("desc_col", DataType::Int32, false);
     let low_card_field = Field::new("low_card_col", DataType::Int32, false);
 
-    let schema = Arc::new(Schema::new(vec![ts_field, inc_field, desc_field, low_card_field]));
+    let schema = Arc::new(Schema::new(vec![
+        ts_field,
+        inc_field,
+        desc_field,
+        low_card_field,
+    ]));
 
     let batch = RecordBatch::try_new(
         schema,
@@ -2619,11 +2624,11 @@ fn write_test_data_to_parquet(tmpdir: &TempDir, n_file: usize) -> Result<()> {
                 -181, -184, -189, -193, -196, -201, -203, -208, -210, -213,
             ])),
             Arc::new(Int32Array::from_slice([
-                0, 3, 4, 3, 2, 2, 0, 1, 1, 3, 4, 1, 0, 1, 3, 2, 1, 4, 4, 1, 4, 3,
-                4, 4, 0, 4, 1, 2, 4, 3, 2, 1, 4, 2, 2, 4, 2, 4, 1, 0, 1, 1, 4, 4,
-                2, 1, 4, 1, 4, 1, 1, 3, 4, 4, 3, 0, 4, 0, 3, 0, 4, 4, 0, 0, 4, 3,
-                1, 0, 3, 3, 1, 1, 0, 4, 3, 3, 0, 0, 4, 2, 1, 3, 2, 2, 1, 3, 1, 4,
-                1, 3, 3, 1, 2, 0, 1, 0, 3, 2, 1, 2
+                0, 3, 4, 3, 2, 2, 0, 1, 1, 3, 4, 1, 0, 1, 3, 2, 1, 4, 4, 1, 4, 3, 4, 4,
+                0, 4, 1, 2, 4, 3, 2, 1, 4, 2, 2, 4, 2, 4, 1, 0, 1, 1, 4, 4, 2, 1, 4, 1,
+                4, 1, 1, 3, 4, 4, 3, 0, 4, 0, 3, 0, 4, 4, 0, 0, 4, 3, 1, 0, 3, 3, 1, 1,
+                0, 4, 3, 3, 0, 0, 4, 2, 1, 3, 2, 2, 1, 3, 1, 4, 1, 3, 3, 1, 2, 0, 1, 0,
+                3, 2, 1, 2,
             ])),
         ],
     )?;

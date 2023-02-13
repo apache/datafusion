@@ -39,7 +39,9 @@ use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::UnionExec;
-use crate::physical_plan::windows::{BoundedWindowAggExec, PartitionSearchMode, WindowAggExec};
+use crate::physical_plan::windows::{
+    BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
+};
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{reverse_sort_options, DataFusionError};
@@ -556,69 +558,100 @@ fn analyze_window_sort_removal(
     sort_tree: &mut ExecTree,
     window_exec: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
-    let (window_expr, partition_keys, sort_keys, partition_by_sort_keys) = if let Some(exec) =
-        window_exec.as_any().downcast_ref::<BoundedWindowAggExec>()
-    {
-        (exec.window_expr(), &exec.partition_keys, &exec.sort_keys, exec.partition_by_sort_keys()?)
-    } else if let Some(exec) = window_exec.as_any().downcast_ref::<WindowAggExec>() {
-        (exec.window_expr(), &exec.partition_keys, &exec.sort_keys, exec.partition_by_sort_keys()?)
-    } else {
-        return Err(DataFusionError::Plan(
-            "Expects to receive either WindowAggExec of BoundedWindowAggExec".to_string(),
-        ));
-    };
+    let (window_expr, partition_keys, sort_keys, partition_by_sort_keys) =
+        if let Some(exec) = window_exec.as_any().downcast_ref::<BoundedWindowAggExec>() {
+            (
+                exec.window_expr(),
+                &exec.partition_keys,
+                &exec.sort_keys,
+                exec.partition_by_sort_keys()?,
+            )
+        } else if let Some(exec) = window_exec.as_any().downcast_ref::<WindowAggExec>() {
+            (
+                exec.window_expr(),
+                &exec.partition_keys,
+                &exec.sort_keys,
+                exec.partition_by_sort_keys()?,
+            )
+        } else {
+            return Err(DataFusionError::Plan(
+                "Expects to receive either WindowAggExec of BoundedWindowAggExec"
+                    .to_string(),
+            ));
+        };
 
-    println!("sort_keys: {:?}", sort_keys);
-    println!("partition_keys: {:?}", partition_keys);
-    println!("partition_by_sort_keys: {:?}", partition_by_sort_keys);
+    // println!("sort_keys: {:?}", sort_keys);
+    // println!("partition_keys: {:?}", partition_keys);
+    // println!("partition_by_sort_keys: {:?}", partition_by_sort_keys);
     let n_partition_by_keys = partition_by_sort_keys.len();
     let mut first_should_reverse = None;
     let mut physical_ordering_common = vec![];
-    for sort_any in sort_tree.get_leaves() {
-        let sort_output_ordering = sort_any.output_ordering();
-        // Variable `sort_any` will either be a `SortExec` or a
-        // `SortPreservingMergeExec`, and both have a single child.
-        // Therefore, we can use the 0th index without loss of generality.
-        let sort_input = sort_any.children()[0].clone();
-        let physical_ordering = sort_input.output_ordering();
-        // TODO: Once we can ensure that required ordering information propagates with
-        //       the necessary lineage information, compare `physical_ordering` and the
-        //       ordering required by the window executor instead of `sort_output_ordering`.
-        //       This will enable us to handle cases such as (a,b) -> Sort -> (a,b,c) -> Required(a,b).
-        //       Currently, we can not remove such sorts.
-        let required_ordering = sort_output_ordering.ok_or_else(|| {
-            DataFusionError::Plan("A SortExec should have output ordering".to_string())
-        })?;
-        let required_ordering = &required_ordering[n_partition_by_keys..];
-        println!("required_ordering:{:?}", required_ordering);
-        if let Some(physical_ordering) = physical_ordering {
-            if physical_ordering_common.is_empty()
-                || physical_ordering.len() < physical_ordering_common.len()
-            {
-                physical_ordering_common = physical_ordering.to_vec();
-            }
-            let (can_skip_sorting, should_reverse) = can_skip_sort(
-                window_expr[0].partition_by(),
-                required_ordering,
-                &sort_input.schema(),
-                physical_ordering,
-            )?;
-            if !can_skip_sorting {
-                return Ok(None);
-            }
-            if let Some(first_should_reverse) = first_should_reverse {
-                if first_should_reverse != should_reverse {
-                    return Ok(None);
+    let mut partition_search_mode = PartitionSearchMode::Linear;
+    let mut can_skip_sorting = false;
+    for (order_offsets, search_mode) in [0, n_partition_by_keys].into_iter().zip(vec![
+        PartitionSearchMode::Sorted,
+        PartitionSearchMode::Linear,
+    ]) {
+        for sort_any in sort_tree.get_leaves() {
+            let sort_output_ordering = sort_any.output_ordering();
+            // Variable `sort_any` will either be a `SortExec` or a
+            // `SortPreservingMergeExec`, and both have a single child.
+            // Therefore, we can use the 0th index without loss of generality.
+            let sort_input = sort_any.children()[0].clone();
+            let physical_ordering = sort_input.output_ordering();
+            // TODO: Once we can ensure that required ordering information propagates with
+            //       the necessary lineage information, compare `physical_ordering` and the
+            //       ordering required by the window executor instead of `sort_output_ordering`.
+            //       This will enable us to handle cases such as (a,b) -> Sort -> (a,b,c) -> Required(a,b).
+            //       Currently, we can not remove such sorts.
+            let required_ordering = sort_output_ordering.ok_or_else(|| {
+                DataFusionError::Plan(
+                    "A SortExec should have output ordering".to_string(),
+                )
+            })?;
+            let required_ordering = &required_ordering[order_offsets..];
+            // println!("required_ordering:{:?}", required_ordering);
+            if let Some(physical_ordering) = physical_ordering {
+                if physical_ordering_common.is_empty()
+                    || physical_ordering.len() < physical_ordering_common.len()
+                {
+                    physical_ordering_common = physical_ordering.to_vec();
+                }
+                let (can_skip_sorting_inner, should_reverse) = can_skip_sort(
+                    window_expr[0].partition_by(),
+                    required_ordering,
+                    &sort_input.schema(),
+                    physical_ordering,
+                )?;
+                can_skip_sorting = can_skip_sorting_inner;
+                if !can_skip_sorting_inner {
+                    break;
+                    // return Ok(None);
+                }
+                if let Some(first_should_reverse) = first_should_reverse {
+                    if first_should_reverse != should_reverse {
+                        can_skip_sorting = false;
+                        break;
+                        // return Ok(None);
+                    }
+                } else {
+                    first_should_reverse = Some(should_reverse);
                 }
             } else {
-                first_should_reverse = Some(should_reverse);
+                // If there is no physical ordering, there is no way to remove a
+                // sort, so immediately return.
+                return Ok(None);
             }
-        } else {
-            // If there is no physical ordering, there is no way to remove a
-            // sort, so immediately return.
-            return Ok(None);
+        }
+        if can_skip_sorting {
+            partition_search_mode = search_mode;
+            break;
         }
     }
+    if !can_skip_sorting {
+        return Ok(None);
+    }
+    println!("partition_search_mode:{:?}", partition_search_mode);
     let new_window_expr = if first_should_reverse.unwrap() {
         window_expr
             .iter()
@@ -648,7 +681,7 @@ fn analyze_window_sort_removal(
                 new_schema,
                 partition_keys.to_vec(),
                 Some(physical_ordering_common),
-                PartitionSearchMode::Linear,
+                partition_search_mode,
             )?) as _
         } else {
             Arc::new(WindowAggExec::try_new(

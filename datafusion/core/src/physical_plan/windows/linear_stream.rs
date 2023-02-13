@@ -32,6 +32,7 @@ use crate::physical_plan::{
 };
 use arrow::array::Array;
 use arrow::compute::{concat, lexicographical_partition_ranges, SortColumn};
+use arrow::util::pretty::print_batches;
 use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
@@ -47,9 +48,11 @@ use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use arrow::util::pretty::print_batches;
 
 use crate::physical_plan::common::merge_batches;
+use crate::physical_plan::windows::PartitionSearchMode;
+use datafusion_common::utils::{bisect, get_row_at_idx};
+use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::window::{
     PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
     WindowAggState, WindowState,
@@ -57,8 +60,6 @@ use datafusion_physical_expr::window::{
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use indexmap::IndexMap;
 use log::debug;
-use datafusion_common::utils::{bisect, get_row_at_idx};
-use datafusion_expr::ColumnarValue;
 
 /// This trait defines the interface for updating the state and calculating
 /// results for window functions. Depending on the partitioning scheme, one
@@ -104,17 +105,18 @@ pub struct LinearPartitionByBoundedWindowStream {
 impl PartitionByHandler for LinearPartitionByBoundedWindowStream {
     /// This method constructs output columns using the result of each window expression
     fn calculate_out_columns(&mut self) -> Result<Option<Vec<ArrayRef>>> {
-        let partition_by_columns = self.evaluate_partition_by_column_values(&self.input_buffer)?;
+        let partition_by_columns =
+            self.evaluate_partition_by_column_values(&self.input_buffer)?;
         let mut res_generated = vec![];
-        for window_agg_state in &self.window_agg_states{
+        for window_agg_state in &self.window_agg_states {
             let mut map = IndexMap::new();
-            for (key, value) in window_agg_state{
+            for (key, value) in window_agg_state {
                 // println!("key:{:?}", key);
                 // println!("value:{:?}", value.state.out_col.len());
                 map.insert(key, value.state.out_col.len());
             }
             res_generated.push(map);
-        };
+        }
         // for (key, elem) in &self.partition_buffers{
         //     println!("key: {:?}, elem:{:?}", key, elem.indices);
         //     println!("key: {:?}, len:{:?}", key, elem.indices.len());
@@ -123,9 +125,9 @@ impl PartitionByHandler for LinearPartitionByBoundedWindowStream {
         let mut counter: IndexMap<Vec<ScalarValue>, Vec<usize>> = IndexMap::new();
         let n_window_col = self.window_agg_states.len();
         let mut rows_gen = vec![vec![]; n_window_col];
-        for idx in 0..self.input_buffer.num_rows(){
+        for idx in 0..self.input_buffer.num_rows() {
             let row = get_row_at_idx(&partition_by_columns, idx)?;
-            let counts = if let Some(res) = counter.get_mut(&row){
+            let counts = if let Some(res) = counter.get_mut(&row) {
                 res
             } else {
                 let mut res: Vec<usize> = vec![0; n_window_col];
@@ -133,11 +135,16 @@ impl PartitionByHandler for LinearPartitionByBoundedWindowStream {
                 counter.get_mut(&row).unwrap()
             };
             let mut row_res = vec![];
-            for (window_idx, window_agg_state) in self.window_agg_states.iter().enumerate(){
+            for (window_idx, window_agg_state) in
+                self.window_agg_states.iter().enumerate()
+            {
                 // println!("row:{:?}", row);
                 let partition = window_agg_state.get(&row).unwrap();
-                if counts[window_idx]<partition.state.out_col.len() {
-                    let res = ScalarValue::try_from_array(&partition.state.out_col, counts[window_idx])?;
+                if counts[window_idx] < partition.state.out_col.len() {
+                    let res = ScalarValue::try_from_array(
+                        &partition.state.out_col,
+                        counts[window_idx],
+                    )?;
                     row_res.push(res);
                     counts[window_idx] += 1;
                 } else {
@@ -146,23 +153,23 @@ impl PartitionByHandler for LinearPartitionByBoundedWindowStream {
                 // println!("partition.out_col: {:?}", partition.state.out_col);
             }
             if row_res.len() != n_window_col {
-                break
+                break;
             }
-            for (col_idx, elem) in row_res.into_iter().enumerate(){
+            for (col_idx, elem) in row_res.into_iter().enumerate() {
                 rows_gen[col_idx].push(elem)
             }
             // println!("row_res:{:?}", row_res);
             // println!("counts: {:?}", counts);
         }
         println!("counter:{:?}", counter);
-        for (key, val) in counter.iter(){
-            if let Some(partition_batch_state) = self.partition_buffers.get_mut(key){
+        for (key, val) in counter.iter() {
+            if let Some(partition_batch_state) = self.partition_buffers.get_mut(key) {
                 partition_batch_state.n_out_row = *val.iter().min().unwrap();
                 // println!("partition_batch_state.n_out_row: {:?}", partition_batch_state.n_out_row);
             }
         }
         // println!("rows_gen:{:?}", rows_gen);
-        if rows_gen.is_empty(){
+        if rows_gen.is_empty() {
             Ok(None)
         } else {
             let n_out = rows_gen[0].len();
@@ -171,7 +178,9 @@ impl PartitionByHandler for LinearPartitionByBoundedWindowStream {
                 .iter()
                 .map(|elem| Ok(elem.slice(0, n_out)))
                 .chain(
-                    rows_gen.into_iter().map(|col|{ScalarValue::iter_to_array(col)})
+                    rows_gen
+                        .into_iter()
+                        .map(|col| ScalarValue::iter_to_array(col)),
                 )
                 .collect::<Result<Vec<_>>>()
                 .map(Some)
@@ -205,18 +214,21 @@ impl PartitionByHandler for LinearPartitionByBoundedWindowStream {
         let num_rows = record_batch.num_rows();
         println!("num_rows:{:?}", num_rows);
         if num_rows > 0 {
-            let partition_bys = self.evaluate_partition_by_column_values(&record_batch)?;
+            let partition_bys =
+                self.evaluate_partition_by_column_values(&record_batch)?;
             let partition_points =
                 self.evaluate_partition_points(num_rows, &partition_bys)?;
             for partition_range in partition_points {
-                let indices = (partition_range.start..partition_range.end).collect::<Vec<_>>();
-                let partition_row = get_row_at_idx(&partition_bys, partition_range.start)?;
+                let indices =
+                    (partition_range.start..partition_range.end).collect::<Vec<_>>();
+                let partition_row =
+                    get_row_at_idx(&partition_bys, partition_range.start)?;
                 let partition_batch = record_batch.slice(
                     partition_range.start,
                     partition_range.end - partition_range.start,
                 );
                 if let Some(partition_batch_state) =
-                self.partition_buffers.get_mut(&partition_row)
+                    self.partition_buffers.get_mut(&partition_row)
                 {
                     partition_batch_state.record_batch = merge_batches(
                         &partition_batch_state.record_batch,
@@ -282,11 +294,19 @@ impl LinearPartitionByBoundedWindowStream {
         }
     }
 
-    fn print_partition_batches(&self) -> Result<()>{
+    fn print_partition_batches(&self) -> Result<()> {
         println!("n_partition:{:?}", self.partition_buffers.len());
-        for (partition_key, partition_batch) in &self.partition_buffers{
-            println!("partition_key:{:?}, n_row: {:?}", partition_key, partition_batch.record_batch.num_rows());
-            println!("n_out_row: {:?}, len indices: {:?}", partition_batch.n_out_row, partition_batch.indices.len());
+        for (partition_key, partition_batch) in &self.partition_buffers {
+            println!(
+                "partition_key:{:?}, n_row: {:?}",
+                partition_key,
+                partition_batch.record_batch.num_rows()
+            );
+            println!(
+                "n_out_row: {:?}, len indices: {:?}",
+                partition_batch.n_out_row,
+                partition_batch.indices.len()
+            );
             // print_batches(&vec![partition_batch.record_batch.clone()])?;
         }
         Ok(())
@@ -295,7 +315,7 @@ impl LinearPartitionByBoundedWindowStream {
     fn compute_aggregates(&mut self) -> Result<RecordBatch> {
         // calculate window cols
         for (cur_window_expr, state) in
-        self.window_expr.iter().zip(&mut self.window_agg_states)
+            self.window_expr.iter().zip(&mut self.window_agg_states)
         {
             cur_window_expr.evaluate_stateful(&self.partition_buffers, state)?;
         }
@@ -337,7 +357,9 @@ impl LinearPartitionByBoundedWindowStream {
             Some(Err(e)) => Err(e),
             None => {
                 self.finished = true;
-                for (partition_row, partition_batch_state) in self.partition_buffers.iter_mut() {
+                for (partition_row, partition_batch_state) in
+                    self.partition_buffers.iter_mut()
+                {
                     println!("partition row is end set: {:?}", partition_row);
                     partition_batch_state.is_end = true;
                 }
@@ -428,7 +450,10 @@ impl LinearPartitionByBoundedWindowStream {
                 batch.slice(*n_prune, batch.num_rows() - n_prune);
 
             partition_batch_state.indices.drain(0..*n_prune);
-            println!("partition_batch_state.n_out_row:{:?}, n_prune{:?}", partition_batch_state.n_out_row, n_prune);
+            println!(
+                "partition_batch_state.n_out_row:{:?}, n_prune{:?}",
+                partition_batch_state.n_out_row, n_prune
+            );
             // partition_batch_state.n_out_row -= *n_prune;
 
             // Update state indices since we have pruned some rows from the beginning:
@@ -436,7 +461,10 @@ impl LinearPartitionByBoundedWindowStream {
                 let window_state =
                     window_agg_state.get_mut(partition_row).ok_or_else(err)?;
                 let mut state = &mut window_state.state;
-                println!("state.window_frame_range:{:?}, n_prune:{:?}", state.window_frame_range, n_prune);
+                println!(
+                    "state.window_frame_range:{:?}, n_prune:{:?}",
+                    state.window_frame_range, n_prune
+                );
                 state.window_frame_range = Range {
                     start: state.window_frame_range.start - n_prune,
                     end: state.window_frame_range.end - n_prune,
@@ -471,7 +499,6 @@ impl LinearPartitionByBoundedWindowStream {
         // field of `WindowAggState`. Given how many rows are emitted, we remove
         // these sections from state.
         for partition_window_agg_states in self.window_agg_states.iter_mut() {
-            let mut running_length = 0;
             // Remove `n_out` entries from the `out_col` field of `WindowAggState`.
             // Preserve per partition ordering by iterating in the order of insertion.
             // Do not generate a result for a new partition without emitting all results
@@ -479,32 +506,27 @@ impl LinearPartitionByBoundedWindowStream {
             for (
                 partition_key,
                 WindowState {
-                    state: WindowAggState { out_col, offset_pruned_rows, last_calculated_index, .. },
+                    state:
+                        WindowAggState {
+                            out_col,
+                            offset_pruned_rows,
+                            last_calculated_index,
+                            ..
+                        },
                     ..
                 },
             ) in partition_window_agg_states
             {
                 // TODO: we need to consider offset_pruned_rows in calculations also
-                let partition_batch = self.partition_buffers.get_mut(partition_key).unwrap();
-                assert_eq!(partition_batch.record_batch.num_rows(), partition_batch.indices.len());
-                // println!("partition key:{:?}", partition_key);
-                // println!("partition_batch indices:{:?}", partition_batch.indices);
-                // println!("n_out:{:?}", n_out);
-                // println!("out_col len:{:?}", out_col.len());
-                // println!("partition_batch.n_out_row: {:?}", partition_batch.n_out_row);
-                // let n_to_del = partition_batch.indices.iter().rposition(|elem| *elem>=n_out).unwrap_or(partition_batch.indices.len());
+                let partition_batch =
+                    self.partition_buffers.get_mut(partition_key).unwrap();
+                assert_eq!(
+                    partition_batch.record_batch.num_rows(),
+                    partition_batch.indices.len()
+                );
                 let n_to_del = partition_batch.n_out_row;
-                // println!("last_calculated_index:{:?}, n_to_del:{:?}, n_out: {:?}", last_calculated_index, n_to_del, partition_batch.n_out_row);
-                // println!("one bef:{:?}", partition_batch.indices[n_to_del-1]);
-                // println!("itself:{:?}", partition_batch.indices[n_to_del]);
                 let n_to_keep = out_col.len() - n_to_del;
                 *out_col = out_col.slice(n_to_del, n_to_keep);
-                // if running_length < n_out {
-                //     let n_to_del = min(out_col.len(), n_out - running_length);
-                //     let n_to_keep = out_col.len() - n_to_del;
-                //     *out_col = out_col.slice(n_to_del, n_to_keep);
-                //     running_length += n_to_del;
-                // }
             }
         }
         Ok(())
@@ -535,33 +557,41 @@ impl LinearPartitionByBoundedWindowStream {
             let mut res = vec![];
             let mut last_row = get_row_at_idx(&columns, 0)?;
             let mut start = 0;
-            for idx in 0..num_rows{
+            for idx in 0..num_rows {
                 let cur_row = get_row_at_idx(&columns, idx)?;
-                if !last_row.eq(&cur_row){
-                    res.push(Range{start, end: idx});
+                if !last_row.eq(&cur_row) {
+                    res.push(Range { start, end: idx });
                     start = idx;
                     last_row = cur_row;
                 }
             }
-            res.push(Range{start, end: num_rows});
+            res.push(Range {
+                start,
+                end: num_rows,
+            });
             res
         })
     }
 
-    fn evaluate_partition_by_column_values(&self, record_batch: &RecordBatch) -> Result<Vec<ArrayRef>>{
-        self.window_expr[0].partition_by().iter().map(|elem| {
-            let value_to_sort = elem.evaluate(record_batch)?;
-            let array_to_sort = match value_to_sort {
-                ColumnarValue::Array(array) => Ok(array),
-                ColumnarValue::Scalar(scalar) => {
-                    Err(DataFusionError::Plan(format!(
+    fn evaluate_partition_by_column_values(
+        &self,
+        record_batch: &RecordBatch,
+    ) -> Result<Vec<ArrayRef>> {
+        self.window_expr[0]
+            .partition_by()
+            .iter()
+            .map(|elem| {
+                let value_to_sort = elem.evaluate(record_batch)?;
+                let array_to_sort = match value_to_sort {
+                    ColumnarValue::Array(array) => Ok(array),
+                    ColumnarValue::Scalar(scalar) => Err(DataFusionError::Plan(format!(
                         "Sort operation is not applicable to scalar value {scalar}"
-                    )))
-                }
-            };
-            // elem.evaluate(&record_batch).unwrap()
-            array_to_sort
-        }).collect::<Result<Vec<ArrayRef>>>()
+                    ))),
+                };
+                // elem.evaluate(&record_batch).unwrap()
+                array_to_sort
+            })
+            .collect::<Result<Vec<ArrayRef>>>()
     }
 }
 
