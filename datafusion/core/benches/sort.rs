@@ -275,9 +275,11 @@ impl SortBenchCasePreservePartitioning {
         );
 
         self.runtime.block_on(async move {
-            let mut stream = plan.execute(0, task_ctx).unwrap();
-            while let Some(b) = stream.next().await {
-                b.expect("unexpected execution error");
+            for i in 0..self.partition_count {
+                let mut stream = plan.execute(i, task_ctx.clone()).unwrap();
+                while let Some(b) = stream.next().await {
+                    b.expect("unexpected execution error");
+                }
             }
         })
     }
