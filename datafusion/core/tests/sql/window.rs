@@ -1487,7 +1487,7 @@ async fn window_frame_creation() -> Result<()> {
     let results = df.collect().await;
     assert_contains!(
         results.err().unwrap().to_string(),
-        "External error: Execution error: GROUPS mode requires an ORDER BY clause"
+        "Execution error: GROUPS mode requires an ORDER BY clause"
     );
 
     Ok(())
