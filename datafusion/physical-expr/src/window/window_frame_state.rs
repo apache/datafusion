@@ -34,11 +34,13 @@ use std::sync::Arc;
 pub enum WindowFrameContext<'a> {
     // ROWS-frames are inherently stateless:
     Rows(&'a Arc<WindowFrame>),
+    // TODO: Fix this comment, briefly mention what the state is.
     // RANGE-frames will soon have a stateful implementation that is more efficient than a stateless one:
     Range {
         window_frame: &'a Arc<WindowFrame>,
         state: WindowFrameStateRange,
     },
+    // TODO: Fix this comment, briefly mention what the state is.
     // GROUPS-frames have a stateful implementation that is more efficient than a stateless one:
     Groups {
         window_frame: &'a Arc<WindowFrame>,
@@ -159,6 +161,8 @@ impl<'a> WindowFrameContext<'a> {
     }
 }
 
+// TODO: Fix this struct and the comment when we move "where-we-left-off"
+//       information from arguments/return values into the state.
 /// This structure encapsulates all the state information we require as we
 /// scan ranges of data while processing window frames. Currently we calculate
 /// things from scratch every time, but we will make this incremental in the future.
@@ -193,6 +197,9 @@ impl WindowFrameStateRange {
                 }
             }
             WindowFrameBound::CurrentRow => {
+                // TODO: Is this check at the right place? Is this being empty only a problem in this
+                //       match arm? Or is it even a problem here? Let's add a test to exercise this
+                //       if it doesn't exist, and if necessary, move this check to its right place.
                 if range_columns.is_empty() {
                     0
                 } else {
@@ -227,6 +234,9 @@ impl WindowFrameStateRange {
                     length,
                 )?,
             WindowFrameBound::CurrentRow => {
+                // TODO: Is this check at the right place? Is this being empty only a problem in this
+                //       match arm? Or is it even a problem here? Let's add a test to exercise this
+                //       if it doesn't exist, and if necessary, move this check to its right place.
                 if range_columns.is_empty() {
                     length
                 } else {
@@ -360,6 +370,8 @@ impl WindowFrameStateGroups {
         length: usize,
         idx: usize,
     ) -> Result<Range<usize>> {
+        // TODO: This check contradicts with the same check in the handling of CurrentRow
+        //       below. See my comment there, and fix this in the context of that.
         if range_columns.is_empty() {
             return Err(DataFusionError::Execution(
                 "GROUPS mode requires an ORDER BY clause".to_string(),
@@ -380,6 +392,9 @@ impl WindowFrameStateGroups {
                 }
             }
             WindowFrameBound::CurrentRow => {
+                // TODO: Is this check at the right place? Is this being empty only a problem in this
+                //       match arm? Or is it even a problem here? Let's add a test to exercise this
+                //       if it doesn't exist, and if necessary, move this check to its right place.
                 if range_columns.is_empty() {
                     0
                 } else {
@@ -408,6 +423,9 @@ impl WindowFrameStateGroups {
                     length,
                 )?,
             WindowFrameBound::CurrentRow => {
+                // TODO: Is this check at the right place? Is this being empty only a problem in this
+                //       match arm? Or is it even a problem here? Let's add a test to exercise this
+                //       if it doesn't exist, and if necessary, move this check to its right place.
                 if range_columns.is_empty() {
                     length
                 } else {
@@ -516,6 +534,9 @@ impl WindowFrameStateGroups {
 
         // Calculate index of the group boundary:
         Ok(match (SIDE, SEARCH_SIDE) {
+            // TODO: Is it normal that window frame start and end are asymmetric? You have
+            //       PRECEDING and FOLLOWING cases separate for end, but not for start.
+            //       Seems like this is OK, but let's make sure.
             // Window frame start:
             (true, _) => {
                 let group_idx = min(group_idx, self.group_start_indices.len());
