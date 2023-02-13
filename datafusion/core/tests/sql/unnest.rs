@@ -119,6 +119,9 @@ async fn unnest_distinct() -> Result<()> {
 
     let sql = "select distinct(unnest(tags)) from shapes order by 1;";
     let results = execute_to_batches(&ctx, sql).await;
+
+    // rustfmt makes it hard to read.
+    #[rustfmt::skip]
     let expected = vec![
         "+------+",
         "| tags |",
