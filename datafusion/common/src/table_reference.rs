@@ -200,7 +200,7 @@ impl<'a> TableReference<'a> {
     /// a single double quote in the identifier)
     pub fn parse_str(s: &'a str) -> Self {
         let mut parts = parse_identifiers(s)
-            .unwrap_or(vec![])
+            .unwrap_or_default()
             .into_iter()
             .map(|id| match id.quote_style {
                 Some(_) => id.value,

@@ -124,7 +124,7 @@ impl BoundedWindowAggExec {
         let mut result = vec![];
         // All window exprs have the same partition by, so we just use the first one:
         let partition_by = self.window_expr()[0].partition_by();
-        let sort_keys = self.output_ordering().unwrap_or(&[]);
+        let sort_keys = self.output_ordering().unwrap_or(self.sort_keys.as_deref().unwrap_or(&[]));
         for item in partition_by {
             if let Some(a) = sort_keys.iter().find(|&e| e.expr.eq(item)) {
                 result.push(a.clone());
@@ -169,13 +169,16 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirements>>> {
-        let partition_keys = self.window_expr()[0].partition_by();
+        let expr_partition_keys = self.window_expr()[0].partition_by();
+        let expr_order_keys = self.window_expr()[0].order_by();
         let requirements = self.sort_keys.as_deref().map(|ordering| {
             ordering
                 .iter()
                 .map(|o| {
-                    let is_partition = partition_keys.iter().any(|e| e.eq(&o.expr));
-                    if is_partition {
+                    let is_partition_only =
+                        expr_partition_keys.iter().any(|e| e.eq(&o.expr))
+                            && !expr_order_keys.iter().any(|e| e.expr.eq(&o.expr));
+                    if is_partition_only {
                         PhysicalSortRequirements {
                             expr: o.expr.clone(),
                             sort_options: None,
@@ -539,7 +542,6 @@ impl SortedPartitionByBoundedWindowStream {
                 }
                 cur_window_expr_out_result_len
             })
-            .into_iter()
             .min()
             .unwrap_or(0)
     }

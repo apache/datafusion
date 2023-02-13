@@ -842,8 +842,8 @@ mod tests {
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
             "SortExec: [c1@0 ASC], global=false",
-            "ProjectionExec: expr=[c1@0 as c1]",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ProjectionExec: expr=[c1@0 as c1]",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 
@@ -878,7 +878,6 @@ mod tests {
             // Expect repartition on the input to the sort (as it can benefit from additional parallelism)
             "SortExec: [c1@0 ASC], global=false",
             "ProjectionExec: expr=[c1@0 as c1]",
-            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 

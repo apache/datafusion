@@ -323,7 +323,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Cos => Arc::new(math_expressions::cos),
         BuiltinScalarFunction::Exp => Arc::new(math_expressions::exp),
         BuiltinScalarFunction::Floor => Arc::new(math_expressions::floor),
-        BuiltinScalarFunction::Log => Arc::new(math_expressions::log10),
         BuiltinScalarFunction::Ln => Arc::new(math_expressions::ln),
         BuiltinScalarFunction::Log10 => Arc::new(math_expressions::log10),
         BuiltinScalarFunction::Log2 => Arc::new(math_expressions::log2),
@@ -339,6 +338,9 @@ pub fn create_physical_fun(
         }
         BuiltinScalarFunction::Atan2 => {
             Arc::new(|args| make_scalar_function(math_expressions::atan2)(args))
+        }
+        BuiltinScalarFunction::Log => {
+            Arc::new(|args| make_scalar_function(math_expressions::log)(args))
         }
 
         // string functions

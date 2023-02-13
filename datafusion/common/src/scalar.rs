@@ -1526,7 +1526,6 @@ impl ScalarValue {
             DataType::Dictionary(key_type, value_type) => {
                 // create the values array
                 let value_scalars = scalars
-                    .into_iter()
                     .map(|scalar| match scalar {
                         ScalarValue::Dictionary(inner_key_type, scalar) => {
                             if &inner_key_type == key_type {
@@ -1704,7 +1703,6 @@ impl ScalarValue {
     ) -> Decimal128Array {
         std::iter::repeat(value)
             .take(size)
-            .into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(precision, scale)
             .unwrap()

@@ -205,7 +205,9 @@ impl PhysicalOptimizerRule for TopDownEnforceSorting {
                     sort_exec.output_ordering(),
                     || sort_exec.input().equivalence_properties(),
                 ) {
-                    Ok(Some(Arc::new(TombStoneExec::new(sort_exec.input().clone()))))
+                    Ok(Some(Arc::new(TombStoneExec::new(
+                        sort_exec.input().clone(),
+                    ))))
                 } else {
                     Ok(None)
                 }
@@ -261,8 +263,7 @@ fn ensure_sorting(
                 sort_exec.input().output_ordering(),
                 sort_exec.output_ordering(),
                 || sort_exec.input().equivalence_properties(),
-            )
-            {
+            ) {
                 println!("remove sort_exec due to child already satisfy");
                 return Ok(Some(PlanWithSortRequirements {
                     plan: Arc::new(TombStoneExec::new(sort_exec.input().clone())),
@@ -1170,6 +1171,8 @@ mod tests {
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::physical_plan::aggregates::PhysicalGroupBy;
+    use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
     use crate::physical_plan::displayable;
     use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
     use crate::physical_plan::filter::FilterExec;
@@ -2049,20 +2052,6 @@ mod tests {
         Arc::new(FilterExec::try_new(predicate, input).unwrap())
     }
 
-    fn limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-        Arc::new(GlobalLimitExec::new(
-            Arc::new(LocalLimitExec::new(input, 100)),
-            0,
-            Some(100),
-        ))
-    }
-
-    fn repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-        Arc::new(
-            RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(10)).unwrap(),
-        )
-    }
-
     fn window_exec(
         col_name: &str,
         sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
@@ -2137,5 +2126,37 @@ mod tests {
 
     fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {
         Arc::new(UnionExec::new(input))
+    }
+
+    fn limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        global_limit_exec(local_limit_exec(input))
+    }
+
+    fn local_limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(LocalLimitExec::new(input, 100))
+    }
+
+    fn global_limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(GlobalLimitExec::new(input, 0, Some(100)))
+    }
+
+    fn repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(
+            RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(10)).unwrap(),
+        )
+    }
+
+    fn aggregate_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        let schema = input.schema();
+        Arc::new(
+            AggregateExec::try_new(
+                AggregateMode::Final,
+                PhysicalGroupBy::default(),
+                vec![],
+                input,
+                schema,
+            )
+            .unwrap(),
+        )
     }
 }
