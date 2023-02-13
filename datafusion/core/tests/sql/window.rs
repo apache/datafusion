@@ -1477,6 +1477,19 @@ async fn window_frame_creation() -> Result<()> {
         "External error: Internal error: Operator - is not implemented for types UInt32(1) and Utf8(\"1 DAY\"). This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
     );
 
+    let df = ctx
+        .sql(
+            "SELECT
+                COUNT(c1) OVER(groups BETWEEN current row and UNBOUNDED FOLLOWING)
+                FROM aggregate_test_100;",
+        )
+        .await?;
+    let results = df.collect().await;
+    assert_contains!(
+        results.err().unwrap().to_string(),
+        "External error: Execution error: GROUPS mode requires an ORDER BY clause"
+    );
+
     Ok(())
 }
 

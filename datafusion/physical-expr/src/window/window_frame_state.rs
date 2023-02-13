@@ -34,14 +34,14 @@ use std::sync::Arc;
 pub enum WindowFrameContext<'a> {
     // ROWS-frames are inherently stateless:
     Rows(&'a Arc<WindowFrame>),
-    // TODO: Fix this comment, briefly mention what the state is.
-    // RANGE-frames will soon have a stateful implementation that is more efficient than a stateless one:
+    // RANGE-frames store window frame to calculate window frame boundaries
+    // In `state`, it keeps track of `last_range` calculated to increase search speed.
     Range {
         window_frame: &'a Arc<WindowFrame>,
         state: WindowFrameStateRange,
     },
-    // TODO: Fix this comment, briefly mention what the state is.
-    // GROUPS-frames have a stateful implementation that is more efficient than a stateless one:
+    // GROUPS-frames store window frame to calculate window frame boundaries
+    // In `state`, we store the boundaries of each group from the start of the table.
     Groups {
         window_frame: &'a Arc<WindowFrame>,
         state: WindowFrameStateGroups,
@@ -50,12 +50,16 @@ pub enum WindowFrameContext<'a> {
 
 impl<'a> WindowFrameContext<'a> {
     /// Create a new default state for the given window frame.
-    pub fn new(window_frame: &'a Arc<WindowFrame>) -> Self {
+    pub fn new(
+        window_frame: &'a Arc<WindowFrame>,
+        sort_options: Vec<SortOptions>,
+        last_range: Range<usize>,
+    ) -> Self {
         match window_frame.units {
             WindowFrameUnits::Rows => WindowFrameContext::Rows(window_frame),
             WindowFrameUnits::Range => WindowFrameContext::Range {
                 window_frame,
-                state: WindowFrameStateRange::default(),
+                state: WindowFrameStateRange::new(sort_options, last_range),
             },
             WindowFrameUnits::Groups => WindowFrameContext::Groups {
                 window_frame,
@@ -68,10 +72,8 @@ impl<'a> WindowFrameContext<'a> {
     pub fn calculate_range(
         &mut self,
         range_columns: &[ArrayRef],
-        sort_options: &[SortOptions],
         length: usize,
         idx: usize,
-        last_range: &Range<usize>,
     ) -> Result<Range<usize>> {
         match *self {
             WindowFrameContext::Rows(window_frame) => {
@@ -83,14 +85,7 @@ impl<'a> WindowFrameContext<'a> {
             WindowFrameContext::Range {
                 window_frame,
                 ref mut state,
-            } => state.calculate_range(
-                window_frame,
-                range_columns,
-                sort_options,
-                length,
-                idx,
-                last_range,
-            ),
+            } => state.calculate_range(window_frame, range_columns, length, idx),
             // Sort options is not used in GROUPS mode calculations as the
             // inequality of two rows indicates a group change, and ordering
             // or position of NULLs do not impact inequality.
@@ -161,24 +156,35 @@ impl<'a> WindowFrameContext<'a> {
     }
 }
 
-// TODO: Fix this struct and the comment when we move "where-we-left-off"
-//       information from arguments/return values into the state.
 /// This structure encapsulates all the state information we require as we
-/// scan ranges of data while processing window frames. Currently we calculate
-/// things from scratch every time, but we will make this incremental in the future.
+/// scan ranges of data while processing window frames.
+/// `last_range` keeps the range calculated at the last search. Since we know that range only can progress forward
+/// at the next search we start from `last_range`. This makes linear search amortized constant.
+/// `sort_options` keeps the ordering of the columns in the ORDER BY clause. This information is used to calculate
+/// range boundary,
 #[derive(Debug, Default)]
-pub struct WindowFrameStateRange {}
+pub struct WindowFrameStateRange {
+    last_range: Range<usize>,
+    sort_options: Vec<SortOptions>,
+}
 
 impl WindowFrameStateRange {
+    /// Creates new struct for range calculation
+    fn new(sort_options: Vec<SortOptions>, last_range: Range<usize>) -> Self {
+        Self {
+            // Keeps the search range we last calculated
+            last_range,
+            sort_options,
+        }
+    }
+
     /// This function calculates beginning/ending indices for the frame of the current row.
     fn calculate_range(
         &mut self,
         window_frame: &Arc<WindowFrame>,
         range_columns: &[ArrayRef],
-        sort_options: &[SortOptions],
         length: usize,
         idx: usize,
-        last_range: &Range<usize>,
     ) -> Result<Range<usize>> {
         let start = match window_frame.start_bound {
             WindowFrameBound::Preceding(ref n) => {
@@ -188,27 +194,25 @@ impl WindowFrameStateRange {
                 } else {
                     self.calculate_index_of_row::<true, true>(
                         range_columns,
-                        sort_options,
                         idx,
                         Some(n),
-                        last_range,
                         length,
                     )?
                 }
             }
             WindowFrameBound::CurrentRow => {
-                // TODO: Is this check at the right place? Is this being empty only a problem in this
-                //       match arm? Or is it even a problem here? Let's add a test to exercise this
-                //       if it doesn't exist, and if necessary, move this check to its right place.
+                // If RANGE queries contain `CURRENT ROW` clause in the window frame start,
+                // when there is no ordering (e.g `range_columns` is empty)
+                // Window frame start is treated as UNBOUNDED PRECEDING. As an example
+                // OVER(RANGE BETWEEN CURRENT ROW and UNBOUNDED FOLLOWING) is treated as
+                // OVER(RANGE BETWEEN UNBOUNDED PRECEDING and UNBOUNDED FOLLOWING)
                 if range_columns.is_empty() {
                     0
                 } else {
                     self.calculate_index_of_row::<true, true>(
                         range_columns,
-                        sort_options,
                         idx,
                         None,
-                        last_range,
                         length,
                     )?
                 }
@@ -216,10 +220,8 @@ impl WindowFrameStateRange {
             WindowFrameBound::Following(ref n) => self
                 .calculate_index_of_row::<true, false>(
                     range_columns,
-                    sort_options,
                     idx,
                     Some(n),
-                    last_range,
                     length,
                 )?,
         };
@@ -227,25 +229,23 @@ impl WindowFrameStateRange {
             WindowFrameBound::Preceding(ref n) => self
                 .calculate_index_of_row::<false, true>(
                     range_columns,
-                    sort_options,
                     idx,
                     Some(n),
-                    last_range,
                     length,
                 )?,
             WindowFrameBound::CurrentRow => {
-                // TODO: Is this check at the right place? Is this being empty only a problem in this
-                //       match arm? Or is it even a problem here? Let's add a test to exercise this
-                //       if it doesn't exist, and if necessary, move this check to its right place.
+                // If RANGE queries contain `CURRENT ROW` clause in the window frame end,
+                // when there is no ordering (e.g `range_columns` is empty)
+                // Window frame end is treated as UNBOUNDED FOLLOWING. As an example
+                // OVER(RANGE BETWEEN UNBOUNDED PRECEDING and CURRENT ROW) is treated as
+                // OVER(RANGE BETWEEN UNBOUNDED PRECEDING and UNBOUNDED FOLLOWING)
                 if range_columns.is_empty() {
                     length
                 } else {
                     self.calculate_index_of_row::<false, false>(
                         range_columns,
-                        sort_options,
                         idx,
                         None,
-                        last_range,
                         length,
                     )?
                 }
@@ -257,15 +257,16 @@ impl WindowFrameStateRange {
                 } else {
                     self.calculate_index_of_row::<false, false>(
                         range_columns,
-                        sort_options,
                         idx,
                         Some(n),
-                        last_range,
                         length,
                     )?
                 }
             }
         };
+        // Store last calculated range, to start where we left of in the next iteration
+        self.last_range.start = start;
+        self.last_range.end = end;
         Ok(Range { start, end })
     }
 
@@ -275,15 +276,14 @@ impl WindowFrameStateRange {
     fn calculate_index_of_row<const SIDE: bool, const SEARCH_SIDE: bool>(
         &mut self,
         range_columns: &[ArrayRef],
-        sort_options: &[SortOptions],
         idx: usize,
         delta: Option<&ScalarValue>,
-        last_range: &Range<usize>,
         length: usize,
     ) -> Result<usize> {
         let current_row_values = get_row_at_idx(range_columns, idx)?;
         let end_range = if let Some(delta) = delta {
-            let is_descending: bool = sort_options
+            let is_descending: bool = self
+                .sort_options
                 .first()
                 .ok_or_else(|| {
                     DataFusionError::Internal(
@@ -316,12 +316,12 @@ impl WindowFrameStateRange {
             current_row_values
         };
         let search_start = if SIDE {
-            last_range.start
+            self.last_range.start
         } else {
-            last_range.end
+            self.last_range.end
         };
         let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
-            let cmp = compare_rows(current, target, sort_options)?;
+            let cmp = compare_rows(current, target, &self.sort_options)?;
             Ok(if SIDE { cmp.is_lt() } else { cmp.is_le() })
         };
         search_in_slice(range_columns, &end_range, compare_fn, search_start, length)
@@ -370,8 +370,8 @@ impl WindowFrameStateGroups {
         length: usize,
         idx: usize,
     ) -> Result<Range<usize>> {
-        // TODO: This check contradicts with the same check in the handling of CurrentRow
-        //       below. See my comment there, and fix this in the context of that.
+        // Groups mode should have an ordering
+        // e.g `range_columns` shouldn't be empty
         if range_columns.is_empty() {
             return Err(DataFusionError::Execution(
                 "GROUPS mode requires an ORDER BY clause".to_string(),
@@ -391,21 +391,12 @@ impl WindowFrameStateGroups {
                     )?
                 }
             }
-            WindowFrameBound::CurrentRow => {
-                // TODO: Is this check at the right place? Is this being empty only a problem in this
-                //       match arm? Or is it even a problem here? Let's add a test to exercise this
-                //       if it doesn't exist, and if necessary, move this check to its right place.
-                if range_columns.is_empty() {
-                    0
-                } else {
-                    self.calculate_index_of_row::<true, true>(
-                        range_columns,
-                        idx,
-                        None,
-                        length,
-                    )?
-                }
-            }
+            WindowFrameBound::CurrentRow => self.calculate_index_of_row::<true, true>(
+                range_columns,
+                idx,
+                None,
+                length,
+            )?,
             WindowFrameBound::Following(ref n) => self
                 .calculate_index_of_row::<true, false>(
                     range_columns,
@@ -422,21 +413,12 @@ impl WindowFrameStateGroups {
                     Some(n),
                     length,
                 )?,
-            WindowFrameBound::CurrentRow => {
-                // TODO: Is this check at the right place? Is this being empty only a problem in this
-                //       match arm? Or is it even a problem here? Let's add a test to exercise this
-                //       if it doesn't exist, and if necessary, move this check to its right place.
-                if range_columns.is_empty() {
-                    length
-                } else {
-                    self.calculate_index_of_row::<false, false>(
-                        range_columns,
-                        idx,
-                        None,
-                        length,
-                    )?
-                }
-            }
+            WindowFrameBound::CurrentRow => self.calculate_index_of_row::<false, false>(
+                range_columns,
+                idx,
+                None,
+                length,
+            )?,
             WindowFrameBound::Following(ref n) => {
                 if n.is_null() {
                     // UNBOUNDED FOLLOWING
@@ -534,9 +516,6 @@ impl WindowFrameStateGroups {
 
         // Calculate index of the group boundary:
         Ok(match (SIDE, SEARCH_SIDE) {
-            // TODO: Is it normal that window frame start and end are asymmetric? You have
-            //       PRECEDING and FOLLOWING cases separate for end, but not for start.
-            //       Seems like this is OK, but let's make sure.
             // Window frame start:
             (true, _) => {
                 let group_idx = min(group_idx, self.group_start_indices.len());

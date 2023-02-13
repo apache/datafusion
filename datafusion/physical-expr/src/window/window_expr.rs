@@ -162,18 +162,10 @@ pub trait AggregateWindowExpr: WindowExpr {
 
     /// Evaluates the window function against the batch.
     fn aggregate_evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        let mut window_frame_ctx = WindowFrameContext::new(self.get_window_frame());
         let mut accumulator = self.get_accumulator()?;
         let mut last_range = Range { start: 0, end: 0 };
         let mut idx = 0;
-        self.get_result_column(
-            &mut accumulator,
-            batch,
-            &mut window_frame_ctx,
-            &mut last_range,
-            &mut idx,
-            false,
-        )
+        self.get_result_column(&mut accumulator, batch, &mut last_range, &mut idx, false)
     }
 
     /// Statefully evaluates the window function against the batch. Maintains
@@ -207,11 +199,9 @@ pub trait AggregateWindowExpr: WindowExpr {
             let mut state = &mut window_state.state;
 
             let record_batch = &partition_batch_state.record_batch;
-            let mut window_frame_ctx = WindowFrameContext::new(self.get_window_frame());
             let out_col = self.get_result_column(
                 accumulator,
                 record_batch,
-                &mut window_frame_ctx,
                 &mut state.window_frame_range,
                 &mut state.last_calculated_index,
                 !partition_batch_state.is_end,
@@ -230,7 +220,6 @@ pub trait AggregateWindowExpr: WindowExpr {
         &self,
         accumulator: &mut Box<dyn Accumulator>,
         record_batch: &RecordBatch,
-        window_frame_ctx: &mut WindowFrameContext,
         last_range: &mut Range<usize>,
         idx: &mut usize,
         not_end: bool,
@@ -240,15 +229,15 @@ pub trait AggregateWindowExpr: WindowExpr {
         let length = values[0].len();
         let sort_options: Vec<SortOptions> =
             self.order_by().iter().map(|o| o.options).collect();
+        let mut window_frame_ctx = WindowFrameContext::new(
+            self.get_window_frame(),
+            sort_options,
+            // Start search from the last range
+            last_range.clone(),
+        );
         let mut row_wise_results: Vec<ScalarValue> = vec![];
         while *idx < length {
-            let cur_range = window_frame_ctx.calculate_range(
-                &order_bys,
-                &sort_options,
-                length,
-                *idx,
-                last_range,
-            )?;
+            let cur_range = window_frame_ctx.calculate_range(&order_bys, length, *idx)?;
             // Exit if the range extends all the way:
             if cur_range.end == length && not_end {
                 break;
