@@ -1464,20 +1464,48 @@ async fn window_frame_creation() -> Result<()> {
         "Execution error: Invalid window frame: start bound (2 FOLLOWING) cannot be larger than end bound (1 FOLLOWING)"
     );
 
-    let df = ctx
-        .sql(
-            "SELECT
-                COUNT(c1) OVER (ORDER BY c2 RANGE BETWEEN '1 DAY' PRECEDING AND '2 DAY' FOLLOWING)
-                FROM aggregate_test_100;",
-        )
-        .await?;
-    let results = df.collect().await;
-    assert_contains!(
-        results.err().unwrap().to_string(),
-        "Internal error: Operator - is not implemented for types UInt32(1) and Utf8(\"1 DAY\"). This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
-    );
-
     Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_creation_type_checking() -> Result<()> {
+    // The following query has type error. We should test the error could be detected
+    // from either the logical plan (when `skip_failed_rules` is set to `false`) or
+    // the physical plan (when `skip_failed_rules` is set to `true`).
+
+    // We should remove the type checking in physical plan after we don't skip
+    // the failed optimizing rules by default. (see more in https://github.com/apache/arrow-datafusion/issues/4615)
+    async fn check_query(skip_failed_rules: bool, err_msg: &str) -> Result<()> {
+        use datafusion_common::ScalarValue::Boolean;
+        let config = SessionConfig::new().set(
+            "datafusion.optimizer.skip_failed_rules",
+            Boolean(Some(skip_failed_rules)),
+        );
+        let ctx = SessionContext::with_config(config);
+        register_aggregate_csv(&ctx).await?;
+        let df = ctx
+            .sql(
+                "SELECT
+                    COUNT(c1) OVER (ORDER BY c2 RANGE BETWEEN '1 DAY' PRECEDING AND '2 DAY' FOLLOWING)
+                    FROM aggregate_test_100;",
+            )
+            .await?;
+        let results = df.collect().await;
+        assert_contains!(results.err().unwrap().to_string(), err_msg);
+        Ok(())
+    }
+
+    // Error is returned from the physical plan.
+    check_query(
+        true,
+        "Internal error: Operator - is not implemented for types UInt32(1) and Utf8(\"1 DAY\")."
+    ).await?;
+
+    // Error is returned from the logical plan.
+    check_query(
+        false,
+        "Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: Arrow error: Cast error: Cannot cast string '1 DAY' to value of UInt32 type"
+    ).await
 }
 
 #[tokio::test]
