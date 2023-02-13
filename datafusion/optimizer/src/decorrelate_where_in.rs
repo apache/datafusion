@@ -17,12 +17,11 @@
 
 use crate::alias::AliasGenerator;
 use crate::optimizer::ApplyOrder;
-use crate::utils::{conjunction, only_or_err, split_conjunction};
+use crate::utils::{conjunction, extract_join_filters, only_or_err, split_conjunction};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{context, Column, DataFusionError, Result};
 use datafusion_expr::expr_rewriter::{replace_col, unnormalize_col};
 use datafusion_expr::logical_plan::{JoinType, Projection, Subquery};
-use datafusion_expr::utils::check_all_column_from_schema;
 use datafusion_expr::{Expr, Filter, LogicalPlan, LogicalPlanBuilder};
 use log::debug;
 use std::collections::{BTreeSet, HashMap};
@@ -218,34 +217,6 @@ fn optimize_where_in(
 
     debug!("where in optimized:\n{}", new_plan.display_indent());
     Ok(new_plan)
-}
-
-fn extract_join_filters(maybe_filter: &LogicalPlan) -> Result<(Vec<Expr>, LogicalPlan)> {
-    if let LogicalPlan::Filter(plan_filter) = maybe_filter {
-        let input_schema = plan_filter.input.schema();
-        let subquery_filter_exprs = split_conjunction(&plan_filter.predicate);
-
-        let mut join_filters: Vec<Expr> = vec![];
-        let mut subquery_filters: Vec<Expr> = vec![];
-        for expr in subquery_filter_exprs {
-            let cols = expr.to_columns()?;
-            if check_all_column_from_schema(&cols, input_schema.clone()) {
-                subquery_filters.push(expr.clone());
-            } else {
-                join_filters.push(expr.clone())
-            }
-        }
-
-        // if the subquery still has filter expressions, restore them.
-        let mut plan = LogicalPlanBuilder::from((*plan_filter.input).clone());
-        if let Some(expr) = conjunction(subquery_filters) {
-            plan = plan.filter(expr)?
-        }
-
-        Ok((join_filters, plan.build()?))
-    } else {
-        Ok((vec![], maybe_filter.clone()))
-    }
 }
 
 fn remove_duplicated_filter(filters: Vec<Expr>, in_predicate: Expr) -> Vec<Expr> {

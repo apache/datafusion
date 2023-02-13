@@ -23,10 +23,11 @@ use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr::{BinaryExpr, Sort};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::expr_visitor::inspect_expr_pre;
+use datafusion_expr::logical_plan::LogicalPlanBuilder;
+use datafusion_expr::utils::{check_all_column_from_schema, from_plan};
 use datafusion_expr::{
     and,
     logical_plan::{Filter, LogicalPlan},
-    utils::from_plan,
     Expr, Operator,
 };
 use std::collections::HashSet;
@@ -466,6 +467,36 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
             lhs.merge(rhs);
             lhs
         })
+}
+
+pub(crate) fn extract_join_filters(
+    maybe_filter: &LogicalPlan,
+) -> Result<(Vec<Expr>, LogicalPlan)> {
+    if let LogicalPlan::Filter(plan_filter) = maybe_filter {
+        let input_schema = plan_filter.input.schema();
+        let subquery_filter_exprs = split_conjunction(&plan_filter.predicate);
+
+        let mut join_filters: Vec<Expr> = vec![];
+        let mut subquery_filters: Vec<Expr> = vec![];
+        for expr in subquery_filter_exprs {
+            let cols = expr.to_columns()?;
+            if check_all_column_from_schema(&cols, input_schema.clone()) {
+                subquery_filters.push(expr.clone());
+            } else {
+                join_filters.push(expr.clone())
+            }
+        }
+
+        // if the subquery still has filter expressions, restore them.
+        let mut plan = LogicalPlanBuilder::from((*plan_filter.input).clone());
+        if let Some(expr) = conjunction(subquery_filters) {
+            plan = plan.filter(expr)?
+        }
+
+        Ok((join_filters, plan.build()?))
+    } else {
+        Ok((vec![], maybe_filter.clone()))
+    }
 }
 
 #[cfg(test)]
