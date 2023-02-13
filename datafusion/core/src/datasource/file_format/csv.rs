@@ -184,7 +184,7 @@ async fn read_to_delimited_chunks(
         Ok(s) => newline_delimited_stream(s.into_stream())
             .map_err(|e| DataFusionError::External(Box::new(e)))
             .left_stream(),
-        Err(e) => futures::stream::iter(vec![Err(e)]).right_stream(),
+        Err(e) => futures::stream::once(futures::future::ready(Err(e))).right_stream(),
     }
 }
 
