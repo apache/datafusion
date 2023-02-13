@@ -200,23 +200,12 @@ impl WindowFrameStateRange {
                     )?
                 }
             }
-            WindowFrameBound::CurrentRow => {
-                // If RANGE queries contain `CURRENT ROW` clause in the window frame start,
-                // when there is no ordering (e.g `range_columns` is empty)
-                // Window frame start is treated as UNBOUNDED PRECEDING. As an example
-                // OVER(RANGE BETWEEN CURRENT ROW and UNBOUNDED FOLLOWING) is treated as
-                // OVER(RANGE BETWEEN UNBOUNDED PRECEDING and UNBOUNDED FOLLOWING)
-                if range_columns.is_empty() {
-                    0
-                } else {
-                    self.calculate_index_of_row::<true, true>(
-                        range_columns,
-                        idx,
-                        None,
-                        length,
-                    )?
-                }
-            }
+            WindowFrameBound::CurrentRow => self.calculate_index_of_row::<true, true>(
+                range_columns,
+                idx,
+                None,
+                length,
+            )?,
             WindowFrameBound::Following(ref n) => self
                 .calculate_index_of_row::<true, false>(
                     range_columns,
@@ -233,23 +222,12 @@ impl WindowFrameStateRange {
                     Some(n),
                     length,
                 )?,
-            WindowFrameBound::CurrentRow => {
-                // If RANGE queries contain `CURRENT ROW` clause in the window frame end,
-                // when there is no ordering (e.g `range_columns` is empty)
-                // Window frame end is treated as UNBOUNDED FOLLOWING. As an example
-                // OVER(RANGE BETWEEN UNBOUNDED PRECEDING and CURRENT ROW) is treated as
-                // OVER(RANGE BETWEEN UNBOUNDED PRECEDING and UNBOUNDED FOLLOWING)
-                if range_columns.is_empty() {
-                    length
-                } else {
-                    self.calculate_index_of_row::<false, false>(
-                        range_columns,
-                        idx,
-                        None,
-                        length,
-                    )?
-                }
-            }
+            WindowFrameBound::CurrentRow => self.calculate_index_of_row::<false, false>(
+                range_columns,
+                idx,
+                None,
+                length,
+            )?,
             WindowFrameBound::Following(ref n) => {
                 if n.is_null() {
                     // UNBOUNDED FOLLOWING

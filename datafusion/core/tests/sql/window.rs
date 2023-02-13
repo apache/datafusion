@@ -1035,21 +1035,22 @@ async fn window_frame_ranges_unbounded_preceding_following() -> Result<()> {
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
                SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as sum1, \
-               COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as cnt1 \
+               COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as cnt1, \
+               COUNT(c1) OVER(RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) as cnt2
                FROM aggregate_test_100 \
                ORDER BY c9 \
                LIMIT 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------+------+",
-        "| sum1 | cnt1 |",
-        "+------+------+",
-        "| 285  | 100  |",
-        "| 123  | 63   |",
-        "| 285  | 100  |",
-        "| 123  | 63   |",
-        "| 123  | 63   |",
-        "+------+------+",
+        "+------+------+------+",
+        "| sum1 | cnt1 | cnt2 |",
+        "+------+------+------+",
+        "| 285  | 100  | 100  |",
+        "| 123  | 63   | 100  |",
+        "| 285  | 100  | 100  |",
+        "| 123  | 63   | 100  |",
+        "| 123  | 63   | 100  |",
+        "+------+------+------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -1480,7 +1481,7 @@ async fn window_frame_creation() -> Result<()> {
     let df = ctx
         .sql(
             "SELECT
-                COUNT(c1) OVER(groups BETWEEN current row and UNBOUNDED FOLLOWING)
+                COUNT(c1) OVER(GROUPS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
                 FROM aggregate_test_100;",
         )
         .await?;
