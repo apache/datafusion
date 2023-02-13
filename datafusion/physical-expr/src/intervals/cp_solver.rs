@@ -17,6 +17,7 @@
 
 //! Constraint propagator/solver for custom PhysicalExpr graphs.
 
+use std::collections::{HashSet, VecDeque};
 use std::fmt::{Display, Formatter};
 use std::ops::Index;
 use std::sync::Arc;
@@ -26,7 +27,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::{DefaultIx, StableGraph};
-use petgraph::visit::{Bfs, DfsPostOrder};
+use petgraph::visit::{Bfs, DfsPostOrder, EdgeRef, VisitMap, Visitable};
 use petgraph::Outgoing;
 
 use crate::expressions::{BinaryExpr, CastExpr, Literal};
@@ -276,6 +277,10 @@ impl ExprIntervalGraph {
         Ok(Self { graph, root })
     }
 
+    pub fn node_count(&self) -> usize {
+        self.graph.node_count()
+    }
+
     // Sometimes, we do not want to calculate and/or propagate intervals all
     // way down to leaf expressions. For example, assume that we have a
     // `SymmetricHashJoin` which has a child with an output ordering like:
@@ -347,16 +352,57 @@ impl ExprIntervalGraph {
             if let Some(value) = exprs.iter().position(|e| expr.eq(e)) {
                 // Update the node index of the associated `PhysicalExpr`:
                 expr_node_indices[value].1 = node.index();
-                for n_index in graph.neighbors_directed(node, Outgoing) {
+                for edge_reference in graph.edges_directed(node, Outgoing) {
                     // Slate the child for removal, do not remove immediately.
-                    removals.push(n_index);
+                    removals.push(edge_reference.id());
                 }
             }
         }
-        for node in removals {
-            self.graph.remove_node(node);
+        for edge_reference in removals {
+            self.graph.remove_edge(edge_reference);
         }
+        // Get the set of node indices connected to the root node
+        let connected_nodes = self.connected_nodes();
+        // Remove nodes not connected to the root node
+        self.graph
+            .retain_nodes(|_graph, index| connected_nodes.contains(&index));
         expr_node_indices
+    }
+
+    /// Returns a set of node indices connected to the root node
+    /// via any directed edges in the graph.
+    fn connected_nodes(&self) -> HashSet<NodeIndex> {
+        // Create a visit map to keep track of visited nodes.
+        let mut visited = self.graph.visit_map();
+        // Create a new set to store the connected nodes.
+        let mut nodes = HashSet::new();
+        // Create a queue to store nodes to be visited.
+        let mut visit_next = VecDeque::new();
+        // Start the traversal from the root node.
+        visit_next.push_back(self.root);
+        // Add the root node to the set of connected nodes.
+        nodes.insert(self.root);
+        // Continue the traversal while there are nodes to be visited.
+        while let Some(node) = visit_next.pop_back() {
+            // If the node has already been visited, skip it.
+            if visited.is_visited(&node) {
+                continue;
+            }
+            // For each outgoing edge from the current node, add the target node to the set of connected nodes
+            // and add it to the queue of nodes to be visited if it hasn't been visited already.
+            for edge in self.graph.edges(node) {
+                let next = edge.target();
+                if visited.is_visited(&next) {
+                    continue;
+                }
+                nodes.insert(next);
+                visit_next.push_back(next);
+            }
+            // Mark the current node as visited.
+            visited.visit(node);
+        }
+        // Return the set of connected nodes.
+        nodes
     }
 
     /// This function assigns given ranges to expressions in the DAEG.
@@ -904,6 +950,120 @@ mod tests {
         let r_lt_l = -l_gt_r;
         let l_lt_r = -r_gt_l;
         generate_case::<false>(expr, left_col, right_col, seed, l_lt_r, r_lt_l)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_gather_node_indices_not_remove() -> Result<()> {
+        // Expression: a@0 + b@1 + 1 > a@0 - b@1
+        // Provide a@0 + b@1, not remove a@0 or b@1, only remove edges since a@0 - b@1
+        // has also leaf nodes a@0 and b@1.
+        let left_expr = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Plus,
+                Arc::new(Column::new("b", 1)),
+            )),
+            Operator::Plus,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+        ));
+
+        let right_expr = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Minus,
+            Arc::new(Column::new("b", 1)),
+        ));
+        let expr = Arc::new(BinaryExpr::new(left_expr, Operator::Gt, right_expr));
+        let mut graph = ExprIntervalGraph::try_new(expr).unwrap();
+        // Define a test leaf node.
+        let leaf_node = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("b", 1)),
+        ));
+        // Store the current node count.
+        let prev_node_count = graph.node_count();
+        // Gather the index of node in the expression graph that match the test leaf node.
+        graph.gather_node_indices(&[leaf_node]);
+        // Store the final node count.
+        let final_node_count = graph.node_count();
+        // Assert that the final node count is equal the previous node count (i.e., no node was pruned).
+        assert_eq!(prev_node_count, final_node_count);
+        Ok(())
+    }
+    #[test]
+    fn test_gather_node_indices_remove() -> Result<()> {
+        // Expression: a@0 + b@1 + 1 > y@0 - z@1
+        // We expect that 2 nodes will be pruned since we do not need a@ and b@
+        let left_expr = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Plus,
+                Arc::new(Column::new("b", 1)),
+            )),
+            Operator::Plus,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+        ));
+
+        let right_expr = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("y", 0)),
+            Operator::Minus,
+            Arc::new(Column::new("z", 1)),
+        ));
+        let expr = Arc::new(BinaryExpr::new(left_expr, Operator::Gt, right_expr));
+        let mut graph = ExprIntervalGraph::try_new(expr).unwrap();
+        // Define a test leaf node.
+        let leaf_node = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("b", 1)),
+        ));
+        // Store the current node count.
+        let prev_node_count = graph.node_count();
+        // Gather the index of node in the expression graph that match the test leaf node.
+        graph.gather_node_indices(&[leaf_node]);
+        // Store the final node count.
+        let final_node_count = graph.node_count();
+        // Assert that the final node count is two less than the previous node count (i.e., two node was pruned).
+        assert_eq!(prev_node_count, final_node_count + 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_gather_node_indices_remove_one() -> Result<()> {
+        // Expression: a@0 + b@1 + 1 > a@0 - z@1
+        // We expect that 1 nodes will be pruned since we do not need b@
+        let left_expr = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Plus,
+                Arc::new(Column::new("b", 1)),
+            )),
+            Operator::Plus,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+        ));
+
+        let right_expr = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Minus,
+            Arc::new(Column::new("z", 1)),
+        ));
+        let expr = Arc::new(BinaryExpr::new(left_expr, Operator::Gt, right_expr));
+        let mut graph = ExprIntervalGraph::try_new(expr).unwrap();
+        // Define a test leaf node.
+        let leaf_node = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("b", 1)),
+        ));
+        // Store the current node count.
+        let prev_node_count = graph.node_count();
+        // Gather the index of node in the expression graph that match the test leaf node.
+        graph.gather_node_indices(&[leaf_node]);
+        // Store the final node count.
+        let final_node_count = graph.node_count();
+        // Assert that the final node count is one less than the previous node count (i.e., one node was pruned).
+        assert_eq!(prev_node_count, final_node_count + 1);
         Ok(())
     }
 }

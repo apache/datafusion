@@ -777,6 +777,7 @@ pub fn build_equal_condition_join_indices(
                 .into_array(build_input_buffer.num_rows()))
         })
         .collect::<Result<Vec<_>>>()?;
+    hashes_buffer.clear();
     hashes_buffer.resize(probe_batch.num_rows(), 0);
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
     // Using a buffer builder to avoid slower normal builder

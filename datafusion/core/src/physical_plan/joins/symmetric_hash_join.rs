@@ -276,6 +276,9 @@ impl SymmetricHashJoinExec {
         let mut physical_expr_graph =
             ExprIntervalGraph::try_new(filter.expression().clone())?;
 
+        // To produce global sorted expressions for interval operations, we use the first
+        // PhysicalSortExpr in child output ordering, taking the leftmost expression
+        // in lexicographical order.
         let (left_ordering, right_ordering) = match (
             left.output_ordering(),
             right.output_ordering(),
@@ -620,7 +623,7 @@ fn prune_hash_values(
 /// Calculate the filter expression intervals
 ///
 /// This function updates the `interval` field of each `SortedFilterExpr` based on
-/// the first or last value of the expression in `build_input_buffer` or `probe_batch`.
+/// the first or last value of the expression in `build_input_buffer` and `probe_batch`.
 ///
 /// # Arguments
 ///
@@ -632,20 +635,6 @@ fn prune_hash_values(
 /// ### Note
 /// ```text
 ///
-///         Build      Probe
-///       +-------+  +-------+
-///       |+-----+|  |   |   |
-///  FV   ||a |b ||  |   |   |
-///       |+--|--+|  |   |   |
-///       |   |   |  |   |   |
-///       |   |   |  |   |   |
-///       |   |   |  |   |   |
-///       |   |   |  |   |   |
-///       |   |   |  |+-----+|
-///       |   |   |  ||c |d ||  LV
-///       |   |   |  |+--|--+|
-///       +-------+  +-------+
-///
 /// Interval arithmetic is used to calculate viable join ranges for build-side
 /// pruning. This is done by first creating an interval for join filter values in
 /// the build side of the join, which spans [-∞, FV] or [FV, ∞] depending on the
@@ -655,11 +644,36 @@ fn prune_hash_values(
 /// (ascending/descending) of the probe side. Here, LV denotes the last value on
 /// the probe side.
 ///
-/// In our case:
-///     Expr1: [a(FV), inf]
-///     Expr2: [b(FV), inf]
-///     Expr3: [c(LV), inf]
-///     Expr4: [d(LV), inf]
+/// Let’s check the query:
+///     SELECT * FROM left_table, right_table
+///          ON
+///      left_key = right_key AND
+///      a > b - 3 AND a < b + 10
+///
+/// When a new RecordBatch comes to the right side (”a” belongs to the left side,
+/// “b” belongs to the right side), a > b - 3 will possibly indicate a prunable range for the left side.
+/// When a new RecordBatch comes to the left side, a < b + 10 will possibly indicate
+/// prunability for the right side. This is how we manage to prune both sides when we get the
+/// data to two sides. Let’s select the build side (new [RecordBatch] comes for the right side)
+/// as left:
+///
+///         Build      Probe
+///       +-------+  +-------+
+///       | a | z |  | b | y |
+///       |+--|--+|  |+--|--+|
+///       | 1 | 2 |  | 4 | 3 |
+///       |+--|--+|  |+--|--+|
+///       | 3 | 1 |  | 4 | 3 |
+///       |+--|--+|  |+--|--+|
+///       | 5 | 7 |  | 6 | 1 |
+///       |+--|--+|  |+--|--+|
+///       | 7 | 1 |  | 6 | 3 |
+///       +-------+  +-------+
+///
+///     - The interval for the column “a” is [1, ∞],
+///     - The interval for the column “b” is [6, ∞].
+///
+/// Then we calculate intervals and propagate the constraint by traversing the expression graph.
 /// ```
 fn calculate_filter_expr_intervals(
     build_input_buffer: &RecordBatch,
@@ -1187,14 +1201,14 @@ impl OneSideHashJoiner {
         // Use the join filter intervals to update the physical expression graph:
         physical_expr_graph.update_ranges(&mut filter_intervals)?;
         // Get the new join filter interval for build side:
-        let new_build_side_sorted_filter_expr = filter_intervals.remove(0).1;
+        let calculated_build_side_interval = filter_intervals.remove(0).1;
         // Check if the intervals changed, exit early if not:
-        if new_build_side_sorted_filter_expr.eq(self.sorted_filter_expr.interval()) {
+        if calculated_build_side_interval.eq(self.sorted_filter_expr.interval()) {
             return Ok(None);
         }
         // Determine the pruning length if there was a change in the intervals:
         self.sorted_filter_expr
-            .set_interval(new_build_side_sorted_filter_expr);
+            .set_interval(calculated_build_side_interval);
         let prune_length =
             determine_prune_length(&self.input_buffer, &self.sorted_filter_expr)?;
         // If we can not prune, exit early:
@@ -2167,7 +2181,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 20)]
+    #[tokio::test(flavor = "multi_thread")]
     async fn join_change_in_planner() -> Result<()> {
         let config = SessionConfig::new().with_target_partitions(1);
         let ctx = SessionContext::with_config(config);
