@@ -1056,7 +1056,19 @@ fn should_reverse_window_sort_requirements(
                         top_reversed_requirement,
                     )
                 } else {
-                    false
+                    if requirements_compatible(
+                        top_reversed_requirement,
+                        window_plan.required_input_ordering()[0].as_deref(),
+                        || window_plan.equivalence_properties(),
+                    ) || requirements_compatible(
+                        window_plan.required_input_ordering()[0].as_deref(),
+                        top_reversed_requirement,
+                        || window_plan.equivalence_properties(),
+                    ) {
+                        true
+                    } else {
+                        false
+                    }
                 }
             } else if requirements_compatible(
                 top_reversed_requirement,
