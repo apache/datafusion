@@ -22,7 +22,10 @@ use crate::expr_rewriter::{
     normalize_cols, rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields, from_plan};
+use crate::utils::{
+    columnize_expr, compare_sort_expr, ensure_any_column_reference_is_unambiguous,
+    exprlist_to_fields, from_plan,
+};
 use crate::{and, binary_expr, Operator};
 use crate::{
     logical_plan::{
@@ -403,6 +406,28 @@ impl LogicalPlanBuilder {
                 Ok(())
             })?;
 
+        // if current plan is distinct or current plan is repartition and its child plan is distinct,
+        // then this plan is a select distinct plan
+        let is_select_distinct = match self.plan {
+            LogicalPlan::Distinct(_) => true,
+            LogicalPlan::Repartition(Repartition { ref input, .. }) => {
+                matches!(input.as_ref(), &LogicalPlan::Distinct(_))
+            }
+            _ => false,
+        };
+
+        // for select distinct, order by expressions must exist in select list
+        if is_select_distinct && !missing_cols.is_empty() {
+            let missing_col_names = missing_cols
+                .iter()
+                .map(|col| col.flat_name())
+                .collect::<String>();
+            let error_msg = format!(
+                "For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list",
+            );
+            return Err(DataFusionError::Plan(error_msg));
+        }
+
         if missing_cols.is_empty() {
             return Ok(Self::from(LogicalPlan::Sort(Sort {
                 expr: normalize_cols(exprs, &self.plan)?,
@@ -501,6 +526,25 @@ impl LogicalPlanBuilder {
                 "left_keys and right_keys were not the same length".to_string(),
             ));
         }
+
+        let filter = if let Some(expr) = filter {
+            // ambiguous check
+            ensure_any_column_reference_is_unambiguous(
+                &expr,
+                &[self.schema(), right.schema()],
+            )?;
+
+            // normalize all columns in expression
+            let using_columns = expr.to_columns()?;
+            let filter = normalize_col_with_schemas(
+                expr,
+                &[self.schema(), right.schema()],
+                &[using_columns],
+            )?;
+            Some(filter)
+        } else {
+            None
+        };
 
         let (left_keys, right_keys): (Vec<Result<Column>>, Vec<Result<Column>>) =
             join_keys

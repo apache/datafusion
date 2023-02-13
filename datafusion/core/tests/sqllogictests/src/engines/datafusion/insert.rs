@@ -16,7 +16,7 @@
 // under the License.
 
 use super::error::Result;
-use crate::engines::datafusion::util::LogicTestContextProvider;
+use crate::{engines::datafusion::util::LogicTestContextProvider, output::DFOutput};
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
@@ -27,7 +27,7 @@ use sqllogictest::DBOutput;
 use sqlparser::ast::{Expr, SetExpr, Statement as SQLStatement};
 use std::sync::Arc;
 
-pub async fn insert(ctx: &SessionContext, insert_stmt: SQLStatement) -> Result<DBOutput> {
+pub async fn insert(ctx: &SessionContext, insert_stmt: SQLStatement) -> Result<DFOutput> {
     // First, use sqlparser to get table name and insert values
     let table_reference;
     let insert_values: Vec<Vec<Expr>>;

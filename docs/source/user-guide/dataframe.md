@@ -68,6 +68,7 @@ execution. The plan is evaluated (executed) when an action method is invoked, su
 | filter              | Filter a DataFrame to only include rows that match the specified filter expression.                                                        |
 | intersect           | Calculate the intersection of two DataFrames. The two DataFrames must have exactly the same schema                                         |
 | join                | Join this DataFrame with another DataFrame using the specified columns as join keys.                                                       |
+| join_on             | Join this DataFrame with another DataFrame using arbitrary expressions.                                                                    |
 | limit               | Limit the number of rows returned from this DataFrame.                                                                                     |
 | repartition         | Repartition a DataFrame based on a logical partitioning scheme.                                                                            |
 | sort                | Sort the DataFrame by the specified sorting expressions. Any expression can be turned into a sort expression by calling its `sort` method. |

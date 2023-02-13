@@ -106,7 +106,7 @@
 //! Specifically, when DataFusion receives an SQL query, there are different steps
 //! that it passes through until a result is obtained. Broadly, they are:
 //!
-//! 1. The string is parsed to an Abstract syntax tree (AST) using [sqlparser](https://docs.rs/sqlparser/0.6.1/sqlparser/).
+//! 1. The string is parsed to an Abstract syntax tree (AST) using [sqlparser](https://docs.rs/sqlparser/latest/sqlparser/).
 //! 2. The planner [`SqlToRel`](sql::planner::SqlToRel) converts logical expressions on the AST to logical expressions [`Expr`s](datafusion_expr::Expr).
 //! 3. The planner [`SqlToRel`](sql::planner::SqlToRel) converts logical nodes on the AST to a [`LogicalPlan`](datafusion_expr::LogicalPlan).
 //! 4. [`OptimizerRules`](optimizer::optimizer::OptimizerRule) are applied to the [`LogicalPlan`](datafusion_expr::LogicalPlan) to optimize it.
@@ -144,7 +144,7 @@
 //!
 //! Broadly speaking,
 //!
-//! * an [`ExecutionPlan`](physical_plan::ExecutionPlan) receives a partition number and asyncronosly returns
+//! * an [`ExecutionPlan`](physical_plan::ExecutionPlan) receives a partition number and asynchronously returns
 //!   an iterator over [`RecordBatch`](arrow::record_batch::RecordBatch)
 //!   (a node-specific struct that implements [`RecordBatchReader`](arrow::record_batch::RecordBatchReader))
 //! * a [`PhysicalExpr`](physical_plan::PhysicalExpr) receives a [`RecordBatch`](arrow::record_batch::RecordBatch)
@@ -159,9 +159,9 @@
 //! * Projection: [`ProjectionExec`](physical_plan::projection::ProjectionExec)
 //! * Filter: [`FilterExec`](physical_plan::filter::FilterExec)
 //! * Grouped and non-grouped aggregations: [`AggregateExec`](physical_plan::aggregates::AggregateExec)
-//! * Hash Join: [`HashJoinExec`](physical_plan::hash_join::HashJoinExec)
-//! * Cross Join: [`CrossJoinExec`](physical_plan::cross_join::CrossJoinExec)
-//! * Sort Merge Join: [`SortMergeJoinExec`](physical_plan::sort_merge_join::SortMergeJoinExec)
+//! * Hash Join: [`HashJoinExec`](physical_plan::joins::HashJoinExec)
+//! * Cross Join: [`CrossJoinExec`](physical_plan::joins::CrossJoinExec)
+//! * Sort Merge Join: [`SortMergeJoinExec`](physical_plan::joins::SortMergeJoinExec)
 //! * Union: [`UnionExec`](physical_plan::union::UnionExec)
 //! * Sort: [`SortExec`](physical_plan::sorts::sort::SortExec)
 //! * Coalesce partitions: [`CoalescePartitionsExec`](physical_plan::coalesce_partitions::CoalescePartitionsExec)
@@ -180,7 +180,7 @@
 //! * declare and use user-defined scalar functions ([`ScalarUDF`](physical_plan::udf::ScalarUDF))
 //! * declare and use user-defined aggregate functions ([`AggregateUDF`](physical_plan::udaf::AggregateUDF))
 //!
-//! you can find examples of each of them in examples section.
+//! You can find examples of each of them in examples section.
 //!
 //! ## Examples
 //!

@@ -51,6 +51,8 @@ pub type FileOpenFuture =
 
 /// Generic API for opening a file using an [`ObjectStore`] and resolving to a
 /// stream of [`RecordBatch`]
+///
+/// [`ObjectStore`]: object_store::ObjectStore
 pub trait FileOpener: Unpin {
     /// Asynchronously open the specified file and return a stream
     /// of [`RecordBatch`]

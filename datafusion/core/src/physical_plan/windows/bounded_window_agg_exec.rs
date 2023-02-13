@@ -518,7 +518,6 @@ impl SortedPartitionByBoundedWindowStream {
                 }
                 cur_window_expr_out_result_len
             })
-            .into_iter()
             .min()
             .unwrap_or(0)
     }

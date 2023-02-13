@@ -24,6 +24,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion::from_slice::FromSlice;
+use datafusion_common::DataFusionError;
 use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
@@ -128,6 +129,39 @@ async fn sort_on_unprojected_columns() -> Result<()> {
 }
 
 #[tokio::test]
+async fn sort_on_distinct_unprojected_columns() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![
+            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
+            Arc::new(Int32Array::from_slice([2, 12, 12, 120])),
+        ],
+    )
+    .unwrap();
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch).unwrap();
+
+    assert!(matches!(
+        ctx.table("t")
+            .await
+            .unwrap()
+            .select(vec![col("a")])
+            .unwrap()
+            .distinct()
+            .unwrap()
+            .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))]),
+        Err(DataFusionError::Plan(_))
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn filter_with_alias_overwrite() -> Result<()> {
     let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
@@ -171,24 +205,19 @@ async fn select_with_alias_overwrite() -> Result<()> {
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![Arc::new(Int32Array::from_slice([1, 10, 10, 100]))],
-    )
-    .unwrap();
+    )?;
 
     let ctx = SessionContext::new();
     ctx.register_batch("t", batch).unwrap();
 
     let df = ctx
         .table("t")
-        .await
-        .unwrap()
-        .select(vec![col("a").alias("a")])
-        .unwrap()
-        .select(vec![(col("a").eq(lit(10))).alias("a")])
-        .unwrap()
-        .select(vec![col("a")])
-        .unwrap();
+        .await?
+        .select(vec![col("a").alias("a")])?
+        .select(vec![(col("a").eq(lit(10))).alias("a")])?
+        .select(vec![col("a")])?;
 
-    let results = df.collect().await.unwrap();
+    let results = df.collect().await?;
 
     #[rustfmt::skip]
         let expected = vec![

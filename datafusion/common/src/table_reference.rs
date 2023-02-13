@@ -194,12 +194,13 @@ impl<'a> TableReference<'a> {
     /// failing that then taking the entire unnormalized input as the identifier itself.
     ///
     /// Will normalize (convert to lowercase) any unquoted identifiers.
+    ///
     /// e.g. `Foo` will be parsed as `foo`, and `"Foo"".bar"` will be parsed as
     /// `Foo".bar` (note the preserved case and requiring two double quotes to represent
     /// a single double quote in the identifier)
     pub fn parse_str(s: &'a str) -> Self {
         let mut parts = parse_identifiers(s)
-            .unwrap_or(vec![])
+            .unwrap_or_default()
             .into_iter()
             .map(|id| match id.quote_style {
                 Some(_) => id.value,
