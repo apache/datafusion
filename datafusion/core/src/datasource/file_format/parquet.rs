@@ -570,7 +570,7 @@ pub(crate) mod test_util {
 
                 let builder = WriterProperties::builder();
                 let props = if multi_page {
-                    builder.set_data_page_row_count_limit(2)
+                    builder.set_data_page_row_count_limit(ROWS_PER_PAGE)
                 } else {
                     builder
                 }
