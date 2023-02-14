@@ -469,6 +469,12 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
         })
 }
 
+/// Extract join predicates from the correclated subquery.
+/// The join predicate means that the expression references columns
+/// from both the subquery and outer table or only from the outer table.
+///
+/// Returns join predicates and subquery(extracted).
+/// ```
 pub(crate) fn extract_join_filters(
     maybe_filter: &LogicalPlan,
 ) -> Result<(Vec<Expr>, LogicalPlan)> {

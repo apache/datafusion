@@ -123,7 +123,7 @@ fn semi_join_with_join_filter() -> Result<()> {
                     \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
                     \n    Projection: t2.col_int32, t2.col_uint32\
                     \n      SubqueryAlias: t2\
-                    \n        TableScan: test projection=[col_int32, col_uint32]";               
+                    \n        TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
@@ -140,7 +140,7 @@ fn anti_join_with_join_filter() -> Result<()> {
                     \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
                     \n    Projection: t2.col_int32, t2.col_uint32\
                     \n      SubqueryAlias: t2\
-                    \n        TableScan: test projection=[col_int32, col_uint32]";                
+                    \n        TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
@@ -156,7 +156,7 @@ fn where_exists_distinct() -> Result<()> {
                     \n    TableScan: test projection=[col_int32]\
                     \n    Projection: t2.col_int32\
                     \n      SubqueryAlias: t2\
-                    \n        TableScan: test projection=[col_int32]";                
+                    \n        TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }

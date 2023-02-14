@@ -16,10 +16,7 @@
 // under the License.
 
 use crate::optimizer::ApplyOrder;
-use crate::utils::{
-    conjunction, extract_join_filters,
-    split_conjunction,
-};
+use crate::utils::{conjunction, extract_join_filters, split_conjunction};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_expr::{
@@ -147,16 +144,12 @@ fn optimize_exists(
 ) -> Result<Option<LogicalPlan>> {
     let maybe_subqury_filter = match query_info.query.subquery.as_ref() {
         LogicalPlan::Distinct(subqry_distinct) => match subqry_distinct.input.as_ref() {
-            LogicalPlan::Projection(subqry_proj) => {
-                &subqry_proj.input
-            }
+            LogicalPlan::Projection(subqry_proj) => &subqry_proj.input,
             _ => {
                 return Ok(None);
             }
         },
-        LogicalPlan::Projection(subqry_proj) => {
-            &subqry_proj.input
-        }
+        LogicalPlan::Projection(subqry_proj) => &subqry_proj.input,
         _ => {
             // Subquery currently only supports distinct or projection
             return Ok(None);
@@ -201,6 +194,7 @@ fn optimize_exists(
         false => JoinType::LeftSemi,
     };
 
+    // TODO: add Distinct if the original plan is a Distinct.
     let new_plan = LogicalPlanBuilder::from(outer_input.clone())
         .join(
             right,
@@ -259,13 +253,13 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-                             \n  LeftSemi Join:  Filter: orders.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]\
-                             \n    LeftSemi Join:  Filter: orders.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]\
-                             \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-                             \n      Projection: orders.o_custkey [o_custkey:Int64]\
-                             \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
-                             \n    Projection: orders.o_custkey [o_custkey:Int64]\
-                             \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
+                           \n  LeftSemi Join:  Filter: orders.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]\
+                           \n    LeftSemi Join:  Filter: orders.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]\
+                           \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                           \n      Projection: orders.o_custkey [o_custkey:Int64]\
+                           \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+                           \n    Projection: orders.o_custkey [o_custkey:Int64]\
+                           \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
         assert_plan_eq(&plan, expected)
     }
 
@@ -295,13 +289,13 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-                             \n  LeftSemi Join:  Filter: orders.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]\
-                             \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-                             \n    Projection: orders.o_custkey [o_custkey:Int64]\
-                             \n      LeftSemi Join:  Filter: lineitem.l_orderkey = orders.o_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
-                             \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
-                             \n        Projection: lineitem.l_orderkey [l_orderkey:Int64]\
-                             \n          TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]";
+                           \n  LeftSemi Join:  Filter: orders.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]\
+                           \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                           \n    Projection: orders.o_custkey [o_custkey:Int64]\
+                           \n      LeftSemi Join:  Filter: lineitem.l_orderkey = orders.o_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+                           \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+                           \n        Projection: lineitem.l_orderkey [l_orderkey:Int64]\
+                           \n          TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]";
         assert_plan_eq(&plan, expected)
     }
 
@@ -324,7 +318,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-      let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
                            \n  LeftSemi Join:  Filter: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
                            \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
                            \n    Projection: orders.o_custkey [o_custkey:Int64]\
@@ -348,12 +342,12 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        // `customer.c_custkey = 1` will pushdown by other rule.
+        // Other rule will pushdown `customer.c_custkey = 1`,
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
                            \n  LeftSemi Join:  Filter: customer.c_custkey = UInt32(1) [c_custkey:Int64, c_name:Utf8]\
                            \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
                            \n    Projection:  []\
-                           \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";                   
+                           \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_plan_eq(&plan, expected)
     }
@@ -389,7 +383,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(exists(sq))?
             .project(vec![col("customer.c_custkey")])?
-            .build()?;   
+            .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
                            \n  LeftSemi Join:  Filter: customer.c_custkey != orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
@@ -450,7 +444,6 @@ mod tests {
                            \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_plan_eq(&plan, expected)
-
     }
 
     /// Test for correlated exists without projection
@@ -485,11 +478,11 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-    let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-                       \n  LeftSemi Join:  Filter: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
-                       \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-                       \n    Projection: orders.o_custkey [o_custkey:Int64]\
-                       \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+                           \n  LeftSemi Join:  Filter: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
+                           \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                           \n    Projection: orders.o_custkey [o_custkey:Int64]\
+                           \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_plan_eq(&plan, expected)
     }
@@ -508,12 +501,12 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-      let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-                         \n  Filter: customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]\
-                         \n    LeftSemi Join:  Filter: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
-                         \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-                         \n      Projection: orders.o_custkey [o_custkey:Int64]\
-                         \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+                           \n  Filter: customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]\
+                           \n    LeftSemi Join:  Filter: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
+                           \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                           \n      Projection: orders.o_custkey [o_custkey:Int64]\
+                           \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_plan_eq(&plan, expected)
     }
