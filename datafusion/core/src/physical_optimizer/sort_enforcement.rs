@@ -592,6 +592,9 @@ fn analyze_window_sort_removal(
         PartitionSearchMode::Sorted,
         PartitionSearchMode::Linear,
     ]) {
+        // for (order_offsets, search_mode) in [0].into_iter().zip(vec![
+        //     PartitionSearchMode::Sorted,
+        // ]) {
         for sort_any in sort_tree.get_leaves() {
             let sort_output_ordering = sort_any.output_ordering();
             // Variable `sort_any` will either be a `SortExec` or a
@@ -684,13 +687,24 @@ fn analyze_window_sort_removal(
                 partition_search_mode,
             )?) as _
         } else {
-            Arc::new(WindowAggExec::try_new(
-                window_expr,
-                new_child,
-                new_schema,
-                partition_keys.to_vec(),
-                Some(physical_ordering_common),
-            )?) as _
+            if let Some(sort_keys) = sort_keys {
+                let new_child = add_sort_above_child(&new_child, sort_keys.clone())?;
+                Arc::new(WindowAggExec::try_new(
+                    window_expr,
+                    new_child,
+                    new_schema,
+                    partition_keys.to_vec(),
+                    Some(sort_keys.clone()),
+                )?) as _
+            } else {
+                Arc::new(WindowAggExec::try_new(
+                    window_expr,
+                    new_child,
+                    new_schema,
+                    partition_keys.to_vec(),
+                    Some(physical_ordering_common),
+                )?) as _
+            }
         };
         return Ok(Some(PlanWithCorrespondingSort::new(new_plan)));
     }

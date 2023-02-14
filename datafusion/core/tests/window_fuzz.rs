@@ -29,7 +29,7 @@ use rand::{Rng, SeedableRng};
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::windows::{
-    create_window_expr, BoundedWindowAggExec, WindowAggExec,
+    create_window_expr, BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
 };
 use datafusion_expr::{
     AggregateFunction, BuiltInWindowFunction, WindowFrame, WindowFrameBound,
@@ -371,6 +371,7 @@ async fn run_window_test(
             schema.clone(),
             vec![],
             Some(sort_keys),
+            PartitionSearchMode::Sorted,
         )
         .unwrap(),
     );

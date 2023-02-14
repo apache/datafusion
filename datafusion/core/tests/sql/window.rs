@@ -18,6 +18,7 @@
 use super::*;
 use ::parquet::arrow::arrow_writer::ArrowWriter;
 use ::parquet::file::properties::WriterProperties;
+use arrow::util::pretty::print_batches;
 use datafusion::execution::options::ReadOptions;
 
 /// for window functions without order by the first, last, and nth function call does not make sense
@@ -1292,6 +1293,42 @@ async fn window_frame_groups_order_by_null_desc() -> Result<()> {
         "+----------------------+",
     ];
     assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+    let formatted = displayable(plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    println!("{:#?}", actual);
+    Ok(())
+}
+
+fn print_logical_plan(plan: &LogicalPlan) -> Result<()> {
+    println!("{:#?}", plan);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_show_plan() -> Result<()> {
+    let config = SessionConfig::new()
+        .with_repartition_windows(false)
+        .with_target_partitions(1);
+    let ctx = SessionContext::with_config(config);
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT
+    SUM(c5) OVER(PARTITION BY c4, c1 ORDER BY c3 ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING) as summation1,
+    SUM(c5) OVER(PARTITION BY c3 ORDER BY c9 ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING) as summation3
+FROM aggregate_test_100
+ORDER BY c9";
+
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+    print_plan(&physical_plan)?;
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    print_batches(&actual)?;
     Ok(())
 }
 
