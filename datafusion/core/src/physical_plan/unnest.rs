@@ -248,11 +248,9 @@ fn build_batch(
                 .unwrap();
             unnest_batch(batch, schema, column, list_array)
         }
-        _ => {
-            return Err(DataFusionError::Execution(format!(
-                "Invalid unnest column {column}"
-            )));
-        }
+        _ => Err(DataFusionError::Execution(format!(
+            "Invalid unnest column {column}"
+        ))),
     }
 }
 

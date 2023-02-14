@@ -295,7 +295,6 @@ fn in_mem_partial_sort(
         let (sorted_arrays, batches): (Vec<Vec<ArrayRef>>, Vec<RecordBatch>) =
             buffered_batches
                 .drain(..)
-                .into_iter()
                 .map(|b| {
                     let BatchWithSortArray {
                         sort_arrays,

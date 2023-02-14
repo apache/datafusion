@@ -75,7 +75,7 @@ pub enum RewriteRecursion {
 /// mutate(BinaryExpr(GT))
 /// ```
 ///
-/// If an Err result is returned, recursion is stopped immediately
+/// If an `Err` result is returned, recursion is stopped immediately
 ///
 /// If [`false`] is returned on a call to pre_visit, no
 /// children of that expression are visited, nor is mutate
@@ -84,6 +84,8 @@ pub enum RewriteRecursion {
 /// # See Also:
 /// * [`Expr::accept`] to drive a rewriter through an [`Expr`]
 /// * [`rewrite_expr`]: For rewriting an [`Expr`] using functions
+///
+/// [`Expr::accept`]: crate::expr_visitor::ExprVisitable::accept
 pub trait ExprRewriter<E: ExprRewritable = Expr>: Sized {
     /// Invoked before any children of `expr` are rewritten /
     /// visited. Default implementation returns `Ok(RewriteRecursion::Continue)`
@@ -96,14 +98,14 @@ pub trait ExprRewriter<E: ExprRewritable = Expr>: Sized {
     fn mutate(&mut self, expr: E) -> Result<E>;
 }
 
-/// a trait for marking types that are rewritable by [ExprRewriter]
+/// A trait for marking types that are rewritable by [ExprRewriter]
 pub trait ExprRewritable: Sized {
-    /// rewrite the expression tree using the given [ExprRewriter]
+    /// Rewrite the expression tree using the given [ExprRewriter]
     fn rewrite<R: ExprRewriter<Self>>(self, rewriter: &mut R) -> Result<Self>;
 }
 
 impl ExprRewritable for Expr {
-    /// see comments on [`ExprRewritable`] for details
+    /// See comments on [`ExprRewritable`] for details
     fn rewrite<R>(self, rewriter: &mut R) -> Result<Self>
     where
         R: ExprRewriter<Self>,
@@ -331,7 +333,7 @@ where
         .transpose()
 }
 
-/// rewrite a `Vec` of `Expr`s with the rewriter
+/// Rewrite a `Vec` of `Expr`s with the rewriter
 fn rewrite_vec<R>(v: Vec<Expr>, rewriter: &mut R) -> Result<Vec<Expr>>
 where
     R: ExprRewriter,
@@ -339,13 +341,13 @@ where
     v.into_iter().map(|expr| expr.rewrite(rewriter)).collect()
 }
 
-/// Recursively call [`Column::normalize_with_schemas`] on all Column expressions
+/// Recursively call [`Column::normalize_with_schemas`] on all [`Column`] expressions
 /// in the `expr` expression tree.
 pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
     normalize_col_with_schemas(expr, &plan.all_schemas(), &plan.using_columns()?)
 }
 
-/// Recursively call [`Column::normalize_with_schemas`] on all Column expressions
+/// Recursively call [`Column::normalize_with_schemas`] on all [`Column`] expressions
 /// in the `expr` expression tree.
 pub fn normalize_col_with_schemas(
     expr: Expr,
@@ -363,7 +365,7 @@ pub fn normalize_col_with_schemas(
     })
 }
 
-/// Recursively normalize all Column expressions in a list of expression trees
+/// Recursively normalize all [`Column`] expressions in a list of expression trees
 pub fn normalize_cols(
     exprs: impl IntoIterator<Item = impl Into<Expr>>,
     plan: &LogicalPlan,
@@ -374,8 +376,8 @@ pub fn normalize_cols(
         .collect()
 }
 
-/// Recursively replace all Column expressions in a given expression tree with Column expressions
-/// provided by the hash map argument.
+/// Recursively replace all [`Column`] expressions in a given expression tree with
+/// `Column` expressions provided by the hash map argument.
 pub fn replace_col(e: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<Expr> {
     rewrite_expr(e, |expr| {
         if let Expr::Column(c) = &expr {
@@ -408,7 +410,7 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
     .expect("Unnormalize is infallable")
 }
 
-/// Recursively un-normalize all Column expressions in a list of expression trees
+/// Recursively un-normalize all [`Column`] expressions in a list of expression trees
 #[inline]
 pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
     exprs.into_iter().map(unnormalize_col).collect()

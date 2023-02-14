@@ -193,7 +193,6 @@ impl Accumulator for DistinctCountAccumulator {
                     "cols_out should only consist of ScalarValue::List. {t:?} is found"
                 ))),
             })
-            .into_iter()
             .collect::<Result<Vec<_>>>()?;
 
         self.values.iter().for_each(|distinct_values| {

@@ -112,7 +112,7 @@ pub fn merge_batches(
 }
 
 /// Merge a slice of record batch references into a single record batch, or
-/// return None if the slice itself is empty. All the record batches inside the
+/// return `None` if the slice itself is empty. All the record batches inside the
 /// slice must have the same schema.
 pub fn merge_multiple_batches(
     batches: &[&RecordBatch],
@@ -322,7 +322,7 @@ pub fn transpose<T>(original: Vec<Vec<T>>) -> Vec<Vec<T>> {
 
 /// Calculates the "meet" of given orderings.
 /// The meet is the finest ordering that satisfied by all the given
-/// orderings, see https://en.wikipedia.org/wiki/Join_and_meet.
+/// orderings, see <https://en.wikipedia.org/wiki/Join_and_meet>.
 pub fn get_meet_of_orderings(
     given: &[Arc<dyn ExecutionPlan>],
 ) -> Option<&[PhysicalSortExpr]> {
@@ -610,9 +610,9 @@ mod tests {
 pub struct IPCWriter {
     /// path
     pub path: PathBuf,
-    /// Inner writer
+    /// inner writer
     pub writer: FileWriter<File>,
-    /// bathes written
+    /// batches written
     pub num_batches: u64,
     /// rows written
     pub num_rows: u64,

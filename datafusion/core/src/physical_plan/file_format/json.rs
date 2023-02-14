@@ -281,7 +281,7 @@ mod tests {
     use crate::prelude::NdJsonReadOptions;
     use crate::prelude::*;
     use crate::test::partitioned_file_groups;
-    use datafusion_common::cast::{as_int32_array, as_int64_array};
+    use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
     use rstest::*;
     use tempfile::TempDir;
     use url::Url;
@@ -543,6 +543,62 @@ mod tests {
 
         assert_eq!(batch.num_rows(), 4);
         let values = as_int64_array(batch.column(0))?;
+        assert_eq!(values.value(0), 1);
+        assert_eq!(values.value(1), -10);
+        assert_eq!(values.value(2), 2);
+        Ok(())
+    }
+
+    #[rstest(
+        file_compression_type,
+        case(FileCompressionType::UNCOMPRESSED),
+        case(FileCompressionType::GZIP),
+        case(FileCompressionType::BZIP2),
+        case(FileCompressionType::XZ)
+    )]
+    #[tokio::test]
+    async fn nd_json_exec_file_mixed_order_projection(
+        file_compression_type: FileCompressionType,
+    ) -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let task_ctx = session_ctx.task_ctx();
+        let (object_store_url, file_groups, file_schema) =
+            prepare_store(&state, file_compression_type.to_owned()).await;
+
+        let exec = NdJsonExec::new(
+            FileScanConfig {
+                object_store_url,
+                file_groups,
+                file_schema,
+                statistics: Statistics::default(),
+                projection: Some(vec![3, 0, 2]),
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering: None,
+                infinite_source: false,
+            },
+            file_compression_type.to_owned(),
+        );
+        let inferred_schema = exec.schema();
+        assert_eq!(inferred_schema.fields().len(), 3);
+
+        inferred_schema.field_with_name("a").unwrap();
+        inferred_schema.field_with_name("b").unwrap_err();
+        inferred_schema.field_with_name("c").unwrap();
+        inferred_schema.field_with_name("d").unwrap();
+
+        let mut it = exec.execute(0, task_ctx)?;
+        let batch = it.next().await.unwrap()?;
+
+        assert_eq!(batch.num_rows(), 4);
+
+        let values = as_string_array(batch.column(0))?;
+        assert_eq!(values.value(0), "4");
+        assert_eq!(values.value(1), "4");
+        assert_eq!(values.value(2), "text");
+
+        let values = as_int64_array(batch.column(1))?;
         assert_eq!(values.value(0), 1);
         assert_eq!(values.value(1), -10);
         assert_eq!(values.value(2), 2);
