@@ -60,7 +60,7 @@ unicode_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 apache-avro = { version = "0.14", optional = true }
-arrow = { version = "32.0.0", features = ["prettyprint"] }
+arrow = { version = "33.0.0", features = ["prettyprint"] }
 async-compression = { version = "0.3.14", features = ["bzip2", "gzip", "xz", "futures-io", "tokio"], optional = true }
 async-trait = "0.1.41"
 bytes = "1.1"
