@@ -140,7 +140,14 @@ impl ExternalSorter {
             // The resulting batch might be smaller (or larger, see #3747) than the input
             // batch due to either a propagated limit or the re-construction of arrays. So
             // for being reliable, we need to reflect the memory usage of the partial batch.
-            let new_size = batch_byte_size(&partial.sorted_batch);
+            //
+            // In addition, if it's row encoding was preserved, that would also change the size.
+            let new_size = batch_byte_size(&partial.sorted_batch)
+                + partial
+                    .sort_data
+                    .rows
+                    .as_ref()
+                    .map_or(0, |rows| rows.size());
             match new_size.cmp(&size) {
                 Ordering::Greater => {
                     // We don't have to call try_grow here, since we have already used the
@@ -209,6 +216,7 @@ impl ExternalSorter {
                 &self.expr,
                 tracking_metrics,
                 self.session_config.batch_size(),
+                true,
             )?))
         } else if !self.in_mem_batches.is_empty() {
             // sort in mem doesnt require SortPreservingMergeStream
@@ -545,8 +553,7 @@ impl SortedSizedRecordBatchStream {
             // include rows if non-None
             + rows
                 .as_ref()
-                .map(|r| r.iter().map(|r| r.size()).sum())
-                .unwrap_or(0);
+                .map_or(0, |r| r.iter().map(|r| r.size()).sum());
         metrics.init_mem_used(size);
         let num_cols = batches[0].num_columns();
         SortedSizedRecordBatchStream {
@@ -1054,8 +1061,6 @@ fn sort_batch(
         sorted_batch,
     })
 }
-// todo: add option to always emit None for row encoding to save memory in cases
-// where the parent node does not care about the row encoding.
 async fn do_sort(
     mut input: SendableRecordBatchStream,
     partition_id: usize,

@@ -117,7 +117,8 @@ impl RowBatch {
     /// Amount of bytes
     pub fn memory_size(&self) -> usize {
         let indices_size = self.indices.len() * 2 * std::mem::size_of::<usize>();
-        let rows_size = self.rows.iter().map(|r| r.size()).sum::<usize>();
+        // rows are refs so dont count the size inside the refs, just the refs itself?
+        let rows_size = 0;
         rows_size + indices_size + std::mem::size_of::<Self>()
     }
 }

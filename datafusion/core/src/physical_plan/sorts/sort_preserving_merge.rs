@@ -261,6 +261,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     &self.expr,
                     tracking_metrics,
                     context.session_config().batch_size(),
+                    false,
                 )?;
 
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
@@ -376,6 +377,8 @@ pub(crate) struct SortPreservingMergeStream {
 
     /// row converter
     row_converter: RowConverter,
+    /// if this is false it will always yield None for the row encoding
+    preserve_row_encoding: bool,
 }
 
 impl SortPreservingMergeStream {
@@ -385,6 +388,8 @@ impl SortPreservingMergeStream {
         expressions: &[PhysicalSortExpr],
         mut tracking_metrics: MemTrackingMetrics,
         batch_size: usize,
+        // when used from within SortExec this should be true
+        preserve_row_encoding: bool,
     ) -> Result<Self> {
         let stream_count = streams.len();
         let batches = (0..stream_count).map(|_| VecDeque::new()).collect();
@@ -415,6 +420,7 @@ impl SortPreservingMergeStream {
             loser_tree_adjusted: false,
             batch_size,
             row_converter,
+            preserve_row_encoding,
         })
     }
 
@@ -1386,6 +1392,7 @@ mod tests {
             sort.as_slice(),
             tracking_metrics,
             task_ctx.session_config().batch_size(),
+            false,
         )
         .unwrap();
         let mut merged = common::collect(merge_stream.into()).await.unwrap();
