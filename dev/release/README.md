@@ -80,7 +80,7 @@ We maintain a `CHANGELOG.md` so our users know what has been
 changed between releases.
 
 The CHANGELOG is managed automatically using
-[update_change_log.sh](https://github.com/apache/arrow-datafusion/blob/master/dev/release/update_change_log.sh)
+[update_change_log.sh](https://github.com/apache/arrow-datafusion/blob/main/dev/release/update_change_log.sh)
 
 This script creates a changelog using GitHub PRs and issues based on the labels
 associated with them.
