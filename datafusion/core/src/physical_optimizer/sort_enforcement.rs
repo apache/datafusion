@@ -549,13 +549,14 @@ fn analyze_window_sort_removal(
     sort_tree: &mut ExecTree,
     window_exec: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
-    let (window_expr, partition_keys, sort_keys, partition_by_sort_keys) =
+    let (window_expr, partition_keys, sort_keys, partition_by_sort_keys, orderby_sort_keys) =
         if let Some(exec) = window_exec.as_any().downcast_ref::<BoundedWindowAggExec>() {
             (
                 exec.window_expr(),
                 &exec.partition_keys,
                 &exec.sort_keys,
                 exec.partition_by_sort_keys()?,
+                exec.order_by_sort_keys()?,
             )
         } else if let Some(exec) = window_exec.as_any().downcast_ref::<WindowAggExec>() {
             (
@@ -563,6 +564,7 @@ fn analyze_window_sort_removal(
                 &exec.partition_keys,
                 &exec.sort_keys,
                 exec.partition_by_sort_keys()?,
+                exec.order_by_sort_keys()?,
             )
         } else {
             return Err(DataFusionError::Plan(
@@ -571,10 +573,15 @@ fn analyze_window_sort_removal(
             ));
         };
 
-    // println!("sort_keys: {:?}", sort_keys);
-    // println!("partition_keys: {:?}", partition_keys);
-    // println!("partition_by_sort_keys: {:?}", partition_by_sort_keys);
+    for elem in window_expr{
+        println!("elem: {:?}", elem);
+    }
+    println!("partition_keys:{:?}", partition_keys);
+    println!("partition_by_sort_keys:{:?}", partition_by_sort_keys);
+    println!("orderby_sort_keys:{:?}", orderby_sort_keys);
+    println!("sort_keys:{:?}", sort_keys);
     let n_partition_by_keys = partition_by_sort_keys.len();
+    println!("n_partition_by_keys:{:?}", n_partition_by_keys);
     let mut first_should_reverse = None;
     let mut physical_ordering_common = vec![];
     let mut partition_search_mode = PartitionSearchMode::Linear;
@@ -604,8 +611,9 @@ fn analyze_window_sort_removal(
                 )
             })?;
             let required_ordering = &required_ordering[order_offsets..];
-            // println!("required_ordering:{:?}", required_ordering);
             if let Some(physical_ordering) = physical_ordering {
+                println!("physical_ordering:{:?}", physical_ordering);
+                println!("required_ordering:{:?}", required_ordering);
                 if physical_ordering_common.is_empty()
                     || physical_ordering.len() < physical_ordering_common.len()
                 {
@@ -645,7 +653,7 @@ fn analyze_window_sort_removal(
     if !can_skip_sorting {
         return Ok(None);
     }
-    println!("partition_search_mode:{:?}", partition_search_mode);
+    println!("partition_search mode:{:?}", partition_search_mode);
     let new_window_expr = if first_should_reverse.unwrap() {
         window_expr
             .iter()

@@ -126,6 +126,28 @@ impl WindowAggExec {
         }
         Ok(result)
     }
+
+    /// Return the output sort order of order by keys: For example
+    /// OVER(PARTITION BY a, ORDER BY b) -> would give sorting of the column b
+    // We are sure that partition by columns are always at the beginning of sort_keys
+    // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
+    // to calculate partition separation points
+    pub fn order_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
+        let mut result = vec![];
+        // All window exprs have the same partition by, so we just use the first one:
+        let order_by = self.window_expr()[0].order_by();
+        let sort_keys = self.sort_keys.as_deref().unwrap_or(&[]);
+        println!("order_by:{:?}", order_by);
+        println!("sort_keys:{:?}", sort_keys);
+        for item in order_by {
+            println!("item:{:?}", item);
+            if let Some(a) = sort_keys.iter().find(|e| e.expr.eq(&item.expr)) {
+                println!("pushing");
+                result.push(a.clone());
+            }
+        }
+        Ok(result)
+    }
 }
 
 impl ExecutionPlan for WindowAggExec {

@@ -903,8 +903,8 @@ async fn test_show_plan() -> Result<()> {
     let ctx = SessionContext::with_config(config);
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT
-    SUM(c5) OVER(PARTITION BY c4, c1 ORDER BY c1 ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING) as summation1,
-    SUM(c5) OVER(PARTITION BY c1, c4 ORDER BY c1 ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING) as summation2
+    SUM(c5) OVER(ORDER BY c1, c2, c5 ROWS BETWEEN 4 PRECEDING AND 1 FOLLOWING) as summation1,
+    SUM(c5) OVER(PARTITION BY c1, c3 ORDER BY c1, c2 ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING) as summation2
 FROM aggregate_test_100
 ORDER BY c9";
 
