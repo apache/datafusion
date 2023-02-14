@@ -493,11 +493,9 @@ impl DataGenerator {
 
     /// Create an array of i64 unsorted values (where approximately 1/3 values is repeated)
     fn i64_values(&mut self) -> Vec<i64> {
-        let vec: Vec<_> = (0..INPUT_SIZE)
+        (0..INPUT_SIZE)
             .map(|_| self.rng.gen_range(0..INPUT_SIZE as i64))
-            .collect();
-
-        vec
+            .collect()
     }
 
     /// Create an array of f64 sorted values (with same distribution of `i64_values`)
@@ -512,23 +510,21 @@ impl DataGenerator {
             .collect::<Vec<_>>();
 
         // pick from the 100 strings randomly
-        let input = (0..INPUT_SIZE)
+        (0..INPUT_SIZE)
             .map(|_| {
                 let idx = self.rng.gen_range(0..strings.len());
                 let s = Arc::clone(&strings[idx]);
                 Some(s)
             })
-            .collect::<Vec<_>>();
-        input
+            .collect::<Vec<_>>()
     }
 
     /// Create values of high  cardinality (~ no duplicates) utf8 values
     fn utf8_high_cardinality_values(&mut self) -> Vec<Option<String>> {
         // make random strings
-        let input = (0..INPUT_SIZE)
+        (0..INPUT_SIZE)
             .map(|_| Some(self.random_string()))
-            .collect::<Vec<_>>();
-        input
+            .collect::<Vec<_>>()
     }
 
     fn random_string(&mut self) -> String {
