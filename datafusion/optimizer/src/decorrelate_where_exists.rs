@@ -253,13 +253,13 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-                           \n  LeftSemi Join:  Filter: orders.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]\
-                           \n    LeftSemi Join:  Filter: orders.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]\
-                           \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-                           \n      Projection: orders.o_custkey [o_custkey:Int64]\
-                           \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
-                           \n    Projection: orders.o_custkey [o_custkey:Int64]\
-                           \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
+                        \n  LeftSemi Join:  Filter: orders.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]\
+                        \n    LeftSemi Join:  Filter: orders.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]\
+                        \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                        \n      Projection: orders.o_custkey [o_custkey:Int64]\
+                        \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+                        \n    Projection: orders.o_custkey [o_custkey:Int64]\
+                        \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
         assert_plan_eq(&plan, expected)
     }
 
@@ -289,13 +289,13 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-                           \n  LeftSemi Join:  Filter: orders.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]\
-                           \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-                           \n    Projection: orders.o_custkey [o_custkey:Int64]\
-                           \n      LeftSemi Join:  Filter: lineitem.l_orderkey = orders.o_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
-                           \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
-                           \n        Projection: lineitem.l_orderkey [l_orderkey:Int64]\
-                           \n          TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]";
+                        \n  LeftSemi Join:  Filter: orders.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]\
+                        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                        \n    Projection: orders.o_custkey [o_custkey:Int64]\
+                        \n      LeftSemi Join:  Filter: lineitem.l_orderkey = orders.o_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+                        \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+                        \n        Projection: lineitem.l_orderkey [l_orderkey:Int64]\
+                        \n          TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]";
         assert_plan_eq(&plan, expected)
     }
 
@@ -319,11 +319,11 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-                           \n  LeftSemi Join:  Filter: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
-                           \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-                           \n    Projection: orders.o_custkey [o_custkey:Int64]\
-                           \n      Filter: orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
-                           \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
+                        \n  LeftSemi Join:  Filter: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
+                        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                        \n    Projection: orders.o_custkey [o_custkey:Int64]\
+                        \n      Filter: orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+                        \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_plan_eq(&plan, expected)
     }
@@ -344,10 +344,10 @@ mod tests {
 
         // Other rule will pushdown `customer.c_custkey = 1`,
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-                           \n  LeftSemi Join:  Filter: customer.c_custkey = UInt32(1) [c_custkey:Int64, c_name:Utf8]\
-                           \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-                           \n    Projection:  []\
-                           \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
+                        \n  LeftSemi Join:  Filter: customer.c_custkey = UInt32(1) [c_custkey:Int64, c_name:Utf8]\
+                        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                        \n    Projection:  []\
+                        \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_plan_eq(&plan, expected)
     }
@@ -386,10 +386,10 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-                           \n  LeftSemi Join:  Filter: customer.c_custkey != orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
-                           \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-                           \n    Projection: orders.o_custkey [o_custkey:Int64]\
-                           \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
+                        \n  LeftSemi Join:  Filter: customer.c_custkey != orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
+                        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                        \n    Projection: orders.o_custkey [o_custkey:Int64]\
+                        \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_plan_eq(&plan, expected)
     }
@@ -410,10 +410,10 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-                           \n  LeftSemi Join:  Filter: customer.c_custkey < orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
-                           \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-                           \n    Projection: orders.o_custkey [o_custkey:Int64]\
-                           \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
+                        \n  LeftSemi Join:  Filter: customer.c_custkey < orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
+                        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                        \n    Projection: orders.o_custkey [o_custkey:Int64]\
+                        \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_plan_eq(&plan, expected)
     }
@@ -438,10 +438,10 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-                           \n  LeftSemi Join:  Filter: customer.c_custkey = orders.o_custkey OR orders.o_orderkey = Int32(1) [c_custkey:Int64, c_name:Utf8]\
-                           \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-                           \n    Projection: orders.o_custkey, orders.o_orderkey [o_custkey:Int64, o_orderkey:Int64]\
-                           \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
+                        \n  LeftSemi Join:  Filter: customer.c_custkey = orders.o_custkey OR orders.o_orderkey = Int32(1) [c_custkey:Int64, c_name:Utf8]\
+                        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                        \n    Projection: orders.o_custkey, orders.o_orderkey [o_custkey:Int64, o_orderkey:Int64]\
+                        \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_plan_eq(&plan, expected)
     }
@@ -479,10 +479,10 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-                           \n  LeftSemi Join:  Filter: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
-                           \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-                           \n    Projection: orders.o_custkey [o_custkey:Int64]\
-                           \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
+                        \n  LeftSemi Join:  Filter: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
+                        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                        \n    Projection: orders.o_custkey [o_custkey:Int64]\
+                        \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_plan_eq(&plan, expected)
     }
@@ -502,11 +502,11 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-                           \n  Filter: customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]\
-                           \n    LeftSemi Join:  Filter: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
-                           \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-                           \n      Projection: orders.o_custkey [o_custkey:Int64]\
-                           \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
+                        \n  Filter: customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]\
+                        \n    LeftSemi Join:  Filter: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
+                        \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                        \n      Projection: orders.o_custkey [o_custkey:Int64]\
+                        \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_plan_eq(&plan, expected)
     }
@@ -554,10 +554,10 @@ mod tests {
             .build()?;
 
         let expected  = "Projection: test.c [c:UInt32]\
-                            \n  LeftSemi Join:  Filter: test.a = sq.a [a:UInt32, b:UInt32, c:UInt32]\
-                            \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-                            \n    Projection: sq.a [a:UInt32]\
-                            \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
+                        \n  LeftSemi Join:  Filter: test.a = sq.a [a:UInt32, b:UInt32, c:UInt32]\
+                        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+                        \n    Projection: sq.a [a:UInt32]\
+                        \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_plan_eq(&plan, expected)
     }
@@ -611,14 +611,14 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.b [b:UInt32]\
-                           \n  Filter: test.c > UInt32(1) [a:UInt32, b:UInt32, c:UInt32]\
-                           \n    LeftSemi Join:  Filter: test.a = sq2.a [a:UInt32, b:UInt32, c:UInt32]\
-                           \n      LeftSemi Join:  Filter: test.a = sq1.a [a:UInt32, b:UInt32, c:UInt32]\
-                           \n        TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-                           \n        Projection: sq1.a [a:UInt32]\
-                           \n          TableScan: sq1 [a:UInt32, b:UInt32, c:UInt32]\
-                           \n      Projection: sq2.a [a:UInt32]\
-                           \n        TableScan: sq2 [a:UInt32, b:UInt32, c:UInt32]";
+                        \n  Filter: test.c > UInt32(1) [a:UInt32, b:UInt32, c:UInt32]\
+                        \n    LeftSemi Join:  Filter: test.a = sq2.a [a:UInt32, b:UInt32, c:UInt32]\
+                        \n      LeftSemi Join:  Filter: test.a = sq1.a [a:UInt32, b:UInt32, c:UInt32]\
+                        \n        TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+                        \n        Projection: sq1.a [a:UInt32]\
+                        \n          TableScan: sq1 [a:UInt32, b:UInt32, c:UInt32]\
+                        \n      Projection: sq2.a [a:UInt32]\
+                        \n        TableScan: sq2 [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_plan_eq(&plan, expected)
     }
@@ -637,10 +637,10 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.b [b:UInt32]\
-                           \n  LeftSemi Join:  Filter: UInt32(1) + sq.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]\
-                           \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-                           \n    Projection: sq.a [a:UInt32]\
-                           \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
+                        \n  LeftSemi Join:  Filter: UInt32(1) + sq.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]\
+                        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+                        \n    Projection: sq.a [a:UInt32]\
+                        \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_plan_eq(&plan, expected)
     }
