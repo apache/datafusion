@@ -85,8 +85,6 @@ pub struct RowBatch {
     // refs to the rows referenced by `indices`
     rows: Vec<Arc<RowSelection>>,
     // first item = index of the ref in `rows`, second item=index within that row
-    // TODO: make this field optional for case where the RowBatch is just one `Rows`
-    // and it is in the exact same order to save memory.
     indices: Vec<(usize, usize)>,
 }
 
@@ -126,7 +124,7 @@ impl RowBatch {
 impl From<RowSelection> for RowBatch {
     fn from(value: RowSelection) -> Self {
         Self {
-            indices: (0..value.indices.len()).map(|i| (0, i)).collect(),
+            indices: (0..value.num_rows()).map(|i| (0, i)).collect(),
             rows: vec![Arc::new(value)],
         }
     }
@@ -160,19 +158,25 @@ impl<'a> Iterator for RowBatchIter<'a> {
 #[derive(Debug)]
 pub struct RowSelection {
     rows: Rows,
-    // todo: make None in case where RowSelection is equivalent to Rows
-    // to save memory
-    indices: Vec<usize>,
+    // None when this `RowSelection` is equivalent to its `Rows`
+    indices: Option<Vec<usize>>,
 }
 impl RowSelection {
     /// New
     pub fn new(rows: Rows, indices: Vec<usize>) -> Self {
-        Self { rows, indices }
+        Self {
+            rows,
+            indices: Some(indices),
+        }
     }
     /// Get the nth row of the selection.
     pub fn row(&self, n: usize) -> Row {
-        let idx = self.indices[n];
-        self.rows.row(idx)
+        if let Some(ref indices) = self.indices {
+            let idx = indices[n];
+            self.rows.row(idx)
+        } else {
+            self.rows.row(n)
+        }
     }
     /// Iterate over the rows in the selected order.
     pub fn iter(&self) -> RowSelectionIter {
@@ -183,15 +187,26 @@ impl RowSelection {
     }
     /// Number of bytes held in rows and indices.
     pub fn size(&self) -> usize {
-        self.rows.size()
-            + self.indices.len() * std::mem::size_of::<usize>()
-            + std::mem::size_of::<Self>()
+        let indices_size = self
+            .indices
+            .as_ref()
+            .map(|i| i.len() * std::mem::size_of::<usize>())
+            .unwrap_or(0);
+        self.rows.size() + indices_size + std::mem::size_of::<Self>()
+    }
+
+    fn num_rows(&self) -> usize {
+        if let Some(ref indices) = self.indices {
+            indices.len()
+        } else {
+            self.rows.num_rows()
+        }
     }
 }
 impl From<Rows> for RowSelection {
     fn from(value: Rows) -> Self {
         Self {
-            indices: (0..value.num_rows()).collect(),
+            indices: None,
             rows: value,
         }
     }
@@ -205,7 +220,7 @@ impl<'a> Iterator for RowSelectionIter<'a> {
     type Item = Row<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.cur_n < self.row_selection.indices.len() {
+        if self.cur_n < self.row_selection.num_rows() {
             let row = self.row_selection.row(self.cur_n);
             self.cur_n += 1;
             Some(row)
@@ -243,7 +258,7 @@ mod tests {
         let mut conv = RowConverter::new(vec![SortField::new(DataType::Int64)]).unwrap();
         let s1 = RowSelection::new(int64_rows(&mut conv, 0..3), vec![2, 2, 1]);
         let s2 = RowSelection::new(int64_rows(&mut conv, 5..8), vec![1, 2, 0]);
-        let s3: RowSelection = int64_rows(&mut conv, 2..4).into();
+        let s3: RowSelection = int64_rows(&mut conv, 2..4).into(); // null indices case
         let selection = RowBatch::new(
             vec![s1, s2, s3].into_iter().map(Arc::new).collect(),
             vec![

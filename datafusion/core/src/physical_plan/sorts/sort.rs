@@ -232,8 +232,7 @@ impl ExternalSorter {
             });
             Ok(Box::pin(output_stream))
         } else {
-            todo!()
-            // Ok(Box::pin(EmptyRecordBatchStream::new(self.schema.clone())))
+            Ok(Box::pin(futures::stream::empty()))
         }
     }
 
