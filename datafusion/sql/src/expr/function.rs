@@ -19,9 +19,10 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::normalize_ident;
 use datafusion_common::{DFSchema, DataFusionError, Result};
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
+use datafusion_expr::window_frame::regularize;
 use datafusion_expr::{
     expr, window_function, AggregateFunction, BuiltinScalarFunction, Expr, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, WindowFunction,
+    WindowFunction,
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr,
@@ -65,26 +66,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .window_frame
                 .as_ref()
                 .map(|window_frame| {
-                    let window_frame: WindowFrame = window_frame.clone().try_into()?;
-                    if WindowFrameUnits::Range == window_frame.units
-                        && order_by.len() != 1
-                    {
-                        // Construct equivalent window frame. Only in below expressions for RANGE ORDER BY is not a requirement
-                        // In the downstream we will assume that RANGE contains ORDER BY clause.
-                        if (window_frame.start_bound.is_unbounded() || window_frame.start_bound == WindowFrameBound::CurrentRow)
-                        && (window_frame.end_bound == WindowFrameBound::CurrentRow || window_frame.end_bound.is_unbounded()) {
-                            if order_by.is_empty() {
-                                Ok(WindowFrame::new(false))
-                            } else {
-                                Ok(window_frame)
-                            }
-                        } else {
-                            Err(DataFusionError::Plan(format!(
-                                "With window frame of type RANGE, the order by expression must be of length 1, got {}", order_by.len())))
-                        }
-                    } else {
-                        Ok(window_frame)
-                    }
+                    let window_frame = window_frame.clone().try_into()?;
+                    regularize(window_frame, order_by.len())
                 })
                 .transpose()?;
             let window_frame = if let Some(window_frame) = window_frame {

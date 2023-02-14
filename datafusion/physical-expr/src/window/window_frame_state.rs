@@ -32,16 +32,18 @@ use std::sync::Arc;
 /// This object stores the window frame state for use in incremental calculations.
 #[derive(Debug)]
 pub enum WindowFrameContext<'a> {
-    // ROWS-frames are inherently stateless:
+    /// ROWS frames are inherently stateless.
     Rows(&'a Arc<WindowFrame>),
-    // RANGE-frames store window frame to calculate window frame boundaries
-    // In `state`, it keeps track of `last_range` calculated to increase search speed.
+    /// RANGE frames are stateful, they store indices specifying where the
+    /// previous search left off. This amortizes the overall cost to O(n)
+    /// where n denotes the row count.
     Range {
         window_frame: &'a Arc<WindowFrame>,
         state: WindowFrameStateRange,
     },
-    // GROUPS-frames store window frame to calculate window frame boundaries
-    // In `state`, we store the boundaries of each group from the start of the table.
+    /// GROUPS frames are stateful, they store group boundaries and indices
+    /// specifying where the previous search left off. This amortizes the
+    /// overall cost to O(n) where n denotes the row count.
     Groups {
         window_frame: &'a Arc<WindowFrame>,
         state: WindowFrameStateGroups,
@@ -49,7 +51,7 @@ pub enum WindowFrameContext<'a> {
 }
 
 impl<'a> WindowFrameContext<'a> {
-    /// Create a new default state for the given window frame.
+    /// Create a new state object for the given window frame.
     pub fn new(
         window_frame: &'a Arc<WindowFrame>,
         sort_options: Vec<SortOptions>,
@@ -156,12 +158,14 @@ impl<'a> WindowFrameContext<'a> {
     }
 }
 
-/// This structure encapsulates all the state information we require as we
-/// scan ranges of data while processing window frames.
-/// `last_range` keeps the range calculated at the last search. Since we know that range only can progress forward
-/// at the next search we start from `last_range`. This makes linear search amortized constant.
-/// `sort_options` keeps the ordering of the columns in the ORDER BY clause. This information is used to calculate
-/// range boundary,
+/// This structure encapsulates all the state information we require as we scan
+/// ranges of data while processing RANGE frames. Attribute `last_range` stores
+/// the resulting indices from the previous search. Since the indices only
+/// advance forward, we start from `last_range` subsequently. Thus, the overall
+/// time complexity of linear search amortizes to O(n) where n denotes the total
+/// row count.
+/// Attribute `sort_options` stores the column ordering specified by the ORDER
+/// BY clause. This information is used to calculate the range.
 #[derive(Debug, Default)]
 pub struct WindowFrameStateRange {
     last_range: Range<usize>,
@@ -169,10 +173,10 @@ pub struct WindowFrameStateRange {
 }
 
 impl WindowFrameStateRange {
-    /// Creates new struct for range calculation
+    /// Create a new object to store the search state.
     fn new(sort_options: Vec<SortOptions>, last_range: Range<usize>) -> Self {
         Self {
-            // Keeps the search range we last calculated
+            // Stores the search range we calculate for future use.
             last_range,
             sort_options,
         }
@@ -242,7 +246,7 @@ impl WindowFrameStateRange {
                 }
             }
         };
-        // Store last calculated range, to start where we left of in the next iteration
+        // Store the resulting range so we can start from here subsequently:
         self.last_range.start = start;
         self.last_range.end = end;
         Ok(Range { start, end })
@@ -348,13 +352,6 @@ impl WindowFrameStateGroups {
         length: usize,
         idx: usize,
     ) -> Result<Range<usize>> {
-        // Groups mode should have an ordering
-        // e.g `range_columns` shouldn't be empty
-        if range_columns.is_empty() {
-            return Err(DataFusionError::Execution(
-                "GROUPS mode requires an ORDER BY clause".to_string(),
-            ));
-        }
         let start = match window_frame.start_bound {
             WindowFrameBound::Preceding(ref n) => {
                 if n.is_null() {
