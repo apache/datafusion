@@ -142,7 +142,7 @@ impl ExecutionPlan for UnnestExec {
     }
 
     fn statistics(&self) -> Statistics {
-        self.input.statistics()
+        Default::default()
     }
 }
 
