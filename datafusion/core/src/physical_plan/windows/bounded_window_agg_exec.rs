@@ -49,7 +49,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::physical_plan::common::merge_batches;
-use crate::physical_plan::windows::linear_stream::LinearPartitionByBoundedWindowStream;
 use datafusion_common::utils::get_row_at_idx;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::window::{

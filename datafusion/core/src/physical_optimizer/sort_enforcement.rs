@@ -659,7 +659,7 @@ fn analyze_window_sort_removal(
             window_exec.required_input_distribution()[sort_tree.idx],
             Distribution::SinglePartition
         );
-        let new_child = remove_corresponding_sort_from_sub_plan(
+        let mut new_child = remove_corresponding_sort_from_sub_plan(
             sort_tree,
             requires_single_partition,
         )?;
@@ -678,23 +678,24 @@ fn analyze_window_sort_removal(
                 partition_search_mode,
             )?) as _
         } else {
-            if let Some(sort_keys) = sort_keys {
-                let new_child = add_sort_above_child(&new_child, sort_keys.clone())?;
-                Arc::new(WindowAggExec::try_new(
-                    window_expr,
-                    new_child,
-                    new_schema,
-                    partition_keys.to_vec(),
-                    Some(sort_keys.clone()),
-                )?) as _
-            } else {
-                Arc::new(WindowAggExec::try_new(
+            match (partition_search_mode, sort_keys) {
+                (PartitionSearchMode::Linear, Some(sort_keys)) => {
+                    add_sort_above(&mut new_child, sort_keys.clone())?;
+                    Arc::new(WindowAggExec::try_new(
+                        window_expr,
+                        new_child,
+                        new_schema,
+                        partition_keys.to_vec(),
+                        Some(sort_keys.clone()),
+                    )?) as _
+                }
+                (_, _) => Arc::new(WindowAggExec::try_new(
                     window_expr,
                     new_child,
                     new_schema,
                     partition_keys.to_vec(),
                     Some(physical_ordering_common),
-                )?) as _
+                )?) as _,
             }
         };
         return Ok(Some(PlanWithCorrespondingSort::new(new_plan)));

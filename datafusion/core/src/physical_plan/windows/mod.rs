@@ -40,7 +40,6 @@ use std::convert::TryInto;
 use std::sync::Arc;
 
 mod bounded_window_agg_exec;
-mod linear_stream;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
