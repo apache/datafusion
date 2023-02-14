@@ -26,7 +26,7 @@ Patch releases are made on an adhoc basis, but we try and avoid them given the f
 ## Branching Policy
 
 - When we prepare a new release, we create a release branch, such as `branch-18` in the Apache repository (not in a fork)
-- We update the crate version and generate the changelog in this branch and create a PR against the master branch
+- We update the crate version and generate the changelog in this branch and create a PR against the main branch
 - Once the PR is approved and merged, we tag the rc in the release branch, and release from the release branch
 - Bug fixes can be merged to the release branch and patch releases can be created from the release branch
 
@@ -34,8 +34,8 @@ Patch releases are made on an adhoc basis, but we try and avoid them given the f
 
 If you would like to propose your change for inclusion in a release branch
 
-1. follow normal workflow to create PR to `master` branch and wait for its approval and merges.
-2. after PR is squash merged to `master`, branch from most recent release branch (e.g. `branch-18`), cherry-pick the commit and create a PR to release branch.
+1. follow normal workflow to create PR to `main` branch and wait for its approval and merges.
+2. after PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-18`), cherry-pick the commit and create a PR to release branch.
 
 ## Prerequisite
 
@@ -96,11 +96,11 @@ Here are the commands that could be used to prepare the `5.1.0` release:
 
 ### Update Version
 
-Checkout the master commit to be released
+Checkout the main commit to be released
 
 ```
 git fetch apache
-git checkout apache/master
+git checkout apache/main
 ```
 
 Update datafusion version in `datafusion/Cargo.toml` to `5.1.0`:
@@ -117,7 +117,7 @@ git commit -a -m 'Update version'
 
 ### Update CHANGELOG.md
 
-Define release branch (e.g. `master`), base version tag (e.g. `7.0.0`) and future version tag (e.g. `8.0.0`). Commits between the base version tag and the release branch will be used to
+Define release branch (e.g. `main`), base version tag (e.g. `7.0.0`) and future version tag (e.g. `8.0.0`). Commits between the base version tag and the release branch will be used to
 populate the changelog content.
 
 You will need a GitHub Personal Access Token for the following steps. Follow
@@ -126,7 +126,7 @@ to generate one if you do not already have one.
 
 ```bash
 # create the changelog
-CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-datafusion.sh master 8.0.0 7.0.0
+CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-datafusion.sh main 8.0.0 7.0.0
 # review change log / edit issues and labels if needed, rerun until you are happy with the result
 git commit -a -m 'Create changelog for release'
 ```
@@ -138,8 +138,8 @@ value of the `--cpus` argument in the `update_change_log.sh` script._
 You can add `invalid` or `development-process` label to exclude items from
 release notes.
 
-Send a PR to get these changes merged into `master` branch. If new commits that
-could change the change log content landed in the `master` branch before you
+Send a PR to get these changes merged into `main` branch. If new commits that
+could change the change log content landed in the `main` branch before you
 could merge the PR, you need to rerun the changelog update script to regenerate
 the changelog and update the PR accordingly.
 
@@ -163,7 +163,7 @@ Using a string such as `5.1.0` as the `<version>`, create and push the tag by ru
 
 ```shell
 git fetch apache
-git tag <version>-<rc> apache/master
+git tag <version>-<rc> apache/main
 # push tag to Github remote
 git push apache <version>
 ```
@@ -233,7 +233,7 @@ The `dev/release/verify-release-candidate.sh` is a script in this repository tha
 #### If the release is not approved
 
 If the release is not approved, fix whatever the problem is, merge changelog
-changes into master if there is any and try again with the next RC number.
+changes into main if there is any and try again with the next RC number.
 
 ## Finalize the release
 
