@@ -955,8 +955,8 @@ mod tests {
 
     #[test]
     fn test_gather_node_indices_not_remove() -> Result<()> {
-        // Expression: a@0 + b@1 + 1 > a@0 - b@1
-        // Provide a@0 + b@1, not remove a@0 or b@1, only remove edges since a@0 - b@1
+        // Expression: a@0 + b@1 + 1 > a@0 - b@1 -> provide a@0 + b@1
+        // Not remove a@0 or b@1, only remove edges since a@0 - b@1
         // has also leaf nodes a@0 and b@1.
         let left_expr = Arc::new(BinaryExpr::new(
             Arc::new(BinaryExpr::new(
@@ -993,7 +993,7 @@ mod tests {
     }
     #[test]
     fn test_gather_node_indices_remove() -> Result<()> {
-        // Expression: a@0 + b@1 + 1 > y@0 - z@1
+        // Expression: a@0 + b@1 + 1 > y@0 - z@1 -> provide a@0 + b@1
         // We expect that 2 nodes will be pruned since we do not need a@ and b@
         let left_expr = Arc::new(BinaryExpr::new(
             Arc::new(BinaryExpr::new(
@@ -1031,7 +1031,7 @@ mod tests {
 
     #[test]
     fn test_gather_node_indices_remove_one() -> Result<()> {
-        // Expression: a@0 + b@1 + 1 > a@0 - z@1
+        // Expression: a@0 + b@1 + 1 > a@0 - z@1 -> provide a@0 + b@1
         // We expect that 1 nodes will be pruned since we do not need b@
         let left_expr = Arc::new(BinaryExpr::new(
             Arc::new(BinaryExpr::new(
@@ -1064,6 +1064,47 @@ mod tests {
         let final_node_count = graph.node_count();
         // Assert that the final node count is one less than the previous node count (i.e., one node was pruned).
         assert_eq!(prev_node_count, final_node_count + 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_gather_node_indices_cannot_provide() -> Result<()> {
+        // Expression: a@0 + 1 + b@1 > y@0 - z@1 -> provide a@0 + b@1
+        // TODO: We expect nodes a@0 and b@1 to be pruned, and intervals to be provided from the a@0 + b@1 node.
+        //  However, we do not have an exact node for a@0 + b@1 due to the binary tree structure of the expressions.
+        //  Pruning and interval providing for BinaryExpr expressions are more challenging without exact matches.
+        //  Currently, we only support exact matches for BinaryExprs, but we plan to extend support beyond exact matches in the future.
+        let left_expr = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Plus,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+            )),
+            Operator::Plus,
+            Arc::new(Column::new("b", 1)),
+        ));
+
+        let right_expr = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("y", 0)),
+            Operator::Minus,
+            Arc::new(Column::new("z", 1)),
+        ));
+        let expr = Arc::new(BinaryExpr::new(left_expr, Operator::Gt, right_expr));
+        let mut graph = ExprIntervalGraph::try_new(expr).unwrap();
+        // Define a test leaf node.
+        let leaf_node = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("b", 1)),
+        ));
+        // Store the current node count.
+        let prev_node_count = graph.node_count();
+        // Gather the index of node in the expression graph that match the test leaf node.
+        graph.gather_node_indices(&[leaf_node]);
+        // Store the final node count.
+        let final_node_count = graph.node_count();
+        // Assert that the final node count is equal the previous node count (i.e., no node was pruned).
+        assert_eq!(prev_node_count, final_node_count);
         Ok(())
     }
 }
