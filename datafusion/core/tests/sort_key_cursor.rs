@@ -186,7 +186,7 @@ impl CursorBuilder {
         SortKeyCursor::new(
             stream_idx.expect("stream idx not set"),
             batch_id.expect("batch id not set"),
-            rows,
+            rows.into(),
         )
     }
 }
