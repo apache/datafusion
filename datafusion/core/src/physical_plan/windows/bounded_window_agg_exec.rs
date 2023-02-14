@@ -363,17 +363,10 @@ impl SortedPartitionByBoundedWindowStream {
                 for window_agg_state in &self.window_agg_states {
                     let mut map = IndexMap::new();
                     for (key, value) in window_agg_state {
-                        // println!("key:{:?}", key);
-                        // println!("value:{:?}", value.state.out_col.len());
                         map.insert(key, value.state.out_col.len());
                     }
                     res_generated.push(map);
                 }
-                // for (key, elem) in &self.partition_buffers{
-                //     println!("key: {:?}, elem:{:?}", key, elem.indices);
-                //     println!("key: {:?}, len:{:?}", key, elem.indices.len());
-                // }
-                // println!("res_generated:{:?}", res_generated);
                 let mut counter: IndexMap<Vec<ScalarValue>, Vec<usize>> = IndexMap::new();
                 let n_window_col = self.window_agg_states.len();
                 let mut rows_gen = vec![vec![]; n_window_col];
@@ -390,7 +383,6 @@ impl SortedPartitionByBoundedWindowStream {
                     for (window_idx, window_agg_state) in
                         self.window_agg_states.iter().enumerate()
                     {
-                        // println!("row:{:?}", row);
                         let partition = window_agg_state.get(&row).unwrap();
                         if counts[window_idx] < partition.state.out_col.len() {
                             let res = ScalarValue::try_from_array(
@@ -402,7 +394,6 @@ impl SortedPartitionByBoundedWindowStream {
                         } else {
                             break;
                         }
-                        // println!("partition.out_col: {:?}", partition.state.out_col);
                     }
                     if row_res.len() != n_window_col {
                         break;
@@ -410,19 +401,14 @@ impl SortedPartitionByBoundedWindowStream {
                     for (col_idx, elem) in row_res.into_iter().enumerate() {
                         rows_gen[col_idx].push(elem)
                     }
-                    // println!("row_res:{:?}", row_res);
-                    // println!("counts: {:?}", counts);
                 }
-                // println!("counter:{:?}", counter);
                 for (key, val) in counter.iter() {
                     if let Some(partition_batch_state) =
                         self.partition_buffers.get_mut(key)
                     {
                         partition_batch_state.n_out_row = *val.iter().min().unwrap();
-                        // println!("partition_batch_state.n_out_row: {:?}", partition_batch_state.n_out_row);
                     }
                 }
-                // println!("rows_gen:{:?}", rows_gen);
                 if rows_gen.is_empty() {
                     Ok(None)
                 } else {
@@ -461,107 +447,93 @@ impl SortedPartitionByBoundedWindowStream {
     }
 
     fn update_partition_batch(&mut self, record_batch: RecordBatch) -> Result<()> {
-        match self.search_mode {
-            PartitionSearchMode::Sorted => {
-                let partition_columns = self.partition_columns(&record_batch)?;
-                let num_rows = record_batch.num_rows();
-                if num_rows > 0 {
+        let num_rows = record_batch.num_rows();
+        if num_rows > 0 {
+            let (partition_points, partition_bys) = match self.search_mode {
+                PartitionSearchMode::Sorted => {
+                    let partition_columns = self.partition_columns(&record_batch)?;
                     let partition_points =
                         self.evaluate_partition_points(num_rows, &partition_columns)?;
-                    for partition_range in partition_points {
-                        let indices = (partition_range.start..partition_range.end)
-                            .collect::<Vec<_>>();
-                        let partition_row = partition_columns
-                            .iter()
-                            .map(|arr| {
-                                ScalarValue::try_from_array(
-                                    &arr.values,
-                                    partition_range.start,
-                                )
-                            })
-                            .collect::<Result<PartitionKey>>()?;
-                        let partition_batch = record_batch.slice(
-                            partition_range.start,
-                            partition_range.end - partition_range.start,
-                        );
-                        if let Some(partition_batch_state) =
-                            self.partition_buffers.get_mut(&partition_row)
-                        {
-                            partition_batch_state.record_batch = merge_batches(
-                                &partition_batch_state.record_batch,
-                                &partition_batch,
-                                self.input.schema(),
-                            )?;
-                            partition_batch_state.indices.extend(indices);
-                        } else {
-                            let partition_batch_state = PartitionBatchState {
-                                record_batch: partition_batch,
-                                is_end: false,
-                                indices,
-                                n_out_row: 0,
-                            };
-                            self.partition_buffers
-                                .insert(partition_row, partition_batch_state);
-                        };
-                    }
+                    let partition_bys = partition_columns
+                        .into_iter()
+                        .map(|arr| arr.values)
+                        .collect::<Vec<ArrayRef>>();
+                    (partition_points, partition_bys)
                 }
+                PartitionSearchMode::Linear => {
+                    let partition_bys =
+                        self.evaluate_partition_by_column_values(&record_batch)?;
+                    let partition_points =
+                        self.evaluate_partition_points_linear(num_rows, &partition_bys)?;
+                    (partition_points, partition_bys)
+                }
+            };
+            for partition_range in partition_points {
+                let indices =
+                    (partition_range.start..partition_range.end).collect::<Vec<_>>();
+                let partition_row =
+                    get_row_at_idx(&partition_bys, partition_range.start)?;
+                let partition_batch = record_batch.slice(
+                    partition_range.start,
+                    partition_range.end - partition_range.start,
+                );
+                if let Some(partition_batch_state) =
+                    self.partition_buffers.get_mut(&partition_row)
+                {
+                    partition_batch_state.record_batch = merge_batches(
+                        &partition_batch_state.record_batch,
+                        &partition_batch,
+                        self.input.schema(),
+                    )?;
+                    partition_batch_state.indices.extend(indices);
+                } else {
+                    let partition_batch_state = PartitionBatchState {
+                        record_batch: partition_batch,
+                        is_end: false,
+                        indices,
+                        n_out_row: 0,
+                    };
+                    self.partition_buffers
+                        .insert(partition_row, partition_batch_state);
+                };
+            }
+        }
+        match self.search_mode {
+            PartitionSearchMode::Sorted => {
                 let n_partitions = self.partition_buffers.len();
                 for (idx, (_, partition_batch_state)) in
                     self.partition_buffers.iter_mut().enumerate()
                 {
                     partition_batch_state.is_end |= idx < n_partitions - 1;
                 }
-                self.input_buffer = if self.input_buffer.num_rows() == 0 {
-                    record_batch
-                } else {
-                    merge_batches(&self.input_buffer, &record_batch, self.input.schema())?
-                };
             }
-            PartitionSearchMode::Linear => {
-                let num_rows = record_batch.num_rows();
-                if num_rows > 0 {
-                    let partition_bys =
-                        self.evaluate_partition_by_column_values(&record_batch)?;
-                    let partition_points =
-                        self.evaluate_partition_points_linear(num_rows, &partition_bys)?;
-                    for partition_range in partition_points {
-                        let indices = (partition_range.start..partition_range.end)
-                            .collect::<Vec<_>>();
-                        let partition_row =
-                            get_row_at_idx(&partition_bys, partition_range.start)?;
-                        let partition_batch = record_batch.slice(
-                            partition_range.start,
-                            partition_range.end - partition_range.start,
-                        );
-                        if let Some(partition_batch_state) =
-                            self.partition_buffers.get_mut(&partition_row)
-                        {
-                            partition_batch_state.record_batch = merge_batches(
-                                &partition_batch_state.record_batch,
-                                &partition_batch,
-                                self.input.schema(),
-                            )?;
-                            partition_batch_state.indices.extend(indices);
-                        } else {
-                            let partition_batch_state = PartitionBatchState {
-                                record_batch: partition_batch,
-                                is_end: false,
-                                indices,
-                                n_out_row: 0,
-                            };
-                            self.partition_buffers
-                                .insert(partition_row, partition_batch_state);
-                        };
-                    }
-                }
-                self.input_buffer = if self.input_buffer.num_rows() == 0 {
-                    record_batch
-                } else {
-                    merge_batches(&self.input_buffer, &record_batch, self.input.schema())?
-                };
-            }
-        }
+            _ => {}
+        };
 
+        self.input_buffer = if self.input_buffer.num_rows() == 0 {
+            record_batch
+        } else {
+            merge_batches(&self.input_buffer, &record_batch, self.input.schema())?
+        };
+
+        Ok(())
+    }
+
+    fn print_partition_batches(&self) -> Result<()> {
+        println!("n_partition:{:?}", self.partition_buffers.len());
+        for (partition_key, partition_batch) in &self.partition_buffers {
+            println!(
+                "partition_key:{:?}, n_row: {:?}",
+                partition_key,
+                partition_batch.record_batch.num_rows()
+            );
+            println!(
+                "n_out_row: {:?}, len indices: {:?}",
+                partition_batch.n_out_row,
+                partition_batch.indices.len()
+            );
+            // print_batches(&vec![partition_batch.record_batch.clone()])?;
+        }
         Ok(())
     }
 }
