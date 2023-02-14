@@ -79,13 +79,13 @@ impl Debug for SortedStream {
     }
 }
 
-/// A batch of rows taken from multiple [RowSelection]s
+/// Cloneable batch of rows taken from multiple [RowSelection]s
 #[derive(Debug, Clone)]
 pub struct RowBatch {
     // refs to the rows referenced by `indices`
     rows: Vec<Arc<RowSelection>>,
     // first item = index of the ref in `rows`, second item=index within that row
-    indices: Vec<(usize, usize)>,
+    indices: Arc<Vec<(usize, usize)>>,
 }
 
 impl RowBatch {
@@ -94,7 +94,10 @@ impl RowBatch {
     /// `indices` defines where each row comes from: first element of the tuple is the index
     /// of the ref in `rows`, second is the index within that `RowSelection`.
     pub fn new(rows: Vec<Arc<RowSelection>>, indices: Vec<(usize, usize)>) -> Self {
-        Self { rows, indices }
+        Self {
+            rows,
+            indices: Arc::new(indices),
+        }
     }
 
     /// Returns the nth row in the batch.
@@ -125,7 +128,7 @@ impl RowBatch {
 impl From<RowSelection> for RowBatch {
     fn from(value: RowSelection) -> Self {
         Self {
-            indices: (0..value.num_rows()).map(|i| (0, i)).collect(),
+            indices: Arc::new((0..value.num_rows()).map(|i| (0, i)).collect()),
             rows: vec![Arc::new(value)],
         }
     }

@@ -52,7 +52,7 @@ use crate::physical_plan::{
 };
 use datafusion_physical_expr::EquivalenceProperties;
 
-use super::{SendableSortStream, SortStreamItem};
+use super::{RowBatch, RowSelection, SendableSortStream, SortStreamItem};
 
 /// Sort preserving merge execution plan
 ///
@@ -261,6 +261,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     &self.expr,
                     tracking_metrics,
                     context.session_config().batch_size(),
+                    // dont emit row encodings for this plan
                     false,
                 )?;
 
@@ -332,8 +333,7 @@ pub(crate) struct SortPreservingMergeStream {
     ///
     /// Exhausted batches will be popped off the front once all
     /// their rows have been yielded to the output
-    batches: Vec<VecDeque<RecordBatch>>,
-
+    batches: Vec<VecDeque<(RecordBatch, Option<RowBatch>)>>,
     /// The accumulated row indexes for the next record batch
     in_progress: Vec<RowIndex>,
 
@@ -378,6 +378,8 @@ pub(crate) struct SortPreservingMergeStream {
     /// row converter
     row_converter: RowConverter,
     /// if this is false it will always yield None for the row encoding
+    /// this is true when `SortPreservingMergeStream` is used within `SortExec`
+    /// but not when its used in `SortPreservingMergeStream`
     preserve_row_encoding: bool,
 }
 
@@ -481,13 +483,17 @@ impl SortPreservingMergeStream {
                             },
                         };
 
+                        if self.preserve_row_encoding {
+                            self.batches[idx].push_back((batch, Some(rows.clone())))
+                        } else {
+                            self.batches[idx].push_back((batch, None))
+                        }
                         self.cursors[idx] = Some(SortKeyCursor::new(
                             idx,
                             self.next_batch_id, // assign this batch an ID
                             rows,
                         ));
                         self.next_batch_id += 1;
-                        self.batches[idx].push_back(batch)
                     } else {
                         empty_batch = true;
                     }
@@ -525,7 +531,9 @@ impl SortPreservingMergeStream {
                     .batches
                     .iter()
                     .flat_map(|batch| {
-                        batch.iter().map(|batch| batch.column(column_idx).data())
+                        batch
+                            .iter()
+                            .map(|(batch, _rows)| batch.column(column_idx).data())
                     })
                     .collect();
 
@@ -569,6 +577,63 @@ impl SortPreservingMergeStream {
                 make_arrow_array(array_data.freeze())
             })
             .collect();
+        dbg!(self.preserve_row_encoding);
+        let rows = if self.preserve_row_encoding {
+            if self.in_progress.is_empty() {
+                Some(RowBatch::new(vec![], vec![]))
+            } else {
+                let rows = self
+                    .batches
+                    .iter()
+                    .flat_map(|batch| {
+                        batch.iter().map(|(_, rows)| {
+                            rows.as_ref().expect(
+                                "if preserve_row_encoding was true \
+                                     then row data should've been saved in batch",
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let mut new_indices: Vec<(usize, usize)> =
+                    Vec::with_capacity(self.in_progress.len());
+                let mut new_rows: Vec<Arc<RowSelection>> = vec![];
+                let first = &self.in_progress[0];
+                let mut buffer_idx =
+                    stream_to_buffer_idx[first.stream_idx] + first.batch_idx;
+                let mut start_row_idx = first.row_idx;
+                let mut end_row_idx = start_row_idx + 1;
+                for row_index in self.in_progress.iter().skip(1) {
+                    let next_buffer_idx =
+                        stream_to_buffer_idx[row_index.stream_idx] + row_index.batch_idx;
+
+                    if next_buffer_idx == buffer_idx && row_index.row_idx == end_row_idx {
+                        // subsequent row in same batch
+                        end_row_idx += 1;
+                        continue;
+                    }
+                    let row_batch = rows[buffer_idx];
+                    let row_indices = &row_batch.indices[start_row_idx..end_row_idx];
+                    new_indices.extend(
+                        row_indices.iter().map(|(x, y)| (*x + new_rows.len(), *y)),
+                    );
+                    new_rows.extend(row_batch.rows.iter().map(Arc::clone));
+                    // start new batch of rows
+                    buffer_idx = next_buffer_idx;
+                    start_row_idx = row_index.row_idx;
+                    end_row_idx = start_row_idx + 1;
+                }
+                // emit final batch of rows
+                let row_batch = rows[buffer_idx];
+                let row_indices = &row_batch.indices[start_row_idx..end_row_idx];
+                new_indices
+                    .extend(row_indices.iter().map(|(x, y)| (*x + new_rows.len(), *y)));
+                new_rows.extend(row_batch.rows.iter().map(Arc::clone));
+                assert_eq!(new_indices.len(), self.in_progress.len());
+                Some(RowBatch::new(new_rows, new_indices))
+            }
+        } else {
+            None as Option<RowBatch>
+        };
 
         self.in_progress.clear();
 
@@ -588,7 +653,7 @@ impl SortPreservingMergeStream {
         }
 
         RecordBatch::try_new(self.schema.clone(), columns)
-            .map(|batch| (batch, None))
+            .map(|batch| (batch, rows))
             .map_err(Into::into)
     }
 }
@@ -647,7 +712,6 @@ impl SortPreservingMergeStream {
                 .as_mut()
                 .filter(|cursor| !cursor.is_finished())
                 .map(|cursor| (cursor.stream_idx(), cursor.advance()));
-
             if let Some((stream_idx, row_idx)) = next {
                 self.loser_tree_adjusted = false;
                 let batch_idx = self.batches[stream_idx].len() - 1;

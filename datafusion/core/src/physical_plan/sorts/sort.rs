@@ -142,12 +142,12 @@ impl ExternalSorter {
             // for being reliable, we need to reflect the memory usage of the partial batch.
             //
             // In addition, if it's row encoding was preserved, that would also change the size.
-            let new_size = batch_byte_size(&partial.sorted_batch)
-                + partial
-                    .sort_data
-                    .rows
-                    .as_ref()
-                    .map_or(0, |rows| rows.size());
+            let new_size = batch_byte_size(&partial.sorted_batch);
+            // + partial
+            //     .sort_data
+            //     .rows
+            //     .as_ref()
+            //     .map_or(0, |rows| rows.size());
             match new_size.cmp(&size) {
                 Ordering::Greater => {
                     // We don't have to call try_grow here, since we have already used the
@@ -210,6 +210,7 @@ impl ExternalSorter {
             let tracking_metrics = self
                 .metrics_set
                 .new_final_tracking(self.partition_id, &self.runtime.memory_pool);
+            println!("using SortPreservingMergeStream to emit row encodings");
             Ok(Box::pin(SortPreservingMergeStream::new_from_streams(
                 streams,
                 self.schema.clone(),
