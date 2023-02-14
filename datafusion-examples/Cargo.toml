@@ -36,7 +36,7 @@ required-features = ["datafusion/avro"]
 [dev-dependencies]
 arrow = "32.0.0"
 arrow-flight = { version = "32.0.0", features = ["flight-sql-experimental"] }
-arrow-schema = "32.0.0"
+arrow-schema = "33.0.0"
 async-trait = "0.1.41"
 dashmap = "5.4"
 datafusion = { path = "../datafusion/core" }
