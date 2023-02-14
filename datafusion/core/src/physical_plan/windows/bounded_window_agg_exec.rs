@@ -139,11 +139,6 @@ impl BoundedWindowAggExec {
             if let Some(a) = sort_keys.iter().find(|&e| e.expr.eq(item)) {
                 result.push(a.clone());
             }
-            // else {
-            //     return Err(DataFusionError::Internal(
-            //         "Partition key not found in sort keys".to_string(),
-            //     ));
-            // }
         }
         Ok(result)
     }
@@ -686,187 +681,87 @@ impl SortedPartitionByBoundedWindowStream {
     /// Prunes the sections of the record batch (for each partition)
     /// that we no longer need to calculate the window function result.
     fn prune_partition_batches(&mut self) -> Result<()> {
-        match self.search_mode {
-            PartitionSearchMode::Sorted => {
-                // Remove partitions which we know already ended (is_end flag is true).
-                // Since the retain method preserves insertion order, we still have
-                // ordering in between partitions after removal.
-                self.partition_buffers
-                    .retain(|_, partition_batch_state| !partition_batch_state.is_end);
+        // Implementation is same for Linear and Sorted Versions
 
-                // The data in `self.partition_batches` is used by all window expressions.
-                // Therefore, when removing from `self.partition_batches`, we need to remove
-                // from the earliest range boundary among all window expressions. Variable
-                // `n_prune_each_partition` fill the earliest range boundary information for
-                // each partition. This way, we can delete the no-longer-needed sections from
-                // `self.partition_batches`.
-                // For instance, if window frame one uses [10, 20] and window frame two uses
-                // [5, 15]; we only prune the first 5 elements from the corresponding record
-                // batch in `self.partition_batches`.
+        // Remove partitions which we know already ended (is_end flag is true).
+        // Since the retain method preserves insertion order, we still have
+        // ordering in between partitions after removal.
+        self.partition_buffers
+            .retain(|_, partition_batch_state| !partition_batch_state.is_end);
 
-                // Calculate how many elements to prune for each partition batch
-                let mut n_prune_each_partition: HashMap<PartitionKey, usize> =
-                    HashMap::new();
-                for window_agg_state in self.window_agg_states.iter_mut() {
-                    window_agg_state.retain(|_, WindowState { state, .. }| !state.is_end);
-                    for (partition_row, WindowState { state: value, .. }) in
-                        window_agg_state
-                    {
-                        let n_prune = min(
-                            value.window_frame_range.start,
-                            value.last_calculated_index,
-                        );
-                        if let Some(state) = n_prune_each_partition.get_mut(partition_row)
-                        {
-                            if n_prune < *state {
-                                *state = n_prune;
-                            }
-                        } else {
-                            n_prune_each_partition.insert(partition_row.clone(), n_prune);
-                        }
+        // The data in `self.partition_batches` is used by all window expressions.
+        // Therefore, when removing from `self.partition_batches`, we need to remove
+        // from the earliest range boundary among all window expressions. Variable
+        // `n_prune_each_partition` fill the earliest range boundary information for
+        // each partition. This way, we can delete the no-longer-needed sections from
+        // `self.partition_batches`.
+        // For instance, if window frame one uses [10, 20] and window frame two uses
+        // [5, 15]; we only prune the first 5 elements from the corresponding record
+        // batch in `self.partition_batches`.
+
+        // Calculate how many elements to prune for each partition batch
+        let mut n_prune_each_partition: HashMap<PartitionKey, usize> = HashMap::new();
+        for window_agg_state in self.window_agg_states.iter_mut() {
+            window_agg_state.retain(|_, WindowState { state, .. }| !state.is_end);
+            for (partition_row, WindowState { state: value, .. }) in window_agg_state {
+                let n_prune =
+                    min(value.window_frame_range.start, value.last_calculated_index);
+                if let Some(state) = n_prune_each_partition.get_mut(partition_row) {
+                    if n_prune < *state {
+                        *state = n_prune;
                     }
-                }
-
-                let err = || {
-                    DataFusionError::Execution("Expects to have partition".to_string())
-                };
-                // Retract no longer needed parts during window calculations from partition batch:
-                for (partition_row, n_prune) in n_prune_each_partition.iter() {
-                    let partition_batch_state = self
-                        .partition_buffers
-                        .get_mut(partition_row)
-                        .ok_or_else(err)?;
-                    let batch = &partition_batch_state.record_batch;
-                    partition_batch_state.record_batch =
-                        batch.slice(*n_prune, batch.num_rows() - n_prune);
-
-                    // Update state indices since we have pruned some rows from the beginning:
-                    for window_agg_state in self.window_agg_states.iter_mut() {
-                        let window_state =
-                            window_agg_state.get_mut(partition_row).ok_or_else(err)?;
-                        let mut state = &mut window_state.state;
-                        state.window_frame_range = Range {
-                            start: state.window_frame_range.start - n_prune,
-                            end: state.window_frame_range.end - n_prune,
-                        };
-                        state.last_calculated_index -= n_prune;
-                        state.offset_pruned_rows += n_prune;
-                    }
-                }
-            }
-            PartitionSearchMode::Linear => {
-                // Remove partitions which we know already ended (is_end flag is true).
-                // Since the retain method preserves insertion order, we still have
-                // ordering in between partitions after removal.
-                self.partition_buffers
-                    .retain(|_, partition_batch_state| !partition_batch_state.is_end);
-
-                // The data in `self.partition_batches` is used by all window expressions.
-                // Therefore, when removing from `self.partition_batches`, we need to remove
-                // from the earliest range boundary among all window expressions. Variable
-                // `n_prune_each_partition` fill the earliest range boundary information for
-                // each partition. This way, we can delete the no-longer-needed sections from
-                // `self.partition_batches`.
-                // For instance, if window frame one uses [10, 20] and window frame two uses
-                // [5, 15]; we only prune the first 5 elements from the corresponding record
-                // batch in `self.partition_batches`.
-
-                // Calculate how many elements to prune for each partition batch
-                let mut n_prune_each_partition: HashMap<PartitionKey, usize> =
-                    HashMap::new();
-                for window_agg_state in self.window_agg_states.iter_mut() {
-                    window_agg_state.retain(|_, WindowState { state, .. }| !state.is_end);
-                    for (partition_row, WindowState { state: value, .. }) in
-                        window_agg_state
-                    {
-                        let n_prune = min(
-                            value.window_frame_range.start,
-                            value.last_calculated_index,
-                        );
-                        if let Some(state) = n_prune_each_partition.get_mut(partition_row)
-                        {
-                            if n_prune < *state {
-                                *state = n_prune;
-                            }
-                        } else {
-                            n_prune_each_partition.insert(partition_row.clone(), n_prune);
-                        }
-                    }
-                }
-                // println!("n_prune_each_partition:{:?}", n_prune_each_partition);
-
-                let err = || {
-                    DataFusionError::Execution("Expects to have partition".to_string())
-                };
-                // Retract no longer needed parts during window calculations from partition batch:
-                for (partition_row, n_prune) in n_prune_each_partition.iter() {
-                    let partition_batch_state = self
-                        .partition_buffers
-                        .get_mut(partition_row)
-                        .ok_or_else(err)?;
-                    // TODO: do not ues below value for each window state take minimum beginning
-                    // let n_prune = partition_batch_state.n_out_row;
-                    let batch = &partition_batch_state.record_batch;
-                    partition_batch_state.record_batch =
-                        batch.slice(*n_prune, batch.num_rows() - n_prune);
-
-                    partition_batch_state.indices.drain(0..*n_prune);
-                    // println!(
-                    //     "partition_batch_state.n_out_row:{:?}, n_prune{:?}",
-                    //     partition_batch_state.n_out_row, n_prune
-                    // );
-                    // partition_batch_state.n_out_row -= *n_prune;
-
-                    // Update state indices since we have pruned some rows from the beginning:
-                    for window_agg_state in self.window_agg_states.iter_mut() {
-                        let window_state =
-                            window_agg_state.get_mut(partition_row).ok_or_else(err)?;
-                        let mut state = &mut window_state.state;
-                        // println!(
-                        //     "state.window_frame_range:{:?}, n_prune:{:?}",
-                        //     state.window_frame_range, n_prune
-                        // );
-                        state.window_frame_range = Range {
-                            start: state.window_frame_range.start - n_prune,
-                            end: state.window_frame_range.end - n_prune,
-                        };
-                        state.last_calculated_index -= n_prune;
-                        state.offset_pruned_rows += n_prune;
-                    }
+                } else {
+                    n_prune_each_partition.insert(partition_row.clone(), n_prune);
                 }
             }
         }
+
+        let err = || DataFusionError::Execution("Expects to have partition".to_string());
+        // Retract no longer needed parts during window calculations from partition batch:
+        for (partition_row, n_prune) in n_prune_each_partition.iter() {
+            let partition_batch_state = self
+                .partition_buffers
+                .get_mut(partition_row)
+                .ok_or_else(err)?;
+            // TODO: do not ues below value for each window state take minimum beginning
+            let batch = &partition_batch_state.record_batch;
+            partition_batch_state.record_batch =
+                batch.slice(*n_prune, batch.num_rows() - n_prune);
+
+            partition_batch_state.indices.drain(0..*n_prune);
+            // partition_batch_state.n_out_row -= *n_prune;
+
+            // Update state indices since we have pruned some rows from the beginning:
+            for window_agg_state in self.window_agg_states.iter_mut() {
+                let window_state =
+                    window_agg_state.get_mut(partition_row).ok_or_else(err)?;
+                let mut state = &mut window_state.state;
+                state.window_frame_range = Range {
+                    start: state.window_frame_range.start - n_prune,
+                    end: state.window_frame_range.end - n_prune,
+                };
+                state.last_calculated_index -= n_prune;
+                state.offset_pruned_rows += n_prune;
+            }
+        }
+
         Ok(())
     }
 
     /// Prunes the section of the input batch whose aggregate results
     /// are calculated and emitted.
     fn prune_input_batch(&mut self, n_out: usize) -> Result<()> {
-        match self.search_mode {
-            PartitionSearchMode::Sorted => {
-                let n_to_keep = self.input_buffer.num_rows() - n_out;
-                let batch_to_keep = self
-                    .input_buffer
-                    .columns()
-                    .iter()
-                    .map(|elem| elem.slice(n_out, n_to_keep))
-                    .collect::<Vec<_>>();
-                self.input_buffer =
-                    RecordBatch::try_new(self.input_buffer.schema(), batch_to_keep)?;
-            }
-            PartitionSearchMode::Linear => {
-                // TODO: ADD pruning for indices field in PartitionBatchState
-                let n_to_keep = self.input_buffer.num_rows() - n_out;
-                let batch_to_keep = self
-                    .input_buffer
-                    .columns()
-                    .iter()
-                    .map(|elem| elem.slice(n_out, n_to_keep))
-                    .collect::<Vec<_>>();
-                self.input_buffer =
-                    RecordBatch::try_new(self.input_buffer.schema(), batch_to_keep)?;
-            }
-        }
+        // Implementation is same for both Linear and Sorted version
+        // TODO: ADD pruning for indices field in PartitionBatchState
+        let n_to_keep = self.input_buffer.num_rows() - n_out;
+        let batch_to_keep = self
+            .input_buffer
+            .columns()
+            .iter()
+            .map(|elem| elem.slice(n_out, n_to_keep))
+            .collect::<Vec<_>>();
+        self.input_buffer =
+            RecordBatch::try_new(self.input_buffer.schema(), batch_to_keep)?;
         Ok(())
     }
 
