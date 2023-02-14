@@ -17,7 +17,7 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::normalize_ident;
-use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DFSchema, DataFusionError, Result};
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::{
     expr, window_function, AggregateFunction, BuiltinScalarFunction, Expr, WindowFrame,
@@ -72,12 +72,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         // Construct equivalent window frame. Only in below expressions for RANGE ORDER BY is not a requirement
                         // In the downstream we will assume that RANGE contains ORDER BY clause.
                         if (window_frame.start_bound.is_unbounded() || window_frame.start_bound == WindowFrameBound::CurrentRow)
-                        && (window_frame.end_bound == WindowFrameBound::CurrentRow || window_frame.end_bound.is_unbounded()){
-                            Ok(WindowFrame{
-                                units: WindowFrameUnits::Rows,
-                                start_bound: WindowFrameBound::Preceding(ScalarValue::Null),
-                                end_bound: WindowFrameBound::Following(ScalarValue::Null)
-                            })
+                        && (window_frame.end_bound == WindowFrameBound::CurrentRow || window_frame.end_bound.is_unbounded()) {
+                            if order_by.is_empty() {
+                                Ok(WindowFrame::new(false))
+                            } else {
+                                Ok(window_frame)
+                            }
                         } else {
                             Err(DataFusionError::Plan(format!(
                                 "With window frame of type RANGE, the order by expression must be of length 1, got {}", order_by.len())))

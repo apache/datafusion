@@ -621,22 +621,21 @@ async fn window_frame_ranges_unbounded_preceding_following() -> Result<()> {
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
                SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as sum1, \
-               COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as cnt1, \
-               COUNT(c1) OVER(RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) as cnt2
+               COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as cnt1 \
                FROM aggregate_test_100 \
                ORDER BY c9 \
                LIMIT 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------+------+------+",
-        "| sum1 | cnt1 | cnt2 |",
-        "+------+------+------+",
-        "| 285  | 100  | 100  |",
-        "| 123  | 63   | 100  |",
-        "| 285  | 100  | 100  |",
-        "| 123  | 63   | 100  |",
-        "| 123  | 63   | 100  |",
-        "+------+------+------+",
+        "+------+------+",
+        "| sum1 | cnt1 |",
+        "+------+------+",
+        "| 285  | 100  |",
+        "| 123  | 63   |",
+        "| 285  | 100  |",
+        "| 123  | 63   |",
+        "| 123  | 63   |",
+        "+------+------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -1054,19 +1053,6 @@ async fn window_frame_creation() -> Result<()> {
     let df = ctx
         .sql(
             "SELECT
-                COUNT(c1) OVER (ORDER BY c2 RANGE BETWEEN '1 DAY' PRECEDING AND '2 DAY' FOLLOWING)
-                FROM aggregate_test_100;",
-        )
-        .await?;
-    let results = df.collect().await;
-    assert_contains!(
-        results.err().unwrap().to_string(),
-        "Internal error: Operator - is not implemented for types UInt32(1) and Utf8(\"1 DAY\"). This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
-    );
-
-    let df = ctx
-        .sql(
-            "SELECT
                 COUNT(c1) OVER(GROUPS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
                 FROM aggregate_test_100;",
         )
@@ -1145,6 +1131,39 @@ async fn test_window_row_number_aggregate() -> Result<()> {
         "| 417 | 14  | 14  |",
         "| 794 | 95  | 95  |",
         "+-----+-----+-----+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_window_range_equivalent_frames() -> Result<()> {
+    let config = SessionConfig::new();
+    let ctx = SessionContext::with_config(config);
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT
+          c9,
+          COUNT(*) OVER(ORDER BY c9, c1 RANGE BETWEEN CURRENT ROW AND CURRENT ROW) AS cnt1,
+          COUNT(*) OVER(ORDER BY c9, c1 RANGE UNBOUNDED PRECEDING) AS cnt2,
+          COUNT(*) OVER(ORDER BY c9, c1 RANGE CURRENT ROW) AS cnt3,
+          COUNT(*) OVER(RANGE BETWEEN CURRENT ROW AND CURRENT ROW) AS cnt4,
+          COUNT(*) OVER(RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cnt5,
+          COUNT(*) OVER(RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS cnt6
+          FROM aggregate_test_100
+          ORDER BY c9
+          LIMIT 5";
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------+------+------+------+------+------+------+",
+        "| c9        | cnt1 | cnt2 | cnt3 | cnt4 | cnt5 | cnt6 |",
+        "+-----------+------+------+------+------+------+------+",
+        "| 28774375  | 1    | 1    | 1    | 100  | 100  | 100  |",
+        "| 63044568  | 1    | 2    | 1    | 100  | 100  | 100  |",
+        "| 141047417 | 1    | 3    | 1    | 100  | 100  | 100  |",
+        "| 141680161 | 1    | 4    | 1    | 100  | 100  | 100  |",
+        "| 145294611 | 1    | 5    | 1    | 100  | 100  | 100  |",
+        "+-----------+------+------+------+------+------+------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
