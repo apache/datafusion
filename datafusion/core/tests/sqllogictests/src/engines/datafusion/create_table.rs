@@ -16,8 +16,8 @@
 // under the License.
 
 use super::error::Result;
-use crate::engines::datafusion::error::DFSqlLogicTestError;
 use crate::engines::datafusion::util::LogicTestContextProvider;
+use crate::{engines::datafusion::error::DFSqlLogicTestError, output::DFOutput};
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DataFusionError, OwnedTableReference};
@@ -32,7 +32,7 @@ pub async fn create_table(
     columns: Vec<ColumnDef>,
     if_not_exists: bool,
     or_replace: bool,
-) -> Result<DBOutput> {
+) -> Result<DFOutput> {
     let table_reference =
         object_name_to_table_reference(name, ctx.enable_ident_normalization())?;
     let existing_table = ctx.table(&table_reference).await;
@@ -60,7 +60,7 @@ fn create_new_table(
     ctx: &SessionContext,
     table_reference: OwnedTableReference,
     columns: Vec<ColumnDef>,
-) -> Result<DBOutput> {
+) -> Result<DFOutput> {
     let config = ctx.copied_config();
     let sql_to_rel = SqlToRel::new_with_options(
         &LogicTestContextProvider {},

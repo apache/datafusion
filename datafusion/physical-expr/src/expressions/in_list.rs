@@ -924,7 +924,7 @@ mod tests {
 
         // test the optimization: set
         // expression: "a in (99..300), the data type of list is INT32
-        let list = (99i32..300).into_iter().map(lit).collect::<Vec<_>>();
+        let list = (99i32..300).map(lit).collect::<Vec<_>>();
 
         in_list!(
             batch,

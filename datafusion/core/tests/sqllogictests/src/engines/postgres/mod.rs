@@ -22,8 +22,10 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use log::debug;
-use sqllogictest::{ColumnType, DBOutput};
+use sqllogictest::DBOutput;
 use tokio::task::JoinHandle;
+
+use crate::output::{DFColumnType, DFOutput};
 
 use super::conversion::*;
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
@@ -131,7 +133,7 @@ impl Postgres {
     /// ```
     ///
     /// And read the file locally.
-    async fn run_copy_command(&mut self, sql: &str) -> Result<DBOutput> {
+    async fn run_copy_command(&mut self, sql: &str) -> Result<DFOutput> {
         let canonical_sql = sql.trim_start().to_ascii_lowercase();
 
         debug!("Handling COPY command: {sql}");
@@ -256,8 +258,9 @@ fn cell_to_string(row: &Row, column: &Column, idx: usize) -> String {
 #[async_trait]
 impl sqllogictest::AsyncDB for Postgres {
     type Error = Error;
+    type ColumnType = DFColumnType;
 
-    async fn run(&mut self, sql: &str) -> Result<DBOutput, Self::Error> {
+    async fn run(&mut self, sql: &str) -> Result<DFOutput, Self::Error> {
         println!(
             "[{}] Running query: \"{}\"",
             self.relative_path.display(),
@@ -301,12 +304,12 @@ impl sqllogictest::AsyncDB for Postgres {
         if output.is_empty() {
             let stmt = self.client.prepare(sql).await?;
             Ok(DBOutput::Rows {
-                types: vec![ColumnType::Any; stmt.columns().len()],
+                types: vec![DFColumnType::Any; stmt.columns().len()],
                 rows: vec![],
             })
         } else {
             Ok(DBOutput::Rows {
-                types: vec![ColumnType::Any; output[0].len()],
+                types: vec![DFColumnType::Any; output[0].len()],
                 rows: output,
             })
         }

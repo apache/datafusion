@@ -36,6 +36,7 @@ use datafusion_physical_expr::execution_props::ExecutionProps;
 /// is optimized to
 /// `Filter: b > 2`
 ///
+/// [`Expr`]: datafusion_expr::Expr
 #[derive(Default)]
 pub struct SimplifyExpressions {}
 

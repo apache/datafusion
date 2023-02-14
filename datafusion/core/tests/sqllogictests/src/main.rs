@@ -26,6 +26,7 @@ use crate::engines::datafusion::DataFusion;
 use crate::engines::postgres::Postgres;
 
 mod engines;
+mod output;
 mod setup;
 mod utils;
 
@@ -90,7 +91,7 @@ async fn run_complete_file(
     path: &Path,
     relative_path: PathBuf,
 ) -> Result<(), Box<dyn Error>> {
-    use sqllogictest::{default_validator, update_test_file};
+    use sqllogictest::default_validator;
 
     info!("Using complete mode to complete: {}", path.display());
 
@@ -98,7 +99,8 @@ async fn run_complete_file(
     let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, relative_path));
     let col_separator = " ";
     let validator = default_validator;
-    update_test_file(path, &mut runner, col_separator, validator)
+    runner
+        .update_test_file(path, col_separator, validator)
         .await
         .map_err(|e| e.to_string())?;
 

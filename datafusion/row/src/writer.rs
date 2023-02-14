@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`RowWriter`]  writes [`RecordBatch`]es to Vec<u8> to stitch attributes together
+//! [`RowWriter`] writes [`RecordBatch`]es to `Vec<u8>` to stitch attributes together
 
 use crate::layout::{estimate_row_width, RowLayout, RowType};
 use arrow::array::*;
@@ -56,7 +56,7 @@ pub fn write_batch_unchecked(
     offsets
 }
 
-/// bench interpreted version write
+/// Bench interpreted version write
 #[inline(never)]
 pub fn bench_write_batch(
     batches: &[Vec<RecordBatch>],
@@ -100,7 +100,7 @@ macro_rules! fn_set_idx {
     };
 }
 
-/// Reusable row writer backed by Vec<u8>
+/// Reusable row writer backed by `Vec<u8>`
 ///
 /// ```text
 ///                             ┌ ─ ─ ─ ─ ─ ─ ─ ─
@@ -120,7 +120,7 @@ macro_rules! fn_set_idx {
 pub struct RowWriter {
     /// Layout on how to write each field
     layout: RowLayout,
-    /// buffer for the current tuple been written.
+    /// Buffer for the current tuple being written.
     data: Vec<u8>,
     /// Length in bytes for the current tuple, 8-bytes word aligned.
     pub(crate) row_width: usize,
@@ -131,7 +131,7 @@ pub struct RowWriter {
 }
 
 impl RowWriter {
-    /// new
+    /// New
     pub fn new(schema: &Schema, row_type: RowType) -> Self {
         let layout = RowLayout::new(schema, row_type);
         let init_capacity = estimate_row_width(schema, &layout);

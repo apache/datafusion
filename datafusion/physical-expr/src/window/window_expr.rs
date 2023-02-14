@@ -40,7 +40,7 @@ pub trait WindowExpr: Send + Sync + Debug {
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 
-    /// the field of the final result of this window function.
+    /// The field of the final result of this window function.
     fn field(&self) -> Result<Field>;
 
     /// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
@@ -49,13 +49,13 @@ pub trait WindowExpr: Send + Sync + Debug {
         "WindowExpr: default name"
     }
 
-    /// expressions that are passed to the WindowAccumulator.
+    /// Expressions that are passed to the WindowAccumulator.
     /// Functions which take a single input argument, such as `sum`, return a single [`datafusion_expr::expr::Expr`],
     /// others (e.g. `cov`) return many.
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
 
-    /// evaluate the window function arguments against the batch and return
-    /// array ref, normally the resulting vec is a single element one.
+    /// Evaluate the window function arguments against the batch and return
+    /// array ref, normally the resulting `Vec` is a single element one.
     fn evaluate_args(&self, batch: &RecordBatch) -> Result<Vec<ArrayRef>> {
         self.expressions()
             .iter()
@@ -64,7 +64,7 @@ pub trait WindowExpr: Send + Sync + Debug {
             .collect()
     }
 
-    /// evaluate the window function values against the batch
+    /// Evaluate the window function values against the batch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef>;
 
     /// Evaluate the window function against the batch. This function facilitates
@@ -80,8 +80,8 @@ pub trait WindowExpr: Send + Sync + Debug {
         )))
     }
 
-    /// evaluate the partition points given the sort columns; if the sort columns are
-    /// empty then the result will be a single element vec of the whole column rows.
+    /// Evaluate the partition points given the sort columns; if the sort columns are
+    /// empty then the result will be a single element `Vec` of the whole column rows.
     fn evaluate_partition_points(
         &self,
         num_rows: usize,
@@ -99,13 +99,13 @@ pub trait WindowExpr: Send + Sync + Debug {
         }
     }
 
-    /// expressions that's from the window function's partition by clause, empty if absent
+    /// Expressions that's from the window function's partition by clause, empty if absent
     fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>];
 
-    /// expressions that's from the window function's order by clause, empty if absent
+    /// Expressions that's from the window function's order by clause, empty if absent
     fn order_by(&self) -> &[PhysicalSortExpr];
 
-    /// get order by columns, empty if absent
+    /// Get order by columns, empty if absent
     fn order_by_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
         self.order_by()
             .iter()
@@ -113,14 +113,14 @@ pub trait WindowExpr: Send + Sync + Debug {
             .collect::<Result<Vec<SortColumn>>>()
     }
 
-    /// get sort columns that can be used for peer evaluation, empty if absent
+    /// Get sort columns that can be used for peer evaluation, empty if absent
     fn sort_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
         let order_by_columns = self.order_by_columns(batch)?;
         Ok(order_by_columns)
     }
 
-    /// Get values columns(argument of Window Function)
-    /// and order by columns (columns of the ORDER BY expression)used in evaluators
+    /// Get values columns (argument of Window Function)
+    /// and order by columns (columns of the ORDER BY expression) used in evaluators
     fn get_values_orderbys(
         &self,
         record_batch: &RecordBatch,
@@ -369,7 +369,7 @@ pub struct WindowAggState {
 pub struct PartitionBatchState {
     /// The record_batch belonging to current partition
     pub record_batch: RecordBatch,
-    /// flag indicating whether we have received all data for this partition
+    /// Flag indicating whether we have received all data for this partition
     pub is_end: bool,
     /// Indices where entries in this partition comes from
     /// should have the same size with record_batch
@@ -378,9 +378,10 @@ pub struct PartitionBatchState {
     pub n_out_row: usize,
 }
 
-/// key for IndexMap for each unique partition
-/// For instance, if window frame is OVER(PARTITION BY a,b)
-/// PartitionKey would consist of unique [a,b] pairs
+/// Key for IndexMap for each unique partition
+///
+/// For instance, if window frame is `OVER(PARTITION BY a,b)`,
+/// PartitionKey would consist of unique `[a,b]` pairs
 pub type PartitionKey = Vec<ScalarValue>;
 
 #[derive(Debug)]
