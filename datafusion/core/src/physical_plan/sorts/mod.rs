@@ -110,7 +110,7 @@ impl RowBatch {
     /// Iterate over rows in their selected order
     pub fn iter(&self) -> RowBatchIter {
         RowBatchIter {
-            row_selection: &self,
+            row_selection: self,
             cur_idx: 0,
         }
     }
@@ -181,7 +181,7 @@ impl RowSelection {
     /// Iterate over the rows in the selected order.
     pub fn iter(&self) -> RowSelectionIter {
         RowSelectionIter {
-            row_selection: &self,
+            row_selection: self,
             cur_n: 0,
         }
     }

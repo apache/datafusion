@@ -478,7 +478,7 @@ impl SortPreservingMergeStream {
                         self.cursors[idx] = Some(SortKeyCursor::new(
                             idx,
                             self.next_batch_id, // assign this batch an ID
-                            rows.into(),
+                            rows,
                         ));
                         self.next_batch_id += 1;
                         self.batches[idx].push_back(batch)
@@ -758,14 +758,15 @@ impl SortPreservingMergeStream {
         Poll::Ready(Ok(()))
     }
 }
-impl Into<SendableRecordBatchStream> for SortPreservingMergeStream {
-    fn into(self) -> SendableRecordBatchStream {
+impl From<SortPreservingMergeStream> for SendableRecordBatchStream {
+    fn from(value: SortPreservingMergeStream) -> Self {
         Box::pin(RecordBatchStreamAdapter::new(
-            self.schema.clone(),
-            self.map_ok(|(rb, _rows)| rb),
+            value.schema.clone(),
+            value.into_stream().map_ok(|(rb, _rows)| rb),
         ))
     }
 }
+
 struct SortReceiverStream {
     inner: ReceiverStream<SortStreamItem>,
     #[allow(dead_code)]
@@ -790,7 +791,6 @@ impl Stream for SortReceiverStream {
         self.inner.poll_next_unpin(cx)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::iter::FromIterator;
@@ -1344,71 +1344,68 @@ mod tests {
         );
     }
 
-    // #[tokio::test]
-    // async fn test_async() {
-    //     let session_ctx = SessionContext::new();
-    //     let task_ctx = session_ctx.task_ctx();
-    //     let schema = test_util::aggr_test_schema();
-    //     let sort = vec![PhysicalSortExpr {
-    //         expr: col("c12", &schema).unwrap(),
-    //         options: SortOptions::default(),
-    //     }];
+    #[tokio::test]
+    async fn test_async() {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let schema = test_util::aggr_test_schema();
+        let sort = vec![PhysicalSortExpr {
+            expr: col("c12", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
 
-    //     let batches =
-    //         sorted_partitioned_input(sort.clone(), &[5, 7, 3], task_ctx.clone()).await;
+        let batches =
+            sorted_partitioned_input(sort.clone(), &[5, 7, 3], task_ctx.clone()).await;
 
-    //     let partition_count = batches.output_partitioning().partition_count();
-    //     let mut streams = Vec::with_capacity(partition_count);
+        let partition_count = batches.output_partitioning().partition_count();
+        let mut streams = Vec::with_capacity(partition_count);
 
-    //     for partition in 0..partition_count {
-    //         let (sender, receiver) = mpsc::channel(1);
-    //         let mut stream = batches.execute(partition, task_ctx.clone()).unwrap();
-    //         let join_handle = tokio::spawn(async move {
-    //             while let Some(batch) = stream.next().await {
-    //                 sender.send(batch).await.unwrap();
-    //                 // This causes the MergeStream to wait for more input
-    //                 tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-    //             }
-    //         });
+        for partition in 0..partition_count {
+            let (sender, receiver) = mpsc::channel(1);
+            let mut stream = batches.execute(partition, task_ctx.clone()).unwrap();
+            let join_handle = tokio::spawn(async move {
+                while let Some(batch) = stream.next().await {
+                    sender.send(batch).await.unwrap();
+                    // This causes the MergeStream to wait for more input
+                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                }
+            });
 
-    //         streams.push(SortedStream::new(
-    //             RecordBatchReceiverStream::create(&schema, receiver, join_handle),
-    //             0,
-    //             futures::stream::empty().boxed(),
-    //         ));
-    //     }
+            streams.push(SortedStream::new_no_row_encoding(
+                RecordBatchReceiverStream::create(&schema, receiver, join_handle),
+                0,
+            ));
+        }
 
-    //     let metrics = ExecutionPlanMetricsSet::new();
-    //     let tracking_metrics =
-    //         MemTrackingMetrics::new(&metrics, task_ctx.memory_pool(), 0);
+        let metrics = ExecutionPlanMetricsSet::new();
+        let tracking_metrics =
+            MemTrackingMetrics::new(&metrics, task_ctx.memory_pool(), 0);
+        let merge_stream = SortPreservingMergeStream::new_from_streams(
+            streams,
+            batches.schema(),
+            sort.as_slice(),
+            tracking_metrics,
+            task_ctx.session_config().batch_size(),
+        )
+        .unwrap();
+        let mut merged = common::collect(merge_stream.into()).await.unwrap();
 
-    //     let merge_stream = SortPreservingMergeStream::new_from_streams(
-    //         streams,
-    //         batches.schema(),
-    //         sort.as_slice(),
-    //         tracking_metrics,
-    //         task_ctx.session_config().batch_size(),
-    //     )
-    //     .unwrap();
+        assert_eq!(merged.len(), 1);
+        let merged = merged.remove(0);
+        let basic = basic_sort(batches, sort.clone(), task_ctx.clone()).await;
 
-    //     let mut merged = common::collect(Box::pin(merge_stream)).await.unwrap();
+        let basic = arrow::util::pretty::pretty_format_batches(&[basic])
+            .unwrap()
+            .to_string();
+        let partition = arrow::util::pretty::pretty_format_batches(&[merged])
+            .unwrap()
+            .to_string();
 
-    //     assert_eq!(merged.len(), 1);
-    //     let merged = merged.remove(0);
-    //     let basic = basic_sort(batches, sort.clone(), task_ctx.clone()).await;
-
-    //     let basic = arrow::util::pretty::pretty_format_batches(&[basic])
-    //         .unwrap()
-    //         .to_string();
-    //     let partition = arrow::util::pretty::pretty_format_batches(&[merged])
-    //         .unwrap()
-    //         .to_string();
-
-    //     assert_eq!(
-    //         basic, partition,
-    //         "basic:\n\n{basic}\n\npartition:\n\n{partition}\n\n"
-    //     );
-    // }
+        assert_eq!(
+            basic, partition,
+            "basic:\n\n{basic}\n\npartition:\n\n{partition}\n\n"
+        );
+    }
 
     #[tokio::test]
     async fn test_merge_metrics() {
