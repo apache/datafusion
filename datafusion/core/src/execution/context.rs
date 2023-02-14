@@ -106,8 +106,11 @@ use super::options::{
     AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions, ReadOptions,
 };
 
+/// DataFilePaths adds a method to convert strings and vector of strings to vector of URLs.
+/// This is primarily used as restriciton on the input to methods like read_csv, read_avro
+/// and the rest.
 pub trait DataFilePaths {
-    // Parse to a list of URs
+    /// Parse to a list of URLs
     fn to_urls(self) -> Result<Vec<ListingTableUrl>>;
 }
 
@@ -129,7 +132,10 @@ impl DataFilePaths for &String {
     }
 }
 
-impl DataFilePaths for Vec<&str> {
+impl<P> DataFilePaths for Vec<P>
+where
+    P: AsRef<str>,
+{
     fn to_urls(self) -> Result<Vec<ListingTableUrl>> {
         self.iter()
             .map(ListingTableUrl::parse)
@@ -2791,6 +2797,9 @@ mod tests {
         async fn call_read_csv(&self) -> DataFrame;
         async fn call_read_avro(&self) -> DataFrame;
         async fn call_read_parquet(&self) -> DataFrame;
+        async fn call_read_csvs(&self) -> DataFrame;
+        async fn call_read_avros(&self) -> DataFrame;
+        async fn call_read_parquets(&self) -> DataFrame;
     }
 
     struct CallRead {}
@@ -2812,6 +2821,27 @@ mod tests {
         async fn call_read_parquet(&self) -> DataFrame {
             let ctx = SessionContext::new();
             ctx.read_parquet("dummy", ParquetReadOptions::default())
+                .await
+                .unwrap()
+        }
+
+        async fn call_read_csvs(&self) -> DataFrame {
+            let ctx = SessionContext::new();
+            ctx.read_csv(vec!["dummy", "dummy"], CsvReadOptions::new())
+                .await
+                .unwrap()
+        }
+
+        async fn call_read_avros(&self) -> DataFrame {
+            let ctx = SessionContext::new();
+            ctx.read_avro(vec!["dummy", "dummy"], AvroReadOptions::default())
+                .await
+                .unwrap()
+        }
+
+        async fn call_read_parquets(&self) -> DataFrame {
+            let ctx = SessionContext::new();
+            ctx.read_parquet(vec!["dummy", "dummy"], ParquetReadOptions::default())
                 .await
                 .unwrap()
         }
