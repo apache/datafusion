@@ -74,14 +74,12 @@ impl EmptyExec {
             vec![RecordBatch::try_new(
                 Arc::new(Schema::new(
                     (0..n_field)
-                        .into_iter()
                         .map(|i| {
                             Field::new(format!("placeholder_{i}"), DataType::Null, true)
                         })
                         .collect(),
                 )),
                 (0..n_field)
-                    .into_iter()
                     .map(|_i| {
                         let ret: ArrayRef = Arc::new(NullArray::new(1));
                         ret

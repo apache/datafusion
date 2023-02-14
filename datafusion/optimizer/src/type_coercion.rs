@@ -34,7 +34,7 @@ use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_when, get_coerce_type_for_list,
 };
-use datafusion_expr::type_coercion::{is_date, is_numeric, is_timestamp};
+use datafusion_expr::type_coercion::{is_date, is_numeric, is_timestamp, is_uft8};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     aggregate_function, function, is_false, is_not_false, is_not_true, is_not_unknown,
@@ -478,7 +478,7 @@ fn get_coerced_window_frame(
     expressions: &[Expr],
 ) -> Result<WindowFrame> {
     fn get_coerced_type(column_type: &DataType) -> Result<DataType> {
-        if is_numeric(column_type) {
+        if is_numeric(column_type) | is_uft8(column_type) {
             Ok(column_type.clone())
         } else if is_timestamp(column_type) || is_date(column_type) {
             Ok(DataType::Interval(IntervalUnit::MonthDayNano))

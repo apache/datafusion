@@ -1881,12 +1881,12 @@ async fn sort_merge_join_on_date32() -> Result<()> {
     let expected = vec![
         "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@4 as c1, c2@5 as c2, c3@6 as c3, c4@7 as c4]",
         "  SortMergeJoin: join_type=Inner, on=[(Column { name: \"c1\", index: 0 }, Column { name: \"c1\", index: 0 })]",
-        "    SortExec: [c1@0 ASC]",
+        "    SortExec: expr=[c1@0 ASC]",
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2), input_partitions=2",
         "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
         "            MemoryExec: partitions=1, partition_sizes=[1]",
-        "    SortExec: [c1@0 ASC]",
+        "    SortExec: expr=[c1@0 ASC]",
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2), input_partitions=2",
         "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
@@ -1927,13 +1927,13 @@ async fn sort_merge_join_on_decimal() -> Result<()> {
         "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@4 as c1, c2@5 as c2, c3@6 as c3, c4@7 as c4]",
         "  ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@5 as c1, c2@6 as c2, c3@7 as c3, c4@8 as c4]",
         "    SortMergeJoin: join_type=Right, on=[(Column { name: \"CAST(t1.c3 AS Decimal128(10, 2))\", index: 4 }, Column { name: \"c3\", index: 2 })]",
-        "      SortExec: [CAST(t1.c3 AS Decimal128(10, 2))@4 ASC]",
+        "      SortExec: expr=[CAST(t1.c3 AS Decimal128(10, 2))@4 ASC]",
         "        CoalesceBatchesExec: target_batch_size=4096",
         "          RepartitionExec: partitioning=Hash([Column { name: \"CAST(t1.c3 AS Decimal128(10, 2))\", index: 4 }], 2), input_partitions=2",
         "            ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, CAST(c3@2 AS Decimal128(10, 2)) as CAST(t1.c3 AS Decimal128(10, 2))]",
         "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
         "                MemoryExec: partitions=1, partition_sizes=[1]",
-        "      SortExec: [c3@2 ASC]",
+        "      SortExec: expr=[c3@2 ASC]",
         "        CoalesceBatchesExec: target_batch_size=4096",
         "          RepartitionExec: partitioning=Hash([Column { name: \"c3\", index: 2 }], 2), input_partitions=2",
         "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
@@ -1981,7 +1981,7 @@ async fn left_semi_join() -> Result<()> {
         let expected = if repartition_joins {
             vec![
                 "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
-                "  SortExec: [t1_id@0 ASC NULLS LAST]",
+                "  SortExec: expr=[t1_id@0 ASC NULLS LAST]",
                 "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
                 "      CoalesceBatchesExec: target_batch_size=4096",
                 "        HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
@@ -1991,21 +1991,19 @@ async fn left_semi_join() -> Result<()> {
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
                 "          CoalesceBatchesExec: target_batch_size=4096",
                 "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
-                "              ProjectionExec: expr=[t2_id@0 as t2_id]",
-                "                RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "                ProjectionExec: expr=[t2_id@0 as t2_id]",
                 "                  MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         } else {
             vec![
-                "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
-                "  SortExec: [t1_id@0 ASC NULLS LAST]",
-                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
-                "      CoalesceBatchesExec: target_batch_size=4096",
-                "        HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+                "SortExec: expr=[t1_id@0 ASC NULLS LAST]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
+                "        ProjectionExec: expr=[t2_id@0 as t2_id]",
                 "          MemoryExec: partitions=1, partition_sizes=[1]",
-                "          ProjectionExec: expr=[t2_id@0 as t2_id]",
-                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "              MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2063,7 +2061,7 @@ async fn left_semi_join() -> Result<()> {
         let expected = if repartition_joins {
             vec![
                 "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
-                "  SortExec: [t1_id@0 ASC NULLS LAST]",
+                "  SortExec: expr=[t1_id@0 ASC NULLS LAST]",
                 "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
                 "      CoalesceBatchesExec: target_batch_size=4096",
                 "        HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
@@ -2078,14 +2076,12 @@ async fn left_semi_join() -> Result<()> {
             ]
         } else {
             vec![
-                "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
-                "  SortExec: [t1_id@0 ASC NULLS LAST]",
-                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
-                "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "        CoalesceBatchesExec: target_batch_size=4096",
-                "          HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
-                "            MemoryExec: partitions=1, partition_sizes=[1]",
-                "            MemoryExec: partitions=1, partition_sizes=[1]",
+                "SortExec: expr=[t1_id@0 ASC NULLS LAST]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2260,7 +2256,7 @@ async fn right_semi_join() -> Result<()> {
         let physical_plan = dataframe.create_physical_plan().await?;
         let expected = if repartition_joins {
             vec![ "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
-                  "  SortExec: [t1_id@0 ASC NULLS LAST]",
+                  "  SortExec: expr=[t1_id@0 ASC NULLS LAST]",
                   "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
                   "      CoalesceBatchesExec: target_batch_size=4096",
                   "        HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
@@ -2275,14 +2271,12 @@ async fn right_semi_join() -> Result<()> {
             ]
         } else {
             vec![
-                "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
-                "  SortExec: [t1_id@0 ASC NULLS LAST]",
-                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
-                "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "        CoalesceBatchesExec: target_batch_size=4096",
-                "          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
-                "            MemoryExec: partitions=1, partition_sizes=[1]",
-                "            MemoryExec: partitions=1, partition_sizes=[1]",
+                "SortExec: expr=[t1_id@0 ASC NULLS LAST]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2308,7 +2302,7 @@ async fn right_semi_join() -> Result<()> {
         let physical_plan = dataframe.create_physical_plan().await?;
         let expected = if repartition_joins {
             vec![ "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
-                  "  SortExec: [t1_id@0 ASC NULLS LAST]",
+                  "  SortExec: expr=[t1_id@0 ASC NULLS LAST]",
                   "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
                   "      CoalesceBatchesExec: target_batch_size=4096",
                   "        HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 0 }, op: NotEq, right: Column { name: \"t1_name\", index: 1 } }",
@@ -2323,14 +2317,12 @@ async fn right_semi_join() -> Result<()> {
             ]
         } else {
             vec![
-                "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
-                "  SortExec: [t1_id@0 ASC NULLS LAST]",
-                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
-                "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "        CoalesceBatchesExec: target_batch_size=4096",
-                "          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 0 }, op: NotEq, right: Column { name: \"t1_name\", index: 1 } }",
-                "            MemoryExec: partitions=1, partition_sizes=[1]",
-                "            MemoryExec: partitions=1, partition_sizes=[1]",
+                "SortExec: expr=[t1_id@0 ASC NULLS LAST]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 0 }, op: NotEq, right: Column { name: \"t1_name\", index: 1 } }",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2658,14 +2650,13 @@ async fn left_side_expr_key_inner_join() -> Result<()> {
             vec![
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@3 as t2_id]",
-                "    RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "      CoalesceBatchesExec: target_batch_size=4096",
-                "        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }, Column { name: \"t2_id\", index: 0 })]",
-                "          CoalescePartitionsExec",
-                "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as t1.t1_id + UInt32(11)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "                MemoryExec: partitions=1, partition_sizes=[1]",
-                "          MemoryExec: partitions=1, partition_sizes=[1]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }, Column { name: \"t2_id\", index: 0 })]",
+                "        CoalescePartitionsExec",
+                "          ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as t1.t1_id + UInt32(11)]",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -3291,6 +3282,110 @@ async fn two_in_subquery_to_join_with_outer_filter() -> Result<()> {
         "+-------+---------+--------+",
         "| 44    | d       | 4      |",
         "+-------+---------+--------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn right_as_inner_table_nested_loop_join() -> Result<()> {
+    let ctx = create_nested_loop_join_context()?;
+
+    // Distribution: left is `UnspecifiedDistribution`, right is `SinglePartition`.
+    let sql = "SELECT t1.t1_id, t2.t2_id 
+                     FROM t1 INNER JOIN t2 ON t1.t1_id > t2.t2_id 
+                     WHERE t1.t1_id > 10 AND t2.t2_int > 1";
+
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+
+    // right is single partition side, so it will be visited many times.
+    let expected = vec![
+        "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@1 as t2_id]",
+        "  NestedLoopJoinExec: join_type=Inner, filter=BinaryExpr { left: Column { name: \"t1_id\", index: 0 }, op: Gt, right: Column { name: \"t2_id\", index: 1 } }",
+        "    CoalesceBatchesExec: target_batch_size=4096",
+        "      FilterExec: t1_id@0 > 10",
+        "        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+        "          MemoryExec: partitions=1, partition_sizes=[1]",
+        "    CoalescePartitionsExec",
+        "      CoalesceBatchesExec: target_batch_size=4096",
+        "        FilterExec: t2_int@1 > 1",
+        "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+        "            MemoryExec: partitions=1, partition_sizes=[1]",
+    ];
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+-------+",
+        "| t1_id | t2_id |",
+        "+-------+-------+",
+        "| 22    | 11    |",
+        "| 33    | 11    |",
+        "| 44    | 11    |",
+        "+-------+-------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_as_inner_table_nested_loop_join() -> Result<()> {
+    let ctx = create_nested_loop_join_context()?;
+
+    // Distribution: left is `SinglePartition`, right is `UnspecifiedDistribution`.
+    let sql = "SELECT t1.t1_id,t2.t2_id FROM (select t1_id from t1 where t1.t1_id > 22) as t1 
+                                                 RIGHT JOIN (select t2_id from t2 where t2.t2_id > 11) as t2 
+                                                 ON t1.t1_id < t2.t2_id";
+
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+
+    // left is single partition side, so it will be visited many times.
+    let expected = vec![
+        "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@1 as t2_id]",
+        "  NestedLoopJoinExec: join_type=Right, filter=BinaryExpr { left: Column { name: \"t1_id\", index: 0 }, op: Lt, right: Column { name: \"t2_id\", index: 1 } }",
+        "    CoalescePartitionsExec",
+        "      ProjectionExec: expr=[t1_id@0 as t1_id]",
+        "        CoalesceBatchesExec: target_batch_size=4096",
+        "          FilterExec: t1_id@0 > 22",
+        "            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+        "              MemoryExec: partitions=1, partition_sizes=[1]",
+        "    ProjectionExec: expr=[t2_id@0 as t2_id]",
+        "      CoalesceBatchesExec: target_batch_size=4096",
+        "        FilterExec: t2_id@0 > 11",
+        "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+        "            MemoryExec: partitions=1, partition_sizes=[1]",
+    ];
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+-------+",
+        "| t1_id | t2_id |",
+        "+-------+-------+",
+        "|       | 22    |",
+        "| 33    | 44    |",
+        "| 33    | 55    |",
+        "| 44    | 55    |",
+        "+-------+-------+",
     ];
 
     let results = execute_to_batches(&ctx, sql).await;

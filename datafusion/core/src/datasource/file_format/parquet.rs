@@ -61,28 +61,28 @@ pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
 /// <https://github.com/apache/arrow-datafusion/issues/4349>
 #[derive(Debug, Default)]
 pub struct ParquetFormat {
-    /// Override the global setting for enable_pruning
+    /// Override the global setting for `enable_pruning`
     enable_pruning: Option<bool>,
-    /// Override the global setting for metadata_size_hint
+    /// Override the global setting for `metadata_size_hint`
     metadata_size_hint: Option<usize>,
-    /// Override the global setting for skip_metadata
+    /// Override the global setting for `skip_metadata`
     skip_metadata: Option<bool>,
 }
 
 impl ParquetFormat {
-    /// construct a new Format with no local overrides
+    /// Construct a new Format with no local overrides
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Activate statistics based row group level pruning
-    /// - If None, defaults to value on `config_options`
+    /// - If `None`, defaults to value on `config_options`
     pub fn with_enable_pruning(mut self, enable: Option<bool>) -> Self {
         self.enable_pruning = enable;
         self
     }
 
-    /// Return true if pruning is enabled
+    /// Return `true` if pruning is enabled
     pub fn enable_pruning(&self, config_options: &ConfigOptions) -> bool {
         self.enable_pruning
             .unwrap_or(config_options.execution.parquet.pruning)
@@ -90,10 +90,10 @@ impl ParquetFormat {
 
     /// Provide a hint to the size of the file metadata. If a hint is provided
     /// the reader will try and fetch the last `size_hint` bytes of the parquet file optimistically.
-    /// With out a hint, two read are required. One read to fetch the 8-byte parquet footer and then
+    /// Without a hint, two read are required. One read to fetch the 8-byte parquet footer and then
     /// another read to fetch the metadata length encoded in the footer.
     ///
-    /// - If None, defaults to value on `config_options`
+    /// - If `None`, defaults to value on `config_options`
     pub fn with_metadata_size_hint(mut self, size_hint: Option<usize>) -> Self {
         self.metadata_size_hint = size_hint;
         self
@@ -109,13 +109,13 @@ impl ParquetFormat {
     /// the file Schema. This can help avoid schema conflicts due to
     /// metadata.
     ///
-    /// - If None, defaults to value on `config_options`
+    /// - If `None`, defaults to value on `config_options`
     pub fn with_skip_metadata(mut self, skip_metadata: Option<bool>) -> Self {
         self.skip_metadata = skip_metadata;
         self
     }
 
-    /// returns true if schema metadata will be cleared prior to
+    /// Returns `true` if schema metadata will be cleared prior to
     /// schema merging.
     pub fn skip_metadata(&self, config_options: &ConfigOptions) -> bool {
         self.skip_metadata
@@ -375,7 +375,9 @@ fn summarize_min_max(
 /// Fetches parquet metadata from ObjectStore for given object
 ///
 /// This component is a subject to **change** in near future and is exposed for low level integrations
-/// through [ParquetFileReaderFactory].
+/// through [`ParquetFileReaderFactory`].
+///
+/// [`ParquetFileReaderFactory`]: crate::physical_plan::file_format::ParquetFileReaderFactory
 pub async fn fetch_parquet_metadata(
     store: &dyn ObjectStore,
     meta: &ObjectMeta,
@@ -548,6 +550,12 @@ pub(crate) mod test_util {
     use parquet::file::properties::WriterProperties;
     use tempfile::NamedTempFile;
 
+    /// Writes `batches` to a temporary parquet file
+    ///
+    /// If multi_page is set to `true`, all batches are written into
+    /// one temporary parquet file and the parquet file is written
+    /// with 2 rows per data page (used to test page filtering and
+    /// boundaries).
     pub async fn store_parquet(
         batches: Vec<RecordBatch>,
         multi_page: bool,
