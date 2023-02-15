@@ -566,6 +566,65 @@ pub fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec
     Ok(result)
 }
 
+fn can_skip_ordering_fn(
+    sort_tree: &ExecTree,
+    search_indices: &[usize],
+    partition_keys: &[Arc<dyn PhysicalExpr>],
+) -> Result<Option<bool>> {
+    let mut first_should_reverse = None;
+    let mut physical_ordering_common = vec![];
+    for sort_any in sort_tree.get_leaves() {
+        let sort_output_ordering = sort_any.output_ordering();
+        // Variable `sort_any` will either be a `SortExec` or a
+        // `SortPreservingMergeExec`, and both have a single child.
+        // Therefore, we can use the 0th index without loss of generality.
+        let sort_input = sort_any.children()[0].clone();
+        let physical_ordering = sort_input.output_ordering();
+        // TODO: Once we can ensure that required ordering information propagates with
+        //       the necessary lineage information, compare `physical_ordering` and the
+        //       ordering required by the window executor instead of `sort_output_ordering`.
+        //       This will enable us to handle cases such as (a,b) -> Sort -> (a,b,c) -> Required(a,b).
+        //       Currently, we can not remove such sorts.
+        let required_ordering = sort_output_ordering.ok_or_else(|| {
+            DataFusionError::Plan("A SortExec should have output ordering".to_string())
+        })?;
+        let required_ordering = &get_at_indices(required_ordering, search_indices)?;
+        if let Some(physical_ordering) = physical_ordering {
+            if physical_ordering_common.is_empty()
+                || physical_ordering.len() < physical_ordering_common.len()
+            {
+                physical_ordering_common = physical_ordering.to_vec();
+            }
+            let (can_skip_sorting, should_reverse) = can_skip_sort(
+                partition_keys,
+                required_ordering,
+                &sort_input.schema(),
+                physical_ordering,
+            )?;
+            if !can_skip_sorting {
+                // break;
+                return Ok(None);
+            }
+            if let Some(first_should_reverse) = first_should_reverse {
+                if first_should_reverse != should_reverse {
+                    // break;
+                    return Ok(None);
+                }
+            } else {
+                first_should_reverse = Some(should_reverse);
+            }
+        } else {
+            // If there is no physical ordering, there is no way to remove a
+            // sort, so immediately return.
+            return Ok(None);
+        }
+    }
+    // if can_skip_sorting {
+    //     partition_search_mode = search_mode;
+    //     break;
+    // }
+    Ok(first_should_reverse)
+}
 /// Analyzes a [WindowAggExec] or a [BoundedWindowAggExec] to determine whether
 /// it may allow removing a sort.
 fn analyze_window_sort_removal(
@@ -606,67 +665,77 @@ fn analyze_window_sort_removal(
         search_indices[1] = find_match_indices(&orderby_sort_keys, &sort_keys)?;
     }
     let mut first_should_reverse = None;
-    let mut physical_ordering_common = vec![];
     let mut partition_search_mode = PartitionSearchMode::Linear;
     let mut can_skip_sorting = false;
     for (search_indices, search_mode) in search_indices.iter().zip(vec![
         PartitionSearchMode::Sorted,
         PartitionSearchMode::Linear,
     ]) {
-        for sort_any in sort_tree.get_leaves() {
-            let sort_output_ordering = sort_any.output_ordering();
-            // Variable `sort_any` will either be a `SortExec` or a
-            // `SortPreservingMergeExec`, and both have a single child.
-            // Therefore, we can use the 0th index without loss of generality.
-            let sort_input = sort_any.children()[0].clone();
-            let physical_ordering = sort_input.output_ordering();
-            // TODO: Once we can ensure that required ordering information propagates with
-            //       the necessary lineage information, compare `physical_ordering` and the
-            //       ordering required by the window executor instead of `sort_output_ordering`.
-            //       This will enable us to handle cases such as (a,b) -> Sort -> (a,b,c) -> Required(a,b).
-            //       Currently, we can not remove such sorts.
-            let required_ordering = sort_output_ordering.ok_or_else(|| {
-                DataFusionError::Plan(
-                    "A SortExec should have output ordering".to_string(),
-                )
-            })?;
-            let required_ordering = &get_at_indices(required_ordering, search_indices)?;
-            if let Some(physical_ordering) = physical_ordering {
-                if physical_ordering_common.is_empty()
-                    || physical_ordering.len() < physical_ordering_common.len()
-                {
-                    physical_ordering_common = physical_ordering.to_vec();
-                }
-                let (can_skip_sorting_inner, should_reverse) = can_skip_sort(
-                    window_expr[0].partition_by(),
-                    required_ordering,
-                    &sort_input.schema(),
-                    physical_ordering,
-                )?;
-                can_skip_sorting = can_skip_sorting_inner;
-                if !can_skip_sorting_inner {
-                    break;
-                    // return Ok(None);
-                }
-                if let Some(first_should_reverse) = first_should_reverse {
-                    if first_should_reverse != should_reverse {
-                        can_skip_sorting = false;
-                        break;
-                        // return Ok(None);
-                    }
-                } else {
-                    first_should_reverse = Some(should_reverse);
-                }
-            } else {
-                // If there is no physical ordering, there is no way to remove a
-                // sort, so immediately return.
-                return Ok(None);
-            }
-        }
-        if can_skip_sorting {
+        let res = can_skip_ordering_fn(
+            sort_tree,
+            search_indices,
+            window_expr[0].partition_by(),
+        )?;
+        if let Some(_) = res {
+            can_skip_sorting = true;
+            first_should_reverse = res;
             partition_search_mode = search_mode;
             break;
         }
+        // for sort_any in sort_tree.get_leaves() {
+        //     let sort_output_ordering = sort_any.output_ordering();
+        //     // Variable `sort_any` will either be a `SortExec` or a
+        //     // `SortPreservingMergeExec`, and both have a single child.
+        //     // Therefore, we can use the 0th index without loss of generality.
+        //     let sort_input = sort_any.children()[0].clone();
+        //     let physical_ordering = sort_input.output_ordering();
+        //     // TODO: Once we can ensure that required ordering information propagates with
+        //     //       the necessary lineage information, compare `physical_ordering` and the
+        //     //       ordering required by the window executor instead of `sort_output_ordering`.
+        //     //       This will enable us to handle cases such as (a,b) -> Sort -> (a,b,c) -> Required(a,b).
+        //     //       Currently, we can not remove such sorts.
+        //     let required_ordering = sort_output_ordering.ok_or_else(|| {
+        //         DataFusionError::Plan(
+        //             "A SortExec should have output ordering".to_string(),
+        //         )
+        //     })?;
+        //     let required_ordering = &get_at_indices(required_ordering, search_indices)?;
+        //     if let Some(physical_ordering) = physical_ordering {
+        //         if physical_ordering_common.is_empty()
+        //             || physical_ordering.len() < physical_ordering_common.len()
+        //         {
+        //             physical_ordering_common = physical_ordering.to_vec();
+        //         }
+        //         let (can_skip_sorting_inner, should_reverse) = can_skip_sort(
+        //             window_expr[0].partition_by(),
+        //             required_ordering,
+        //             &sort_input.schema(),
+        //             physical_ordering,
+        //         )?;
+        //         can_skip_sorting = can_skip_sorting_inner;
+        //         if !can_skip_sorting_inner {
+        //             break;
+        //             // return Ok(None);
+        //         }
+        //         if let Some(first_should_reverse) = first_should_reverse {
+        //             if first_should_reverse != should_reverse {
+        //                 can_skip_sorting = false;
+        //                 break;
+        //                 // return Ok(None);
+        //             }
+        //         } else {
+        //             first_should_reverse = Some(should_reverse);
+        //         }
+        //     } else {
+        //         // If there is no physical ordering, there is no way to remove a
+        //         // sort, so immediately return.
+        //         return Ok(None);
+        //     }
+        // }
+        // if can_skip_sorting {
+        //     partition_search_mode = search_mode;
+        //     break;
+        // }
     }
     if !can_skip_sorting {
         return Ok(None);
@@ -694,13 +763,14 @@ fn analyze_window_sort_removal(
         let uses_bounded_memory = window_expr.iter().all(|e| e.uses_bounded_memory());
         // If all window expressions can run with bounded memory, choose the
         // bounded window variant:
+        let physical_ordering = new_child.output_ordering().map(|elem| elem.to_vec());
         let new_plan = if uses_bounded_memory {
             Arc::new(BoundedWindowAggExec::try_new(
                 window_expr,
                 new_child,
                 new_schema,
                 partition_keys.to_vec(),
-                Some(physical_ordering_common),
+                physical_ordering,
                 partition_search_mode,
             )?) as _
         } else {
@@ -720,7 +790,7 @@ fn analyze_window_sort_removal(
                     new_child,
                     new_schema,
                     partition_keys.to_vec(),
-                    Some(physical_ordering_common),
+                    physical_ordering,
                 )?) as _,
             }
         };
