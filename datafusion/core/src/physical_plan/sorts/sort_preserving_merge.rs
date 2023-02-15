@@ -33,12 +33,9 @@ use futures::stream::{Fuse, FusedStream};
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use log::debug;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
-use tokio_stream::wrappers::ReceiverStream;
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
-use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::metrics::{
     ExecutionPlanMetricsSet, MemTrackingMetrics, MetricsSet,
 };
@@ -207,12 +204,11 @@ impl ExecutionPlan for SortPreservingMergeExec {
                                     context.clone(),
                                     tx,
                                 );
-                                let stream =
-                                    Box::pin(SortReceiverStream::new(rx, join_handle));
-                                SortedStream {
-                                    stream,
-                                    mem_used: 0,
-                                }
+                                let stream = Box::pin(super::SortReceiverStream::new(
+                                    rx,
+                                    join_handle,
+                                ));
+                                SortedStream::new(stream, 0)
                             } else {
                                 let (sender, receiver) = mpsc::channel(1);
                                 let join_handle = spawn_execution(
@@ -241,10 +237,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                                     partition,
                                     context.clone(),
                                 )?;
-                                Ok(SortedStream {
-                                    stream,
-                                    mem_used: 0,
-                                })
+                                Ok(SortedStream::new(stream, 0))
                             } else {
                                 let stream =
                                     self.input.execute(partition, context.clone())?;
@@ -837,30 +830,6 @@ impl From<SortPreservingMergeStream> for SendableRecordBatchStream {
     }
 }
 
-struct SortReceiverStream {
-    inner: ReceiverStream<SortStreamItem>,
-    #[allow(dead_code)]
-    drop_helper: AbortOnDropSingle<()>,
-}
-impl SortReceiverStream {
-    fn new(rx: mpsc::Receiver<SortStreamItem>, handle: JoinHandle<()>) -> Self {
-        let stream = ReceiverStream::new(rx);
-        Self {
-            inner: stream,
-            drop_helper: AbortOnDropSingle::new(handle),
-        }
-    }
-}
-impl Stream for SortReceiverStream {
-    type Item = SortStreamItem;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        self.inner.poll_next_unpin(cx)
-    }
-}
 #[cfg(test)]
 mod tests {
     use std::iter::FromIterator;

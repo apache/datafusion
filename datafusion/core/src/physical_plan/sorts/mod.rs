@@ -31,11 +31,15 @@ pub mod sort_preserving_merge;
 
 use arrow::{
     record_batch::RecordBatch,
-    row::{Row, Rows},
+    row::{Row, RowParser, Rows},
 };
 pub use cursor::SortKeyCursor;
-use futures::{stream, Stream, StreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 pub use index::RowIndex;
+use tokio::{sync::mpsc, task::JoinHandle};
+use tokio_stream::wrappers::ReceiverStream;
+
+use super::common::AbortOnDropSingle;
 
 pub(crate) type RowStream = Pin<Box<dyn Stream<Item = Option<RowBatch>> + Send>>;
 pub(crate) type SortStreamItem = Result<(RecordBatch, Option<RowBatch>)>;
@@ -43,9 +47,19 @@ pub(crate) type SendableSortStream = Pin<Box<dyn Stream<Item = SortStreamItem> +
 pub(crate) struct SortedStream {
     stream: SendableSortStream,
     mem_used: usize,
+    // flag is only true if this was intialized wiith `new_no_row_encoding`
+    row_encoding_ignored: bool,
 }
 impl SortedStream {
-    pub(crate) fn new(
+    pub(crate) fn new(stream: SendableSortStream, mem_used: usize) -> Self {
+        Self {
+            stream,
+            mem_used,
+            row_encoding_ignored: false,
+        }
+    }
+
+    pub(crate) fn new_from_streams(
         stream: SendableRecordBatchStream,
         mem_used: usize,
         row_stream: RowStream,
@@ -58,19 +72,27 @@ impl SortedStream {
                 Err(err) => Err(err),
             }
         }));
-        Self { stream, mem_used }
+        Self {
+            stream,
+            mem_used,
+            row_encoding_ignored: false,
+        }
+        // if let Some(row_stream) = row_stream {
+        // } else {
+        //     Self::new_no_row_encoding(stream, mem_used)
+        // }
     }
     /// create stream where the row encoding for each batch is always None
     pub(crate) fn new_no_row_encoding(
         stream: SendableRecordBatchStream,
         mem_used: usize,
     ) -> Self {
-        Self::new(
+        let stream = Box::pin(stream.map_ok(|batch| (batch, None)));
+        Self {
             stream,
             mem_used,
-            // stream will end as soon as the record batch stream ends
-            Box::pin(stream::repeat(None)),
-        )
+            row_encoding_ignored: true,
+        }
     }
 }
 impl Debug for SortedStream {
@@ -84,7 +106,7 @@ impl Debug for SortedStream {
 pub struct RowBatch {
     // refs to the rows referenced by `indices`
     rows: Vec<Arc<RowSelection>>,
-    // first item = index of the ref in `rows`, second item=index within that row
+    // first item = index of the ref in `rows`, second item=index within that `RowSelection`
     indices: Arc<Vec<(usize, usize)>>,
 }
 
@@ -158,19 +180,53 @@ impl<'a> Iterator for RowBatchIter<'a> {
     }
 }
 
-/// A sorted selection of rows from the same [`Rows`].
+/// A selection of rows from the same [`RowData`].
 #[derive(Debug)]
 pub struct RowSelection {
-    rows: Rows,
+    rows: RowData,
     // None when this `RowSelection` is equivalent to its `Rows`
     indices: Option<Vec<usize>>,
+}
+#[derive(Debug)]
+enum RowData {
+    Rows(Rows),
+    Spilled {
+        parser: RowParser,
+        bytes: Vec<bytes::Bytes>,
+    },
+}
+impl RowData {
+    fn row(&self, n: usize) -> Row {
+        match self {
+            RowData::Rows(rows) => rows.row(n),
+            RowData::Spilled { parser, bytes } => parser.parse(&bytes[n]),
+        }
+    }
+    fn size(&self) -> usize {
+        match self {
+            RowData::Rows(rows) => rows.size(),
+            RowData::Spilled { bytes, .. } => bytes.len() + std::mem::size_of::<Self>(),
+        }
+    }
+    fn num_rows(&self) -> usize {
+        match self {
+            RowData::Rows(rows) => rows.num_rows(),
+            RowData::Spilled { bytes, .. } => bytes.len(),
+        }
+    }
 }
 impl RowSelection {
     /// New
     pub fn new(rows: Rows, indices: Vec<usize>) -> Self {
         Self {
-            rows,
+            rows: RowData::Rows(rows),
             indices: Some(indices),
+        }
+    }
+    fn from_spilled(parser: RowParser, bytes: Vec<bytes::Bytes>) -> Self {
+        Self {
+            rows: RowData::Spilled { parser, bytes },
+            indices: None,
         }
     }
     /// Get the nth row of the selection.
@@ -182,6 +238,7 @@ impl RowSelection {
             self.rows.row(n)
         }
     }
+
     /// Iterate over the rows in the selected order.
     pub fn iter(&self) -> RowSelectionIter {
         RowSelectionIter {
@@ -211,11 +268,19 @@ impl From<Rows> for RowSelection {
     fn from(value: Rows) -> Self {
         Self {
             indices: None,
+            rows: RowData::Rows(value),
+        }
+    }
+}
+impl From<RowData> for RowSelection {
+    fn from(value: RowData) -> Self {
+        Self {
+            indices: None,
             rows: value,
         }
     }
 }
-/// Iterator for [`SortedRows`]
+/// Iterator for [`RowSelection`]
 pub struct RowSelectionIter<'a> {
     row_selection: &'a RowSelection,
     cur_n: usize,
@@ -231,6 +296,30 @@ impl<'a> Iterator for RowSelectionIter<'a> {
         } else {
             None
         }
+    }
+}
+pub(crate) struct SortReceiverStream {
+    inner: ReceiverStream<SortStreamItem>,
+    #[allow(dead_code)]
+    drop_helper: AbortOnDropSingle<()>,
+}
+impl SortReceiverStream {
+    fn new(rx: mpsc::Receiver<SortStreamItem>, handle: JoinHandle<()>) -> Self {
+        let stream = ReceiverStream::new(rx);
+        Self {
+            inner: stream,
+            drop_helper: AbortOnDropSingle::new(handle),
+        }
+    }
+}
+impl Stream for SortReceiverStream {
+    type Item = SortStreamItem;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.poll_next_unpin(cx)
     }
 }
 
