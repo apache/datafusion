@@ -793,12 +793,22 @@ impl ExecutionPlan for SortExec {
         match t {
             DisplayFormatType::Default => {
                 let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
-                write!(
-                    f,
-                    "SortExec: [{}], global={}",
-                    expr.join(","),
-                    !self.preserve_partitioning
-                )
+                match self.fetch {
+                    Some(fetch) => {
+                        write!(
+                            f,
+                            "SortExec: fetch={fetch}, expr=[{}], global={}",
+                            expr.join(","),
+                            !self.preserve_partitioning
+                        )
+                    }
+                    None => write!(
+                        f,
+                        "SortExec: expr=[{}], global={}",
+                        expr.join(","),
+                        !self.preserve_partitioning
+                    ),
+                }
             }
         }
     }

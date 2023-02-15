@@ -27,8 +27,8 @@
 //! somehow get the fragment
 //!
 //! ```text
-//! SortExec: [nullable_co  l@0 ASC]
-//!   SortExec: [non_nullable_col@1 ASC]
+//! SortExec: expr=[nullable_col@0 ASC]
+//!   SortExec: expr=[non_nullable_col@1 ASC]
 //! ```
 //!
 //! in the physical plan. The child sort is unnecessary since its result is overwritten
@@ -1396,12 +1396,12 @@ mod tests {
         let physical_plan = sort_exec(vec![sort_expr("nullable_col", &schema)], input);
 
         let expected_input = vec![
-            "SortExec: [nullable_col@0 ASC], global=true",
-            "  SortExec: [non_nullable_col@1 ASC], global=true",
+            "SortExec: expr=[nullable_col@0 ASC], global=true",
+            "  SortExec: expr=[non_nullable_col@1 ASC], global=true",
             "    MemoryExec: partitions=0, partition_sizes=[]",
         ];
         let expected_optimized = vec![
-            "SortExec: [nullable_col@0 ASC], global=true",
+            "SortExec: expr=[nullable_col@0 ASC], global=true",
             "  MemoryExec: partitions=0, partition_sizes=[]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -1450,18 +1450,18 @@ mod tests {
         let expected_input = vec![
             "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
             "  FilterExec: NOT non_nullable_col@1",
-            "    SortExec: [non_nullable_col@1 ASC NULLS LAST], global=true",
+            "    SortExec: expr=[non_nullable_col@1 ASC NULLS LAST], global=true",
             "      WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
-            "        SortExec: [non_nullable_col@1 DESC], global=true",
+            "        SortExec: expr=[non_nullable_col@1 DESC], global=true",
             "          MemoryExec: partitions=0, partition_sizes=[]",
         ];
 
         let expected_optimized = vec![
             "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
             "  FilterExec: NOT non_nullable_col@1",
-            "    SortExec: [non_nullable_col@1 ASC NULLS LAST], global=true",
+            "    SortExec: expr=[non_nullable_col@1 ASC NULLS LAST], global=true",
             "      WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
-            "        SortExec: [non_nullable_col@1 DESC], global=true",
+            "        SortExec: expr=[non_nullable_col@1 DESC], global=true",
             "          MemoryExec: partitions=0, partition_sizes=[]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -1489,7 +1489,7 @@ mod tests {
             "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
             "  WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
             "    WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
-            "      SortExec: [nullable_col@0 ASC], global=true",
+            "      SortExec: expr=[nullable_col@0 ASC], global=true",
             "        MemoryExec: partitions=0, partition_sizes=[]",
         ];
 
@@ -1497,7 +1497,7 @@ mod tests {
             "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
             "  WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
             "    WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
-            "      SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "      SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
             "        MemoryExec: partitions=0, partition_sizes=[]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -1519,7 +1519,7 @@ mod tests {
         ];
         let expected_optimized = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
-            "  SortExec: [nullable_col@0 ASC], global=true",
+            "  SortExec: expr=[nullable_col@0 ASC], global=true",
             "    MemoryExec: partitions=0, partition_sizes=[]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -1539,14 +1539,14 @@ mod tests {
         let physical_plan = sort_preserving_merge_exec(sort_exprs, sort);
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
-            "  SortExec: [nullable_col@0 ASC], global=true",
+            "  SortExec: expr=[nullable_col@0 ASC], global=true",
             "    SortPreservingMergeExec: [nullable_col@0 ASC]",
-            "      SortExec: [nullable_col@0 ASC], global=true",
+            "      SortExec: expr=[nullable_col@0 ASC], global=true",
             "        MemoryExec: partitions=0, partition_sizes=[]",
         ];
         let expected_optimized = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
-            "  SortExec: [nullable_col@0 ASC], global=true",
+            "  SortExec: expr=[nullable_col@0 ASC], global=true",
             "    MemoryExec: partitions=0, partition_sizes=[]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -1575,11 +1575,11 @@ mod tests {
         let expected_input = vec![
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
             "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "    SortExec: [nullable_col@0 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC], global=true",
             "      SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
-            "        SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "        SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
             "          SortPreservingMergeExec: [non_nullable_col@1 ASC]",
-            "            SortExec: [non_nullable_col@1 ASC], global=true",
+            "            SortExec: expr=[non_nullable_col@1 ASC], global=true",
             "              MemoryExec: partitions=0, partition_sizes=[]",
         ];
 
@@ -1616,10 +1616,10 @@ mod tests {
         let expected_input = vec![
             "AggregateExec: mode=Final, gby=[], aggr=[]",
             "  SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
-            "    SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "        SortPreservingMergeExec: [non_nullable_col@1 ASC]",
-            "          SortExec: [non_nullable_col@1 ASC], global=true",
+            "          SortExec: expr=[non_nullable_col@1 ASC], global=true",
             "            MemoryExec: partitions=0, partition_sizes=[]",
         ];
 
@@ -1646,14 +1646,14 @@ mod tests {
         let physical_plan = sort_preserving_merge_exec(sort_exprs, sort);
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
-            "  SortExec: [nullable_col@0 ASC], global=true",
+            "  SortExec: expr=[nullable_col@0 ASC], global=true",
             "    SortPreservingMergeExec: [nullable_col@0 ASC]",
-            "      SortExec: [nullable_col@0 ASC], global=true",
+            "      SortExec: expr=[nullable_col@0 ASC], global=true",
             "        MemoryExec: partitions=0, partition_sizes=[]",
         ];
         let expected_optimized = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
-            "  SortExec: [nullable_col@0 ASC], global=true",
+            "  SortExec: expr=[nullable_col@0 ASC], global=true",
             "    MemoryExec: partitions=0, partition_sizes=[]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -1676,14 +1676,14 @@ mod tests {
         let physical_plan = sort_exec(vec![sort_expr("nullable_col", &schema)], input2);
 
         let expected_input = vec![
-            "SortExec: [nullable_col@0 ASC], global=true",
-            "  SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
-            "    SortExec: [non_nullable_col@1 ASC], global=true",
+            "SortExec: expr=[nullable_col@0 ASC], global=true",
+            "  SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "    SortExec: expr=[non_nullable_col@1 ASC], global=true",
             "      MemoryExec: partitions=0, partition_sizes=[]",
         ];
         // Keep the middle SortExec
         let expected_optimized = [
-            "SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
             "  MemoryExec: partitions=0, partition_sizes=[]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -1701,12 +1701,12 @@ mod tests {
         let physical_plan = sort_exec(vec![sort_expr("nullable_col", &schema)], input);
 
         let expected_input = vec![
-            "SortExec: [nullable_col@0 ASC], global=true",
+            "SortExec: expr=[nullable_col@0 ASC], global=true",
             "  SortPreservingMergeExec: [non_nullable_col@1 ASC]",
             "    MemoryExec: partitions=0, partition_sizes=[]",
         ];
         let expected_optimized = vec![
-            "SortExec: [nullable_col@0 ASC], global=true",
+            "SortExec: expr=[nullable_col@0 ASC], global=true",
             "  MemoryExec: partitions=0, partition_sizes=[]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -1736,7 +1736,7 @@ mod tests {
         ];
         let expected_optimized = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
-            "  SortExec: [nullable_col@0 ASC], global=true",
+            "  SortExec: expr=[nullable_col@0 ASC], global=true",
             "    MemoryExec: partitions=0, partition_sizes=[]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -1769,20 +1769,20 @@ mod tests {
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
             "      GlobalLimitExec: skip=0, fetch=100",
             "        LocalLimitExec: fetch=100",
-            "          SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "          SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
             "            ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
 
         // We should keep the bottom `SortExec`.
         let expected_optimized = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
-            "  SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=false",
+            "  SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=false",
             "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
             "      UnionExec",
             "        ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
             "        GlobalLimitExec: skip=0, fetch=100",
             "          LocalLimitExec: fetch=100",
-            "            SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "            SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
             "              ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -1801,12 +1801,12 @@ mod tests {
         let physical_plan = sort_preserving_merge_exec(sort_exprs, sort);
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
-            "  SortExec: [nullable_col@0 ASC], global=true",
+            "  SortExec: expr=[nullable_col@0 ASC], global=true",
             "    MemoryExec: partitions=0, partition_sizes=[]",
         ];
         let expected_optimized = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
-            "  SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "  SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
             "    MemoryExec: partitions=0, partition_sizes=[]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -1828,13 +1828,13 @@ mod tests {
 
         let expected_input = vec![
             "SortPreservingMergeExec: [non_nullable_col@1 ASC]",
-            "  SortExec: [nullable_col@0 ASC], global=true",
+            "  SortExec: expr=[nullable_col@0 ASC], global=true",
             "    SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "      MemoryExec: partitions=0, partition_sizes=[]",
         ];
         let expected_optimized = vec![
             "SortPreservingMergeExec: [non_nullable_col@1 ASC]",
-            "  SortExec: [non_nullable_col@1 ASC], global=true",
+            "  SortExec: expr=[non_nullable_col@1 ASC], global=true",
             "    MemoryExec: partitions=0, partition_sizes=[]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -1859,7 +1859,7 @@ mod tests {
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  UnionExec",
             "    ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
-            "    SortExec: [nullable_col@0 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
         // should not add a sort at the output of the union, input plan should not be changed
@@ -1890,7 +1890,7 @@ mod tests {
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  UnionExec",
             "    ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC], projection=[nullable_col, non_nullable_col]",
-            "    SortExec: [nullable_col@0 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
         // should not add a sort at the output of the union, input plan should not be changed
@@ -1923,16 +1923,16 @@ mod tests {
             "SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "  UnionExec",
             "    ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
-            "    SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
 
         let expected_optimized = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "  UnionExec",
-            "    SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
-            "    SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -1964,20 +1964,20 @@ mod tests {
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  UnionExec",
-            "    SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
-            "    SortExec: [nullable_col@0 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
         // should adjust sorting in the first input of the union such that it is not unnecessarily fine
         let expected_optimized = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  UnionExec",
-            "    SortExec: [nullable_col@0 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
-            "    SortExec: [nullable_col@0 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -2009,20 +2009,20 @@ mod tests {
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "  UnionExec",
-            "    SortExec: [nullable_col@0 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
-            "    SortExec: [nullable_col@0 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
         let expected_optimized = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "  UnionExec",
-            "    SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
-            "    SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
-            "    SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -2062,17 +2062,17 @@ mod tests {
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  UnionExec",
-            "    SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
-            "    SortExec: [nullable_col@0 ASC,non_nullable_col@1 DESC NULLS LAST], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 DESC NULLS LAST], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
         let expected_optimized = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  UnionExec",
-            "    SortExec: [nullable_col@0 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
-            "    SortExec: [nullable_col@0 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -2108,7 +2108,7 @@ mod tests {
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  UnionExec",
-            "    SortExec: [nullable_col@0 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
             "    SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
@@ -2120,10 +2120,10 @@ mod tests {
         let expected_optimized = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  UnionExec",
-            "    SortExec: [nullable_col@0 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
-            "    SortExec: [nullable_col@0 ASC], global=false",
+            "    SortExec: expr=[nullable_col@0 ASC], global=false",
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "        ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
@@ -2151,9 +2151,9 @@ mod tests {
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  UnionExec",
-            "    SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
-            "    SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "    SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
         assert_optimized!(expected_input, expected_input, physical_plan);
@@ -2191,9 +2191,9 @@ mod tests {
         let expected_input = vec![
             "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
             "  UnionExec",
-            "    SortExec: [nullable_col@0 DESC NULLS LAST], global=true",
+            "    SortExec: expr=[nullable_col@0 DESC NULLS LAST], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC], projection=[nullable_col, non_nullable_col]",
-            "    SortExec: [nullable_col@0 DESC NULLS LAST], global=true",
+            "    SortExec: expr=[nullable_col@0 DESC NULLS LAST], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
         ];
         assert_optimized!(expected_input, expected_input, physical_plan);
@@ -2231,9 +2231,9 @@ mod tests {
         let expected_input = vec![
             "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
             "  UnionExec",
-            "    SortExec: [nullable_col@0 DESC NULLS LAST], global=true",
+            "    SortExec: expr=[nullable_col@0 DESC NULLS LAST], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC], projection=[nullable_col, non_nullable_col]",
-            "    SortExec: [nullable_col@0 DESC NULLS LAST], global=true",
+            "    SortExec: expr=[nullable_col@0 DESC NULLS LAST], global=true",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
         ];
         let expected_optimized = vec![

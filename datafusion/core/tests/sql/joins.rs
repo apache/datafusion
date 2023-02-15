@@ -1881,12 +1881,12 @@ async fn sort_merge_join_on_date32() -> Result<()> {
     let expected = vec![
         "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@4 as c1, c2@5 as c2, c3@6 as c3, c4@7 as c4]",
         "  SortMergeJoin: join_type=Inner, on=[(Column { name: \"c1\", index: 0 }, Column { name: \"c1\", index: 0 })]",
-        "    SortExec: [c1@0 ASC], global=false",
+        "    SortExec: expr=[c1@0 ASC], global=false",
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2), input_partitions=2",
         "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
         "            MemoryExec: partitions=1, partition_sizes=[1]",
-        "    SortExec: [c1@0 ASC], global=false",
+        "    SortExec: expr=[c1@0 ASC], global=false",
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2), input_partitions=2",
         "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
@@ -1927,13 +1927,13 @@ async fn sort_merge_join_on_decimal() -> Result<()> {
         "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@4 as c1, c2@5 as c2, c3@6 as c3, c4@7 as c4]",
         "  ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@5 as c1, c2@6 as c2, c3@7 as c3, c4@8 as c4]",
         "    SortMergeJoin: join_type=Right, on=[(Column { name: \"CAST(t1.c3 AS Decimal128(10, 2))\", index: 4 }, Column { name: \"c3\", index: 2 })]",
-        "      SortExec: [CAST(t1.c3 AS Decimal128(10, 2))@4 ASC], global=false",
+        "      SortExec: expr=[CAST(t1.c3 AS Decimal128(10, 2))@4 ASC], global=false",
         "        CoalesceBatchesExec: target_batch_size=4096",
         "          RepartitionExec: partitioning=Hash([Column { name: \"CAST(t1.c3 AS Decimal128(10, 2))\", index: 4 }], 2), input_partitions=2",
         "            ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, CAST(c3@2 AS Decimal128(10, 2)) as CAST(t1.c3 AS Decimal128(10, 2))]",
         "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
         "                MemoryExec: partitions=1, partition_sizes=[1]",
-        "      SortExec: [c3@2 ASC], global=false",
+        "      SortExec: expr=[c3@2 ASC], global=false",
         "        CoalesceBatchesExec: target_batch_size=4096",
         "          RepartitionExec: partitioning=Hash([Column { name: \"c3\", index: 2 }], 2), input_partitions=2",
         "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
@@ -1981,7 +1981,7 @@ async fn left_semi_join() -> Result<()> {
         let expected = if repartition_joins {
             vec![
                 "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
-                "  SortExec: [t1_id@0 ASC NULLS LAST], global=false",
+                "  SortExec: expr=[t1_id@0 ASC NULLS LAST], global=false",
                 "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
                 "      CoalesceBatchesExec: target_batch_size=4096",
                 "        HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
@@ -1997,7 +1997,7 @@ async fn left_semi_join() -> Result<()> {
             ]
         } else {
             vec![
-                "SortExec: [t1_id@0 ASC NULLS LAST], global=true",
+                "SortExec: expr=[t1_id@0 ASC NULLS LAST], global=true",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
                 "    CoalesceBatchesExec: target_batch_size=4096",
                 "      HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
@@ -2061,7 +2061,7 @@ async fn left_semi_join() -> Result<()> {
         let expected = if repartition_joins {
             vec![
                 "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
-                "  SortExec: [t1_id@0 ASC NULLS LAST], global=false",
+                "  SortExec: expr=[t1_id@0 ASC NULLS LAST], global=false",
                 "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
                 "      CoalesceBatchesExec: target_batch_size=4096",
                 "        HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
@@ -2076,7 +2076,7 @@ async fn left_semi_join() -> Result<()> {
             ]
         } else {
             vec![
-                "SortExec: [t1_id@0 ASC NULLS LAST], global=true",
+                "SortExec: expr=[t1_id@0 ASC NULLS LAST], global=true",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
                 "    CoalesceBatchesExec: target_batch_size=4096",
                 "      HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
@@ -2256,7 +2256,7 @@ async fn right_semi_join() -> Result<()> {
         let physical_plan = dataframe.create_physical_plan().await?;
         let expected = if repartition_joins {
             vec![ "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
-                  "  SortExec: [t1_id@0 ASC NULLS LAST], global=false",
+                  "  SortExec: expr=[t1_id@0 ASC NULLS LAST], global=false",
                   "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
                   "      CoalesceBatchesExec: target_batch_size=4096",
                   "        HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
@@ -2271,7 +2271,7 @@ async fn right_semi_join() -> Result<()> {
             ]
         } else {
             vec![
-                "SortExec: [t1_id@0 ASC NULLS LAST], global=true",
+                "SortExec: expr=[t1_id@0 ASC NULLS LAST], global=true",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
                 "    CoalesceBatchesExec: target_batch_size=4096",
                 "      HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
@@ -2302,7 +2302,7 @@ async fn right_semi_join() -> Result<()> {
         let physical_plan = dataframe.create_physical_plan().await?;
         let expected = if repartition_joins {
             vec![ "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
-                  "  SortExec: [t1_id@0 ASC NULLS LAST], global=false",
+                  "  SortExec: expr=[t1_id@0 ASC NULLS LAST], global=false",
                   "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
                   "      CoalesceBatchesExec: target_batch_size=4096",
                   "        HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 0 }, op: NotEq, right: Column { name: \"t1_name\", index: 1 } }",
@@ -2317,7 +2317,7 @@ async fn right_semi_join() -> Result<()> {
             ]
         } else {
             vec![
-                "SortExec: [t1_id@0 ASC NULLS LAST], global=true",
+                "SortExec: expr=[t1_id@0 ASC NULLS LAST], global=true",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
                 "    CoalesceBatchesExec: target_batch_size=4096",
                 "      HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 0 }, op: NotEq, right: Column { name: \"t1_name\", index: 1 } }",

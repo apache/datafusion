@@ -45,7 +45,7 @@ chrono = { version = "0.4", default-features = false }
 datafusion = { path = "../core", version = "18.0.0" }
 datafusion-common = { path = "../common", version = "18.0.0" }
 datafusion-expr = { path = "../expr", version = "18.0.0" }
-object_store = { version = "0.5.0" }
+object_store = { version = "0.5.4" }
 parking_lot = { version = "0.12" }
 pbjson = { version = "0.5", optional = true }
 pbjson-types = { version = "0.5", optional = true }
