@@ -687,7 +687,7 @@ impl SessionContext {
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    /// 
+    ///
     /// For an example, see [`read_csv`](Self::read_csv)
     pub async fn read_avro<P: DataFilePaths>(
         &self,
@@ -701,7 +701,7 @@ impl SessionContext {
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    /// 
+    ///
     /// For an example, see [`read_csv`](Self::read_csv)
     pub async fn read_json<P: DataFilePaths>(
         &self,
@@ -723,9 +723,9 @@ impl SessionContext {
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    /// 
+    ///
     /// Example usage is given below:
-    /// 
+    ///
     /// ```
     /// use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -749,7 +749,7 @@ impl SessionContext {
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    /// 
+    ///
     /// For an example, see [`read_csv`](Self::read_csv)
     pub async fn read_parquet<P: DataFilePaths>(
         &self,
