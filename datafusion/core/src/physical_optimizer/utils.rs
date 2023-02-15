@@ -67,24 +67,3 @@ pub fn add_sort_above(
     }
     Ok(())
 }
-
-/// Util function to add SortExec above child
-/// preserving the original partitioning
-pub fn add_sort_above_child(
-    child: &Arc<dyn ExecutionPlan>,
-    sort_expr: Vec<PhysicalSortExpr>,
-    fetch: Option<usize>,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let new_child = if child.output_partitioning().partition_count() > 1 {
-        Arc::new(SortExec::new_with_partitioning(
-            sort_expr,
-            child.clone(),
-            true,
-            fetch,
-        )) as Arc<dyn ExecutionPlan>
-    } else {
-        Arc::new(SortExec::try_new(sort_expr, child.clone(), fetch)?)
-            as Arc<dyn ExecutionPlan>
-    };
-    Ok(new_child)
-}
