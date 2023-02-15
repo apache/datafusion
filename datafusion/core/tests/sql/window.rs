@@ -2878,14 +2878,16 @@ mod test_linear_partition_by {
     #[tokio::test]
     #[ignore]
     async fn test1() {
-        // let n_trials = vec![10];
-        // let n_rows = vec![100, 1000, 10_000];
-        // let distincts = vec![10, 1000, 100_000, 100_000_000];
-        // let n_batches = vec![10, 100_000_000];
         let n_trials = vec![10];
+        // let n_rows = vec![100, 1000, 10_000];
         let n_rows = vec![10_000];
-        let distincts = vec![100];
-        let n_batches = vec![100];
+        // let distincts = vec![10, 1000, 100_000_000];
+        let distincts = vec![1000];
+        let n_batches = vec![10, 100_000_000];
+        // let n_trials = vec![10];
+        // let n_rows = vec![10_000];
+        // let distincts = vec![100];
+        // let n_batches = vec![100];
         let modes = [true, false];
         for (n_trial, n_row, distinct, n_batch, is_linear) in
             iproduct!(n_trials, n_rows, distincts, n_batches, modes)
