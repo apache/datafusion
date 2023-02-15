@@ -523,13 +523,24 @@ fn push_down_scan(
         }
     }
 
+    // Building new projection from BTreeSet
+    // preserving source projection order if it exists
+    let projection = if let Some(original_projection) = &scan.projection {
+        original_projection
+            .clone()
+            .into_iter()
+            .filter(|idx| projection.contains(idx))
+            .collect::<Vec<_>>()
+    } else {
+        projection.into_iter().collect::<Vec<_>>()
+    };
+
     // create the projected schema
     let projected_fields: Vec<DFField> = projection
         .iter()
         .map(|i| DFField::from_qualified(&scan.table_name, schema.fields()[*i].clone()))
         .collect();
 
-    let projection = projection.into_iter().collect::<Vec<_>>();
     let projected_schema = projected_fields.to_dfschema_ref()?;
 
     // return the table scan with projection
@@ -553,7 +564,7 @@ mod tests {
     use datafusion_expr::expr::Cast;
     use datafusion_expr::{
         col, count, lit,
-        logical_plan::{builder::LogicalPlanBuilder, JoinType},
+        logical_plan::{builder::LogicalPlanBuilder, table_scan, JoinType},
         max, min, AggregateFunction, Expr,
     };
     use std::collections::HashMap;
@@ -636,6 +647,33 @@ mod tests {
             .build()?;
         let expected = "Projection: test.a, test.c, test.b\
         \n  TableScan: test projection=[a, b, c]";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn reorder_scan() -> Result<()> {
+        let schema = Schema::new(test_table_scan_fields());
+
+        let plan = table_scan(Some("test"), &schema, Some(vec![1, 0, 2]))?.build()?;
+        let expected = "TableScan: test projection=[b, a, c]";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn reorder_scan_projection() -> Result<()> {
+        let schema = Schema::new(test_table_scan_fields());
+
+        let plan = table_scan(Some("test"), &schema, Some(vec![1, 0, 2]))?
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let expected = "Projection: test.a, test.b\
+        \n  TableScan: test projection=[b, a]";
 
         assert_optimized_plan_eq(&plan, expected);
 
