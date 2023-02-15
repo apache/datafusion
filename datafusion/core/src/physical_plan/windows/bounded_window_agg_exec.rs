@@ -760,13 +760,7 @@ impl BoundedWindowAggStream {
                     for (
                         partition_key,
                         WindowState {
-                            state:
-                                WindowAggState {
-                                    out_col,
-                                    offset_pruned_rows,
-                                    last_calculated_index,
-                                    ..
-                                },
+                            state: WindowAggState { out_col, .. },
                             ..
                         },
                     ) in partition_window_agg_states
