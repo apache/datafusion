@@ -147,13 +147,12 @@ impl ExternalSorter {
             // for being reliable, we need to reflect the memory usage of the partial batch.
             //
             // In addition, if it's row encoding was preserved, that would also change the size.
-            let new_size = batch_byte_size(&partial.sorted_batch);
-            // TODO
-            // + partial
-            //     .sort_data
-            //     .rows
-            //     .as_ref()
-            //     .map_or(0, |rows| rows.size());
+            let new_size = batch_byte_size(&partial.sorted_batch)
+                + partial
+                    .sort_data
+                    .rows
+                    .as_ref()
+                    .map_or(0, |rows| rows.size());
             match new_size.cmp(&size) {
                 Ordering::Greater => {
                     // We don't have to call try_grow here, since we have already used the
@@ -181,8 +180,6 @@ impl ExternalSorter {
     }
 
     /// MergeSort in mem batches as well as spills into total order with `SortPreservingMergeStream`.
-    ///
-    /// todo: add flag to specify that the row encoding should not be preserved (to save memory)
     fn sort(&mut self) -> Result<SendableSortStream> {
         let batch_size = self.session_config.batch_size();
 
@@ -221,7 +218,6 @@ impl ExternalSorter {
             let tracking_metrics = self
                 .metrics_set
                 .new_final_tracking(self.partition_id, &self.runtime.memory_pool);
-            println!("using SortPreservingMergeStream to emit row encodings");
             Ok(Box::pin(SortPreservingMergeStream::new_from_streams(
                 streams,
                 self.schema.clone(),
@@ -231,7 +227,6 @@ impl ExternalSorter {
                 true,
             )?))
         } else if !self.in_mem_batches.is_empty() {
-            // sort in mem doesnt require SortPreservingMergeStream
             let tracking_metrics = self
                 .metrics_set
                 .new_final_tracking(self.partition_id, &self.runtime.memory_pool);
@@ -761,7 +756,6 @@ fn read_spill(
             (Err(err), Ok(_)) | (Err(err), Err(_)) => Err(err.into()),
             (Ok(_), Err(err)) => Err(err),
         };
-        // TODO: read spilled row data
         sender
             .blocking_send(item)
             .map_err(|e| DataFusionError::Execution(format!("{e}")))?;
@@ -866,7 +860,6 @@ impl SortExec {
         context: Arc<TaskContext>,
         tx: mpsc::Sender<SortStreamItem>,
     ) -> tokio::task::JoinHandle<()> {
-        // create owned vars for task
         let input = self.input.clone();
         let expr = self.expr.clone();
         let metrics = self.metrics_set.clone();
@@ -1033,37 +1026,30 @@ fn sort_batch(
         .iter()
         .map(|e| e.evaluate_to_sort_column(&batch))
         .collect::<Result<Vec<SortColumn>>>()?;
+    let (indices, rows) = match (sort_columns.len(), fetch) {
+        // if single column or there's a limit, fallback to regular sort
+        (1, None) | (_, Some(_)) => (lexsort_to_indices(&sort_columns, fetch)?, None),
+        _ => {
+            let sort_fields = sort_columns
+                .iter()
+                .map(|c| {
+                    let datatype = c.values.data_type().to_owned();
+                    SortField::new_with_options(datatype, c.options.unwrap_or_default())
+                })
+                .collect::<Vec<_>>();
+            let arrays: Vec<ArrayRef> =
+                sort_columns.iter().map(|c| c.values.clone()).collect();
+            let mut row_converter = RowConverter::new(sort_fields)?;
+            let rows = row_converter.convert_columns(&arrays)?;
 
-    let (indices, rows) = if sort_columns.len() == 1 {
-        (lexsort_to_indices(&sort_columns, fetch)?, None)
-    } else {
-        let sort_fields = sort_columns
-            .iter()
-            .map(|c| {
-                let datatype = c.values.data_type().to_owned();
-                SortField::new_with_options(datatype, c.options.unwrap_or_default())
-            })
-            .collect::<Vec<_>>();
-        let arrays: Vec<ArrayRef> =
-            sort_columns.iter().map(|c| c.values.clone()).collect();
-        let mut row_converter = RowConverter::new(sort_fields)?;
-        let rows = row_converter.convert_columns(&arrays)?;
-
-        let mut to_sort: Vec<(usize, Row)> = rows.into_iter().enumerate().collect();
-        to_sort.sort_unstable_by(|(_, row_a), (_, row_b)| row_a.cmp(row_b));
-        let limit = match fetch {
-            Some(lim) => lim.min(to_sort.len()),
-            None => to_sort.len(),
-        };
-        let sorted_indices = to_sort
-            .iter()
-            .take(limit)
-            .map(|(idx, _)| *idx)
-            .collect::<Vec<_>>();
-        (
-            UInt32Array::from_iter(sorted_indices.iter().map(|i| *i as u32)),
-            Some(RowSelection::new(rows, sorted_indices)),
-        )
+            let mut to_sort: Vec<(usize, Row)> = rows.into_iter().enumerate().collect();
+            to_sort.sort_unstable_by(|(_, row_a), (_, row_b)| row_a.cmp(row_b));
+            let sorted_indices = to_sort.iter().map(|(idx, _)| *idx).collect::<Vec<_>>();
+            (
+                UInt32Array::from_iter(sorted_indices.iter().map(|i| *i as u32)),
+                Some(RowSelection::new(rows, sorted_indices)),
+            )
+        }
     };
 
     // reorder all rows based on sorted indices
@@ -1190,7 +1176,6 @@ impl RowWriter {
                     bytes.len()
                 })
                 .sum::<usize>();
-            println!("writing {} to spill", rows.num_rows());
             let mut builder = BinaryBuilder::with_capacity(rows.num_rows(), numbytes);
             for r in rows.iter() {
                 let bytes: &[u8] = r.as_ref();
@@ -1361,7 +1346,9 @@ mod tests {
     #[tokio::test]
     async fn test_sort_spill() -> Result<()> {
         // trigger spill there will be 4 batches with 5.5KB for each
-        let config = RuntimeConfig::new().with_memory_limit(12288, 1.0);
+        // plus 1289 bytes of row data for each batch
+        let row_size = 1289;
+        let config = RuntimeConfig::new().with_memory_limit(12288 + (row_size * 4), 1.0);
         let runtime = Arc::new(RuntimeEnv::new(config)?);
         let session_ctx = SessionContext::with_config_rt(SessionConfig::new(), runtime);
 
@@ -1432,6 +1419,7 @@ mod tests {
         // This test mirrors down the size from the example above.
         let avg_batch_size = 5336;
         let partitions = 4;
+        let added_row_size = 1289 * partitions;
 
         // A tuple of (fetch, expect_spillage)
         let test_options = vec![
@@ -1444,8 +1432,10 @@ mod tests {
         ];
 
         for (fetch, expect_spillage) in test_options {
-            let config = RuntimeConfig::new()
-                .with_memory_limit(avg_batch_size * (partitions - 1), 1.0);
+            let config = RuntimeConfig::new().with_memory_limit(
+                avg_batch_size * (partitions - 1) + added_row_size,
+                1.0,
+            );
             let runtime = Arc::new(RuntimeEnv::new(config)?);
             let session_ctx =
                 SessionContext::with_config_rt(SessionConfig::new(), runtime);

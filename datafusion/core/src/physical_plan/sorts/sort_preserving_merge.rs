@@ -458,14 +458,8 @@ impl SortPreservingMergeStream {
                             })
                             .collect::<Result<Vec<_>>>()?;
                         // use preserved row encoding if it existed, otherwise create now
-                        //
-                        // (could be because: either not used at all (single col)
-                        // or currently rows are not spilled to disk.)
                         let rows = match preserved_rows {
-                            Some(rows) => {
-                                println!("got preserved row encoding...");
-                                rows
-                            }
+                            Some(rows) => rows,
                             None => match self.row_converter.convert_columns(&cols) {
                                 Ok(rows) => rows.into(),
                                 Err(e) => {
@@ -475,7 +469,9 @@ impl SortPreservingMergeStream {
                                 }
                             },
                         };
-
+                        // if this stream should emit the row encoding, save it in
+                        // batches so that the sorted rows can be constructed
+                        // when the sroted record batches are
                         if self.preserve_row_encoding {
                             self.batches[idx].push_back((batch, Some(rows.clone())))
                         } else {
@@ -570,7 +566,6 @@ impl SortPreservingMergeStream {
                 make_arrow_array(array_data.freeze())
             })
             .collect();
-        dbg!(self.preserve_row_encoding);
         let rows = if self.preserve_row_encoding {
             if self.in_progress.is_empty() {
                 Some(RowBatch::new(vec![], vec![]))
