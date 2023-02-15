@@ -543,56 +543,76 @@ fn analyze_immediate_sort_removal(
     None
 }
 
+pub fn find_match_indices<T: PartialEq>(
+    to_search: &[T],
+    searched: &[T],
+) -> Result<Vec<usize>> {
+    let mut result = vec![];
+    for item in to_search {
+        if let Some((idx, _elem)) =
+            searched.iter().enumerate().find(|(idx, e)| e.eq(&item))
+        {
+            result.push(idx);
+        }
+    }
+    Ok(result)
+}
+
+pub fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec<T>> {
+    let mut result = vec![];
+    for idx in indices {
+        result.push(searched[*idx].clone());
+    }
+    Ok(result)
+}
+
 /// Analyzes a [WindowAggExec] or a [BoundedWindowAggExec] to determine whether
 /// it may allow removing a sort.
 fn analyze_window_sort_removal(
     sort_tree: &mut ExecTree,
     window_exec: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
-    let (window_expr, partition_keys, sort_keys, partition_by_sort_keys, orderby_sort_keys) =
-        if let Some(exec) = window_exec.as_any().downcast_ref::<BoundedWindowAggExec>() {
-            (
-                exec.window_expr(),
-                &exec.partition_keys,
-                &exec.sort_keys,
-                exec.partition_by_sort_keys()?,
-                exec.order_by_sort_keys()?,
-            )
-        } else if let Some(exec) = window_exec.as_any().downcast_ref::<WindowAggExec>() {
-            (
-                exec.window_expr(),
-                &exec.partition_keys,
-                &exec.sort_keys,
-                exec.partition_by_sort_keys()?,
-                exec.order_by_sort_keys()?,
-            )
-        } else {
-            return Err(DataFusionError::Plan(
-                "Expects to receive either WindowAggExec of BoundedWindowAggExec"
-                    .to_string(),
-            ));
-        };
+    let (
+        window_expr,
+        partition_keys,
+        sort_keys,
+        partition_by_sort_keys,
+        orderby_sort_keys,
+    ) = if let Some(exec) = window_exec.as_any().downcast_ref::<BoundedWindowAggExec>() {
+        (
+            exec.window_expr(),
+            &exec.partition_keys,
+            &exec.sort_keys,
+            exec.partition_by_sort_keys()?,
+            exec.order_by_sort_keys()?,
+        )
+    } else if let Some(exec) = window_exec.as_any().downcast_ref::<WindowAggExec>() {
+        (
+            exec.window_expr(),
+            &exec.partition_keys,
+            &exec.sort_keys,
+            exec.partition_by_sort_keys()?,
+            exec.order_by_sort_keys()?,
+        )
+    } else {
+        return Err(DataFusionError::Plan(
+            "Expects to receive either WindowAggExec of BoundedWindowAggExec".to_string(),
+        ));
+    };
 
-    for elem in window_expr{
-        println!("elem: {:?}", elem);
+    let mut search_indices = vec![vec![], vec![]];
+    if let Some(sort_keys) = sort_keys {
+        search_indices[0] = (0..sort_keys.len()).collect();
+        search_indices[1] = find_match_indices(&orderby_sort_keys, &sort_keys)?;
     }
-    println!("partition_keys:{:?}", partition_keys);
-    println!("partition_by_sort_keys:{:?}", partition_by_sort_keys);
-    println!("orderby_sort_keys:{:?}", orderby_sort_keys);
-    println!("sort_keys:{:?}", sort_keys);
-    let n_partition_by_keys = partition_by_sort_keys.len();
-    println!("n_partition_by_keys:{:?}", n_partition_by_keys);
     let mut first_should_reverse = None;
     let mut physical_ordering_common = vec![];
     let mut partition_search_mode = PartitionSearchMode::Linear;
     let mut can_skip_sorting = false;
-    for (order_offsets, search_mode) in [0, n_partition_by_keys].into_iter().zip(vec![
+    for (search_indices, search_mode) in search_indices.iter().zip(vec![
         PartitionSearchMode::Sorted,
         PartitionSearchMode::Linear,
     ]) {
-        // for (order_offsets, search_mode) in [0].into_iter().zip(vec![
-        //     PartitionSearchMode::Sorted,
-        // ]) {
         for sort_any in sort_tree.get_leaves() {
             let sort_output_ordering = sort_any.output_ordering();
             // Variable `sort_any` will either be a `SortExec` or a
@@ -610,10 +630,8 @@ fn analyze_window_sort_removal(
                     "A SortExec should have output ordering".to_string(),
                 )
             })?;
-            let required_ordering = &required_ordering[order_offsets..];
+            let required_ordering = &get_at_indices(required_ordering, search_indices)?;
             if let Some(physical_ordering) = physical_ordering {
-                println!("physical_ordering:{:?}", physical_ordering);
-                println!("required_ordering:{:?}", required_ordering);
                 if physical_ordering_common.is_empty()
                     || physical_ordering.len() < physical_ordering_common.len()
                 {

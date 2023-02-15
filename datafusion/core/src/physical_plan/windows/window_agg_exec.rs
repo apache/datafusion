@@ -137,13 +137,9 @@ impl WindowAggExec {
         // All window exprs have the same partition by, so we just use the first one:
         let order_by = self.window_expr()[0].order_by();
         let sort_keys = self.sort_keys.as_deref().unwrap_or(&[]);
-        println!("order_by:{:?}", order_by);
-        println!("sort_keys:{:?}", sort_keys);
         for item in order_by {
-            println!("item:{:?}", item);
-            if let Some(a) = sort_keys.iter().find(|e| e.expr.eq(&item.expr)) {
-                println!("pushing");
-                result.push(a.clone());
+            if let Some(elem) = sort_keys.iter().find(|e| e.expr.eq(&item.expr)) {
+                result.push(elem.clone());
             }
         }
         Ok(result)

@@ -153,13 +153,9 @@ impl BoundedWindowAggExec {
         // All window exprs have the same partition by, so we just use the first one:
         let order_by = self.window_expr()[0].order_by();
         let sort_keys = self.sort_keys.as_deref().unwrap_or(&[]);
-        println!("order_by:{:?}", order_by);
-        println!("sort_keys:{:?}", sort_keys);
         for item in order_by {
-            println!("item:{:?}", item);
-            if let Some(a) = sort_keys.iter().find(|e| e.expr.eq(&item.expr)) {
-                println!("pushing");
-                result.push(a.clone());
+            if let Some(elem) = sort_keys.iter().find(|e| e.expr.eq(&item.expr)) {
+                result.push(elem.clone());
             }
         }
         Ok(result)
@@ -239,7 +235,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let input = self.input.execute(partition, context)?;
-        let stream = Box::pin(SortedPartitionByBoundedWindowStream::new(
+        let stream = Box::pin(BoundedWindowAggStream::new(
             self.schema.clone(),
             self.window_expr.clone(),
             input,
@@ -314,23 +310,9 @@ fn create_schema(
     Ok(Schema::new(fields))
 }
 
-// /// This trait defines the interface for updating the state and calculating
-// /// results for window functions. Depending on the partitioning scheme, one
-// /// may have different implementations for the functions within.
-// pub trait PartitionByHandler {
-//     /// Constructs output columns from window_expression results.
-//     fn calculate_out_columns(&self) -> Result<Option<Vec<ArrayRef>>>;
-//     /// Prunes the window state to remove any unnecessary information
-//     /// given how many rows we emitted so far.
-//     fn prune_state(&mut self, n_out: usize) -> Result<()>;
-//     /// Updates record batches for each partition when new batches are
-//     /// received.
-//     fn update_partition_batch(&mut self, record_batch: RecordBatch) -> Result<()>;
-// }
-
 /// stream for window aggregation plan
 /// assuming partition by column is sorted (or without PARTITION BY expression)
-pub struct SortedPartitionByBoundedWindowStream {
+pub struct BoundedWindowAggStream {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
     /// The record batch executor receives as input (i.e. the columns needed
@@ -356,7 +338,7 @@ pub struct SortedPartitionByBoundedWindowStream {
     search_mode: PartitionSearchMode,
 }
 
-impl SortedPartitionByBoundedWindowStream {
+impl BoundedWindowAggStream {
     /// This method constructs output columns using the result of each window expression
     fn calculate_out_columns(&mut self) -> Result<Option<Vec<ArrayRef>>> {
         match self.search_mode {
@@ -560,7 +542,7 @@ impl SortedPartitionByBoundedWindowStream {
     }
 }
 
-impl Stream for SortedPartitionByBoundedWindowStream {
+impl Stream for BoundedWindowAggStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -572,7 +554,7 @@ impl Stream for SortedPartitionByBoundedWindowStream {
     }
 }
 
-impl SortedPartitionByBoundedWindowStream {
+impl BoundedWindowAggStream {
     /// Create a new BoundedWindowAggStream
     pub fn new(
         schema: SchemaRef,
@@ -910,7 +892,7 @@ impl SortedPartitionByBoundedWindowStream {
     }
 }
 
-impl RecordBatchStream for SortedPartitionByBoundedWindowStream {
+impl RecordBatchStream for BoundedWindowAggStream {
     /// Get the schema
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
