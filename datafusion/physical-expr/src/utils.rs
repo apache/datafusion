@@ -172,16 +172,15 @@ pub fn normalize_expr_with_equivalence_properties(
 pub fn new_sort_requirements(
     sort_keys: Option<&[PhysicalSortExpr]>,
 ) -> Option<Vec<PhysicalSortRequirements>> {
-    let ordering_requirements = sort_keys.map(|ordering| {
+    sort_keys.map(|ordering| {
         ordering
             .iter()
             .map(|o| PhysicalSortRequirements {
                 expr: o.expr.clone(),
-                sort_options: Some(o.options.clone()),
+                sort_options: Some(o.options),
             })
             .collect::<Vec<_>>()
-    });
-    ordering_requirements
+    })
 }
 
 pub fn normalize_sort_expr_with_equivalence_properties(
@@ -212,7 +211,7 @@ pub fn normalize_sort_requirement_with_equivalence_properties(
     if sort_requirement.expr.ne(&normalized_expr) {
         PhysicalSortRequirements {
             expr: normalized_expr,
-            sort_options: sort_requirement.sort_options.clone(),
+            sort_options: sort_requirement.sort_options,
         }
     } else {
         sort_requirement
@@ -410,7 +409,7 @@ pub fn map_requirement_before_projection(
                 .zip(requirement.iter())
                 .map(|(new, old)| PhysicalSortRequirements {
                     expr: new.clone(),
-                    sort_options: old.sort_options.clone(),
+                    sort_options: old.sort_options,
                 })
                 .collect::<Vec<_>>();
             Some(new_request)
@@ -431,7 +430,7 @@ pub fn create_sort_expr_from_requirement(
             if prop.sort_options.is_some() {
                 PhysicalSortExpr {
                     expr: prop.expr.clone(),
-                    options: prop.sort_options.unwrap().clone(),
+                    options: prop.sort_options.unwrap(),
                 }
             } else {
                 PhysicalSortExpr {

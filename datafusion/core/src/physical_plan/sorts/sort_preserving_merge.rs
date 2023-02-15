@@ -85,8 +85,6 @@ pub struct SortPreservingMergeExec {
     expr: Vec<PhysicalSortExpr>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// use SortPreservingMergeExec to satisfy the Sort Distribution
-    satisfy_distribution: bool,
 }
 
 impl SortPreservingMergeExec {
@@ -96,20 +94,6 @@ impl SortPreservingMergeExec {
             input,
             expr,
             metrics: ExecutionPlanMetricsSet::new(),
-            satisfy_distribution: false,
-        }
-    }
-
-    /// Create a new SortPreservingMergeExec to satisfy the Sort Distribution
-    pub fn new_for_distribuion(
-        expr: Vec<PhysicalSortExpr>,
-        input: Arc<dyn ExecutionPlan>,
-    ) -> Self {
-        Self {
-            input,
-            expr,
-            metrics: ExecutionPlanMetricsSet::new(),
-            satisfy_distribution: true,
         }
     }
 
@@ -121,11 +105,6 @@ impl SortPreservingMergeExec {
     /// Sort expressions
     pub fn expr(&self) -> &[PhysicalSortExpr] {
         &self.expr
-    }
-
-    /// satisfy the Sort Distribution requirements
-    pub fn satisfy_distribution(&self) -> bool {
-        self.satisfy_distribution
     }
 }
 

@@ -856,14 +856,17 @@ fn ensure_distribution(
                 Distribution::SinglePartition
                     if child.output_partitioning().partition_count() > 1 =>
                 {
-                    if repartition_sort && required_ordering.is_some() {
-                        let new_physical_ordering = create_sort_expr_from_requirement(
-                            required_ordering.unwrap().as_ref(),
-                        );
-                        Ok(Arc::new(SortPreservingMergeExec::new_for_distribuion(
-                            new_physical_ordering,
-                            child.clone(),
-                        )))
+                    if repartition_sort {
+                        if let Some(ordering) = required_ordering {
+                            let new_physical_ordering =
+                                create_sort_expr_from_requirement(ordering.as_ref());
+                            Ok(Arc::new(SortPreservingMergeExec::new(
+                                new_physical_ordering,
+                                child.clone(),
+                            )))
+                        } else {
+                            Ok(Arc::new(CoalescePartitionsExec::new(child.clone())))
+                        }
                     } else {
                         Ok(Arc::new(CoalescePartitionsExec::new(child.clone())))
                     }

@@ -126,7 +126,7 @@ impl BoundedWindowAggExec {
         let partition_by = self.window_expr()[0].partition_by();
         let sort_keys = self
             .output_ordering()
-            .unwrap_or(self.sort_keys.as_deref().unwrap_or(&[]));
+            .unwrap_or_else(|| self.sort_keys.as_deref().unwrap_or(&[]));
         for item in partition_by {
             if let Some(a) = sort_keys.iter().find(|&e| e.expr.eq(item)) {
                 result.push(a.clone());
@@ -188,7 +188,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
                     } else {
                         PhysicalSortRequirements {
                             expr: o.expr.clone(),
-                            sort_options: Some(o.options.clone()),
+                            sort_options: Some(o.options),
                         }
                     }
                 })
@@ -460,7 +460,6 @@ impl SortedPartitionByBoundedWindowStream {
     ) -> Self {
         let state = window_expr.iter().map(|_| IndexMap::new()).collect();
         let empty_batch = RecordBatch::new_empty(schema.clone());
-        println!("partition_by_sort_keys {:?}", partition_by_sort_keys);
         Self {
             schema,
             input,

@@ -459,9 +459,11 @@ impl DataFrame {
             .and_then(|r| r.columns().first())
             .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
             .and_then(|a| a.values().first())
-            .ok_or(DataFusionError::Internal(
-                "Unexpected output when collecting for count()".to_string(),
-            ))? as usize;
+            .ok_or_else(|| {
+                DataFusionError::Internal(
+                    "Unexpected output when collecting for count()".to_string(),
+                )
+            })? as usize;
         Ok(len)
     }
 

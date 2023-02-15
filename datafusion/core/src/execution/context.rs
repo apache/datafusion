@@ -1089,7 +1089,6 @@ impl QueryPlanner for DefaultQueryPlanner {
         session_state: &SessionState,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let planner = DefaultPhysicalPlanner::default();
-        println!("optimized logical plan {:?}", logical_plan);
         planner
             .create_physical_plan(logical_plan, session_state)
             .await
