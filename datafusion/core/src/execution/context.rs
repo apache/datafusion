@@ -1479,6 +1479,7 @@ impl SessionState {
         Self::with_config_rt_and_catalog_list(config, runtime, catalog_list)
     }
 
+    /// Returns new SessionState using the provided configuration, runtime and catalog list.
     pub fn with_config_rt_and_catalog_list(
         config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
