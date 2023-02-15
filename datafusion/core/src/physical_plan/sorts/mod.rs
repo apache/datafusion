@@ -77,10 +77,6 @@ impl SortedStream {
             mem_used,
             row_encoding_ignored: false,
         }
-        // if let Some(row_stream) = row_stream {
-        // } else {
-        //     Self::new_no_row_encoding(stream, mem_used)
-        // }
     }
     /// create stream where the row encoding for each batch is always None
     pub(crate) fn new_no_row_encoding(
@@ -142,8 +138,7 @@ impl RowBatch {
     /// Amount of bytes
     pub fn memory_size(&self) -> usize {
         let indices_size = self.indices.len() * 2 * std::mem::size_of::<usize>();
-        // rows are refs so dont count the size inside the refs, just the refs itself?
-        let rows_size = 0;
+        let rows_size = self.rows.iter().map(|r| r.size()).sum::<usize>();
         rows_size + indices_size + std::mem::size_of::<Self>()
     }
 }
@@ -189,7 +184,9 @@ pub struct RowSelection {
 }
 #[derive(Debug)]
 enum RowData {
+    /// Rows that have always been in memory
     Rows(Rows),
+    /// Rows that were spilled to disk and then later read back into mem
     Spilled {
         parser: RowParser,
         bytes: Vec<bytes::Bytes>,

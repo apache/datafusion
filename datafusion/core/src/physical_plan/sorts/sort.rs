@@ -90,7 +90,7 @@ struct ExternalSorter {
 }
 struct Spill {
     record_batch_file: NamedTempFile,
-    // `None` when row encoding not used
+    // `None` when row encoding not preserved
     rows_file: Option<NamedTempFile>,
 }
 
@@ -418,7 +418,6 @@ fn get_sorted_iter(
         sort_data.iter().map(|d| d.rows.as_ref()).collect();
     let indices = match rows_per_batch {
         Some(rows_per_batch) => {
-            // concat rows in their selection order and then sort
             let mut to_sort = rows_per_batch
                 .iter()
                 .flat_map(|r| r.iter())
