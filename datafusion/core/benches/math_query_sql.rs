@@ -82,29 +82,33 @@ fn criterion_benchmark(c: &mut Criterion) {
     let array_len = 1048576; // 2^20
     let batch_size = 512; // 2^9
     let ctx = create_context(array_len, batch_size).unwrap();
-    c.bench_function("sqrt_20_9", |b| {
-        b.iter(|| query(ctx.clone(), "SELECT sqrt(f32) FROM t"))
-    });
+    // c.bench_function("sqrt_20_9", |b| {
+    //     b.iter(|| query(ctx.clone(), "SELECT sqrt(f32) FROM t"))
+    // });
+    //
+    // let array_len = 1048576; // 2^20
+    // let batch_size = 4096; // 2^12
+    // let ctx = create_context(array_len, batch_size).unwrap();
+    // c.bench_function("sqrt_20_12", |b| {
+    //     b.iter(|| query(ctx.clone(), "SELECT sqrt(f32) FROM t"))
+    // });
+    //
+    // let array_len = 4194304; // 2^22
+    // let batch_size = 4096; // 2^12
+    // let ctx = create_context(array_len, batch_size).unwrap();
+    // c.bench_function("sqrt_22_12", |b| {
+    //     b.iter(|| query(ctx.clone(), "SELECT sqrt(f32) FROM t"))
+    // });
+    //
+    // let array_len = 4194304; // 2^22
+    // let batch_size = 16384; // 2^14
+    // let ctx = create_context(array_len, batch_size).unwrap();
+    // c.bench_function("sqrt_22_14", |b| {
+    //     b.iter(|| query(ctx.clone(), "SELECT sqrt(f32) FROM t"))
+    // });
 
-    let array_len = 1048576; // 2^20
-    let batch_size = 4096; // 2^12
-    let ctx = create_context(array_len, batch_size).unwrap();
-    c.bench_function("sqrt_20_12", |b| {
-        b.iter(|| query(ctx.clone(), "SELECT sqrt(f32) FROM t"))
-    });
-
-    let array_len = 4194304; // 2^22
-    let batch_size = 4096; // 2^12
-    let ctx = create_context(array_len, batch_size).unwrap();
-    c.bench_function("sqrt_22_12", |b| {
-        b.iter(|| query(ctx.clone(), "SELECT sqrt(f32) FROM t"))
-    });
-
-    let array_len = 4194304; // 2^22
-    let batch_size = 16384; // 2^14
-    let ctx = create_context(array_len, batch_size).unwrap();
-    c.bench_function("sqrt_22_14", |b| {
-        b.iter(|| query(ctx.clone(), "SELECT sqrt(f32) FROM t"))
+    c.bench_function("add_cow", |b| {
+        b.iter(|| query(ctx.clone(), "SELECT f32 + 1 FROM t"))
     });
 }
 

@@ -24,9 +24,8 @@ use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
 use arrow::compute::kernels::arithmetic::{
-    add, add_scalar_dyn as add_dyn_scalar, divide_opt,
-    divide_scalar_dyn as divide_dyn_scalar, modulus, modulus_scalar, multiply,
-    multiply_scalar_dyn as multiply_dyn_scalar, subtract,
+    add, divide_opt, divide_scalar_dyn as divide_dyn_scalar, modulus, modulus_scalar,
+    multiply, multiply_scalar_dyn as multiply_dyn_scalar, subtract,
     subtract_scalar_dyn as subtract_dyn_scalar,
 };
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
@@ -55,6 +54,7 @@ use arrow::datatypes::*;
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
+use arrow::compute::{add_scalar_dyn, unary_mut};
 use kernels::{
     bitwise_and, bitwise_and_scalar, bitwise_or, bitwise_or_scalar, bitwise_shift_left,
     bitwise_shift_left_scalar, bitwise_shift_right, bitwise_shift_right_scalar,
@@ -70,6 +70,7 @@ use kernels_arrow::{
 };
 
 use arrow::datatypes::{DataType, Schema, TimeUnit};
+use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 
 use super::column::Column;
@@ -449,6 +450,34 @@ macro_rules! binary_primitive_array_op_dyn_scalar {
     }}
 }
 
+macro_rules! binary_primitive_array_op_dyn_scalar_cow {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+        // unwrap underlying (non dictionary) value
+        let right = unwrap_dict_value($RIGHT);
+        let op_type = $LEFT.data_type();
+
+        let result: Result<Arc<dyn Array>> = match right {
+            ScalarValue::Decimal128(v, _, _) => compute_primitive_decimal_op_dyn_scalar!(&$LEFT, v, $OP, op_type),
+            ScalarValue::Int8(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int8Type),
+            ScalarValue::Int16(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int16Type),
+            ScalarValue::Int32(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int32Type),
+            ScalarValue::Int64(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int64Type),
+            ScalarValue::UInt8(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, UInt8Type),
+            ScalarValue::UInt16(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, UInt16Type),
+            ScalarValue::UInt32(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, UInt32Type),
+            ScalarValue::UInt64(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, UInt64Type),
+            ScalarValue::Float32(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Float32Type),
+            ScalarValue::Float64(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Float64Type),
+            other => Err(DataFusionError::Internal(format!(
+                "Data type {:?} not supported for scalar operation '{}' on dyn array",
+                other, stringify!($OP)))
+            )
+        };
+
+        Some(result)
+    }}
+}
+
 /// Invoke a compute kernel on an array and a scalar
 /// The binary_primitive_array_op_scalar macro only evaluates for primitive
 /// types like integers and floats.
@@ -676,7 +705,7 @@ impl PhysicalExpr for BinaryExpr {
         }
 
         // Attempt to use special kernels if one input is scalar and the other is an array
-        let scalar_result = match (&left_value, &right_value) {
+        let scalar_result = match (left_value, right_value) {
             (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
                 // if left is array and right is literal - use scalar operations
                 self.evaluate_array_scalar(array, scalar.clone())?
@@ -692,13 +721,16 @@ impl PhysicalExpr for BinaryExpr {
             return result.map(|a| ColumnarValue::Array(a));
         }
 
-        // if both arrays or both literals - extract arrays and continue execution
-        let (left, right) = (
-            left_value.into_array(batch.num_rows()),
-            right_value.into_array(batch.num_rows()),
-        );
-        self.evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type)
-            .map(|a| ColumnarValue::Array(a))
+        // // if both arrays or both literals - extract arrays and continue execution
+        // let (left, right) = (
+        //     left_value.into_array(batch.num_rows()),
+        //     right_value.into_array(batch.num_rows()),
+        // );
+        // self.evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type)
+        //     .map(|a| ColumnarValue::Array(a))
+        return Err(DataFusionError::Internal(format!(
+            "For test"
+        )));
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -968,83 +1000,103 @@ pub(crate) fn array_eq_scalar(lhs: &dyn Array, rhs: &ScalarValue) -> Result<Arra
     )?
 }
 
+pub fn add_dyn_scalar<T>(
+    array: ArrayRef,
+    scalar: T::Native,
+) -> Result<ArrayRef, ArrowError>
+where
+    T: ArrowNumericType,
+    T::Native: ArrowNativeTypeOp,
+{
+    let primitive_array = array
+        .as_any()
+        .downcast_ref::<PrimitiveArray<T>>()
+        .unwrap()
+        .clone();
+    std::mem::drop(array);
+    match unary_mut(primitive_array, |value| value.add_wrapping(scalar)) {
+        Ok(array) => Ok(make_array(array.into_data())),
+        Err(array) => add_scalar_dyn::<T>(&make_array(array.into_data()), scalar),
+    }
+}
+
 impl BinaryExpr {
     /// Evaluate the expression of the left input is an array and
     /// right is literal - use scalar operations
     fn evaluate_array_scalar(
         &self,
-        array: &dyn Array,
+        array: ArrayRef,
         scalar: ScalarValue,
     ) -> Result<Option<Result<ArrayRef>>> {
         let bool_type = &DataType::Boolean;
         let scalar_result = match &self.op {
             Operator::Lt => {
-                binary_array_op_dyn_scalar!(array, scalar, lt, bool_type)
+                binary_array_op_dyn_scalar!(&array, scalar, lt, bool_type)
             }
             Operator::LtEq => {
-                binary_array_op_dyn_scalar!(array, scalar, lt_eq, bool_type)
+                binary_array_op_dyn_scalar!(&array, scalar, lt_eq, bool_type)
             }
             Operator::Gt => {
-                binary_array_op_dyn_scalar!(array, scalar, gt, bool_type)
+                binary_array_op_dyn_scalar!(&array, scalar, gt, bool_type)
             }
             Operator::GtEq => {
-                binary_array_op_dyn_scalar!(array, scalar, gt_eq, bool_type)
+                binary_array_op_dyn_scalar!(&array, scalar, gt_eq, bool_type)
             }
             Operator::Eq => {
-                binary_array_op_dyn_scalar!(array, scalar, eq, bool_type)
+                binary_array_op_dyn_scalar!(&array, scalar, eq, bool_type)
             }
             Operator::NotEq => {
-                binary_array_op_dyn_scalar!(array, scalar, neq, bool_type)
+                binary_array_op_dyn_scalar!(&array, scalar, neq, bool_type)
             }
             Operator::Plus => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, add)
+                binary_primitive_array_op_dyn_scalar_cow!(array, scalar, add)
             }
             Operator::Minus => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, subtract)
+                binary_primitive_array_op_dyn_scalar!(&array, scalar, subtract)
             }
             Operator::Multiply => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, multiply)
+                binary_primitive_array_op_dyn_scalar!(&array, scalar, multiply)
             }
             Operator::Divide => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, divide)
+                binary_primitive_array_op_dyn_scalar!(&array, scalar, divide)
             }
             Operator::Modulo => {
                 // todo: change to binary_primitive_array_op_dyn_scalar! once modulo is implemented
-                binary_primitive_array_op_scalar!(array, scalar, modulus)
+                binary_primitive_array_op_scalar!(&array, scalar, modulus)
             }
             Operator::RegexMatch => binary_string_array_flag_op_scalar!(
-                array,
+                &array,
                 scalar,
                 regexp_is_match,
                 false,
                 false
             ),
             Operator::RegexIMatch => binary_string_array_flag_op_scalar!(
-                array,
+                &array,
                 scalar,
                 regexp_is_match,
                 false,
                 true
             ),
             Operator::RegexNotMatch => binary_string_array_flag_op_scalar!(
-                array,
+                &array,
                 scalar,
                 regexp_is_match,
                 true,
                 false
             ),
             Operator::RegexNotIMatch => binary_string_array_flag_op_scalar!(
-                array,
+                &array,
                 scalar,
                 regexp_is_match,
                 true,
                 true
             ),
-            Operator::BitwiseAnd => bitwise_and_scalar(array, scalar),
-            Operator::BitwiseOr => bitwise_or_scalar(array, scalar),
-            Operator::BitwiseXor => bitwise_xor_scalar(array, scalar),
-            Operator::BitwiseShiftRight => bitwise_shift_right_scalar(array, scalar),
-            Operator::BitwiseShiftLeft => bitwise_shift_left_scalar(array, scalar),
+            Operator::BitwiseAnd => bitwise_and_scalar(&array, scalar),
+            Operator::BitwiseOr => bitwise_or_scalar(&array, scalar),
+            Operator::BitwiseXor => bitwise_xor_scalar(&array, scalar),
+            Operator::BitwiseShiftRight => bitwise_shift_right_scalar(&array, scalar),
+            Operator::BitwiseShiftLeft => bitwise_shift_left_scalar(&array, scalar),
             // if scalar operation is not supported - fallback to array implementation
             _ => None,
         };
@@ -1057,27 +1109,27 @@ impl BinaryExpr {
     fn evaluate_scalar_array(
         &self,
         scalar: ScalarValue,
-        array: &ArrayRef,
+        array: ArrayRef,
     ) -> Result<Option<Result<ArrayRef>>> {
         let bool_type = &DataType::Boolean;
         let scalar_result = match &self.op {
             Operator::Lt => {
-                binary_array_op_dyn_scalar!(array, scalar, gt, bool_type)
+                binary_array_op_dyn_scalar!(&array, scalar, gt, bool_type)
             }
             Operator::LtEq => {
-                binary_array_op_dyn_scalar!(array, scalar, gt_eq, bool_type)
+                binary_array_op_dyn_scalar!(&array, scalar, gt_eq, bool_type)
             }
             Operator::Gt => {
-                binary_array_op_dyn_scalar!(array, scalar, lt, bool_type)
+                binary_array_op_dyn_scalar!(&array, scalar, lt, bool_type)
             }
             Operator::GtEq => {
-                binary_array_op_dyn_scalar!(array, scalar, lt_eq, bool_type)
+                binary_array_op_dyn_scalar!(&array, scalar, lt_eq, bool_type)
             }
             Operator::Eq => {
-                binary_array_op_dyn_scalar!(array, scalar, eq, bool_type)
+                binary_array_op_dyn_scalar!(&array, scalar, eq, bool_type)
             }
             Operator::NotEq => {
-                binary_array_op_dyn_scalar!(array, scalar, neq, bool_type)
+                binary_array_op_dyn_scalar!(&array, scalar, neq, bool_type)
             }
             // if scalar operation is not supported - fallback to array implementation
             _ => None,
