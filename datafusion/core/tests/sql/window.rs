@@ -2218,6 +2218,57 @@ async fn test_window_agg_low_cardinality() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_source_linear_partition_by() -> Result<()> {
+    let config = SessionConfig::new().with_target_partitions(1);
+    let ctx = SessionContext::with_config(config);
+    register_aggregate_csv(&ctx).await?;
+
+    let sql = "SELECT SUM(c5) OVER(ORDER BY c1, c2, c5 ROWS BETWEEN 4 PRECEDING AND 1 FOLLOWING) as summation1,
+    SUM(c5) OVER(PARTITION BY c1, c3 ORDER BY c1, c2 ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING) as summation2
+    FROM aggregate_test_100
+    ORDER BY c9
+    LIMIT 5";
+
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let expected = {
+        vec![
+            "ProjectionExec: expr=[summation1@0 as summation1, summation2@1 as summation2]",
+            "  GlobalLimitExec: skip=0, fetch=5",
+            "    SortExec: [c9@2 ASC NULLS LAST]",
+            "      ProjectionExec: expr=[SUM(aggregate_test_100.c5) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST, aggregate_test_100.c5 ASC NULLS LAST] ROWS BETWEEN 4 PRECEDING AND 1 FOLLOWING@5 as summation1, SUM(aggregate_test_100.c5) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c3] ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING@6 as summation2, c9@4 as c9]",
+            "        BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c5): Ok(Field { name: \"SUM(aggregate_test_100.c5)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(3)), end_bound: Following(UInt64(1)) }]",
+            "          BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c5): Ok(Field { name: \"SUM(aggregate_test_100.c5)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(4)), end_bound: Following(UInt64(1)) }]",
+            "            SortExec: [c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST,c5@3 ASC NULLS LAST]",        ]
+    };
+
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let actual_len = actual.len();
+    let actual_trim_last = &actual[..actual_len - 1];
+    assert_eq!(
+        expected, actual_trim_last,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------------+-------------+",
+        "| summation1  | summation2  |",
+        "+-------------+-------------+",
+        "| 3808603231  | 61035129    |",
+        "| 3842254278  | -108973366  |",
+        "| 1674385152  | 623103518   |",
+        "| -4505110804 | -1927628110 |",
+        "| 4688570752  | -1899175111 |",
+        "+-------------+-------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
 fn write_test_data_to_parquet(tmpdir: &TempDir, n_file: usize) -> Result<()> {
     let ts_field = Field::new("ts", DataType::Int32, false);
     let inc_field = Field::new("inc_col", DataType::Int32, false);
