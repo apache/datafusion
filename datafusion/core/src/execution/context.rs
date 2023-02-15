@@ -106,11 +106,11 @@ use super::options::{
     AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions, ReadOptions,
 };
 
-/// DataFilePaths adds a method to convert strings and vector of strings to vector of URLs.
-/// This is primarily used as restriciton on the input to methods like read_csv, read_avro
-/// and the rest.
+/// DataFilePaths adds a method to convert strings and vector of strings to vector of [`ListingTableUrl`] URLs.
+/// This allows methods such [`SessionContext::read_csv`] and `[`SessionContext::read_avro`]
+/// to take either a single file or multiple files.
 pub trait DataFilePaths {
-    /// Parse to a list of URLs
+    /// Parse to a vector of [`ListingTableUrl`] URLs.
     fn to_urls(self) -> Result<Vec<ListingTableUrl>>;
 }
 
@@ -161,6 +161,7 @@ where
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let ctx = SessionContext::new();
+/// let df = ctx.read_csv(vec!["tests/data/example.csv", "tests/data/example.csv"], CsvReadOptions::new()).await?;
 /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
 /// let df = df.filter(col("a").lt_eq(col("b")))?
 ///            .aggregate(vec![col("a")], vec![min(col("b"))])?
@@ -686,6 +687,8 @@ impl SessionContext {
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
+    /// 
+    /// For an example, see [`read_csv`](Self::read_csv)
     pub async fn read_avro<P: DataFilePaths>(
         &self,
         table_paths: P,
@@ -698,6 +701,8 @@ impl SessionContext {
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
+    /// 
+    /// For an example, see [`read_csv`](Self::read_csv)
     pub async fn read_json<P: DataFilePaths>(
         &self,
         table_paths: P,
@@ -718,6 +723,20 @@ impl SessionContext {
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
+    /// 
+    /// Example usage is given below:
+    /// 
+    /// ```
+    /// use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv(vec!["tests/data/example.csv", "tests/data/example.csv"], CsvReadOptions::new()).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn read_csv<P: DataFilePaths>(
         &self,
         table_paths: P,
@@ -730,6 +749,8 @@ impl SessionContext {
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
+    /// 
+    /// For an example, see [`read_csv`](Self::read_csv)
     pub async fn read_parquet<P: DataFilePaths>(
         &self,
         table_paths: P,
