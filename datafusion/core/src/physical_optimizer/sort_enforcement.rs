@@ -631,12 +631,9 @@ fn analyze_window_sort_removal(
     sort_tree: &mut ExecTree,
     window_exec: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
-    let (
-        window_expr,
-        partition_keys,
-        sort_keys,
-        orderby_sort_keys,
-    ) = if let Some(exec) = window_exec.as_any().downcast_ref::<BoundedWindowAggExec>() {
+    let (window_expr, partition_keys, sort_keys, orderby_sort_keys) = if let Some(exec) =
+        window_exec.as_any().downcast_ref::<BoundedWindowAggExec>()
+    {
         (
             exec.window_expr(),
             &exec.partition_keys,

@@ -356,7 +356,7 @@ async fn run_window_test(
     let exec2 =
         Arc::new(MemoryExec::try_new(&[input1.clone()], schema.clone(), None).unwrap());
     let mut search_mode = PartitionSearchMode::Sorted;
-    if rng.gen_range(0..2) == 0{
+    if rng.gen_range(0..2) == 0 {
         // with 50% use linear search
         search_mode = PartitionSearchMode::Linear;
     }

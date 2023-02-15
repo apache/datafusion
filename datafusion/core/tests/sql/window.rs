@@ -2782,3 +2782,243 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod test_linear_partition_by {
+    use super::*;
+    use arrow::compute::SortOptions;
+    use datafusion::physical_plan::aggregates::AggregateExec;
+    use datafusion::physical_plan::aggregates::{AggregateMode, PhysicalGroupBy};
+    use datafusion::physical_plan::memory::MemoryExec;
+    use datafusion::physical_plan::sorts::sort::SortExec;
+    use datafusion::physical_plan::windows::create_window_expr;
+    use datafusion::physical_plan::windows::{
+        BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
+    };
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{
+        AggregateFunction, WindowFrame, WindowFrameBound, WindowFrameUnits,
+        WindowFunction,
+    };
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr::expressions::{Avg, Max, Min, Sum};
+    use datafusion_physical_expr::{AggregateExpr, PhysicalSortExpr};
+    use itertools::iproduct;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+    use std::time::{Duration, Instant};
+    use test_utils::add_empty_batches;
+
+    /// Return randomly sized record batches with:
+    /// two sorted int32 columns 'a', 'b' ranged from 0..len / DISTINCT as columns
+    /// two random int32 columns 'x', 'y' as other columns
+    fn make_staggered_batches<const STREAM: bool>(
+        len: usize,
+        distinct: usize,
+        random_seed: u64,
+        n_batch: usize,
+    ) -> Vec<RecordBatch> {
+        // use a random number generator to pick a random sized output
+        let mut rng = StdRng::seed_from_u64(random_seed);
+        let mut input1: Vec<i32> = vec![0; len];
+        input1
+            .iter_mut()
+            .for_each(|v| *v = rng.gen_range(0..distinct) as i32);
+        let input1 = Int32Array::from_iter_values(input1.into_iter());
+
+        let mut input2: Vec<i32> = vec![0; len];
+        input2
+            .iter_mut()
+            .for_each(|v| *v = rng.gen_range(0..distinct) as i32);
+        let input2 = Int32Array::from_iter_values(input2.into_iter());
+
+        let mut input3: Vec<i32> = vec![0; len];
+        input3
+            .iter_mut()
+            .for_each(|v| *v = rng.gen_range(0..distinct) as i32);
+        let input3 = Int32Array::from_iter_values(input3.into_iter());
+
+        let mut input4: Vec<i32> = vec![0; len];
+        input4
+            .iter_mut()
+            .for_each(|v| *v = rng.gen_range(0..distinct) as i32);
+        let input4 = Int32Array::from_iter_values(input4.into_iter());
+
+        // split into several record batches
+        let mut remainder = RecordBatch::try_from_iter(vec![
+            ("a", Arc::new(input1) as ArrayRef),
+            ("b", Arc::new(input2) as ArrayRef),
+            ("x", Arc::new(input3) as ArrayRef),
+            ("y", Arc::new(input4) as ArrayRef),
+        ])
+        .unwrap();
+
+        let mut batches = vec![];
+        if STREAM {
+            while remainder.num_rows() > 0 {
+                let mut batch_size = rng.gen_range(0..n_batch);
+                if remainder.num_rows() < batch_size {
+                    batch_size = remainder.num_rows()
+                }
+                batches.push(remainder.slice(0, batch_size));
+                remainder =
+                    remainder.slice(batch_size, remainder.num_rows() - batch_size);
+            }
+        } else {
+            while remainder.num_rows() > 0 {
+                let batch_size = rng.gen_range(0..remainder.num_rows() + 1);
+                batches.push(remainder.slice(0, batch_size));
+                remainder =
+                    remainder.slice(batch_size, remainder.num_rows() - batch_size);
+            }
+        }
+        add_empty_batches(batches, &mut rng)
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test1() {
+        // let n_trials = vec![10];
+        // let n_rows = vec![100, 1000, 10_000];
+        // let distincts = vec![10, 1000, 100_000, 100_000_000];
+        // let n_batches = vec![10, 100_000_000];
+        let n_trials = vec![10];
+        let n_rows = vec![10_000];
+        let distincts = vec![100];
+        let n_batches = vec![100];
+        let modes = [true, false];
+        for (n_trial, n_row, distinct, n_batch, is_linear) in
+            iproduct!(n_trials, n_rows, distincts, n_batches, modes)
+        {
+            let mut elapsed = vec![];
+            for i in 0..n_trial {
+                let res = run_test(i, n_row, distinct, n_batch, is_linear)
+                    .await
+                    .unwrap();
+                elapsed.push(res);
+            }
+            elapsed.sort();
+            let tot_dur: Duration = elapsed.iter().sum();
+            println!("------------------------------------");
+            println!(
+                "n_row: {:?}, distinct: {:?}, n_batch: {:?}, is_linear: {:?}",
+                n_row, distinct, n_batch, is_linear
+            );
+            println!("elapsed   mean: {:?}", tot_dur / elapsed.len() as u32);
+            println!("elapsed median: {:?}", elapsed[(n_trial / 2) as usize]);
+            println!("------------------------------------");
+        }
+    }
+
+    async fn run_test(
+        random_seed: u64,
+        n_row: usize,
+        distinct: usize,
+        n_batch: usize,
+        linear_mode_on: bool,
+    ) -> Result<Duration> {
+        let in_data =
+            make_staggered_batches::<true>(n_row, distinct, random_seed, n_batch);
+        let schema = in_data[0].schema();
+        // let in_data = vec![concat_batches(&schema, &in_data).unwrap()];
+        let in_exec =
+            Arc::new(MemoryExec::try_new(&[in_data], schema.clone(), None).unwrap());
+
+        let window_fn = WindowFunction::AggregateFunction(AggregateFunction::Sum);
+        let fn_name = "sum".to_string();
+        let mut args = vec![col("y", &schema).unwrap()];
+        let partition_by_columns = vec!["x"];
+        let mut partitionby_exprs = vec![];
+        for column in partition_by_columns {
+            partitionby_exprs.push(col(column, &schema).unwrap());
+        }
+        let mut orderby_exprs = vec![];
+        let orderby_columns = vec!["a"];
+        for column in orderby_columns {
+            orderby_exprs.push(PhysicalSortExpr {
+                expr: col(column, &schema).unwrap(),
+                options: SortOptions::default(),
+            })
+        }
+        let window_frame = WindowFrame {
+            units: WindowFrameUnits::Rows,
+            start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(Some(3))),
+            end_bound: WindowFrameBound::Following(ScalarValue::UInt64(Some(3))),
+        };
+
+        let exec_to_run = if linear_mode_on {
+            let mut sort_keys = vec![];
+            for order_by_expr in &orderby_exprs {
+                sort_keys.push(order_by_expr.clone())
+            }
+            // println!("bounded sort_keys: {:?}", sort_keys);
+            let running_window_exec = Arc::new(
+                BoundedWindowAggExec::try_new(
+                    vec![create_window_expr(
+                        &window_fn,
+                        fn_name,
+                        &args,
+                        &partitionby_exprs,
+                        &orderby_exprs,
+                        Arc::new(window_frame.clone()),
+                        schema.as_ref(),
+                    )
+                    .unwrap()],
+                    in_exec,
+                    schema.clone(),
+                    vec![],
+                    Some(sort_keys),
+                    PartitionSearchMode::Linear,
+                )
+                .unwrap(),
+            ) as _;
+            running_window_exec
+        } else {
+            let mut sort_keys = vec![];
+            for partition_by_expr in &partitionby_exprs {
+                sort_keys.push(PhysicalSortExpr {
+                    expr: partition_by_expr.clone(),
+                    options: SortOptions::default(),
+                })
+            }
+            for order_by_expr in &orderby_exprs {
+                sort_keys.push(order_by_expr.clone())
+            }
+            // println!("window sort_keys: {:?}", sort_keys);
+            let sort_exec =
+                Arc::new(SortExec::try_new(sort_keys.clone(), in_exec, None)?) as _;
+            let running_window_exec = Arc::new(
+                BoundedWindowAggExec::try_new(
+                    vec![create_window_expr(
+                        &window_fn,
+                        fn_name,
+                        &args,
+                        &partitionby_exprs,
+                        &orderby_exprs,
+                        Arc::new(window_frame.clone()),
+                        schema.as_ref(),
+                    )
+                    .unwrap()],
+                    sort_exec,
+                    schema.clone(),
+                    vec![],
+                    Some(sort_keys),
+                    PartitionSearchMode::Sorted,
+                )
+                .unwrap(),
+            ) as _;
+            running_window_exec
+        };
+
+        let session_config = SessionConfig::new().with_batch_size(50);
+        let ctx = SessionContext::with_config(session_config);
+        let task_ctx = ctx.task_ctx();
+        let now = Instant::now();
+        let _collected_running = collect(exec_to_run, task_ctx.clone()).await.unwrap();
+        let elapsed = now.elapsed();
+        // prntln!("Elapsed: {:.2?}", now.elapsed());
+        // println!("Elapsed: {:.2?}", now_start.elapsed());
+        // print_batches(&collected_running)?;
+        Ok(elapsed)
+    }
+}
