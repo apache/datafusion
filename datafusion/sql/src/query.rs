@@ -17,9 +17,8 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::normalize_ident;
-use datafusion_common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr_rewriter::rewrite_sort_cols_by_aggs;
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Repartition};
+use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query};
 
 use sqlparser::parser::ParserError::ParserError;
@@ -151,55 +150,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return Ok(plan);
         }
 
-        let mut order_by_rex = order_by
+        let order_by_rex = order_by
             .into_iter()
             .map(|e| self.order_by_to_sort_expr(e, plan.schema()))
             .collect::<Result<Vec<_>>>()?;
 
-        order_by_rex = rewrite_sort_cols_by_aggs(order_by_rex, &plan)?;
-        let schema = plan.schema();
-
-        // if current plan is distinct or current plan is repartition and its child plan is distinct,
-        // then this plan is a select distinct plan
-        let is_select_distinct = match plan {
-            LogicalPlan::Distinct(_) => true,
-            LogicalPlan::Repartition(Repartition { ref input, .. }) => {
-                matches!(input.as_ref(), &LogicalPlan::Distinct(_))
-            }
-            _ => false,
-        };
-
-        let mut missing_cols: Vec<Column> = vec![];
-        // Collect sort columns that are missing in the input plan's schema
-        order_by_rex
-            .clone()
-            .into_iter()
-            .try_for_each::<_, Result<()>>(|expr| {
-                let columns = expr.to_columns()?;
-
-                columns.into_iter().for_each(|c| {
-                    if schema.field_from_column(&c).is_err() {
-                        missing_cols.push(c);
-                    }
-                });
-
-                Ok(())
-            })?;
-
-        // for select distinct, order by expressions must exist in select list
-        if is_select_distinct && !missing_cols.is_empty() {
-            let missing_col_names = missing_cols
-                .iter()
-                .map(|col| col.flat_name())
-                .collect::<String>();
-            let error_msg = format!(
-                "For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list",
-            );
-            return Err(DataFusionError::Plan(error_msg));
-        }
-
-        LogicalPlanBuilder::from(plan)
-            .create_sort_plan(order_by_rex, missing_cols)?
-            .build()
+        LogicalPlanBuilder::from(plan).sort(order_by_rex)?.build()
     }
 }

@@ -258,6 +258,32 @@ ORDER BY time;
 statement error DataFusion error: This feature is not implemented: SORT BY
 select * from t SORT BY time;
 
+
+# distinct on a column not in the select list should not work
+statement error For SELECT DISTINCT, ORDER BY expressions time must appear in select list
+SELECT DISTINCT value FROM t ORDER BY time;
+
+# distinct on an expression of a column not in the select list should not work
+statement error For SELECT DISTINCT, ORDER BY expressions time must appear in select list
+SELECT DISTINCT date_trunc('hour', time)  FROM t ORDER BY time;
+
+# distinct on a column that is in the select list but aliasted should work
+query I
+SELECT DISTINCT time as "first_seen" FROM t ORDER BY "first_seen";
+----
+2022-01-01T00:00:30
+2022-01-01T01:00:10
+2022-01-02T00:00:20
+
+# distinct on a column that is in the select list, but aliased (though
+# the reference is to original expr) should work
+query I
+SELECT DISTINCT time as "first_seen" FROM t ORDER BY time;
+----
+2022-01-01T00:00:30
+2022-01-01T01:00:10
+2022-01-02T00:00:20
+
 ## Cleanup
 statement ok
 drop table t;

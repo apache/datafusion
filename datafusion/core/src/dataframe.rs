@@ -1092,24 +1092,15 @@ mod tests {
     #[tokio::test]
     async fn test_distinct_sort_by() -> Result<()> {
         let t = test_table().await?;
-        let plan = t
+        let err = t
             .select(vec![col("c1")])
             .unwrap()
             .distinct()
             .unwrap()
+            // try to sort on some value not present in input to distinct
             .sort(vec![col("c2").sort(true, true)])
-            .unwrap();
-        let df_results = plan.clone().collect().await?;
-        assert_batches_sorted_eq!(
-            vec![
-                "+----+", "| c1 |", "+----+", "| a  |", "| a  |", "| a  |", "| a  |",
-                "| a  |", "| b  |", "| b  |", "| b  |", "| b  |", "| b  |", "| c  |",
-                "| c  |", "| c  |", "| c  |", "| c  |", "| d  |", "| d  |", "| d  |",
-                "| d  |", "| d  |", "| e  |", "| e  |", "| e  |", "| e  |", "| e  |",
-                "+----+",
-            ],
-            &df_results
-        );
+            .unwrap_err();
+        assert_eq!(err.to_string(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions c2 must appear in select list");
 
         Ok(())
     }
