@@ -244,7 +244,7 @@ impl DFSchema {
     }
 
     /// Check if the column is in the current schema
-    pub fn contain_column(&self, col: &Column) -> Result<bool> {
+    pub fn is_column_from_schema(&self, col: &Column) -> Result<bool> {
         self.index_of_column_by_name(col.relation.as_deref(), &col.name)
             .map(|idx| idx.is_some())
     }
@@ -1138,28 +1138,28 @@ mod tests {
         {
             let col = Column::from_qualified_name("t1.c0");
             let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-            assert!(schema.contain_column(&col)?);
+            assert!(schema.is_column_from_schema(&col)?);
         }
 
         // qualified not exists
         {
             let col = Column::from_qualified_name("t1.c2");
             let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-            assert!(!schema.contain_column(&col)?);
+            assert!(!schema.is_column_from_schema(&col)?);
         }
 
         // unqualified exists
         {
             let col = Column::from_name("c0");
             let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-            assert!(schema.contain_column(&col)?);
+            assert!(schema.is_column_from_schema(&col)?);
         }
 
         // unqualified not exists
         {
             let col = Column::from_name("c2");
             let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-            assert!(!schema.contain_column(&col)?);
+            assert!(!schema.is_column_from_schema(&col)?);
         }
 
         Ok(())
