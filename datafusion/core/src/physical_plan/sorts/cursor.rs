@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::row::{Row, Rows};
+use arrow::row::Row;
 use std::cmp::Ordering;
+
+use super::RowBatch;
 
 /// A `SortKeyCursor` is created from a `RecordBatch`, and a set of
 /// `PhysicalExpr` that when evaluated on the `RecordBatch` yield the sort keys.
@@ -35,7 +37,7 @@ pub struct SortKeyCursor {
     // An id uniquely identifying the record batch scanned by this cursor.
     batch_id: usize,
 
-    rows: Rows,
+    rows: RowBatch,
 }
 
 impl std::fmt::Debug for SortKeyCursor {
@@ -50,7 +52,7 @@ impl std::fmt::Debug for SortKeyCursor {
 
 impl SortKeyCursor {
     /// Create a new SortKeyCursor
-    pub fn new(stream_idx: usize, batch_id: usize, rows: Rows) -> Self {
+    pub fn new(stream_idx: usize, batch_id: usize, rows: RowBatch) -> Self {
         Self {
             stream_idx,
             cur_row: 0,

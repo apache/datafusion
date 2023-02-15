@@ -30,7 +30,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use futures::stream::{Fuse, FusedStream};
-use futures::{ready, Stream, StreamExt};
+use futures::{ready, Stream, StreamExt, TryStreamExt};
 use log::debug;
 use tokio::sync::mpsc;
 
@@ -39,14 +39,17 @@ use crate::execution::context::TaskContext;
 use crate::physical_plan::metrics::{
     ExecutionPlanMetricsSet, MemTrackingMetrics, MetricsSet,
 };
+use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::{RowIndex, SortKeyCursor, SortedStream};
-use crate::physical_plan::stream::RecordBatchReceiverStream;
+use crate::physical_plan::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::physical_plan::{
     common::spawn_execution, expressions::PhysicalSortExpr, DisplayFormatType,
-    Distribution, ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    Distribution, ExecutionPlan, Partitioning, PhysicalExpr, SendableRecordBatchStream,
+    Statistics,
 };
 use datafusion_physical_expr::EquivalenceProperties;
+
+use super::{RowBatch, RowSelection, SendableSortStream, SortStreamItem};
 
 /// Sort preserving merge execution plan
 ///
@@ -192,46 +195,71 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 let receivers = match tokio::runtime::Handle::try_current() {
                     Ok(_) => (0..input_partitions)
                         .map(|part_i| {
-                            let (sender, receiver) = mpsc::channel(1);
-                            let join_handle = spawn_execution(
-                                self.input.clone(),
-                                sender,
-                                part_i,
-                                context.clone(),
-                            );
-
-                            SortedStream::new(
-                                RecordBatchReceiverStream::create(
-                                    &schema,
-                                    receiver,
+                            if let Some(sort_plan) =
+                                self.input.as_any().downcast_ref::<SortExec>()
+                            {
+                                let (tx, rx) = mpsc::channel(1);
+                                let join_handle = sort_plan.execution_spawn_task(
+                                    part_i,
+                                    context.clone(),
+                                    tx,
+                                );
+                                let stream = Box::pin(super::SortReceiverStream::new(
+                                    rx,
                                     join_handle,
-                                ),
-                                0,
-                            )
+                                ));
+                                SortedStream::new(stream, 0)
+                            } else {
+                                let (sender, receiver) = mpsc::channel(1);
+                                let join_handle = spawn_execution(
+                                    self.input.clone(),
+                                    sender,
+                                    part_i,
+                                    context.clone(),
+                                );
+                                SortedStream::new_no_row_encoding(
+                                    RecordBatchReceiverStream::create(
+                                        &schema,
+                                        receiver,
+                                        join_handle,
+                                    ),
+                                    0,
+                                )
+                            }
                         })
                         .collect(),
                     Err(_) => (0..input_partitions)
                         .map(|partition| {
-                            let stream =
-                                self.input.execute(partition, context.clone())?;
-                            Ok(SortedStream::new(stream, 0))
+                            if let Some(sort_plan) =
+                                self.input.as_any().downcast_ref::<SortExec>()
+                            {
+                                let stream = sort_plan.execute_save_row_encoding(
+                                    partition,
+                                    context.clone(),
+                                )?;
+                                Ok(SortedStream::new(stream, 0))
+                            } else {
+                                let stream =
+                                    self.input.execute(partition, context.clone())?;
+                                Ok(SortedStream::new_no_row_encoding(stream, 0))
+                            }
                         })
                         .collect::<Result<_>>()?,
                 };
-
                 debug!("Done setting up sender-receiver for SortPreservingMergeExec::execute");
 
-                let result = Box::pin(SortPreservingMergeStream::new_from_streams(
+                let result = SortPreservingMergeStream::new_from_streams(
                     receivers,
                     schema,
                     &self.expr,
                     tracking_metrics,
                     context.session_config().batch_size(),
-                )?);
+                    // dont emit row encodings for this plan
+                    false,
+                )?;
 
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
-
-                Ok(result)
+                Ok(result.into())
             }
         }
     }
@@ -260,7 +288,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
 struct MergingStreams {
     /// The sorted input streams to merge together
-    streams: Vec<Fuse<SendableRecordBatchStream>>,
+    streams: Vec<Fuse<SendableSortStream>>,
     /// number of streams
     num_streams: usize,
 }
@@ -274,7 +302,7 @@ impl std::fmt::Debug for MergingStreams {
 }
 
 impl MergingStreams {
-    fn new(input_streams: Vec<Fuse<SendableRecordBatchStream>>) -> Self {
+    fn new(input_streams: Vec<Fuse<SendableSortStream>>) -> Self {
         Self {
             num_streams: input_streams.len(),
             streams: input_streams,
@@ -298,8 +326,7 @@ pub(crate) struct SortPreservingMergeStream {
     ///
     /// Exhausted batches will be popped off the front once all
     /// their rows have been yielded to the output
-    batches: Vec<VecDeque<RecordBatch>>,
-
+    batches: Vec<VecDeque<(RecordBatch, Option<RowBatch>)>>,
     /// The accumulated row indexes for the next record batch
     in_progress: Vec<RowIndex>,
 
@@ -343,6 +370,10 @@ pub(crate) struct SortPreservingMergeStream {
 
     /// row converter
     row_converter: RowConverter,
+    /// if this is false it will always yield None for the row encoding
+    /// this is true when `SortPreservingMergeStream` is used within `SortExec`
+    /// but not when its used in `SortPreservingMergeStream`
+    preserve_row_encoding: bool,
 }
 
 impl SortPreservingMergeStream {
@@ -352,11 +383,12 @@ impl SortPreservingMergeStream {
         expressions: &[PhysicalSortExpr],
         mut tracking_metrics: MemTrackingMetrics,
         batch_size: usize,
+        // when used from within SortExec this should be true
+        preserve_row_encoding: bool,
     ) -> Result<Self> {
         let stream_count = streams.len();
         let batches = (0..stream_count).map(|_| VecDeque::new()).collect();
         tracking_metrics.init_mem_used(streams.iter().map(|s| s.mem_used).sum());
-        let wrappers = streams.into_iter().map(|s| s.stream.fuse()).collect();
 
         let sort_fields = expressions
             .iter()
@@ -370,7 +402,9 @@ impl SortPreservingMergeStream {
         Ok(Self {
             schema,
             batches,
-            streams: MergingStreams::new(wrappers),
+            streams: MergingStreams::new(
+                streams.into_iter().map(|s| s.stream.fuse()).collect(),
+            ),
             column_expressions: expressions.iter().map(|x| x.expr.clone()).collect(),
             tracking_metrics,
             aborted: false,
@@ -381,6 +415,7 @@ impl SortPreservingMergeStream {
             loser_tree_adjusted: false,
             batch_size,
             row_converter,
+            preserve_row_encoding,
         })
     }
 
@@ -413,7 +448,7 @@ impl SortPreservingMergeStream {
                 Some(Err(e)) => {
                     return Poll::Ready(Err(e));
                 }
-                Some(Ok(batch)) => {
+                Some(Ok((batch, preserved_rows))) => {
                     if batch.num_rows() > 0 {
                         let cols = self
                             .column_expressions
@@ -422,21 +457,36 @@ impl SortPreservingMergeStream {
                                 Ok(expr.evaluate(&batch)?.into_array(batch.num_rows()))
                             })
                             .collect::<Result<Vec<_>>>()?;
-
-                        let rows = match self.row_converter.convert_columns(&cols) {
-                            Ok(rows) => rows,
-                            Err(e) => {
-                                return Poll::Ready(Err(DataFusionError::ArrowError(e)));
+                        // use preserved row encoding if it existed, otherwise create now
+                        //
+                        // (could be because: either not used at all (single col)
+                        // or currently rows are not spilled to disk.)
+                        let rows = match preserved_rows {
+                            Some(rows) => {
+                                println!("got preserved row encoding...");
+                                rows
                             }
+                            None => match self.row_converter.convert_columns(&cols) {
+                                Ok(rows) => rows.into(),
+                                Err(e) => {
+                                    return Poll::Ready(Err(
+                                        DataFusionError::ArrowError(e),
+                                    ));
+                                }
+                            },
                         };
 
+                        if self.preserve_row_encoding {
+                            self.batches[idx].push_back((batch, Some(rows.clone())))
+                        } else {
+                            self.batches[idx].push_back((batch, None))
+                        }
                         self.cursors[idx] = Some(SortKeyCursor::new(
                             idx,
                             self.next_batch_id, // assign this batch an ID
                             rows,
                         ));
                         self.next_batch_id += 1;
-                        self.batches[idx].push_back(batch)
                     } else {
                         empty_batch = true;
                     }
@@ -454,7 +504,7 @@ impl SortPreservingMergeStream {
     /// Drains the in_progress row indexes, and builds a new RecordBatch from them
     ///
     /// Will then drop any batches for which all rows have been yielded to the output
-    fn build_record_batch(&mut self) -> Result<RecordBatch> {
+    fn build_record_batch(&mut self) -> SortStreamItem {
         // Mapping from stream index to the index of the first buffer from that stream
         let mut buffer_idx = 0;
         let mut stream_to_buffer_idx = Vec::with_capacity(self.batches.len());
@@ -474,7 +524,9 @@ impl SortPreservingMergeStream {
                     .batches
                     .iter()
                     .flat_map(|batch| {
-                        batch.iter().map(|batch| batch.column(column_idx).data())
+                        batch
+                            .iter()
+                            .map(|(batch, _rows)| batch.column(column_idx).data())
                     })
                     .collect();
 
@@ -518,6 +570,63 @@ impl SortPreservingMergeStream {
                 make_arrow_array(array_data.freeze())
             })
             .collect();
+        dbg!(self.preserve_row_encoding);
+        let rows = if self.preserve_row_encoding {
+            if self.in_progress.is_empty() {
+                Some(RowBatch::new(vec![], vec![]))
+            } else {
+                let rows = self
+                    .batches
+                    .iter()
+                    .flat_map(|batch| {
+                        batch.iter().map(|(_, rows)| {
+                            rows.as_ref().expect(
+                                "if preserve_row_encoding was true \
+                                     then row data should've been saved in batch",
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let mut new_indices: Vec<(usize, usize)> =
+                    Vec::with_capacity(self.in_progress.len());
+                let mut new_rows: Vec<Arc<RowSelection>> = vec![];
+                let first = &self.in_progress[0];
+                let mut buffer_idx =
+                    stream_to_buffer_idx[first.stream_idx] + first.batch_idx;
+                let mut start_row_idx = first.row_idx;
+                let mut end_row_idx = start_row_idx + 1;
+                for row_index in self.in_progress.iter().skip(1) {
+                    let next_buffer_idx =
+                        stream_to_buffer_idx[row_index.stream_idx] + row_index.batch_idx;
+
+                    if next_buffer_idx == buffer_idx && row_index.row_idx == end_row_idx {
+                        // subsequent row in same batch
+                        end_row_idx += 1;
+                        continue;
+                    }
+                    let row_batch = rows[buffer_idx];
+                    let row_indices = &row_batch.indices[start_row_idx..end_row_idx];
+                    new_indices.extend(
+                        row_indices.iter().map(|(x, y)| (*x + new_rows.len(), *y)),
+                    );
+                    new_rows.extend(row_batch.rows.iter().map(Arc::clone));
+                    // start new batch of rows
+                    buffer_idx = next_buffer_idx;
+                    start_row_idx = row_index.row_idx;
+                    end_row_idx = start_row_idx + 1;
+                }
+                // emit final batch of rows
+                let row_batch = rows[buffer_idx];
+                let row_indices = &row_batch.indices[start_row_idx..end_row_idx];
+                new_indices
+                    .extend(row_indices.iter().map(|(x, y)| (*x + new_rows.len(), *y)));
+                new_rows.extend(row_batch.rows.iter().map(Arc::clone));
+                assert_eq!(new_indices.len(), self.in_progress.len());
+                Some(RowBatch::new(new_rows, new_indices))
+            }
+        } else {
+            None as Option<RowBatch>
+        };
 
         self.in_progress.clear();
 
@@ -536,19 +645,33 @@ impl SortPreservingMergeStream {
             }
         }
 
-        RecordBatch::try_new(self.schema.clone(), columns).map_err(Into::into)
+        RecordBatch::try_new(self.schema.clone(), columns)
+            .map(|batch| (batch, rows))
+            .map_err(Into::into)
     }
 }
 
 impl Stream for SortPreservingMergeStream {
-    type Item = Result<RecordBatch>;
+    type Item = SortStreamItem;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let poll = self.poll_next_inner(cx);
-        self.tracking_metrics.record_poll(poll)
+        // cant use `tracking_metrics.record_poll` since Self::Item is wrong type
+        // this should do the same thing as `tracking_metrics.record_poll`
+        if let Poll::Ready(maybe_sort_item) = &poll {
+            match maybe_sort_item {
+                Some(Ok((batch, _rows))) => {
+                    self.tracking_metrics.record_output(batch.num_rows())
+                }
+                Some(Err(_)) | None => {
+                    self.tracking_metrics.done();
+                }
+            }
+        }
+        poll
     }
 }
 
@@ -557,7 +680,7 @@ impl SortPreservingMergeStream {
     fn poll_next_inner(
         self: &mut Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<RecordBatch>>> {
+    ) -> Poll<Option<SortStreamItem>> {
         if self.aborted {
             return Poll::Ready(None);
         }
@@ -582,7 +705,6 @@ impl SortPreservingMergeStream {
                 .as_mut()
                 .filter(|cursor| !cursor.is_finished())
                 .map(|cursor| (cursor.stream_idx(), cursor.advance()));
-
             if let Some((stream_idx, row_idx)) = next {
                 self.loser_tree_adjusted = false;
                 let batch_idx = self.batches[stream_idx].len() - 1;
@@ -699,10 +821,12 @@ impl SortPreservingMergeStream {
         Poll::Ready(Ok(()))
     }
 }
-
-impl RecordBatchStream for SortPreservingMergeStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+impl From<SortPreservingMergeStream> for SendableRecordBatchStream {
+    fn from(value: SortPreservingMergeStream) -> Self {
+        Box::pin(RecordBatchStreamAdapter::new(
+            value.schema.clone(),
+            value.into_stream().map_ok(|(rb, _rows)| rb),
+        ))
     }
 }
 
@@ -714,7 +838,6 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use futures::FutureExt;
-    use tokio_stream::StreamExt;
 
     use crate::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
     use crate::from_slice::FromSlice;
@@ -1287,7 +1410,7 @@ mod tests {
                 }
             });
 
-            streams.push(SortedStream::new(
+            streams.push(SortedStream::new_no_row_encoding(
                 RecordBatchReceiverStream::create(&schema, receiver, join_handle),
                 0,
             ));
@@ -1296,17 +1419,16 @@ mod tests {
         let metrics = ExecutionPlanMetricsSet::new();
         let tracking_metrics =
             MemTrackingMetrics::new(&metrics, task_ctx.memory_pool(), 0);
-
         let merge_stream = SortPreservingMergeStream::new_from_streams(
             streams,
             batches.schema(),
             sort.as_slice(),
             tracking_metrics,
             task_ctx.session_config().batch_size(),
+            false,
         )
         .unwrap();
-
-        let mut merged = common::collect(Box::pin(merge_stream)).await.unwrap();
+        let mut merged = common::collect(merge_stream.into()).await.unwrap();
 
         assert_eq!(merged.len(), 1);
         let merged = merged.remove(0);
