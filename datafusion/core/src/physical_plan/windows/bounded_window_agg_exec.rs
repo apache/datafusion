@@ -705,7 +705,7 @@ impl BoundedWindowAggStream {
                 batch.slice(*n_prune, batch.num_rows() - n_prune);
 
             partition_batch_state.indices.drain(0..*n_prune);
-            // partition_batch_state.n_out_row -= *n_prune;
+            partition_batch_state.n_out_row = 0;
 
             // Update state indices since we have pruned some rows from the beginning:
             for window_agg_state in self.window_agg_states.iter_mut() {
