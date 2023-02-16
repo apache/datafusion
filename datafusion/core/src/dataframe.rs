@@ -1092,6 +1092,38 @@ mod tests {
     #[tokio::test]
     async fn test_distinct_sort_by() -> Result<()> {
         let t = test_table().await?;
+        let plan = t
+            .select(vec![col("c1")])
+            .unwrap()
+            .distinct()
+            .unwrap()
+            .sort(vec![col("c1").sort(true, true)])
+            .unwrap();
+
+        let df_results = plan.clone().collect().await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!(
+            vec![
+                "+----+",
+                "| c1 |",
+                "+----+",
+                "| a  |",
+                "| b  |",
+                "| c  |",
+                "| d  |",
+                "| e  |",
+                "+----+",
+            ],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_distinct_sort_by_unprojected() -> Result<()> {
+        let t = test_table().await?;
         let err = t
             .select(vec![col("c1")])
             .unwrap()
