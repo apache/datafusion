@@ -19,7 +19,7 @@
 //! It will do in-memory sorting if it has enough memory budget
 //! but spills to disk if needed.
 
-use super::{RowBatch, RowSelection, SortReceiverStream};
+use super::{RowBatch, RowSelection};
 use super::{SendableSortStream, SortStreamItem};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
@@ -62,7 +62,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tempfile::NamedTempFile;
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::task;
+use tokio::task::{self, JoinHandle};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 /// Sort arbitrary size of data to get a total order (may spill several times during sorting based on free memory available).
@@ -180,7 +180,7 @@ impl ExternalSorter {
     }
 
     /// MergeSort in mem batches as well as spills into total order with `SortPreservingMergeStream`.
-    fn sort(&mut self) -> Result<SendableSortStream> {
+    fn sort(&mut self) -> Result<SortedStream> {
         let batch_size = self.session_config.batch_size();
 
         if self.spilled_before() {
@@ -212,20 +212,21 @@ impl ExternalSorter {
                 })
                 .collect::<Result<Vec<_>>>()?;
             for spill in self.spills.drain(..) {
-                let stream = read_spill_as_stream(spill, sort_fields.to_owned())?;
-                streams.push(SortedStream::new(stream, 0));
+                let (rx, handle) = read_spill_as_stream(spill, sort_fields.to_owned())?;
+                streams.push(SortedStream::new_from_rx(rx, handle, 0));
             }
             let tracking_metrics = self
                 .metrics_set
                 .new_final_tracking(self.partition_id, &self.runtime.memory_pool);
-            Ok(Box::pin(SortPreservingMergeStream::new_from_streams(
+            let sort_stream = SortPreservingMergeStream::new_from_streams(
                 streams,
                 self.schema.clone(),
                 &self.expr,
                 tracking_metrics,
                 self.session_config.batch_size(),
                 true,
-            )?))
+            )?;
+            Ok(SortedStream::new(Box::pin(sort_stream), 0))
         } else if !self.in_mem_batches.is_empty() {
             let tracking_metrics = self
                 .metrics_set
@@ -240,9 +241,9 @@ impl ExternalSorter {
             )?;
             // Report to the memory manager we are no longer using memory
             self.reservation.free();
-            Ok(stream.stream)
+            Ok(stream)
         } else {
-            Ok(Box::pin(futures::stream::empty()))
+            Ok(SortedStream::empty())
         }
     }
 
@@ -287,7 +288,7 @@ impl ExternalSorter {
             )
         };
         spill_partial_sorted_stream(
-            &mut stream.stream,
+            &mut stream,
             spillfile.path(),
             rows_file.as_ref().map(|f| f.path()),
             self.schema.clone(),
@@ -679,7 +680,7 @@ impl RecordBatchStream for SortedSizedRecordBatchStream {
 }
 
 async fn spill_partial_sorted_stream(
-    in_mem_stream: &mut SendableSortStream,
+    in_mem_stream: &mut SortedStream,
     path: &Path,
     row_path: Option<&Path>,
     schema: SchemaRef,
@@ -704,7 +705,7 @@ async fn spill_partial_sorted_stream(
 fn read_spill_as_stream(
     spill: Spill,
     sort_fields: Vec<SortField>,
-) -> Result<SendableSortStream> {
+) -> Result<(mpsc::Receiver<SortStreamItem>, JoinHandle<()>)> {
     let (sender, receiver) = mpsc::channel::<SortStreamItem>(2);
     let join_handle = task::spawn_blocking(move || {
         if let Err(e) = read_spill(sender, &spill, sort_fields) {
@@ -714,7 +715,7 @@ fn read_spill_as_stream(
             );
         }
     });
-    Ok(Box::pin(SortReceiverStream::new(receiver, join_handle)))
+    Ok((receiver, join_handle))
 }
 
 fn write_sorted(
@@ -971,11 +972,28 @@ impl ExecutionPlan for SortExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        debug!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+
+        debug!(
+            "Start invoking SortExec's input.execute for partition: {}",
+            partition
+        );
+
+        let input = self.input.execute(partition, context.clone())?;
+
+        debug!("End SortExec's input.execute for partition: {}", partition);
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
-            self.execute_save_row_encoding(partition, context)?
-                // take the record batch and ignore the rows
-                .map_ok(|(record_batch, _rows)| record_batch),
+            futures::stream::once(do_sort(
+                input,
+                partition,
+                self.expr.clone(),
+                self.metrics_set.clone(),
+                context,
+                self.fetch(),
+            ))
+            .try_flatten()
+            .map_ok(|(record_batch, _rows)| record_batch),
         )))
     }
 
@@ -1099,7 +1117,7 @@ async fn do_sort(
     metrics_set: CompositeMetricsSet,
     context: Arc<TaskContext>,
     fetch: Option<usize>,
-) -> Result<SendableSortStream> {
+) -> Result<SortedStream> {
     debug!(
         "Start do_sort for partition {} of context session_id {} and task_id {:?}",
         partition_id,

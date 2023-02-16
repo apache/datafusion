@@ -22,8 +22,8 @@ use std::{
     fmt::{Debug, Formatter},
     pin::Pin,
     sync::Arc,
+    task::Poll,
 };
-
 mod cursor;
 mod index;
 pub mod sort;
@@ -34,48 +34,85 @@ use arrow::{
     row::{Row, RowParser, Rows},
 };
 pub use cursor::SortKeyCursor;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{stream::Fuse, Stream, StreamExt};
 pub use index::RowIndex;
-use tokio::{sync::mpsc, task::JoinHandle};
-use tokio_stream::wrappers::ReceiverStream;
+use pin_project_lite::pin_project;
+use tokio::task::JoinHandle;
 
-use super::common::AbortOnDropSingle;
+use super::{common::AbortOnDropSingle, metrics::MemTrackingMetrics};
 
-pub(crate) type RowStream = Pin<Box<dyn Stream<Item = Option<RowBatch>> + Send>>;
+pub(crate) type SendableRowStream = Pin<Box<dyn Stream<Item = Option<RowBatch>> + Send>>;
 pub(crate) type SortStreamItem = Result<(RecordBatch, Option<RowBatch>)>;
 pub(crate) type SendableSortStream = Pin<Box<dyn Stream<Item = SortStreamItem> + Send>>;
-pub(crate) struct SortedStream {
-    stream: SendableSortStream,
-    mem_used: usize,
-    // flag is only true if this was intialized wiith `new_no_row_encoding`
-    row_encoding_ignored: bool,
+
+pin_project! {
+    pub(crate) struct SortedStream {
+        #[pin]
+        batches: Option<Fuse<SendableRecordBatchStream>>,
+        #[pin]
+        rows: Option<Fuse<SendableRowStream>>,
+        #[pin]
+        pairs_stream: Option<SendableSortStream>,
+        pairs_rx: Option<tokio::sync::mpsc::Receiver<SortStreamItem>>,
+        last_batch: Option<Result<RecordBatch>>,
+        last_row: Option<Option<RowBatch>>,
+        mem_used: usize,
+        // flag is only true if this was intialized wiith `new_no_row_encoding`
+        row_encoding_ignored: bool,
+        rx_drop_helper: Option<AbortOnDropSingle<()>>,
+        is_empty: bool
+    }
 }
+
 impl SortedStream {
     pub(crate) fn new(stream: SendableSortStream, mem_used: usize) -> Self {
         Self {
-            stream,
+            batches: None,
+            rows: None,
+            pairs_rx: None,
+            pairs_stream: Some(stream),
+            rx_drop_helper: None,
             mem_used,
             row_encoding_ignored: false,
+            last_batch: None,
+            last_row: None,
+            is_empty: false,
         }
     }
-
+    pub(crate) fn new_from_rx(
+        rx: tokio::sync::mpsc::Receiver<SortStreamItem>,
+        handle: JoinHandle<()>,
+        mem_used: usize,
+    ) -> Self {
+        Self {
+            batches: None,
+            rows: None,
+            pairs_rx: Some(rx),
+            pairs_stream: None,
+            rx_drop_helper: Some(AbortOnDropSingle::new(handle)),
+            mem_used,
+            row_encoding_ignored: false,
+            last_batch: None,
+            last_row: None,
+            is_empty: false,
+        }
+    }
     pub(crate) fn new_from_streams(
         stream: SendableRecordBatchStream,
         mem_used: usize,
-        row_stream: RowStream,
+        row_stream: SendableRowStream,
     ) -> Self {
-        let stream = Box::pin(stream.zip(row_stream).map(|item| {
-            let batch: Result<RecordBatch> = item.0;
-            let rows: Option<RowBatch> = item.1;
-            match batch {
-                Ok(batch) => Ok((batch, rows)),
-                Err(err) => Err(err),
-            }
-        }));
         Self {
-            stream,
+            batches: Some(stream.fuse()),
+            rows: Some(row_stream.fuse()),
+            pairs_rx: None,
+            pairs_stream: None,
             mem_used,
             row_encoding_ignored: false,
+            last_batch: None,
+            last_row: None,
+            rx_drop_helper: None,
+            is_empty: false,
         }
     }
     /// create stream where the row encoding for each batch is always None
@@ -83,11 +120,32 @@ impl SortedStream {
         stream: SendableRecordBatchStream,
         mem_used: usize,
     ) -> Self {
-        let stream = Box::pin(stream.map_ok(|batch| (batch, None)));
         Self {
-            stream,
+            batches: Some(stream.fuse()),
+            rows: None,
             mem_used,
+            pairs_rx: None,
+            pairs_stream: None,
             row_encoding_ignored: true,
+            last_batch: None,
+            last_row: None,
+            rx_drop_helper: None,
+            is_empty: false,
+        }
+    }
+    pub(crate) fn empty() -> Self {
+        Self {
+            is_empty: true,
+
+            batches: None,
+            rows: None,
+            mem_used: 0,
+            pairs_rx: None,
+            pairs_stream: None,
+            row_encoding_ignored: true,
+            last_batch: None,
+            last_row: None,
+            rx_drop_helper: None,
         }
     }
 }
@@ -96,6 +154,83 @@ impl Debug for SortedStream {
         write!(f, "InMemSorterStream")
     }
 }
+impl Stream for SortedStream {
+    type Item = SortStreamItem;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+        if *this.is_empty {
+            return Poll::Ready(None);
+        }
+        if this.pairs_rx.is_some() {
+            return this.pairs_rx.as_mut().unwrap().poll_recv(cx);
+        }
+        if this.pairs_stream.is_some() {
+            return this.pairs_stream.as_pin_mut().unwrap().poll_next(cx);
+        }
+        if this.rows.is_none() {
+            // even if no rows stream there has to be a batch stream
+            return match this.batches.as_pin_mut().unwrap().poll_next(cx) {
+                Poll::Ready(Some(Ok(batch))) => Poll::Ready(Some(Ok((batch, None)))),
+                Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(err))),
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
+            };
+        }
+        // otherwise both batches and rows exist
+        let mut batches = this.batches.as_pin_mut().unwrap();
+        let mut rows = this.rows.as_pin_mut().unwrap();
+        if this.last_batch.is_none() {
+            match batches.as_mut().poll_next(cx) {
+                Poll::Ready(Some(res)) => *this.last_batch = Some(res),
+                Poll::Ready(None) | Poll::Pending => {}
+            }
+        }
+        if this.last_row.is_none() {
+            match rows.as_mut().poll_next(cx) {
+                Poll::Ready(Some(maybe_rows)) => *this.last_row = Some(maybe_rows),
+                Poll::Ready(None) | Poll::Pending => {}
+            }
+        }
+        if this.last_batch.is_some() && this.last_row.is_some() {
+            let result = this.last_batch.take().unwrap();
+            let maybe_row = this.last_row.take().unwrap();
+            Poll::Ready(Some(result.map(|batch| (batch, maybe_row))))
+        } else if rows.is_done() || batches.is_done() {
+            Poll::Ready(None)
+        } else {
+            Poll::Pending
+        }
+    }
+}
+// helper logic used a few times. version of metrics.record_poll with different inner type
+pub(crate) fn record_poll_sort_item(
+    metrics: &MemTrackingMetrics,
+    poll: std::task::Poll<Option<SortStreamItem>>,
+) -> std::task::Poll<Option<SortStreamItem>> {
+    if let std::task::Poll::Ready(maybe_sort_item) = &poll {
+        match maybe_sort_item {
+            Some(Ok((batch, _rows))) => metrics.record_output(batch.num_rows()),
+            Some(Err(_)) | None => {
+                metrics.done();
+            }
+        }
+    }
+    poll
+}
+
+// pub(crate) struct SortedReceiverStream {
+//     batch_rx: ReceiverStream<Result<RecordBatch>>,
+//     row_rx: Option<ReceiverStream<Result<Option<RowBatch>>>>,
+//     #[allow(dead_code)]
+//     drop_helper: AbortOnDropSingle<()>,
+// }
+// impl Stream for SortedReceiverStream {
+
+// }
 
 /// Cloneable batch of rows taken from multiple [RowSelection]s
 #[derive(Debug, Clone)]
@@ -293,30 +428,6 @@ impl<'a> Iterator for RowSelectionIter<'a> {
         } else {
             None
         }
-    }
-}
-pub(crate) struct SortReceiverStream {
-    inner: ReceiverStream<SortStreamItem>,
-    #[allow(dead_code)]
-    drop_helper: AbortOnDropSingle<()>,
-}
-impl SortReceiverStream {
-    fn new(rx: mpsc::Receiver<SortStreamItem>, handle: JoinHandle<()>) -> Self {
-        let stream = ReceiverStream::new(rx);
-        Self {
-            inner: stream,
-            drop_helper: AbortOnDropSingle::new(handle),
-        }
-    }
-}
-impl Stream for SortReceiverStream {
-    type Item = SortStreamItem;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        self.inner.poll_next_unpin(cx)
     }
 }
 
