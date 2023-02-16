@@ -96,9 +96,13 @@ async fn run_complete_file(
     let ctx = context_for_test_file(&relative_path).await;
     let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, relative_path));
     let col_separator = " ";
-    let validator = default_validator;
     runner
-        .update_test_file(path, col_separator, validator)
+        .update_test_file(
+            path,
+            col_separator,
+            default_validator,
+            strict_column_validator,
+        )
         .await
         .map_err(|e| e.to_string())?;
 
