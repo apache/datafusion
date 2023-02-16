@@ -913,7 +913,9 @@ pub fn parse_expr(
                 })
                 .transpose()?
                 .ok_or_else(|| {
-                    DataFusionError::Execution("expects something".to_string())
+                    DataFusionError::Execution(
+                        "missing window frame during deserialization".to_string(),
+                    )
                 })?;
 
             match window_function {
