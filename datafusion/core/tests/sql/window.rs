@@ -1601,10 +1601,11 @@ async fn test_window_agg_sort_multi_layer_non_reversed_plan() -> Result<()> {
         vec![
             "ProjectionExec: expr=[c9@2 as c9, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@5 as sum1, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c1 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@3 as sum2, ROW_NUMBER() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@4 as rn2]",
             "  GlobalLimitExec: skip=0, fetch=5",
-            "    BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(5)), end_bound: Following(UInt64(1)) }]",
-            "      BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: \"ROW_NUMBER()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
-            "        BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
-            "          SortExec: expr=[c9@2 DESC,c1@0 DESC,c2@1 DESC], global=true",
+            "    BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
+            "      SortExec: expr=[c9@2 ASC NULLS LAST,c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST], global=true",
+            "        BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: \"ROW_NUMBER()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
+            "          BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
+            "            SortExec: expr=[c9@2 DESC,c1@0 DESC], global=true",
         ]
     };
 
@@ -1618,15 +1619,15 @@ async fn test_window_agg_sort_multi_layer_non_reversed_plan() -> Result<()> {
 
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------------+-------------+-------------+-----+",
-        "| c9         | sum1        | sum2        | rn2 |",
-        "+------------+-------------+-------------+-----+",
-        "| 4268716378 | 8498370520  | 24997484146 | 1   |",
-        "| 4229654142 | 12714811027 | 29012926487 | 2   |",
-        "| 4216440507 | 16858984380 | 28743001064 | 3   |",
-        "| 4144173353 | 20935849039 | 28472563256 | 4   |",
-        "| 4076864659 | 24997484146 | 28118515915 | 5   |",
-        "+------------+-------------+-------------+-----+",
+        "+-----------+------------+-----------+-----+",
+        "| c9        | sum1       | sum2      | rn2 |",
+        "+-----------+------------+-----------+-----+",
+        "| 28774375  | 745354217  | 91818943  | 100 |",
+        "| 63044568  | 988558066  | 232866360 | 99  |",
+        "| 141047417 | 1285934966 | 374546521 | 98  |",
+        "| 141680161 | 1654839259 | 519841132 | 97  |",
+        "| 145294611 | 1980231675 | 745354217 | 96  |",
+        "+-----------+------------+-----------+-----+",
     ];
     assert_batches_eq!(expected, &actual);
 

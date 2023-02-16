@@ -775,6 +775,15 @@ fn should_reverse_window_sort_requirements(
     if top_requirement.is_none() {
         return false;
     }
+    let WindowExecInfo { window_expr, .. } =
+        extract_window_info_from_plan(&window_plan).unwrap();
+    let reverse_window_expr = window_expr
+        .iter()
+        .map(|e| e.get_reverse_expr())
+        .collect::<Option<Vec<_>>>();
+    if reverse_window_expr.is_none() {
+        return false;
+    }
     let flags = window_plan
         .children()
         .into_iter()
