@@ -93,24 +93,6 @@ pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatc
     stream.try_collect::<Vec<_>>().await
 }
 
-/// Merge two record batch references into a single record batch.
-/// All the record batches inside the slice must have the same schema.
-pub fn merge_batches(
-    first: &RecordBatch,
-    second: &RecordBatch,
-    schema: SchemaRef,
-) -> Result<RecordBatch> {
-    let columns = (0..schema.fields.len())
-        .map(|index| {
-            let first_column = first.column(index).as_ref();
-            let second_column = second.column(index).as_ref();
-            concat(&[first_column, second_column])
-        })
-        .collect::<Result<Vec<_>, ArrowError>>()
-        .map_err(Into::<DataFusionError>::into)?;
-    RecordBatch::try_new(schema, columns).map_err(Into::into)
-}
-
 /// Merge a slice of record batch references into a single record batch, or
 /// return `None` if the slice itself is empty. All the record batches inside the
 /// slice must have the same schema.
