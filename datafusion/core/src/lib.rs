@@ -184,7 +184,7 @@
 //!
 //! ## Examples
 //!
-//! Examples are located in [datafusion-examples directory](https://github.com/apache/arrow-datafusion/tree/master/datafusion-examples)
+//! Examples are located in [datafusion-examples directory](https://github.com/apache/arrow-datafusion/tree/main/datafusion-examples)
 //!
 //! Here's how to run them
 //!
