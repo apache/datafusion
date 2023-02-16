@@ -2397,8 +2397,8 @@ mod tests {
         let union = union_exec(vec![sort1, sort2]);
         let physical_plan = window_exec("nullable_col", sort_exprs2, union);
 
-        // The `WindowAggExec` gets its sorting from multiple children jointly.
-        // The SortExecs should be kept to ensure the final result ordering
+        // The `WindowAggExec` can get its required sorting from the leaf nodes directly.
+        // The unnecessary SortExecs should be removed
         let expected_input = vec![
             "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
             "  UnionExec",
