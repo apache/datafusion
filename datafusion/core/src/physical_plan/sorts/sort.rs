@@ -57,6 +57,7 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::io::BufReader;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -737,7 +738,9 @@ fn write_sorted(
         "Spilled {} batches of total {} rows to disk, memory released {}",
         writer.num_batches,
         writer.num_rows,
-        human_readable_size(writer.num_bytes as usize + row_writer.num_bytes),
+        human_readable_size(
+            writer.num_bytes as usize + row_writer.num_row_bytes as usize
+        ),
     );
     Ok(())
 }
@@ -1154,72 +1157,60 @@ async fn do_sort(
 /// manages writing potential rows to and from disk
 struct RowWriter {
     // serializing w/ arrow ipc format for maximum code simplicity... probably sub-optimal
-    ipc_writer: Option<IPCWriter>,
-    schema: Option<SchemaRef>,
-    num_bytes: usize,
+    file: Option<File>,
+    num_row_bytes: u32,
 }
+const MAGIC_BYTES: &[u8] = b"AROW";
 impl RowWriter {
     fn try_new(path: Option<impl AsRef<Path>>) -> Result<Self> {
-        use arrow::datatypes::{DataType, Field, Schema};
         match path {
             Some(p) => {
-                let schema = Arc::new(Schema::new(vec![Field::new(
-                    "bytes",
-                    DataType::Binary,
-                    false,
-                )]));
+                let mut file = File::create(p)?;
+                file.write_all(MAGIC_BYTES)?;
                 Ok(Self {
-                    ipc_writer: Some(IPCWriter::new(p.as_ref(), schema.as_ref())?),
-                    schema: Some(schema),
-                    num_bytes: 0,
+                    file: Some(file),
+                    num_row_bytes: 0,
                 })
             }
             None => Ok(Self {
-                ipc_writer: None,
-                schema: None,
-                num_bytes: 0,
+                file: None,
+                num_row_bytes: 0,
             }),
         }
     }
     fn write(&mut self, rows: Option<RowBatch>) -> Result<()> {
-        use arrow::array::BinaryBuilder;
-        if let (Some(writer), Some(schema), Some(rows)) =
-            (self.ipc_writer.as_mut(), self.schema.as_ref(), rows)
-        {
-            let numbytes = rows
-                .iter()
-                .map(|v| {
-                    let bytes: &[u8] = v.as_ref();
-                    bytes.len()
-                })
-                .sum::<usize>();
-            let mut builder = BinaryBuilder::with_capacity(rows.num_rows(), numbytes);
-            for r in rows.iter() {
-                let bytes: &[u8] = r.as_ref();
-                builder.append_value(bytes);
+        match (rows, self.file.as_mut()) {
+            (Some(rows), Some(file)) => {
+                file.write_all(&(rows.num_rows() as u32).to_le_bytes())?;
+                for row in rows.iter() {
+                    let bytes: &[u8] = row.as_ref();
+                    let num_bytes = bytes.len() as u32;
+                    self.num_row_bytes += num_bytes;
+                    file.write_all(&num_bytes.to_le_bytes())?;
+                    file.write_all(bytes)?;
+                }
+                Ok(())
             }
-            let arr = builder.finish();
-            let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(arr)])?;
-            writer.write(&batch)?;
-            self.num_bytes += numbytes;
+            // no-op
+            _ => Ok(()),
+        }
+    }
+    fn finish(&mut self) -> Result<()> {
+        if let Some(file) = self.file.as_mut() {
+            file.flush()?;
             Ok(())
         } else {
             Ok(())
         }
-    }
-    fn finish(&mut self) -> Result<()> {
-        self.ipc_writer
-            .as_mut()
-            .map(|v| v.finish())
-            .unwrap_or(Ok(()))
     }
 }
 
 /// manages reading potential rows to and from disk.
 struct RowReader {
     /// temporary file format solution is storing it w/ arrow IPC
-    reader: Option<FileReader<BufReader<File>>>,
+    file: Option<File>,
     row_conv: RowConverter,
+    stopped: bool,
 }
 impl RowReader {
     fn try_new(
@@ -1227,39 +1218,52 @@ impl RowReader {
         sort_fields: Vec<SortField>,
     ) -> Result<Self> {
         let row_conv = RowConverter::new(sort_fields)?;
-        if let Some(path) = path {
-            let file = BufReader::new(File::open(path)?);
-            let reader = FileReader::try_new(file, None)?;
-
-            Ok(Self {
-                reader: Some(reader),
+        match path {
+            Some(p) => {
+                let mut file = File::open(p)?;
+                let mut buf = [0_u8; 4];
+                file.read_exact(&mut buf)?;
+                if buf != MAGIC_BYTES {
+                    return Err(DataFusionError::Internal(
+                        "unexpected magic bytes in serialized rows file".to_owned(),
+                    ));
+                }
+                Ok(Self {
+                    file: Some(file),
+                    row_conv,
+                    stopped: false,
+                })
+            }
+            None => Ok(Self {
+                file: None,
                 row_conv,
-            })
-        } else {
-            Ok(Self {
-                reader: None,
-                row_conv,
-            })
+                stopped: false,
+            }),
         }
     }
-    fn parse_batch_helper(&self, batch: RecordBatch) -> Result<Option<RowBatch>> {
-        use arrow::array::BinaryArray;
-        let col = batch.column(0);
-        let bincol = col.as_any().downcast_ref::<BinaryArray>().ok_or_else(|| {
-            DataFusionError::Internal(
-                "unexepected error while parsing spilled row data".to_string(),
-            )
-        })?;
-        let bytes = bincol
-            .into_iter()
-            .map(|v| {
-                v.map(bytes::Bytes::copy_from_slice).ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "unexepected error while parsing spilled row data".to_string(),
-                    )
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+
+    fn read_batch(&mut self) -> Result<Option<RowBatch>> {
+        let file = self.file.as_mut().unwrap();
+        let mut buf = [0_u8; 4];
+        match file.read_exact(&mut buf) {
+            Ok(_) => {}
+            Err(io_err) => {
+                if io_err.kind() == std::io::ErrorKind::UnexpectedEof {
+                    return Ok(None);
+                }
+                return Err(io_err.into());
+            }
+        }
+        let num_rows = u32::from_le_bytes(buf);
+        let mut bytes: Vec<Vec<u8>> = Vec::with_capacity(num_rows as usize);
+        for _ in 0..num_rows {
+            let mut buf = [0_u8; 4];
+            file.read_exact(&mut buf)?;
+            let n = u32::from_le_bytes(buf);
+            let mut buf = vec![0_u8; n as usize];
+            file.read_exact(&mut buf)?;
+            bytes.push(buf);
+        }
         Ok(Some(
             RowSelection::from_spilled(self.row_conv.parser(), bytes).into(),
         ))
@@ -1269,11 +1273,18 @@ impl Iterator for RowReader {
     type Item = Result<Option<RowBatch>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(reader) = self.reader.as_mut() {
-            match reader.next() {
-                Some(Ok(batch)) => Some(self.parse_batch_helper(batch)),
-                Some(Err(err)) => Some(Err(err.into())),
-                None => None,
+        if self.stopped {
+            return None;
+        }
+        if self.file.is_some() {
+            let res = self.read_batch();
+            match res {
+                Ok(Some(batch)) => Some(Ok(Some(batch))),
+                Ok(None) => None,
+                Err(err) => {
+                    self.stopped = true;
+                    Some(Err(err))
+                }
             }
         } else {
             // will be zipped with the main record batch reader so
@@ -1302,6 +1313,62 @@ mod tests {
     use datafusion_common::cast::{as_primitive_array, as_string_array};
     use futures::FutureExt;
     use std::collections::HashMap;
+
+    #[test]
+    fn test_row_writer_reader() {
+        use crate::prelude::SessionContext;
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::DataType;
+        let sort_fields = vec![
+            SortField::new(DataType::Int64),
+            SortField::new(DataType::Utf8),
+        ];
+        let mut conv = RowConverter::new(sort_fields.to_owned()).unwrap();
+
+        fn makebatch(n: i64) -> RecordBatch {
+            let ints: Int64Array = (0..n).map(Some).collect();
+            let varlengths: StringArray =
+                StringArray::from_iter((0..n).map(|i| i + 100).map(|i| {
+                    if i % 3 == 0 {
+                        None
+                    } else {
+                        Some((i.pow(2)).to_string())
+                    }
+                }));
+            RecordBatch::try_from_iter(vec![
+                ("c1", Arc::new(ints) as _),
+                ("c2", Arc::new(varlengths) as _),
+            ])
+            .unwrap()
+        }
+        let row_lens = vec![10, 0, 0, 1, 50];
+        let batches = row_lens.iter().map(|i| makebatch(*i)).collect::<Vec<_>>();
+        let rows = batches
+            .iter()
+            .map(|b| conv.convert_columns(b.columns()).unwrap())
+            .collect::<Vec<_>>();
+
+        let ctx = SessionContext::new();
+        let runtime = ctx.runtime_env();
+        let tempfile = runtime.disk_manager.create_tmp_file("Sorting").unwrap();
+        let mut wr = RowWriter::try_new(Some(tempfile.path())).unwrap();
+        for r in rows {
+            wr.write(Some(r.into())).unwrap();
+        }
+        wr.finish().unwrap();
+
+        let rdr = RowReader::try_new(Some(tempfile.path()), sort_fields).unwrap();
+        let batches = rdr.collect::<Vec<_>>();
+        assert_eq!(batches.len(), row_lens.len());
+        let read_lens = batches
+            .iter()
+            .map(|b| {
+                let rowbatch = b.as_ref().unwrap().as_ref().unwrap();
+                rowbatch.num_rows() as i64
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(row_lens, read_lens);
+    }
 
     #[tokio::test]
     async fn test_in_mem_sort() -> Result<()> {

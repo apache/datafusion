@@ -324,7 +324,7 @@ enum RowData {
     /// Rows that were spilled to disk and then later read back into mem
     Spilled {
         parser: RowParser,
-        bytes: Vec<bytes::Bytes>,
+        bytes: Vec<Vec<u8>>,
     },
 }
 impl RowData {
@@ -355,7 +355,7 @@ impl RowSelection {
             indices: Some(indices),
         }
     }
-    fn from_spilled(parser: RowParser, bytes: Vec<bytes::Bytes>) -> Self {
+    fn from_spilled(parser: RowParser, bytes: Vec<Vec<u8>>) -> Self {
         Self {
             rows: RowData::Spilled { parser, bytes },
             indices: None,

@@ -566,7 +566,6 @@ impl SortPreservingMergeStream {
             if self.in_progress.is_empty() {
                 Some(RowBatch::new(vec![], vec![]))
             } else {
-                println!("building rowbatch");
                 let rows = self
                     .batches
                     .iter()
