@@ -104,7 +104,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(move || case.run())
     });
     c.bench_function("sort utf8 low cardinality preserve partitioning", |b| {
-        let case = SortBenchCase::new(&UTF8_LOW_CARDINALITY_STREAMS);
+        let case = SortBenchCasePreservePartitioning::new(&UTF8_LOW_CARDINALITY_STREAMS);
 
         b.iter(move || case.run())
     });
