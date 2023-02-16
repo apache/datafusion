@@ -253,6 +253,9 @@ ORDER BY time;
 2 2022-01-01T01:00:00
 3 2022-01-02T00:00:00
 
+## SORT BY  is not supported
+statement error DataFusion error: This feature is not implemented: SORT BY
+select * from t SORT BY time;
 
 ## Cleanup
 statement ok

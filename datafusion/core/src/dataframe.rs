@@ -1073,6 +1073,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_distinct() -> Result<()> {
+        let t = test_table().await?;
+        let plan = t
+            .select(vec![col("c1")])
+            .unwrap()
+            .distinct()
+            .unwrap()
+            .plan
+            .clone();
+
+        let sql_plan = create_plan("select distinct c1 from aggregate_test_100").await?;
+
+        assert_same_plan(&plan, &sql_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_distinct_sort_by() -> Result<()> {
+        let t = test_table().await?;
+        let plan = t
+            .select(vec![col("c1")])
+            .unwrap()
+            .distinct()
+            .unwrap()
+            .sort(vec![col("c2").sort(true, true)])
+            .unwrap();
+        let df_results = plan.clone().collect().await?;
+        assert_batches_sorted_eq!(
+            vec![
+                "+----+", "| c1 |", "+----+", "| a  |", "| a  |", "| a  |", "| a  |",
+                "| a  |", "| b  |", "| b  |", "| b  |", "| b  |", "| b  |", "| c  |",
+                "| c  |", "| c  |", "| c  |", "| c  |", "| d  |", "| d  |", "| d  |",
+                "| d  |", "| d  |", "| e  |", "| e  |", "| e  |", "| e  |", "| e  |",
+                "+----+",
+            ],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn join() -> Result<()> {
         let left = test_table().await?.select_columns(&["c1", "c2"])?;
         let right = test_table_with_name("c2")

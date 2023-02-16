@@ -406,6 +406,16 @@ impl LogicalPlanBuilder {
                 Ok(())
             })?;
 
+        self.create_sort_plan(exprs, missing_cols)
+    }
+
+    pub fn create_sort_plan(
+        self,
+        exprs: impl IntoIterator<Item = impl Into<Expr>> + Clone,
+        missing_cols: Vec<Column>,
+    ) -> Result<Self> {
+        let schema = self.plan.schema();
+
         if missing_cols.is_empty() {
             return Ok(Self::from(LogicalPlan::Sort(Sort {
                 expr: normalize_cols(exprs, &self.plan)?,

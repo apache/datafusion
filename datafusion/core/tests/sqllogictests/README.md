@@ -78,7 +78,7 @@ docker run \
 
 In test script completion mode, `sqllogictests` reads a prototype script and runs the statements and queries against the database engine. The output is is a full script that is a copy of the prototype script with result inserted.
 
-You can update tests by passing the `--complete` argument.
+You can update the tests / generate expected output by passing the `--complete` argument.
 
 ```shell
 # Update ddl.slt with output from running

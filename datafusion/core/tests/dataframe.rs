@@ -128,6 +128,50 @@ async fn sort_on_unprojected_columns() -> Result<()> {
 }
 
 #[tokio::test]
+async fn sort_on_distinct_unprojected_columns() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![
+            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
+            Arc::new(Int32Array::from_slice([2, 12, 12, 120])),
+        ],
+    )
+    .unwrap();
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch).unwrap();
+    let df = ctx
+        .table("t")
+        .await
+        .unwrap()
+        .select(vec![col("a")])
+        .unwrap()
+        .distinct()
+        .unwrap()
+        .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))])
+        .unwrap();
+    let results = df.collect().await.unwrap();
+
+    #[rustfmt::skip]
+    let expected = vec![
+        "+-----+",
+        "| a   |",
+        "+-----+",
+        "| 100 |",
+        "| 10  |",
+        "| 1   |",
+        "+-----+",
+    ];
+    assert_batches_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
 async fn filter_with_alias_overwrite() -> Result<()> {
     let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
@@ -171,24 +215,19 @@ async fn select_with_alias_overwrite() -> Result<()> {
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![Arc::new(Int32Array::from_slice([1, 10, 10, 100]))],
-    )
-    .unwrap();
+    )?;
 
     let ctx = SessionContext::new();
     ctx.register_batch("t", batch).unwrap();
 
     let df = ctx
         .table("t")
-        .await
-        .unwrap()
-        .select(vec![col("a").alias("a")])
-        .unwrap()
-        .select(vec![(col("a").eq(lit(10))).alias("a")])
-        .unwrap()
-        .select(vec![col("a")])
-        .unwrap();
+        .await?
+        .select(vec![col("a").alias("a")])?
+        .select(vec![(col("a").eq(lit(10))).alias("a")])?
+        .select(vec![col("a")])?;
 
-    let results = df.collect().await.unwrap();
+    let results = df.collect().await?;
 
     #[rustfmt::skip]
         let expected = vec![
@@ -603,6 +642,43 @@ async fn unnest_columns() -> Result<()> {
         .count()
         .await?;
     assert_eq!(count, results.iter().map(|r| r.num_rows()).sum::<usize>());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn unnest_aggregate_columns() -> Result<()> {
+    const NUM_ROWS: usize = 5;
+
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let results = df.select_columns(&["tags"])?.collect().await?;
+    let expected = vec![
+        r#"+--------------------+"#,
+        r#"| tags               |"#,
+        r#"+--------------------+"#,
+        r#"| [tag1]             |"#,
+        r#"| [tag1, tag2]       |"#,
+        r#"|                    |"#,
+        r#"| [tag1, tag2, tag3] |"#,
+        r#"| [tag1, tag2, tag3] |"#,
+        r#"+--------------------+"#,
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let results = df
+        .unnest_column("tags")?
+        .aggregate(vec![], vec![count(col("tags"))])?
+        .collect()
+        .await?;
+    let expected = vec![
+        r#"+--------------------+"#,
+        r#"| COUNT(shapes.tags) |"#,
+        r#"+--------------------+"#,
+        r#"| 9                  |"#,
+        r#"+--------------------+"#,
+    ];
+    assert_batches_sorted_eq!(expected, &results);
 
     Ok(())
 }

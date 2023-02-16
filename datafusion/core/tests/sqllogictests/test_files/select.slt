@@ -55,3 +55,28 @@ VALUES (1,'a'),(2,'b')
 ----
 1   a
 2   b
+
+# table foo for distinct order by
+statement ok
+CREATE TABLE foo AS VALUES
+(1, 2),
+(3, 4),
+(5, 6);
+
+# foo distinct
+query T
+select distinct '1' from foo;
+----
+1
+
+# foo order by
+query T
+select '1' from foo order by column1;
+----
+1
+1
+1
+
+# foo distinct order by
+statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions column1 must appear in select list
+select distinct '1' from foo order by column1;
