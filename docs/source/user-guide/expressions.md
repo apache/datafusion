@@ -89,7 +89,9 @@ expressions such as `col("a") + col("b")` to be used.
 | trunc(x)              | truncate toward zero                              |
 
 ### Math functions usage notes:
+
 Unlike to some databases the math functions in Datafusion works the same way as Rust math functions, avoiding failing on corner cases e.g
+
 ```
 ❯ select log(-1), log(0), sqrt(-1);
 +----------------+---------------+-----------------+
@@ -98,6 +100,7 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 | NaN            | -inf          | NaN             |
 +----------------+---------------+-----------------+
 ```
+
 ## Bitwise Operators
 
 | Operator | Notes                                           |
