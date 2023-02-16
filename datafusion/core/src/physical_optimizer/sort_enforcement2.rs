@@ -297,9 +297,6 @@ fn ensure_sorting(
             // propagate the sort requirements down to correct the unnecessary descendant SortExec under the UnionExec
             let adjusted = new_sort_requirements(union_exec.output_ordering());
             return Ok(Some(PlanWithSortRequirements {
-                plan: plan.clone(),
-                impact_result_ordering: requirements.impact_result_ordering,
-                satisfy_single_distribution: requirements.satisfy_single_distribution,
                 required_ordering: None,
                 adjusted_request_ordering: vec![
                     adjusted;
@@ -307,6 +304,7 @@ fn ensure_sorting(
                         .adjusted_request_ordering
                         .len()
                 ],
+                ..requirements
             }));
         } else if plan.as_any().downcast_ref::<WindowAggExec>().is_some()
             || plan
@@ -370,11 +368,8 @@ fn ensure_sorting(
             }
         }
         Ok(Some(PlanWithSortRequirements {
-            plan: plan.clone(),
-            impact_result_ordering: requirements.impact_result_ordering,
-            satisfy_single_distribution: requirements.satisfy_single_distribution,
             required_ordering: None,
-            adjusted_request_ordering: requirements.adjusted_request_ordering,
+            ..requirements
         }))
     } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         // If the current plan is a SortExec, modify current SortExec to satisfy the parent requirements
@@ -413,79 +408,79 @@ fn ensure_sorting(
                 .is_some()
         {
             let request_child = requirements.adjusted_request_ordering[0].as_deref();
-            if requirements_compatible(request_child, parent_required, || {
-                plan.children()[0].equivalence_properties()
-            }) {
-                // request child requirements are more specific, no need to push down the parent requirements
-                Ok(None)
-            } else if requirements_compatible(parent_required, request_child, || {
-                plan.children()[0].equivalence_properties()
-            }) {
-                // parent requirements are more specific, adjust the request child requirements and push down the new requirements
-                let adjusted = parent_required.map(|r| r.to_vec());
-                Ok(Some(PlanWithSortRequirements {
-                    plan: plan.clone(),
-                    impact_result_ordering: requirements.impact_result_ordering,
-                    satisfy_single_distribution: requirements.satisfy_single_distribution,
-                    required_ordering: None,
-                    adjusted_request_ordering: vec![adjusted],
-                }))
-            } else {
-                let WindowExecInfo {
-                    window_expr,
-                    input_schema,
-                    partition_keys,
-                } = extract_window_info_from_plan(plan).unwrap();
-                if should_reverse_window_exec(
-                    parent_required,
-                    request_child,
-                    &input_schema,
-                ) {
-                    let new_physical_ordering = parent_required_expr.to_vec();
-                    let new_window_expr = window_expr
-                        .iter()
-                        .map(|e| e.get_reverse_expr())
-                        .collect::<Option<Vec<_>>>();
-                    if let Some(window_expr) = new_window_expr {
-                        let uses_bounded_memory =
-                            window_expr.iter().all(|e| e.uses_bounded_memory());
-                        let new_plan = if uses_bounded_memory {
-                            Arc::new(BoundedWindowAggExec::try_new(
-                                window_expr,
-                                plan.children()[0].clone(),
-                                input_schema,
-                                partition_keys,
-                                Some(new_physical_ordering),
-                            )?) as Arc<dyn ExecutionPlan>
-                        } else {
-                            Arc::new(WindowAggExec::try_new(
-                                window_expr,
-                                plan.children()[0].clone(),
-                                input_schema,
-                                partition_keys,
-                                Some(new_physical_ordering),
-                            )?) as Arc<dyn ExecutionPlan>
-                        };
-                        let adjusted_request_ordering =
-                            new_plan.required_input_ordering();
-                        return Ok(Some(PlanWithSortRequirements {
-                            plan: new_plan,
-                            impact_result_ordering: false,
-                            satisfy_single_distribution: requirements
-                                .satisfy_single_distribution,
-                            required_ordering: None,
-                            adjusted_request_ordering,
-                        }));
-                    }
+            let child_plan = plan.children()[0].clone();
+            match determine_children_requirement(
+                parent_required,
+                request_child,
+                child_plan,
+            ) {
+                RequirementsCompatibility::Satisfy => Ok(None),
+                RequirementsCompatibility::Compatible(adjusted) => {
+                    Ok(Some(PlanWithSortRequirements {
+                        required_ordering: None,
+                        adjusted_request_ordering: vec![adjusted],
+                        ..requirements
+                    }))
                 }
-                // Can not push down requirements, add new SortExec
-                let mut new_plan = plan.clone();
-                add_sort_above(&mut new_plan, parent_required_expr)?;
-                Ok(Some(
-                    PlanWithSortRequirements::new_without_impact_result_ordering(
-                        new_plan,
-                    ),
-                ))
+                RequirementsCompatibility::NonCompatible => {
+                    let WindowExecInfo {
+                        window_expr,
+                        input_schema,
+                        partition_keys,
+                    } = extract_window_info_from_plan(plan).unwrap();
+                    if should_reverse_window_exec(
+                        parent_required,
+                        request_child,
+                        &input_schema,
+                    ) {
+                        let new_physical_ordering = parent_required_expr.to_vec();
+                        let new_window_expr = window_expr
+                            .iter()
+                            .map(|e| e.get_reverse_expr())
+                            .collect::<Option<Vec<_>>>();
+                        if let Some(window_expr) = new_window_expr {
+                            let uses_bounded_memory =
+                                window_expr.iter().all(|e| e.uses_bounded_memory());
+                            let new_plan = if uses_bounded_memory {
+                                Arc::new(BoundedWindowAggExec::try_new(
+                                    window_expr,
+                                    plan.children()[0].clone(),
+                                    input_schema,
+                                    partition_keys,
+                                    Some(new_physical_ordering),
+                                )?)
+                                    as Arc<dyn ExecutionPlan>
+                            } else {
+                                Arc::new(WindowAggExec::try_new(
+                                    window_expr,
+                                    plan.children()[0].clone(),
+                                    input_schema,
+                                    partition_keys,
+                                    Some(new_physical_ordering),
+                                )?)
+                                    as Arc<dyn ExecutionPlan>
+                            };
+                            let adjusted_request_ordering =
+                                new_plan.required_input_ordering();
+                            return Ok(Some(PlanWithSortRequirements {
+                                plan: new_plan,
+                                impact_result_ordering: false,
+                                satisfy_single_distribution: requirements
+                                    .satisfy_single_distribution,
+                                required_ordering: None,
+                                adjusted_request_ordering,
+                            }));
+                        }
+                    }
+                    // Can not push down requirements, add new SortExec
+                    let mut new_plan = plan.clone();
+                    add_sort_above(&mut new_plan, parent_required_expr)?;
+                    Ok(Some(
+                        PlanWithSortRequirements::new_without_impact_result_ordering(
+                            new_plan,
+                        ),
+                    ))
+                }
             }
         } else if let Some(smj) = plan.as_any().downcast_ref::<SortMergeJoinExec>() {
             // If the current plan is SortMergeJoinExec
@@ -496,7 +491,6 @@ fn ensure_sorting(
                 Some(JoinSide::Left) if maintains_input_order[0] => {
                     try_pushdown_requirements_to_join(
                         &requirements,
-                        plan,
                         parent_required,
                         parent_required_expr,
                         JoinSide::Left,
@@ -517,7 +511,6 @@ fn ensure_sorting(
                     };
                     try_pushdown_requirements_to_join(
                         &requirements,
-                        plan,
                         Some(new_right_required.deref()),
                         parent_required_expr,
                         JoinSide::Right,
@@ -535,8 +528,6 @@ fn ensure_sorting(
                 }
             }
         } else if plan.required_input_ordering().iter().any(Option::is_some) {
-            // If the current plan has its own ordering requirements to its children, check whether the requirements
-            // are compatible with the parent requirements.
             let plan_children = plan.children();
             let compatible_with_children = izip!(
                 maintains_input_order.iter(),
@@ -544,55 +535,43 @@ fn ensure_sorting(
                 plan_children.iter()
             )
             .map(|(can_push_down, request_child, child)| {
-                *can_push_down
-                    && requirements_compatible(
-                        request_child.as_deref(),
+                if *can_push_down {
+                    determine_children_requirement(
                         parent_required,
-                        || child.equivalence_properties(),
+                        request_child.as_deref(),
+                        child.clone(),
                     )
+                } else {
+                    RequirementsCompatibility::NonCompatible
+                }
             })
             .collect::<Vec<_>>();
-            if compatible_with_children.iter().all(|a| *a) {
-                // Requirements are compatible, not need to push down.
+            if compatible_with_children
+                .iter()
+                .all(|a| matches!(a, RequirementsCompatibility::Satisfy))
+            {
+                // Requirements are satisfied, not need to push down.
                 Ok(None)
+            } else if compatible_with_children
+                .iter()
+                .all(|a| matches!(a, RequirementsCompatibility::Compatible(_)))
+            {
+                // Adjust child requirements and push down the requirements
+                let adjusted = parent_required.map(|r| r.to_vec());
+                Ok(Some(PlanWithSortRequirements {
+                    required_ordering: None,
+                    adjusted_request_ordering: vec![adjusted; plan_children.len()],
+                    ..requirements
+                }))
             } else {
-                let can_adjust_child_requirements = plan
-                    .required_input_ordering()
-                    .into_iter()
-                    .zip(plan_children.iter())
-                    .map(|(request_child, child)| {
-                        requirements_compatible(
-                            parent_required,
-                            request_child.as_deref(),
-                            || child.equivalence_properties(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                if can_adjust_child_requirements.iter().all(|a| *a) {
-                    // Adjust child requirements and push down the requirements
-                    let adjusted = parent_required.map(|r| r.to_vec());
-                    Ok(Some(PlanWithSortRequirements {
-                        plan: plan.clone(),
-                        impact_result_ordering: requirements.impact_result_ordering,
-                        satisfy_single_distribution: requirements
-                            .satisfy_single_distribution,
-                        required_ordering: None,
-                        adjusted_request_ordering: vec![
-                            adjusted;
-                            can_adjust_child_requirements
-                                .len()
-                        ],
-                    }))
-                } else {
-                    // Can not push down, add new SortExec
-                    let mut new_plan = plan.clone();
-                    add_sort_above(&mut new_plan, parent_required_expr)?;
-                    Ok(Some(
-                        PlanWithSortRequirements::new_without_impact_result_ordering(
-                            new_plan,
-                        ),
-                    ))
-                }
+                // Can not push down, add new SortExec
+                let mut new_plan = plan.clone();
+                add_sort_above(&mut new_plan, parent_required_expr)?;
+                Ok(Some(
+                    PlanWithSortRequirements::new_without_impact_result_ordering(
+                        new_plan,
+                    ),
+                ))
             }
         } else {
             // The current plan does not have its own ordering requirements to its children, consider push down the requirements
@@ -601,16 +580,13 @@ fn ensure_sorting(
             {
                 // For Projection, we need to transform the requirements to the columns before the Projection
                 // And then to push down the requirements
-                let new_requirement =
+                let new_adjusted =
                     map_requirement_before_projection(parent_required, expr);
-                if new_requirement.is_some() {
+                if new_adjusted.is_some() {
                     Ok(Some(PlanWithSortRequirements {
-                        plan: plan.clone(),
-                        impact_result_ordering: requirements.impact_result_ordering,
-                        satisfy_single_distribution: requirements
-                            .satisfy_single_distribution,
                         required_ordering: None,
-                        adjusted_request_ordering: vec![new_requirement],
+                        adjusted_request_ordering: vec![new_adjusted],
+                        ..requirements
                     }))
                 } else {
                     // Can not push down, add new SortExec
@@ -624,16 +600,14 @@ fn ensure_sorting(
                 }
             } else {
                 Ok(Some(PlanWithSortRequirements {
-                    plan: plan.clone(),
-                    impact_result_ordering: requirements.impact_result_ordering,
                     required_ordering: None,
-                    satisfy_single_distribution: requirements.satisfy_single_distribution,
                     adjusted_request_ordering: vec![
                         requirements.required_ordering;
                         requirements
                             .adjusted_request_ordering
                             .len()
                     ],
+                    ..requirements
                 }))
             }
         }
@@ -719,6 +693,31 @@ fn analyze_immediate_spm_removal(
         })
     } else {
         None
+    }
+}
+
+/// Determine the children requirements
+/// If the children requirements are more specific, do not push down the parent requirements
+/// If the the parent requirements are more specific, push down the parent requirements
+/// If they are not compatible, need to add Sort.
+fn determine_children_requirement(
+    parent_required: Option<&[PhysicalSortRequirements]>,
+    request_child: Option<&[PhysicalSortRequirements]>,
+    child_plan: Arc<dyn ExecutionPlan>,
+) -> RequirementsCompatibility {
+    if requirements_compatible(request_child, parent_required, || {
+        child_plan.equivalence_properties()
+    }) {
+        // request child requirements are more specific, no need to push down the parent requirements
+        RequirementsCompatibility::Satisfy
+    } else if requirements_compatible(parent_required, request_child, || {
+        child_plan.equivalence_properties()
+    }) {
+        // parent requirements are more specific, adjust the request child requirements and push down the new requirements
+        let adjusted = parent_required.map(|r| r.to_vec());
+        RequirementsCompatibility::Compatible(adjusted)
+    } else {
+        RequirementsCompatibility::NonCompatible
     }
 }
 
@@ -921,52 +920,41 @@ fn extract_window_info_from_plan(
 
 fn try_pushdown_requirements_to_join(
     requirements: &PlanWithSortRequirements,
-    plan: &Arc<dyn ExecutionPlan>,
     parent_required: Option<&[PhysicalSortRequirements]>,
-    parent_required_expr: Vec<PhysicalSortExpr>,
+    sort_expr: Vec<PhysicalSortExpr>,
     push_side: JoinSide,
 ) -> Result<Option<PlanWithSortRequirements>> {
     let child_idx = match push_side {
         JoinSide::Left => 0,
         JoinSide::Right => 1,
     };
-    if requirements_compatible(
-        plan.required_input_ordering()[child_idx].as_deref(),
-        parent_required,
-        || plan.children()[child_idx].equivalence_properties(),
-    ) {
-        // parent requirements are compatible with the SortMergeJoinExec
-        Ok(None)
-    } else if requirements_compatible(
-        parent_required,
-        plan.required_input_ordering()[child_idx].as_deref(),
-        || plan.children()[child_idx].equivalence_properties(),
-    ) {
-        // parent requirements are more specific, adjust the SortMergeJoinExec child requirements and push down the new requirements
-        let new_adjusted = match push_side {
-            JoinSide::Left => vec![
-                parent_required.map(|r| r.to_vec()),
-                requirements.adjusted_request_ordering[1].clone(),
-            ],
-            JoinSide::Right => vec![
-                requirements.adjusted_request_ordering[0].clone(),
-                parent_required.map(|r| r.to_vec()),
-            ],
-        };
-        Ok(Some(PlanWithSortRequirements {
-            plan: plan.clone(),
-            impact_result_ordering: requirements.impact_result_ordering,
-            satisfy_single_distribution: requirements.satisfy_single_distribution,
-            required_ordering: None,
-            adjusted_request_ordering: new_adjusted,
-        }))
-    } else {
-        // Can not push down, add new SortExec
-        let mut new_plan = plan.clone();
-        add_sort_above(&mut new_plan, parent_required_expr)?;
-        Ok(Some(
-            PlanWithSortRequirements::new_without_impact_result_ordering(new_plan),
-        ))
+    let request_child = requirements.adjusted_request_ordering[child_idx].as_deref();
+    let child_plan = requirements.plan.children()[child_idx].clone();
+    match determine_children_requirement(parent_required, request_child, child_plan) {
+        RequirementsCompatibility::Satisfy => Ok(None),
+        RequirementsCompatibility::Compatible(adjusted) => {
+            let new_adjusted = match push_side {
+                JoinSide::Left => {
+                    vec![adjusted, requirements.adjusted_request_ordering[1].clone()]
+                }
+                JoinSide::Right => {
+                    vec![requirements.adjusted_request_ordering[0].clone(), adjusted]
+                }
+            };
+            Ok(Some(PlanWithSortRequirements {
+                required_ordering: None,
+                adjusted_request_ordering: new_adjusted,
+                ..requirements.clone()
+            }))
+        }
+        RequirementsCompatibility::NonCompatible => {
+            // Can not push down, add new SortExec
+            let mut new_plan = requirements.plan.clone();
+            add_sort_above(&mut new_plan, sort_expr)?;
+            Ok(Some(
+                PlanWithSortRequirements::new_without_impact_result_ordering(new_plan),
+            ))
+        }
     }
 }
 
@@ -1082,12 +1070,23 @@ fn shift_right_required(
     }
 }
 
-#[derive(Debug)]
 /// This structure stores extra Window information required to create a new WindowExec
+#[derive(Debug)]
 pub struct WindowExecInfo {
     window_expr: Vec<Arc<dyn WindowExpr>>,
     input_schema: SchemaRef,
     partition_keys: Vec<Arc<dyn PhysicalExpr>>,
+}
+
+/// Define the Requirements Compatibility
+#[derive(Debug)]
+pub enum RequirementsCompatibility {
+    /// Requirements satisfy
+    Satisfy,
+    /// Requirements compatible
+    Compatible(Option<Vec<PhysicalSortRequirements>>),
+    /// Requirements not compatible
+    NonCompatible,
 }
 
 /// A TombStoneExec execution plan generated during optimization process, should be removed finally
