@@ -98,3 +98,56 @@ async fn union_with_type_coercion() -> Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn test_union_upcast_types() -> Result<()> {
+    let config = SessionConfig::new()
+        .with_repartition_windows(false)
+        .with_target_partitions(1);
+    let ctx = SessionContext::with_config(config);
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT c1, c9 FROM aggregate_test_100 
+                     UNION ALL 
+                     SELECT c1, c3 FROM aggregate_test_100 
+                     ORDER BY c9 DESC LIMIT 5";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    println!("{:#?}", dataframe.logical_plan());
+    let physical_plan = dataframe.create_physical_plan().await?;
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let expected = {
+        vec![
+            "GlobalLimitExec: skip=0, fetch=5",
+            "  SortPreservingMergeExec: [c9@1 DESC]",
+            "    SortExec: fetch=5, expr=[c9@1 DESC]",
+            "      UnionExec",
+            "        ProjectionExec: expr=[c1@0 as c1, CAST(c9@1 AS Int64) as c9]",
+            "          CsvExec: files={1 group: [[Users/berkaysahin/Desktop/arrow-datafusion/testing/data/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1, c9]",
+            "        ProjectionExec: expr=[c1@0 as c1, CAST(c3@1 AS Int64) as c9]",
+            "          CsvExec: files={1 group: [[Users/berkaysahin/Desktop/arrow-datafusion/testing/data/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1, c3]",
+        ]
+    };
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let actual_len = actual.len();
+    let actual_trim_last = &actual[..actual_len];
+    assert_eq!(
+        expected, actual_trim_last,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual_trim_last:#?}\n\n"
+    );
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----+------------+",
+        "| c1 | c9         |",
+        "+----+------------+",
+        "| c  | 4268716378 |",
+        "| e  | 4229654142 |",
+        "| d  | 4216440507 |",
+        "| e  | 4144173353 |",
+        "| b  | 4076864659 |",
+        "+----+------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
