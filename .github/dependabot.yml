@@ -22,7 +22,7 @@ updates:
     schedule:
       interval: daily
     open-pull-requests-limit: 10
-    target-branch: master
+    target-branch: main
     labels: [auto-dependencies]
   - package-ecosystem: "github-actions"
     directory: "/"

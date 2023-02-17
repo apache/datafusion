@@ -406,27 +406,15 @@ impl LogicalPlanBuilder {
                 Ok(())
             })?;
 
-        // if current plan is distinct or current plan is repartition and its child plan is distinct,
-        // then this plan is a select distinct plan
-        let is_select_distinct = match self.plan {
-            LogicalPlan::Distinct(_) => true,
-            LogicalPlan::Repartition(Repartition { ref input, .. }) => {
-                matches!(input.as_ref(), &LogicalPlan::Distinct(_))
-            }
-            _ => false,
-        };
+        self.create_sort_plan(exprs, missing_cols)
+    }
 
-        // for select distinct, order by expressions must exist in select list
-        if is_select_distinct && !missing_cols.is_empty() {
-            let missing_col_names = missing_cols
-                .iter()
-                .map(|col| col.flat_name())
-                .collect::<String>();
-            let error_msg = format!(
-                "For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list",
-            );
-            return Err(DataFusionError::Plan(error_msg));
-        }
+    pub fn create_sort_plan(
+        self,
+        exprs: impl IntoIterator<Item = impl Into<Expr>> + Clone,
+        missing_cols: Vec<Column>,
+    ) -> Result<Self> {
+        let schema = self.plan.schema();
 
         if missing_cols.is_empty() {
             return Ok(Self::from(LogicalPlan::Sort(Sort {
