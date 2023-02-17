@@ -106,7 +106,7 @@ select covar_pop(sq.column1, sq.column2) from (values (1.1, 2.2)) as sq
 0
 
 # all_nulls_query_covar
-query R
+query RR
 with data as (
   select null::int as f, null::int as b
   union all
@@ -118,7 +118,7 @@ from data
 NULL NULL
 
 # covar_query_with_nulls
-query R
+query RR
 with data as (
   select 1 as f,       4 as b
   union all
@@ -344,13 +344,13 @@ SELECT median(a) FROM median_f64
 3.3
 
 # median_f64_nan
-query T
+query R
 SELECT median(a) FROM median_f64_nan
 ----
 NaN
 
 # approx_median_f64_nan
-query T
+query R
 SELECT approx_median(a) FROM median_f64_nan
 ----
 NaN
@@ -365,13 +365,13 @@ create table cpu (host string, usage float) as select * from (values
 ('host1', 90.4)
 );
 
-query CI rowsort
+query TR rowsort
 select host, median(usage) from cpu group by host;
 ----
 host0 90.1
 host1 90.3
 
-query CI
+query R
 select median(usage) from cpu;
 ----
 90.2
@@ -395,7 +395,7 @@ create table cpu (host string, usage float) as select * from (values
   ('host1', 89.3)
 );
 
-query CI rowsort
+query TR rowsort
 select host, median(usage) from cpu group by host;
 ----
 host0 90.2
@@ -410,7 +410,7 @@ drop table cpu;
 statement ok
 create table cpu (host string, usage float) as select * from (values ('host0', 90.2), ('host1', 90.1), ('host1', 90.5), ('host0', 90.5), ('host1', 90.0), ('host1', 90.3), ('host1', 90.2), ('host1', 90.3));
 
-query CI rowsort
+query TR rowsort
 select host, median(usage) from cpu group by host;
 ----
 host0 90.35
@@ -499,161 +499,161 @@ SELECT approx_distinct(c9) AS a, approx_distinct(c9) AS b FROM aggregate_test_10
 ## float values.
 
 #csv_query_approx_percentile_cont (c2)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.1) AS DOUBLE) / 1.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.5) AS DOUBLE) / 3.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.9) AS DOUBLE) / 5.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c3)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c3, 0.1) AS DOUBLE) / -95.3) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c3, 0.5) AS DOUBLE) / 15.5) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c3, 0.9) AS DOUBLE) / 102.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c4)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c4, 0.1) AS DOUBLE) / -22925.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c4, 0.5) AS DOUBLE) / 4599.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c4, 0.9) AS DOUBLE) / 25334.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c5)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c5, 0.1) AS DOUBLE) / -1882606710.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c5, 0.5) AS DOUBLE) / 377164262.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c5, 0.9) AS DOUBLE) / 1991374996.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c6)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c6, 0.1) AS DOUBLE) / -7250000000000000000) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c6, 0.5) AS DOUBLE) / 1130000000000000000) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c6, 0.9) AS DOUBLE) / 7370000000000000000) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c7)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c7, 0.1) AS DOUBLE) / 18.9) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c7, 0.5) AS DOUBLE) / 134.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c7, 0.9) AS DOUBLE) / 231.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c8)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c8, 0.1) AS DOUBLE) / 2671.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c8, 0.5) AS DOUBLE) / 30634.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c8, 0.9) AS DOUBLE) / 57518.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c9)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c9, 0.1) AS DOUBLE) / 472608672.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c9, 0.5) AS DOUBLE) / 2365817608.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c9, 0.9) AS DOUBLE) / 3776538487.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c10)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c10, 0.1) AS DOUBLE) / 1830000000000000000) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c10, 0.5) AS DOUBLE) / 9300000000000000000) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c10, 0.9) AS DOUBLE) / 16100000000000000000) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c11)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c11, 0.1) AS DOUBLE) /  0.109) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c11, 0.5) AS DOUBLE) / 0.491) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c11, 0.9) AS DOUBLE) / 0.834) < 0.05) AS q FROM aggregate_test_100
 ----
 true
@@ -986,19 +986,19 @@ SELECT count(1 + 1)
 1
 
 # csv_query_array_agg
-query T
+query ?
 SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 2) test
 ----
 [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB]
 
 # csv_query_array_agg_empty
-query I
+query ?
 SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test
 ----
 []
 
 # csv_query_array_agg_one
-query I
+query ?
 SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1) test
 ----
 [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm]
@@ -1218,13 +1218,13 @@ e 4
 
 
 # array_agg_zero
-query U
+query ?
 SELECT ARRAY_AGG([]);
 ----
 []
 
 # array_agg_one
-query U
+query ?
 SELECT ARRAY_AGG([1]);
 ----
 [[1]]
@@ -1261,7 +1261,7 @@ NULL 1
 NULL 2
 
 # avg should be null
-query II
+query RI
 SELECT avg(column1), column2 from the_nulls group by column2 order by column2;
 ----
 NULL 1

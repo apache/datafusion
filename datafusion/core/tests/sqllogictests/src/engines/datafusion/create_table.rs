@@ -16,8 +16,9 @@
 // under the License.
 
 use super::error::Result;
+use crate::engines::datafusion::error::DFSqlLogicTestError;
 use crate::engines::datafusion::util::LogicTestContextProvider;
-use crate::{engines::datafusion::error::DFSqlLogicTestError, output::DFOutput};
+use crate::engines::output::DFOutput;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DataFusionError, OwnedTableReference};

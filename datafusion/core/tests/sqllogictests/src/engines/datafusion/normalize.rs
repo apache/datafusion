@@ -17,53 +17,43 @@
 
 use arrow::datatypes::SchemaRef;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
+use datafusion_common::DFField;
 use datafusion_common::DataFusionError;
 use lazy_static::lazy_static;
-use sqllogictest::DBOutput;
 use std::path::PathBuf;
 
-use crate::output::{DFColumnType, DFOutput};
+use crate::engines::output::DFColumnType;
 
 use super::super::conversion::*;
 use super::error::{DFSqlLogicTestError, Result};
 
-/// Converts `batches` to a DBOutput as expected by sqllogicteset.
-///
-/// Assumes empty record batches are a successful statement completion
-///
-pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<DFOutput> {
+/// Converts `batches` to a result as expected by sqllogicteset.
+pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
     if batches.is_empty() {
-        // DataFusion doesn't report number of rows complete
-        return Ok(DBOutput::StatementComplete(0));
-    }
+        Ok(vec![])
+    } else {
+        let schema = batches[0].schema();
+        let mut rows = vec![];
+        for batch in batches {
+            // Verify schema
+            if !equivalent_names_and_types(&schema, batch.schema()) {
+                return Err(DFSqlLogicTestError::DataFusion(DataFusionError::Internal(
+                    format!(
+                        "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
+                        &schema,
+                        batch.schema()
+                    ),
+                )));
+            }
 
-    let schema = batches[0].schema();
-
-    // TODO: report the the actual types of the result
-    // https://github.com/apache/arrow-datafusion/issues/4499
-    let types = vec![DFColumnType::Any; batches[0].num_columns()];
-
-    let mut rows = vec![];
-    for batch in batches {
-        // Verify schema
-        if !equivalent_names_and_types(&schema, batch.schema()) {
-            return Err(DFSqlLogicTestError::DataFusion(DataFusionError::Internal(
-                format!(
-                    "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
-                    &schema,
-                    batch.schema()
-                ),
-            )));
+            let new_rows = convert_batch(batch)?
+                .into_iter()
+                .flat_map(expand_row)
+                .map(normalize_paths);
+            rows.extend(new_rows);
         }
-
-        let new_rows = convert_batch(batch)?
-            .into_iter()
-            .flat_map(expand_row)
-            .map(normalize_paths);
-        rows.extend(new_rows);
+        Ok(rows)
     }
-
-    Ok(DBOutput::Rows { types, rows })
 }
 
 /// special case rows that have newlines in them (like explain plans)
@@ -232,4 +222,35 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
         }
         .map_err(DFSqlLogicTestError::Arrow)
     }
+}
+
+/// Converts columns to a result as expected by sqllogicteset.
+pub fn convert_schema_to_types(columns: &[DFField]) -> Vec<DFColumnType> {
+    columns
+        .iter()
+        .map(|f| f.data_type())
+        .map(|data_type| match data_type {
+            DataType::Boolean => DFColumnType::Boolean,
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => DFColumnType::Integer,
+            DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _) => DFColumnType::Float,
+            DataType::Utf8 | DataType::LargeUtf8 => DFColumnType::Text,
+            DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_) => DFColumnType::DateTime,
+            DataType::Timestamp(_, _) => DFColumnType::Timestamp,
+            _ => DFColumnType::Another,
+        })
+        .collect()
 }

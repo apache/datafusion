@@ -577,3 +577,15 @@ e 5 64 -26526 1689098844 8950618259486183091 224 45253 662099130 161279954150608
 ########
 statement ok
 DROP TABLE aggregate_test_100_by_sql
+
+
+statement ok
+CREATE TABLE empty_table (
+  c1  TEXT,
+  c2  INT
+);
+
+
+query TI
+select * from empty_table;
+----

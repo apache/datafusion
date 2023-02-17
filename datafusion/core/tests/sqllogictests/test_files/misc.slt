@@ -20,7 +20,7 @@
 # Show string normalization working
 # '' --> (empty)
 # '' --> NULL
-query II
+query TT?
 select 'foo', '', NULL
 ----
 foo (empty) NULL
