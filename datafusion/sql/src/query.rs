@@ -177,11 +177,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .try_for_each::<_, Result<()>>(|expr| {
                 let columns = expr.to_columns()?;
 
-                columns.into_iter().for_each(|c| {
-                    if schema.field_from_column(&c).is_err() {
+                columns.into_iter().try_for_each::<_, Result<()>>(|c| {
+                    if !schema.has_column(&c)? {
                         missing_cols.push(c);
                     }
-                });
+                    Ok(())
+                })?;
 
                 Ok(())
             })?;

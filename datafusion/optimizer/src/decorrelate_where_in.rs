@@ -167,7 +167,9 @@ fn optimize_where_in(
                 let using_cols: Vec<Column> = expr
                     .to_columns()?
                     .into_iter()
-                    .filter(|col| input_schema.field_from_column(col).is_ok())
+                    // TODO: how to return err in closure, maybe there is method like try_filter in iter?
+                    // or use 'for loop' instead of filter
+                    .filter(|col| input_schema.has_column(col).unwrap())
                     .collect::<_>();
 
                 cols.extend(using_cols);

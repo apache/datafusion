@@ -84,10 +84,10 @@ impl OptimizerRule for EliminateOuterJoin {
                         let mut left_non_nullable = false;
                         let mut right_non_nullable = false;
                         for col in non_nullable_cols.iter() {
-                            if join.left.schema().field_from_column(col).is_ok() {
+                            if join.left.schema().has_column(col)? {
                                 left_non_nullable = true;
                             }
-                            if join.right.schema().field_from_column(col).is_ok() {
+                            if join.right.schema().has_column(col)? {
                                 right_non_nullable = true;
                             }
                         }
@@ -251,10 +251,10 @@ fn extract_non_nullable_columns(
                 {
                     for left_col in &left_non_nullable_cols {
                         for right_col in &right_non_nullable_cols {
-                            if (left_schema.field_from_column(left_col).is_ok()
-                                && left_schema.field_from_column(right_col).is_ok())
-                                || (right_schema.field_from_column(left_col).is_ok()
-                                    && right_schema.field_from_column(right_col).is_ok())
+                            if (left_schema.has_column(left_col)?
+                                && left_schema.has_column(right_col)?)
+                                || (right_schema.has_column(left_col)?
+                                    && right_schema.has_column(right_col)?)
                             {
                                 non_nullable_cols.push(left_col.clone());
                                 break;
