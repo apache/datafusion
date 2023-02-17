@@ -22,7 +22,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{context, Column, DataFusionError, Result};
 use datafusion_expr::expr_rewriter::{replace_col, unnormalize_col};
 use datafusion_expr::logical_plan::{JoinType, Projection, Subquery};
-use datafusion_expr::utils::check_all_column_from_schema;
+use datafusion_expr::utils::check_all_columns_from_schema;
 use datafusion_expr::{Expr, Filter, LogicalPlan, LogicalPlanBuilder};
 use log::debug;
 use std::collections::{BTreeSet, HashMap};
@@ -229,7 +229,7 @@ fn extract_join_filters(maybe_filter: &LogicalPlan) -> Result<(Vec<Expr>, Logica
         let mut subquery_filters: Vec<Expr> = vec![];
         for expr in subquery_filter_exprs {
             let cols = expr.to_columns()?;
-            if check_all_column_from_schema(&cols, input_schema.clone()) {
+            if check_all_columns_from_schema(&cols, input_schema.clone())? {
                 subquery_filters.push(expr.clone());
             } else {
                 join_filters.push(expr.clone())
