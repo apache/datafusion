@@ -112,30 +112,23 @@ async fn test_union_upcast_types() -> Result<()> {
                      ORDER BY c9 DESC LIMIT 5";
     let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
-    println!("{:#?}", dataframe.logical_plan());
-    let physical_plan = dataframe.create_physical_plan().await?;
-    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
-    let expected = {
-        vec![
-            "GlobalLimitExec: skip=0, fetch=5",
-            "  SortPreservingMergeExec: [c9@1 DESC]",
-            "    SortExec: fetch=5, expr=[c9@1 DESC]",
-            "      UnionExec",
-            "        ProjectionExec: expr=[c1@0 as c1, CAST(c9@1 AS Int64) as c9]",
-            "          CsvExec: files={1 group: [[Users/berkaysahin/Desktop/arrow-datafusion/testing/data/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1, c9]",
-            "        ProjectionExec: expr=[c1@0 as c1, CAST(c3@1 AS Int64) as c9]",
-            "          CsvExec: files={1 group: [[Users/berkaysahin/Desktop/arrow-datafusion/testing/data/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1, c3]",
-        ]
-    };
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    let actual_len = actual.len();
-    let actual_trim_last = &actual[..actual_len];
-    assert_eq!(
-        expected, actual_trim_last,
-        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual_trim_last:#?}\n\n"
-    );
+
+    let expected_logical_plan = vec![
+        "Limit: skip=0, fetch=5 [c1:Utf8, c9:Int64]",
+        "  Sort: c9 DESC NULLS FIRST [c1:Utf8, c9:Int64]",
+        "    Union [c1:Utf8, c9:Int64]",
+        "      Projection: aggregate_test_100.c1, CAST(aggregate_test_100.c9 AS Int64) AS c9 [c1:Utf8, c9:Int64]",
+        "        TableScan: aggregate_test_100 [c1:Utf8, c2:UInt32, c3:Int8, c4:Int16, c5:Int32, c6:Int64, c7:UInt8, c8:UInt16, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8]",
+        "      Projection: aggregate_test_100.c1, CAST(aggregate_test_100.c3 AS Int64) AS c9 [c1:Utf8, c9:Int64]",
+        "        TableScan: aggregate_test_100 [c1:Utf8, c2:UInt32, c3:Int8, c4:Int16, c5:Int32, c6:Int64, c7:UInt8, c8:UInt16, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8]",
+    ];
+    let formatted_logical_plan =
+        dataframe.logical_plan().display_indent_schema().to_string();
+    let actual_logical_plan: Vec<&str> = formatted_logical_plan.trim().lines().collect();
+    assert_eq!(expected_logical_plan, actual_logical_plan, "\n\nexpected:\n\n{expected_logical_plan:#?}\nactual:\n\n{actual_logical_plan:#?}\n\n");
 
     let actual = execute_to_batches(&ctx, sql).await;
+
     let expected = vec![
         "+----+------------+",
         "| c1 | c9         |",
