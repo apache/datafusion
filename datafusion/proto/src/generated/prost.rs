@@ -1394,7 +1394,7 @@ pub struct PhysicalExtensionNode {
 pub struct PhysicalExprNode {
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1446,6 +1446,10 @@ pub mod physical_expr_node {
         ),
         #[prost(message, tag = "18")]
         LikeExpr(::prost::alloc::boxed::Box<super::PhysicalLikeExprNode>),
+        #[prost(message, tag = "19")]
+        GetIndexedFieldExpr(
+            ::prost::alloc::boxed::Box<super::PhysicalGetIndexedFieldExprNode>,
+        ),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1955,6 +1959,14 @@ pub struct ColumnStats {
     pub null_count: u32,
     #[prost(uint32, tag = "4")]
     pub distinct_count: u32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalGetIndexedFieldExprNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub arg: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, tag = "2")]
+    pub key: ::core::option::Option<ScalarValue>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
