@@ -510,13 +510,13 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             JoinSide::Left,
             self.sorted_filter_exprs[0].clone(),
             on_left,
-            self.left.clone(),
+            self.left.schema(),
         );
         let right_side_joiner = OneSideHashJoiner::new(
             JoinSide::Right,
             self.sorted_filter_exprs[1].clone(),
             on_right,
-            self.right.clone(),
+            self.right.schema(),
         );
         let left_stream = self.left.execute(partition, context.clone())?;
         let right_stream = self.right.execute(partition, context)?;
@@ -974,11 +974,11 @@ impl OneSideHashJoiner {
         build_side: JoinSide,
         sorted_filter_expr: SortedFilterExpr,
         on: Vec<Column>,
-        plan: Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
     ) -> Self {
         Self {
             build_side,
-            input_buffer: RecordBatch::new_empty(plan.schema()),
+            input_buffer: RecordBatch::new_empty(schema),
             on,
             hashmap: JoinHashMap(RawTable::with_capacity(10_000)),
             row_hash_values: VecDeque::new(),
@@ -1532,7 +1532,7 @@ mod tests {
         null_equals_null: bool,
         context: Arc<TaskContext>,
     ) -> Result<Vec<RecordBatch>> {
-        let partition_count = 1;
+        let partition_count = 4;
 
         let (left_expr, right_expr) = on
             .iter()
@@ -1572,15 +1572,15 @@ mod tests {
 
     pub fn split_record_batches(
         batch: &RecordBatch,
-        num_split: usize,
+        batch_size: usize,
     ) -> Result<Vec<RecordBatch>> {
         let row_num = batch.num_rows();
-        let number_of_batch = row_num / num_split;
-        let mut sizes = vec![num_split; number_of_batch];
-        sizes.push(row_num - (num_split * number_of_batch));
+        let number_of_batch = row_num / batch_size;
+        let mut sizes = vec![batch_size; number_of_batch];
+        sizes.push(row_num - (batch_size * number_of_batch));
         let mut result = vec![];
         for (i, size) in sizes.iter().enumerate() {
-            result.push(batch.slice(i * num_split, *size));
+            result.push(batch.slice(i * batch_size, *size));
         }
         Ok(result)
     }
@@ -1604,14 +1604,14 @@ mod tests {
 
     fn join_expr_tests_fixture(
         expr_id: usize,
-        left_watermark: Arc<dyn PhysicalExpr>,
-        right_watermark: Arc<dyn PhysicalExpr>,
+        left_col: Arc<dyn PhysicalExpr>,
+        right_col: Arc<dyn PhysicalExpr>,
     ) -> Arc<dyn PhysicalExpr> {
         match expr_id {
-            // left_watermark + 1 > right_watermark + 5 AND left_watermark + 3 < right_watermark + 10
+            // left_col + 1 > right_col + 5 AND left_col + 3 < right_col + 10
             0 => gen_conjunctive_numeric_expr(
-                left_watermark,
-                right_watermark,
+                left_col,
+                right_col,
                 Operator::Plus,
                 Operator::Plus,
                 Operator::Plus,
@@ -1621,10 +1621,10 @@ mod tests {
                 3,
                 10,
             ),
-            // left_watermark - 1 > right_watermark + 5 AND left_watermark + 3 < right_watermark + 10
+            // left_col - 1 > right_col + 5 AND left_col + 3 < right_col + 10
             1 => gen_conjunctive_numeric_expr(
-                left_watermark,
-                right_watermark,
+                left_col,
+                right_col,
                 Operator::Minus,
                 Operator::Plus,
                 Operator::Plus,
@@ -1634,10 +1634,10 @@ mod tests {
                 3,
                 10,
             ),
-            // left_watermark - 1 > right_watermark + 5 AND left_watermark - 3 < right_watermark + 10
+            // left_col - 1 > right_col + 5 AND left_col - 3 < right_col + 10
             2 => gen_conjunctive_numeric_expr(
-                left_watermark,
-                right_watermark,
+                left_col,
+                right_col,
                 Operator::Minus,
                 Operator::Plus,
                 Operator::Minus,
@@ -1647,10 +1647,10 @@ mod tests {
                 3,
                 10,
             ),
-            // left_watermark - 10 > right_watermark - 5 AND left_watermark - 3 < right_watermark + 10
+            // left_col - 10 > right_col - 5 AND left_col - 3 < right_col + 10
             3 => gen_conjunctive_numeric_expr(
-                left_watermark,
-                right_watermark,
+                left_col,
+                right_col,
                 Operator::Minus,
                 Operator::Minus,
                 Operator::Minus,
@@ -1660,10 +1660,10 @@ mod tests {
                 3,
                 10,
             ),
-            // left_watermark - 10 > right_watermark - 5 AND left_watermark - 30 < right_watermark - 3
+            // left_col - 10 > right_col - 5 AND left_col - 30 < right_col - 3
             4 => gen_conjunctive_numeric_expr(
-                left_watermark,
-                right_watermark,
+                left_col,
+                right_col,
                 Operator::Minus,
                 Operator::Minus,
                 Operator::Minus,
@@ -1836,16 +1836,17 @@ mod tests {
         right_batch: RecordBatch,
         left_sorted: Vec<PhysicalSortExpr>,
         right_sorted: Vec<PhysicalSortExpr>,
+        batch_size: usize,
     ) -> Result<(Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>)> {
         Ok((
             Arc::new(MemoryExec::try_new_with_sort_information(
-                &[split_record_batches(&left_batch, 13).unwrap()],
+                &[split_record_batches(&left_batch, batch_size).unwrap()],
                 left_batch.schema(),
                 None,
                 Some(left_sorted),
             )?),
             Arc::new(MemoryExec::try_new_with_sort_information(
-                &[split_record_batches(&right_batch, 13).unwrap()],
+                &[split_record_batches(&right_batch, batch_size).unwrap()],
                 right_batch.schema(),
                 None,
                 Some(right_sorted),
@@ -1927,7 +1928,7 @@ mod tests {
             options: SortOptions::default(),
         }];
         let (left, right) =
-            create_memory_table(left_batch, right_batch, left_sorted, right_sorted)?;
+            create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
 
         let on = vec![(
             Column::new_with_schema("lc1", &left.schema())?,
@@ -2007,7 +2008,7 @@ mod tests {
             options: SortOptions::default(),
         }];
         let (left, right) =
-            create_memory_table(left_batch, right_batch, left_sorted, right_sorted)?;
+            create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
 
         let on = vec![(
             Column::new_with_schema("lc1", &left.schema())?,
@@ -2070,7 +2071,7 @@ mod tests {
             },
         }];
         let (left, right) =
-            create_memory_table(left_batch, right_batch, left_sorted, right_sorted)?;
+            create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
 
         let on = vec![(
             Column::new_with_schema("lc1", &left.schema())?,
@@ -2151,7 +2152,7 @@ mod tests {
             },
         }];
         let (left, right) =
-            create_memory_table(left_batch, right_batch, left_sorted, right_sorted)?;
+            create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
 
         let on = vec![(
             Column::new_with_schema("lc1", &left.schema())?,
@@ -2253,7 +2254,7 @@ mod tests {
             },
         }];
         let (left, right) =
-            create_memory_table(left_batch, right_batch, left_sorted, right_sorted)?;
+            create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
 
         let on = vec![(
             Column::new_with_schema("lc1", &left.schema())?,
@@ -2321,7 +2322,7 @@ mod tests {
             },
         }];
         let (left, right) =
-            create_memory_table(left_batch, right_batch, left_sorted, right_sorted)?;
+            create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
 
         let on = vec![(
             Column::new_with_schema("lc1", &left.schema())?,
@@ -2390,7 +2391,7 @@ mod tests {
             },
         }];
         let (left, right) =
-            create_memory_table(left_batch, right_batch, left_sorted, right_sorted)?;
+            create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
 
         let on = vec![(
             Column::new_with_schema("lc1", &left.schema())?,
@@ -2449,7 +2450,7 @@ mod tests {
             options: SortOptions::default(),
         }];
         let (left, right) =
-            create_memory_table(left_batch, right_batch, left_sorted, right_sorted)?;
+            create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
 
         let on = vec![(
             Column::new_with_schema("lc1", &left.schema())?,
@@ -2489,6 +2490,152 @@ mod tests {
         );
 
         experiment(left, right, filter, join_type, on, task_ctx).await?;
+        Ok(())
+    }
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_one_side_hash_joiner_visited_rows(
+        #[values(
+        (JoinType::Inner, true),
+        (JoinType::Left,false),
+        (JoinType::Right, true),
+        (JoinType::RightSemi, true),
+        (JoinType::LeftSemi, false),
+        (JoinType::LeftAnti, false),
+        (JoinType::RightAnti, true),
+        (JoinType::Full, false),
+        )]
+        case: (JoinType, bool),
+    ) -> Result<()> {
+        // Set a random state for the join
+        let join_type = case.0;
+        let should_be_empty = case.1;
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let config = SessionConfig::new().with_repartition_joins(false);
+        let session_ctx = SessionContext::with_config(config);
+        let task_ctx = session_ctx.task_ctx();
+        // Ensure there will be matching rows
+        let (left_batch, right_batch) = build_sides_record_batches(20, (1, 1))?;
+        let (left_schema, right_schema) = (left_batch.schema(), right_batch.schema());
+
+        // Build the join schema from the left and right schemas
+        let (schema, join_column_indices) =
+            build_join_schema(&left_schema, &right_schema, &join_type);
+        let join_schema = Arc::new(schema);
+
+        // Sort information for MemoryExec
+        let left_sorted = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new_with_schema("la1", &left_batch.schema())?),
+            options: SortOptions::default(),
+        }];
+        // Sort information for MemoryExec
+        let right_sorted = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new_with_schema("ra1", &right_batch.schema())?),
+            options: SortOptions::default(),
+        }];
+        // Construct MemoryExec
+        let (left, right) =
+            create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 10)?;
+
+        // Filter columns
+        let filter_col_0 = Arc::new(Column::new("0", 0));
+        let filter_col_1 = Arc::new(Column::new("1", 1));
+
+        let column_indices = vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+        ];
+        let intermediate_schema = Schema::new(vec![
+            Field::new(filter_col_0.name(), DataType::Int32, true),
+            Field::new(filter_col_1.name(), DataType::Int32, true),
+        ]);
+
+        // Ensure first batches will have matching rows.
+        let filter_expr = gen_conjunctive_numeric_expr(
+            filter_col_0.clone(),
+            filter_col_1.clone(),
+            Operator::Plus,
+            Operator::Minus,
+            Operator::Plus,
+            Operator::Plus,
+            0,
+            3,
+            0,
+            3,
+        );
+
+        let filter = JoinFilter::new(
+            filter_expr,
+            column_indices.clone(),
+            intermediate_schema.clone(),
+        );
+
+        let left_sorted_filter_expr = SortedFilterExpr::new(
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new_with_schema("la1", &left_schema)?),
+                options: SortOptions::default(),
+            },
+            Arc::new(Column::new(filter_col_0.name(), 0)),
+        );
+
+        let mut left_side_joiner = OneSideHashJoiner::new(
+            JoinSide::Left,
+            left_sorted_filter_expr,
+            vec![Column::new_with_schema("lc1", &left_schema)?],
+            left_schema,
+        );
+
+        let right_sorted_filter_expr = SortedFilterExpr::new(
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new_with_schema("ra1", &right_schema)?),
+                options: SortOptions::default(),
+            },
+            Arc::new(Column::new(filter_col_1.name(), 0)),
+        );
+
+        let mut right_side_joiner = OneSideHashJoiner::new(
+            JoinSide::Right,
+            right_sorted_filter_expr,
+            vec![Column::new_with_schema("rc1", &right_schema)?],
+            right_schema,
+        );
+
+        let mut left_stream = left.execute(0, task_ctx.clone())?;
+        let mut right_stream = right.execute(0, task_ctx)?;
+
+        let initial_left_batch = left_stream.next().await.unwrap()?;
+        left_side_joiner.update_internal_state(&initial_left_batch, &random_state)?;
+        assert_eq!(
+            left_side_joiner.input_buffer.num_rows(),
+            initial_left_batch.num_rows()
+        );
+
+        let initial_right_batch = right_stream.next().await.unwrap()?;
+        right_side_joiner.update_internal_state(&initial_right_batch, &random_state)?;
+        assert_eq!(
+            right_side_joiner.input_buffer.num_rows(),
+            initial_right_batch.num_rows()
+        );
+
+        left_side_joiner.join_with_probe_batch(
+            &join_schema,
+            join_type,
+            &right_side_joiner.on,
+            &filter,
+            &initial_right_batch,
+            &mut right_side_joiner.visited_rows,
+            right_side_joiner.offset,
+            &join_column_indices,
+            &random_state,
+            &false,
+        )?;
+        assert_eq!(left_side_joiner.visited_rows.is_empty(), should_be_empty);
         Ok(())
     }
 }
