@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 /// See <https://github.com/apache/arrow-datafusion/issues/5278>
 #[tokio::test]
-async fn unbounded_repartition_sa() -> Result<()> {
+async fn unbounded_repartition() -> Result<()> {
     let config = SessionConfig::new();
     let ctx = SessionContext::with_config(config);
     let task = ctx.task_ctx();
