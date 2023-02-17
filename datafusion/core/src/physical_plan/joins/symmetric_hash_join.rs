@@ -51,7 +51,6 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::logical_expr::JoinType;
 use crate::physical_plan::{
-    common::merge_batches,
     expressions::Column,
     expressions::PhysicalSortExpr,
     joins::{
@@ -1007,7 +1006,7 @@ impl OneSideHashJoiner {
         random_state: &RandomState,
     ) -> Result<()> {
         // Merge the incoming batch with the existing input buffer:
-        self.input_buffer = merge_batches(&self.input_buffer, batch, batch.schema())?;
+        self.input_buffer = concat_batches(&batch.schema(), [&self.input_buffer, batch])?;
         // Resize the hashes buffer to the number of rows in the incoming batch:
         self.hashes_buffer.resize(batch.num_rows(), 0);
         // Update the hashmap with the join key values and hashes of the incoming batch:
