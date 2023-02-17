@@ -1218,7 +1218,7 @@ mod roundtrip_tests {
     use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
     use datafusion::physical_expr::ScalarFunctionExpr;
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
-    use datafusion::physical_plan::expressions::like;
+    use datafusion::physical_plan::expressions::{like, GetIndexedFieldExpr};
     use datafusion::physical_plan::functions;
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::physical_plan::projection::ProjectionExec;
@@ -1626,6 +1626,32 @@ mod roundtrip_tests {
             vec![(like_expr, "result".to_string())],
             input,
         )?);
+        roundtrip_test(plan)
+    }
+
+    #[test]
+    fn roundtrip_get_indexed_field() -> Result<()> {
+        let fields = vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new(
+                "a",
+                DataType::List(Box::new(Field::new("item", DataType::Float64, true))),
+                true,
+            ),
+        ];
+
+        let schema = Schema::new(fields);
+        let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
+
+        let col_a = col("a", &schema)?;
+        let key = ScalarValue::Int64(Some(1));
+        let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(col_a, key));
+
+        let plan = Arc::new(ProjectionExec::try_new(
+            vec![(get_indexed_field_expr, "result".to_string())],
+            input,
+        )?);
+
         roundtrip_test(plan)
     }
 }
