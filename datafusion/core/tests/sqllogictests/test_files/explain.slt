@@ -35,7 +35,7 @@ STORED AS CSV
 WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv';
 
-query ??
+query TT
 explain SELECT c1 FROM aggregate_test_100 where c2 > 10
 ----
 logical_plan
@@ -55,7 +55,7 @@ ProjectionExec: expr=[c1@0 as c1]
 statement ok
 set datafusion.explain.physical_plan_only = true
 
-query ??
+query TT
 EXPLAIN select count(*) from (values ('a', 1, 100), ('a', 2, 150)) as t (c1,c2,c3)
 ----
 physical_plan
