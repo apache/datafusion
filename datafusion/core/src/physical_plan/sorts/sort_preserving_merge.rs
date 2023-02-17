@@ -578,9 +578,13 @@ impl SortPreservingMergeStream {
                         })
                     })
                     .collect::<Vec<_>>();
+                // let stream_idx_count = self.in_progress.iter().map(|v| (v.batch_idx, v.stream_idx)).unique().count();
                 let mut new_indices: Vec<(usize, usize)> =
                     Vec::with_capacity(self.in_progress.len());
-                let mut new_rows: Vec<Arc<RowSelection>> = vec![];
+                let mut new_rows: Vec<Arc<RowSelection>> =
+                    Vec::with_capacity(rows.iter().map(|r| r.num_rows()).sum());
+                // map index of `rows` to the location in `new_rows`
+                let mut offsets: Vec<Option<usize>> = vec![None; rows.len()];
                 let first = &self.in_progress[0];
                 let mut buffer_idx =
                     stream_to_buffer_idx[first.stream_idx] + first.batch_idx;
@@ -596,10 +600,18 @@ impl SortPreservingMergeStream {
                         continue;
                     }
                     let row_batch = rows[buffer_idx];
+                    let offset = match offsets[buffer_idx] {
+                        Some(offset) => offset,
+                        None => {
+                            let offset = new_rows.len();
+                            new_rows.extend(row_batch.rows.iter().map(Arc::clone));
+                            offsets[buffer_idx] = Some(offset);
+                            offset
+                        }
+                    };
                     let row_indices = &row_batch.indices[start_row_idx..end_row_idx];
-                    new_indices.extend(
-                        row_indices.iter().map(|(x, y)| (*x + new_rows.len(), *y)),
-                    );
+                    new_indices
+                        .extend(row_indices.iter().map(|(x, y)| (*x + offset, *y)));
                     new_rows.extend(row_batch.rows.iter().map(Arc::clone));
                     // start new batch of rows
                     buffer_idx = next_buffer_idx;
