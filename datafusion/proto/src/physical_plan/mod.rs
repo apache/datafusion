@@ -608,7 +608,12 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 } else {
                     Some(sort.fetch as usize)
                 };
-                Ok(Arc::new(SortExec::try_new(exprs, input, fetch)?))
+                Ok(Arc::new(SortExec::new_with_partitioning(
+                    exprs,
+                    input,
+                    sort.preserve_partitioning,
+                    fetch,
+                )))
             }
             PhysicalPlanType::SortPreservingMerge(sort) => {
                 let input: Arc<dyn ExecutionPlan> =
@@ -1043,6 +1048,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             Some(n) => n as i64,
                             _ => -1,
                         },
+                        preserve_partitioning: exec.preserve_partitioning(),
                     },
                 ))),
             })
@@ -1439,6 +1445,43 @@ mod roundtrip_tests {
             Arc::new(EmptyExec::new(false, schema)),
             None,
         )?))
+    }
+
+    #[test]
+    fn roundtrip_sort_preserve_partitioning() -> Result<()> {
+        let field_a = Field::new("a", DataType::Boolean, false);
+        let field_b = Field::new("b", DataType::Int64, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+        let sort_exprs = vec![
+            PhysicalSortExpr {
+                expr: col("a", &schema)?,
+                options: SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            },
+            PhysicalSortExpr {
+                expr: col("b", &schema)?,
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            },
+        ];
+
+        roundtrip_test(Arc::new(SortExec::new_with_partitioning(
+            sort_exprs.clone(),
+            Arc::new(EmptyExec::new(false, schema.clone())),
+            false,
+            None,
+        )))?;
+
+        roundtrip_test(Arc::new(SortExec::new_with_partitioning(
+            sort_exprs,
+            Arc::new(EmptyExec::new(false, schema)),
+            true,
+            None,
+        )))
     }
 
     #[test]

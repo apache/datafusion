@@ -1594,7 +1594,7 @@ pub fn create_window_expr_with_name(
                 })
                 .collect::<Result<Vec<_>>>()?;
             if !is_window_valid(window_frame) {
-                return Err(DataFusionError::Execution(format!(
+                return Err(DataFusionError::Plan(format!(
                         "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
                         window_frame.start_bound, window_frame.end_bound
                     )));

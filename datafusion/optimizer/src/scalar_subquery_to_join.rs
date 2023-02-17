@@ -668,25 +668,27 @@ mod tests {
 
     /// Test for correlated scalar expressions
     #[test]
-    #[ignore]
     fn scalar_subquery_project_expr() -> Result<()> {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
-                .project(vec![max(col("orders.o_custkey")).add(lit(1))])?
+                .project(vec![col("MAX(orders.o_custkey)").add(lit(1))])?
                 .build()?,
         );
-        /*
-        Error: SchemaError(FieldNotFound { qualifier: Some("orders"), name: "o_custkey", valid_fields: ["MAX(orders.o_custkey)"] })
-         */
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#""#;
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+        \n  Inner Join: customer.c_custkey = __scalar_sq_1.o_custkey, customer.c_custkey = __scalar_sq_1.__value [c_custkey:Int64, c_name:Utf8, o_custkey:Int64, __value:Int64;N]\
+        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+        \n    SubqueryAlias: __scalar_sq_1 [o_custkey:Int64, __value:Int64;N]\
+        \n      Projection: orders.o_custkey, MAX(orders.o_custkey) + Int32(1) AS __value [o_custkey:Int64, __value:Int64;N]\
+        \n        Aggregate: groupBy=[[orders.o_custkey]], aggr=[[MAX(orders.o_custkey)]] [o_custkey:Int64, MAX(orders.o_custkey):Int64;N]\
+        \n          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(ScalarSubqueryToJoin::new()),

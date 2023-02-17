@@ -18,7 +18,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::output::{DFColumnType, DFOutput};
+use crate::engines::output::{DFColumnType, DFOutput};
 
 use self::error::{DFSqlLogicTestError, Result};
 use async_trait::async_trait;
@@ -27,6 +27,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
 use datafusion_sql::parser::{DFParser, Statement};
 use insert::insert;
+use sqllogictest::DBOutput;
 use sqlparser::ast::Statement as SQLStatement;
 
 mod create_table;
@@ -108,7 +109,14 @@ async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DFOut
         }
     }
     let df = ctx.sql(sql.as_str()).await?;
+
+    let types = normalize::convert_schema_to_types(df.schema().fields());
     let results: Vec<RecordBatch> = df.collect().await?;
-    let formatted_batches = normalize::convert_batches(results)?;
-    Ok(formatted_batches)
+    let rows = normalize::convert_batches(results)?;
+
+    if rows.is_empty() && types.is_empty() {
+        Ok(DBOutput::StatementComplete(0))
+    } else {
+        Ok(DBOutput::Rows { types, rows })
+    }
 }
