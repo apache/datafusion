@@ -17,7 +17,7 @@
 
 //! Constraint propagator/solver for custom PhysicalExpr graphs.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::ops::Index;
 use std::sync::Arc;
@@ -27,7 +27,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::{DefaultIx, StableGraph};
-use petgraph::visit::{Bfs, DfsPostOrder, EdgeRef, VisitMap, Visitable};
+use petgraph::visit::{Bfs, Dfs, DfsPostOrder, EdgeRef};
 use petgraph::Outgoing;
 
 use crate::expressions::{BinaryExpr, CastExpr, Literal};
@@ -352,56 +352,31 @@ impl ExprIntervalGraph {
             if let Some(value) = exprs.iter().position(|e| expr.eq(e)) {
                 // Update the node index of the associated `PhysicalExpr`:
                 expr_node_indices[value].1 = node.index();
-                for edge_reference in graph.edges_directed(node, Outgoing) {
+                for edge in graph.edges_directed(node, Outgoing) {
                     // Slate the child for removal, do not remove immediately.
-                    removals.push(edge_reference.id());
+                    removals.push(edge.id());
                 }
             }
         }
-        for edge_reference in removals {
-            self.graph.remove_edge(edge_reference);
+        for edge_idx in removals {
+            self.graph.remove_edge(edge_idx);
         }
-        // Get the set of node indices connected to the root node
+        // Get the set of node indices reachable from the root node:
         let connected_nodes = self.connected_nodes();
-        // Remove nodes not connected to the root node
+        // Remove nodes not connected to the root node:
         self.graph
-            .retain_nodes(|_graph, index| connected_nodes.contains(&index));
+            .retain_nodes(|_, index| connected_nodes.contains(&index));
         expr_node_indices
     }
 
-    /// Returns a set of node indices connected to the root node
-    /// via any directed edges in the graph.
+    /// Returns the set of node indices reachable from the root node via a
+    /// simple depth-first search.
     fn connected_nodes(&self) -> HashSet<NodeIndex> {
-        // Create a visit map to keep track of visited nodes.
-        let mut visited = self.graph.visit_map();
-        // Create a new set to store the connected nodes.
         let mut nodes = HashSet::new();
-        // Create a queue to store nodes to be visited.
-        let mut visit_next = VecDeque::new();
-        // Start the traversal from the root node.
-        visit_next.push_back(self.root);
-        // Add the root node to the set of connected nodes.
-        nodes.insert(self.root);
-        // Continue the traversal while there are nodes to be visited.
-        while let Some(node) = visit_next.pop_back() {
-            // If the node has already been visited, skip it.
-            if visited.is_visited(&node) {
-                continue;
-            }
-            // For each outgoing edge from the current node, add the target node to the set of connected nodes
-            // and add it to the queue of nodes to be visited if it hasn't been visited already.
-            for edge in self.graph.edges(node) {
-                let next = edge.target();
-                if visited.is_visited(&next) {
-                    continue;
-                }
-                nodes.insert(next);
-                visit_next.push_back(next);
-            }
-            // Mark the current node as visited.
-            visited.visit(node);
+        let mut dfs = Dfs::new(&self.graph, self.root);
+        while let Some(node) = dfs.next(&self.graph) {
+            nodes.insert(node);
         }
-        // Return the set of connected nodes.
         nodes
     }
 
@@ -954,10 +929,10 @@ mod tests {
     }
 
     #[test]
-    fn test_gather_node_indices_not_remove() -> Result<()> {
-        // Expression: a@0 + b@1 + 1 > a@0 - b@1 -> provide a@0 + b@1
-        // Not remove a@0 or b@1, only remove edges since a@0 - b@1
-        // has also leaf nodes a@0 and b@1.
+    fn test_gather_node_indices_dont_remove() -> Result<()> {
+        // Expression: a@0 + b@1 + 1 > a@0 - b@1, given a@0 + b@1.
+        // Do not remove a@0 or b@1, only remove edges since a@0 - b@1 also
+        // depends on leaf nodes a@0 and b@1.
         let left_expr = Arc::new(BinaryExpr::new(
             Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("a", 0)),
@@ -987,14 +962,15 @@ mod tests {
         graph.gather_node_indices(&[leaf_node]);
         // Store the final node count.
         let final_node_count = graph.node_count();
-        // Assert that the final node count is equal the previous node count (i.e., no node was pruned).
+        // Assert that the final node count is equal the previous node count.
+        // This means we did not remove any node.
         assert_eq!(prev_node_count, final_node_count);
         Ok(())
     }
     #[test]
     fn test_gather_node_indices_remove() -> Result<()> {
-        // Expression: a@0 + b@1 + 1 > y@0 - z@1 -> provide a@0 + b@1
-        // We expect that 2 nodes will be pruned since we do not need a@ and b@
+        // Expression: a@0 + b@1 + 1 > y@0 - z@1, given a@0 + b@1.
+        // We expect to remove two nodes since we do not need a@ and b@.
         let left_expr = Arc::new(BinaryExpr::new(
             Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("a", 0)),
@@ -1024,15 +1000,16 @@ mod tests {
         graph.gather_node_indices(&[leaf_node]);
         // Store the final node count.
         let final_node_count = graph.node_count();
-        // Assert that the final node count is two less than the previous node count (i.e., two node was pruned).
+        // Assert that the final node count is two less than the previous node
+        // count; i.e. that we did remove two nodes.
         assert_eq!(prev_node_count, final_node_count + 2);
         Ok(())
     }
 
     #[test]
     fn test_gather_node_indices_remove_one() -> Result<()> {
-        // Expression: a@0 + b@1 + 1 > a@0 - z@1 -> provide a@0 + b@1
-        // We expect that 1 nodes will be pruned since we do not need b@
+        // Expression: a@0 + b@1 + 1 > a@0 - z@1, given a@0 + b@1.
+        // We expect to remove one nodesince we still need a@ but not b@.
         let left_expr = Arc::new(BinaryExpr::new(
             Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("a", 0)),
@@ -1062,7 +1039,8 @@ mod tests {
         graph.gather_node_indices(&[leaf_node]);
         // Store the final node count.
         let final_node_count = graph.node_count();
-        // Assert that the final node count is one less than the previous node count (i.e., one node was pruned).
+        // Assert that the final node count is one less than the previous node
+        // count; i.e. that we did remove two nodes.
         assert_eq!(prev_node_count, final_node_count + 1);
         Ok(())
     }

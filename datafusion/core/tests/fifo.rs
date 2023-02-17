@@ -313,10 +313,11 @@ mod unix_test {
             operations.push(op);
         }
 
-        // The SymmetricHashJoin executor produces FULL join results at the each prune,
-        // which happens earlier than the end of the file and more than once.
-        // We provide partially joinable data on both sides to ensure that the right unmatched and left unmatched
-        // results are generated more than once.
+        // The SymmetricHashJoin executor produces FULL join results at every
+        // pruning, which happens before it reaches the end of input and more
+        // than once. In this test, we feed partially joinable data to both
+        // sides in order to ensure that both left/right unmatched results are
+        // generated more than once during the test.
         assert!(
             operations
                 .iter()

@@ -255,30 +255,33 @@ impl SymmetricHashJoinExec {
         let left_schema = left.schema();
         let right_schema = right.schema();
 
-        // Return error if the on constraints in the join are empty
+        // Error out if no "on" contraints are given:
         if on.is_empty() {
             return Err(DataFusionError::Plan(
-                "On constraints in HashJoinExec should be non-empty".to_string(),
+                "On constraints in SymmetricHashJoinExec should be non-empty".to_string(),
             ));
         }
 
-        // Check if the join is valid with the given on constraints
+        // Check if the join is valid with the given on constraints:
         check_join_is_valid(&left_schema, &right_schema, &on)?;
 
-        // Build the join schema from the left and right schemas
+        // Build the join schema from the left and right schemas:
         let (schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
 
-        // Set a random state for the join
+        // Set a random state for the join:
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
-        // Create expression graph for PhysicalExpr
+        // Create an expression DAG for the join filter:
         let mut physical_expr_graph =
             ExprIntervalGraph::try_new(filter.expression().clone())?;
 
-        // To produce global sorted expressions for interval operations, we use the first
-        // PhysicalSortExpr in child output ordering, taking the leftmost expression
-        // in lexicographical order.
+        // Interval calculations require each column to exhibit monotonicity
+        // independently. However, a `PhysicalSortExpr` object defines a
+        // lexicographical ordering, so we can only use their first elements.
+        // when deducing column monotonicities.
+        // TODO: Extend the `PhysicalSortExpr` mechanism to express independent
+        //       (i.e. simultaneous) ordering properties of columns.
         let (left_ordering, right_ordering) = match (
             left.output_ordering(),
             right.output_ordering(),
@@ -620,10 +623,11 @@ fn prune_hash_values(
     Ok(())
 }
 
-/// Calculate the filter expression intervals
+/// Calculate the filter expression intervals.
 ///
-/// This function updates the `interval` field of each `SortedFilterExpr` based on
-/// the first or last value of the expression in `build_input_buffer` and `probe_batch`.
+/// This function updates the `interval` field of each `SortedFilterExpr` based
+/// on the first or the last value of the expression in `build_input_buffer`
+/// and `probe_batch`.
 ///
 /// # Arguments
 ///
@@ -644,18 +648,21 @@ fn prune_hash_values(
 /// (ascending/descending) of the probe side. Here, LV denotes the last value on
 /// the probe side.
 ///
-/// Let’s check the query:
-///     SELECT * FROM left_table, right_table
-///          ON
-///      left_key = right_key AND
-///      a > b - 3 AND a < b + 10
+/// As a concrete example, consider the following query:
 ///
-/// When a new RecordBatch comes to the right side (”a” belongs to the left side,
-/// “b” belongs to the right side), a > b - 3 will possibly indicate a prunable range for the left side.
-/// When a new RecordBatch comes to the left side, a < b + 10 will possibly indicate
-/// prunability for the right side. This is how we manage to prune both sides when we get the
-/// data to two sides. Let’s select the build side (new [RecordBatch] comes for the right side)
-/// as left:
+///   SELECT * FROM left_table, right_table
+///   WHERE
+///     left_key = right_key AND
+///     a > b - 3 AND
+///     a < b + 10
+///
+/// where columns "a" and "b" come from tables "left_table" and "right_table",
+/// respectively. When a new `RecordBatch` arrives at the right side, the
+/// condition a > b - 3 will possibly indicate a prunable range for the left
+/// side. Conversely, when a new `RecordBatch` arrives at the left side, the
+/// condition a < b + 10 will possibly indicate prunability for the right side.
+/// Let’s inspect what happens when a new RecordBatch` arrives at the right
+/// side (i.e. when the left side is the build side):
 ///
 ///         Build      Probe
 ///       +-------+  +-------+
@@ -670,10 +677,11 @@ fn prune_hash_values(
 ///       | 7 | 1 |  | 6 | 3 |
 ///       +-------+  +-------+
 ///
-///     - The interval for the column “a” is [1, ∞],
-///     - The interval for the column “b” is [6, ∞].
-///
-/// Then we calculate intervals and propagate the constraint by traversing the expression graph.
+/// In this case, the interval representing viable (i.e. joinable) values for
+/// column "a" is [1, ∞], and the interval representing possible future values
+/// for column "b" is [6, ∞]. With these intervals at hand, we next calculate
+/// intervals for the whole filter expression and propagate join constraint by
+/// traversing the expression graph.
 /// ```
 fn calculate_filter_expr_intervals(
     build_input_buffer: &RecordBatch,

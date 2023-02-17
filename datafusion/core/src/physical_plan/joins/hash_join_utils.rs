@@ -190,11 +190,11 @@ fn convert_filter_columns(
 /// expression, an interval encapsulating expression bounds, and a stable
 /// index identifying the expression in the expression DAG.
 ///
-/// Physical schema of intermediate batch of a JoinFilter combines two sides with new column names.
-/// For sort information, we do the column exchange, to traverse the main filter expression.
-///
-/// For evaluate the inner buffer, we use origin_sorted_expr.
-/// For interval traversing, we use filter_expr, adjusted with intermediate schema.
+/// Physical schema of a [JoinFilter]'s intermediate batch combines two sides
+/// and uses new column names. In this process, a column exchange is done so
+/// we can utilize sorting information while traversing the filter expression
+/// DAG for interval calculations. When evaluating the inner buffer, we use
+/// `origin_sorted_expr`.
 #[derive(Debug, Clone)]
 pub struct SortedFilterExpr {
     /// Sorted expression from a join side (i.e. a child of the join)
@@ -321,7 +321,7 @@ pub mod tests {
             DataType::Int32,
             true,
         )]));
-        // Will be origin expr
+        // Sorting information for the left side:
         let left_child_sort_expr = PhysicalSortExpr {
             expr: Arc::new(Column::new("left_1", 0)),
             options: SortOptions::default(),
@@ -331,7 +331,7 @@ pub mod tests {
             Field::new("right_1", DataType::Int32, true),
             Field::new("right_2", DataType::Int32, true),
         ]));
-        // Will be origin expr
+        // Sorting information for the right side:
         let right_child_sort_expr = PhysicalSortExpr {
             expr: Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("right_1", 0)),
@@ -364,7 +364,7 @@ pub mod tests {
             Field::new(filter_col_2.name(), DataType::Int32, true),
             Field::new(filter_col_3.name(), DataType::Int32, true),
         ]);
-        // left_1 > right_1 + right_2
+        // Our filter expression is: left_1 > right_1 + right_2.
         let filter_expr = Arc::new(BinaryExpr::new(
             filter_col_1,
             Operator::Gt,
@@ -378,27 +378,28 @@ pub mod tests {
             &left_child_schema,
             &left_child_sort_expr,
         )?;
+        assert!(left_child_sort_expr.eq(left_sort_filter_expr.origin_sorted_expr()));
+
         let right_sort_filter_expr = build_filter_input_order(
             JoinSide::Right,
             &filter,
             &right_child_schema,
             &right_child_sort_expr,
         )?;
+        assert!(right_child_sort_expr.eq(right_sort_filter_expr.origin_sorted_expr()));
 
-        assert!(left_child_sort_expr.eq(left_sort_filter_expr.origin_sorted_expr()),);
-        // Expression that adjusted with filter schema
+        // Filter expression (left) adjusted for filter schema:
         let expected_filter_expr: Arc<dyn PhysicalExpr> =
             Arc::new(Column::new("filter_1", 0));
-        // Matches with left_child_sort_expr expression.
+        // Assert that it matches with the `left_child_sort_expr`:
         assert!(expected_filter_expr.eq(left_sort_filter_expr.filter_expr()));
-        assert!(right_child_sort_expr.eq(right_sort_filter_expr.origin_sorted_expr()),);
-        // Expression that adjusted with filter schema
+        // Filter expression (right) adjusted for filter schema:
         let expected_filter_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("filter_2", 1)),
             Operator::Plus,
             Arc::new(Column::new("filter_3", 2)),
         ));
-        // Matches with right_child_sort_expr expression.
+        // Assert that it matches with the `right_child_sort_expr`:
         assert!(expected_filter_expr.eq(right_sort_filter_expr.filter_expr()));
         Ok(())
     }
