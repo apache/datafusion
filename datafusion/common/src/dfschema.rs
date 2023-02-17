@@ -314,6 +314,39 @@ impl DFSchema {
         }
     }
 
+    pub fn has_column_with_unqualified_name(&self, name: &str) -> Result<bool> {
+        let matches = self.fields_with_unqualified_name(name);
+        match matches.len() {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(DataFusionError::SchemaError(
+                SchemaError::AmbiguousReference {
+                    qualifier: None,
+                    name: name.to_string(),
+                },
+            )),
+        }
+    }
+
+    pub fn has_column_with_qualified_name(
+        &self,
+        qualifier: &str,
+        name: &str,
+    ) -> Result<bool> {
+        let res = self.index_of_column_by_name(Some(qualifier), name)?;
+        match res {
+            Some(_) => Ok(true),
+            None => Ok(false),
+        }
+    }
+
+    pub fn has_column(&self, column: &Column) -> Result<bool> {
+        match &column.relation {
+            Some(r) => self.has_column_with_qualified_name(r, &column.name),
+            None => self.has_column_with_unqualified_name(&column.name),
+        }
+    }
+
     /// Check to see if unqualified field names matches field names in Arrow schema
     pub fn matches_arrow_schema(&self, arrow_schema: &Schema) -> bool {
         self.fields
