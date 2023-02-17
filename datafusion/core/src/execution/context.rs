@@ -149,7 +149,7 @@ use super::options::{
 /// ```
 #[derive(Clone)]
 pub struct SessionContext {
-    /// Uuid for the session
+    /// UUID for the session
     session_id: String,
     /// Session start time
     session_start_time: DateTime<Utc>,
@@ -169,7 +169,7 @@ impl SessionContext {
         Self::with_config(SessionConfig::new())
     }
 
-    /// Finds any ListSchemaProviders and instructs them to reload tables from "disk"
+    /// Finds any [`ListingSchemaProvider`]s and instructs them to reload tables from "disk"
     pub async fn refresh_catalogs(&self) -> Result<()> {
         let cat_names = self.catalog_names().clone();
         for cat_name in cat_names.iter() {
@@ -195,7 +195,7 @@ impl SessionContext {
         Self::with_config_rt(config, runtime)
     }
 
-    /// Creates a new session context using the provided configuration and RuntimeEnv.
+    /// Creates a new session context using the provided configuration and [`RuntimeEnv`].
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let state = SessionState::with_config_rt(config, runtime);
         Self::with_state(state)
@@ -222,7 +222,12 @@ impl SessionContext {
         batch: RecordBatch,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-        self.register_table(TableReference::Bare { table: table_name }, Arc::new(table))
+        self.register_table(
+            TableReference::Bare {
+                table: table_name.into(),
+            },
+            Arc::new(table),
+        )
     }
 
     /// Return the [RuntimeEnv] used to run queries with this [SessionContext]
@@ -230,12 +235,12 @@ impl SessionContext {
         self.state.read().runtime_env.clone()
     }
 
-    /// Return the session_id of this Session
+    /// Return the `session_id` of this Session
     pub fn session_id(&self) -> String {
         self.session_id.clone()
     }
 
-    /// Return the enable_ident_normalization of this Session
+    /// Return the `enable_ident_normalization` of this Session
     pub fn enable_ident_normalization(&self) -> bool {
         self.state
             .read()
@@ -252,7 +257,7 @@ impl SessionContext {
 
     /// Creates a [`DataFrame`] that will execute a SQL query.
     ///
-    /// Note: This api implements DDL such as `CREATE TABLE` and `CREATE VIEW` with in memory
+    /// Note: This API implements DDL such as `CREATE TABLE` and `CREATE VIEW` with in-memory
     /// default implementations.
     ///
     /// If this is not desirable, consider using [`SessionState::create_logical_plan()`] which
@@ -556,19 +561,20 @@ impl SessionContext {
         table_type: TableType,
     ) -> Result<bool> {
         let table_ref = table_ref.into();
+        let table = table_ref.table().to_owned();
         let maybe_schema = {
             let state = self.state.read();
             let resolved = state.resolve_table_ref(table_ref);
             state
                 .catalog_list
-                .catalog(resolved.catalog)
-                .and_then(|c| c.schema(resolved.schema))
+                .catalog(&resolved.catalog)
+                .and_then(|c| c.schema(&resolved.schema))
         };
 
         if let Some(schema) = maybe_schema {
-            if let Some(table_provider) = schema.table(table_ref.table()).await {
+            if let Some(table_provider) = schema.table(&table).await {
                 if table_provider.table_type() == table_type {
-                    schema.deregister_table(table_ref.table())?;
+                    schema.deregister_table(&table)?;
                     return Ok(true);
                 }
             }
@@ -655,7 +661,7 @@ impl SessionContext {
         self._read_type(table_path, options).await
     }
 
-    /// Creates a [`DataFrame`] for reading an Json data source.
+    /// Creates a [`DataFrame`] for reading an JSON data source.
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
@@ -753,7 +759,10 @@ impl SessionContext {
             .with_listing_options(options)
             .with_schema(resolved_schema);
         let table = ListingTable::try_new(config)?.with_definition(sql_definition);
-        self.register_table(TableReference::Bare { table: name }, Arc::new(table))?;
+        self.register_table(
+            TableReference::Bare { table: name.into() },
+            Arc::new(table),
+        )?;
         Ok(())
     }
 
@@ -779,7 +788,7 @@ impl SessionContext {
         Ok(())
     }
 
-    /// Registers a Json file as a table that it can be referenced
+    /// Registers a JSON file as a table that it can be referenced
     /// from SQL statements executed against this context.
     pub async fn register_json(
         &self,
@@ -875,10 +884,11 @@ impl SessionContext {
         provider: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref = table_ref.into();
+        let table = table_ref.table().to_owned();
         self.state
             .read()
             .schema_for_ref(table_ref)?
-            .register_table(table_ref.table().to_owned(), provider)
+            .register_table(table, provider)
     }
 
     /// Deregisters the given table.
@@ -889,23 +899,25 @@ impl SessionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref = table_ref.into();
+        let table = table_ref.table().to_owned();
         self.state
             .read()
             .schema_for_ref(table_ref)?
-            .deregister_table(table_ref.table())
+            .deregister_table(&table)
     }
 
-    /// Return true if the specified table exists in the schema provider.
+    /// Return `true` if the specified table exists in the schema provider.
     pub fn table_exist<'a>(
         &'a self,
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<bool> {
         let table_ref = table_ref.into();
+        let table = table_ref.table().to_owned();
         Ok(self
             .state
             .read()
             .schema_for_ref(table_ref)?
-            .table_exist(table_ref.table()))
+            .table_exist(&table))
     }
 
     /// Retrieves a [`DataFrame`] representing a table previously
@@ -920,9 +932,10 @@ impl SessionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<DataFrame> {
         let table_ref = table_ref.into();
+        let table = table_ref.table().to_owned();
         let provider = self.table_provider(table_ref).await?;
         let plan = LogicalPlanBuilder::scan(
-            table_ref.table(),
+            &table,
             provider_as_source(Arc::clone(&provider)),
             None,
         )?
@@ -936,13 +949,11 @@ impl SessionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn TableProvider>> {
         let table_ref = table_ref.into();
+        let table = table_ref.table().to_owned();
         let schema = self.state.read().schema_for_ref(table_ref)?;
-        match schema.table(table_ref.table()).await {
+        match schema.table(&table).await {
             Some(ref provider) => Ok(Arc::clone(provider)),
-            _ => Err(DataFusionError::Plan(format!(
-                "No table named '{}'",
-                table_ref.table()
-            ))),
+            _ => Err(DataFusionError::Plan(format!("No table named '{table}'"))),
         }
     }
 
@@ -960,7 +971,7 @@ impl SessionContext {
             .state
             .read()
             // a bare reference will always resolve to the default catalog and schema
-            .schema_for_ref(TableReference::Bare { table: "" })?
+            .schema_for_ref(TableReference::Bare { table: "".into() })?
             .table_names()
             .iter()
             .cloned()
@@ -1094,8 +1105,8 @@ type AnyMap =
 
 /// Hasher for [`AnyMap`].
 ///
-/// With [`TypeId`}s as keys, there's no need to hash them. They are already hashes themselves, coming from the compiler.
-/// The [`IdHasher`} just holds the [`u64`} of the [`TypeId`}, and then returns it, instead of doing any bit fiddling.
+/// With [`TypeId`]s as keys, there's no need to hash them. They are already hashes themselves, coming from the compiler.
+/// The [`IdHasher`] just holds the [`u64`] of the [`TypeId`], and then returns it, instead of doing any bit fiddling.
 #[derive(Default)]
 struct IdHasher(u64);
 
@@ -1183,7 +1194,9 @@ impl SessionConfig {
         self
     }
 
-    /// Customize [`OPT_TARGET_PARTITIONS`]
+    /// Customize [`target_partitions`]
+    ///
+    /// [`target_partitions`]: crate::config::ExecutionOptions::target_partitions
     pub fn with_target_partitions(mut self, n: usize) -> Self {
         // partition count must be greater than zero
         assert!(n > 0);
@@ -1191,7 +1204,9 @@ impl SessionConfig {
         self
     }
 
-    /// get target_partitions
+    /// Get [`target_partitions`]
+    ///
+    /// [`target_partitions`]: crate::config::ExecutionOptions::target_partitions
     pub fn target_partitions(&self) -> usize {
         self.options.execution.target_partitions
     }
@@ -1219,6 +1234,12 @@ impl SessionConfig {
     /// Are window functions repartitioned during execution?
     pub fn repartition_window_functions(&self) -> bool {
         self.options.optimizer.repartition_windows
+    }
+
+    /// Do we execute sorts in a per-partition fashion and merge afterwards,
+    /// or do we coalesce partitions first and sort globally?
+    pub fn repartition_sorts(&self) -> bool {
+        self.options.optimizer.repartition_sorts
     }
 
     /// Are statistics collected during execution?
@@ -1279,6 +1300,12 @@ impl SessionConfig {
         self
     }
 
+    /// Enables or disables the use of per-partition sorting to improve parallelism
+    pub fn with_repartition_sorts(mut self, enabled: bool) -> Self {
+        self.options.optimizer.repartition_sorts = enabled;
+        self
+    }
+
     /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
     pub fn with_parquet_pruning(mut self, enabled: bool) -> Self {
         self.options.execution.parquet.pruning = enabled;
@@ -1307,7 +1334,7 @@ impl SessionConfig {
     /// Note that this method will eventually be deprecated and
     /// replaced by [`config_options`].
     ///
-    /// [`config_options`]: SessionContext::config_option
+    /// [`config_options`]: Self::config_options
     pub fn to_props(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
         // copy configs from config_options
@@ -1319,15 +1346,11 @@ impl SessionConfig {
     }
 
     /// Return a handle to the configuration options.
-    ///
-    /// [`config_options`]: SessionContext::config_option
     pub fn config_options(&self) -> &ConfigOptions {
         &self.options
     }
 
     /// Return a mutable handle to the configuration options.
-    ///
-    /// [`config_options`]: SessionContext::config_option
     pub fn config_options_mut(&mut self) -> &mut ConfigOptions {
         &mut self.options
     }
@@ -1413,7 +1436,7 @@ impl From<ConfigOptions> for SessionConfig {
 /// Execution context for registering data sources and executing queries
 #[derive(Clone)]
 pub struct SessionState {
-    /// Uuid for the session
+    /// UUID for the session
     session_id: String,
     /// Responsible for optimizing a logical plan
     optimizer: Optimizer,
@@ -1452,9 +1475,18 @@ pub fn default_session_builder(config: SessionConfig) -> SessionState {
 impl SessionState {
     /// Returns new SessionState using the provided configuration and runtime
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
+        let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
+        Self::with_config_rt_and_catalog_list(config, runtime, catalog_list)
+    }
+
+    /// Returns new SessionState using the provided configuration, runtime and catalog list.
+    pub fn with_config_rt_and_catalog_list(
+        config: SessionConfig,
+        runtime: Arc<RuntimeEnv>,
+        catalog_list: Arc<dyn CatalogList>,
+    ) -> Self {
         let session_id = Uuid::new_v4().to_string();
 
-        let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
         if config.create_default_catalog_and_schema() {
             let default_catalog = MemoryCatalogProvider::new();
 
@@ -1604,14 +1636,14 @@ impl SessionState {
         }
 
         self.catalog_list
-            .catalog(resolved_ref.catalog)
+            .catalog(&resolved_ref.catalog)
             .ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "failed to resolve catalog: {}",
                     resolved_ref.catalog
                 ))
             })?
-            .schema(resolved_ref.schema)
+            .schema(&resolved_ref.schema)
             .ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "failed to resolve schema: {}",
@@ -1671,7 +1703,7 @@ impl SessionState {
         self
     }
 
-    /// Convert a sql string into an ast Statement
+    /// Convert a SQL string into an AST Statement
     pub fn sql_to_statement(
         &self,
         sql: &str,
@@ -1690,7 +1722,7 @@ impl SessionState {
         Ok(statement)
     }
 
-    /// Convert an ast Statement into a LogicalPlan
+    /// Convert an AST Statement into a LogicalPlan
     pub async fn statement_to_plan(
         &self,
         statement: datafusion_sql::parser::Statement,
@@ -1767,10 +1799,11 @@ impl SessionState {
         for relation in relations {
             let reference =
                 object_name_to_table_reference(relation, enable_ident_normalization)?;
+            let table = reference.table();
             let resolved = self.resolve_table_ref(reference.as_table_reference());
             if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
                 if let Ok(schema) = self.schema_for_ref(resolved) {
-                    if let Some(table) = schema.table(resolved.table).await {
+                    if let Some(table) = schema.table(table).await {
                         v.insert(provider_as_source(table));
                     }
                 }
@@ -2014,12 +2047,12 @@ impl TaskContext {
         &self.session_config
     }
 
-    /// Return the session_id of this [TaskContext]
+    /// Return the `session_id` of this [TaskContext]
     pub fn session_id(&self) -> String {
         self.session_id.clone()
     }
 
-    /// Return the task_id of this [TaskContext]
+    /// Return the `task_id` of this [TaskContext]
     pub fn task_id(&self) -> Option<String> {
         self.task_id.clone()
     }

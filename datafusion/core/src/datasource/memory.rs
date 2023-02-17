@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! In-memory data source for presenting a Vec<RecordBatch> as a data source that can be
+//! In-memory data source for presenting a `Vec<RecordBatch>` as a data source that can be
 //! queried by DataFusion. This allows data to be pre-loaded into memory and then
 //! repeatedly queried without incurring additional file I/O overhead.
 
@@ -32,6 +32,7 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
 use crate::physical_plan::common;
+use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
@@ -76,10 +77,12 @@ impl MemTable {
             .map(|part_i| {
                 let task = state.task_ctx();
                 let exec = exec.clone();
-                tokio::spawn(async move {
+                let task = tokio::spawn(async move {
                     let stream = exec.execute(part_i, task)?;
                     common::collect(stream).await
-                })
+                });
+
+                AbortOnDropSingle::new(task)
             })
             // this collect *is needed* so that the join below can
             // switch between tasks
@@ -87,9 +90,9 @@ impl MemTable {
 
         let mut data: Vec<Vec<RecordBatch>> =
             Vec::with_capacity(exec.output_partitioning().partition_count());
-        for task in tasks {
-            let result = task.await.expect("MemTable::load could not join task")?;
-            data.push(result);
+
+        for result in futures::future::join_all(tasks).await {
+            data.push(result.map_err(|e| DataFusionError::External(Box::new(e)))??)
         }
 
         let exec = MemoryExec::try_new(&data, schema.clone(), None)?;

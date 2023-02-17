@@ -371,16 +371,16 @@ pub async fn from_substrait_rel(
                         ));
                     }
                     1 => TableReference::Bare {
-                        table: &nt.names[0],
+                        table: (&nt.names[0]).into(),
                     },
                     2 => TableReference::Partial {
-                        schema: &nt.names[0],
-                        table: &nt.names[1],
+                        schema: (&nt.names[0]).into(),
+                        table: (&nt.names[1]).into(),
                     },
                     _ => TableReference::Full {
-                        catalog: &nt.names[0],
-                        schema: &nt.names[1],
-                        table: &nt.names[2],
+                        catalog: (&nt.names[0]).into(),
+                        schema: (&nt.names[1]).into(),
+                        table: (&nt.names[2]).into(),
                     },
                 };
                 let t = ctx.table(table_reference).await?;
@@ -440,16 +440,14 @@ fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
             join_rel::JoinType::Outer => Ok(JoinType::Full),
             join_rel::JoinType::Anti => Ok(JoinType::LeftAnti),
             join_rel::JoinType::Semi => Ok(JoinType::LeftSemi),
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "unsupported join type {substrait_join_type:?}"
-                )))
-            }
+            _ => Err(DataFusionError::Internal(format!(
+                "unsupported join type {substrait_join_type:?}"
+            ))),
         }
     } else {
-        return Err(DataFusionError::Internal(format!(
+        Err(DataFusionError::Internal(format!(
             "invalid join type variant {join_type:?}"
-        )));
+        )))
     }
 }
 
@@ -671,12 +669,10 @@ pub async fn from_substrait_rex(
                 Some(LiteralType::Null(ntype)) => {
                     Ok(Arc::new(Expr::Literal(from_substrait_null(ntype)?)))
                 }
-                _ => {
-                    return Err(DataFusionError::NotImplemented(format!(
-                        "Unsupported literal_type: {:?}",
-                        lit.literal_type
-                    )))
-                }
+                _ => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported literal_type: {:?}",
+                    lit.literal_type
+                ))),
             }
         }
         _ => Err(DataFusionError::NotImplemented(

@@ -61,28 +61,28 @@ pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
 /// <https://github.com/apache/arrow-datafusion/issues/4349>
 #[derive(Debug, Default)]
 pub struct ParquetFormat {
-    /// Override the global setting for enable_pruning
+    /// Override the global setting for `enable_pruning`
     enable_pruning: Option<bool>,
-    /// Override the global setting for metadata_size_hint
+    /// Override the global setting for `metadata_size_hint`
     metadata_size_hint: Option<usize>,
-    /// Override the global setting for skip_metadata
+    /// Override the global setting for `skip_metadata`
     skip_metadata: Option<bool>,
 }
 
 impl ParquetFormat {
-    /// construct a new Format with no local overrides
+    /// Construct a new Format with no local overrides
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Activate statistics based row group level pruning
-    /// - If None, defaults to value on `config_options`
+    /// - If `None`, defaults to value on `config_options`
     pub fn with_enable_pruning(mut self, enable: Option<bool>) -> Self {
         self.enable_pruning = enable;
         self
     }
 
-    /// Return true if pruning is enabled
+    /// Return `true` if pruning is enabled
     pub fn enable_pruning(&self, config_options: &ConfigOptions) -> bool {
         self.enable_pruning
             .unwrap_or(config_options.execution.parquet.pruning)
@@ -90,10 +90,10 @@ impl ParquetFormat {
 
     /// Provide a hint to the size of the file metadata. If a hint is provided
     /// the reader will try and fetch the last `size_hint` bytes of the parquet file optimistically.
-    /// With out a hint, two read are required. One read to fetch the 8-byte parquet footer and then
+    /// Without a hint, two read are required. One read to fetch the 8-byte parquet footer and then
     /// another read to fetch the metadata length encoded in the footer.
     ///
-    /// - If None, defaults to value on `config_options`
+    /// - If `None`, defaults to value on `config_options`
     pub fn with_metadata_size_hint(mut self, size_hint: Option<usize>) -> Self {
         self.metadata_size_hint = size_hint;
         self
@@ -109,13 +109,13 @@ impl ParquetFormat {
     /// the file Schema. This can help avoid schema conflicts due to
     /// metadata.
     ///
-    /// - If None, defaults to value on `config_options`
+    /// - If `None`, defaults to value on `config_options`
     pub fn with_skip_metadata(mut self, skip_metadata: Option<bool>) -> Self {
         self.skip_metadata = skip_metadata;
         self
     }
 
-    /// returns true if schema metadata will be cleared prior to
+    /// Returns `true` if schema metadata will be cleared prior to
     /// schema merging.
     pub fn skip_metadata(&self, config_options: &ConfigOptions) -> bool {
         self.skip_metadata
@@ -375,7 +375,9 @@ fn summarize_min_max(
 /// Fetches parquet metadata from ObjectStore for given object
 ///
 /// This component is a subject to **change** in near future and is exposed for low level integrations
-/// through [ParquetFileReaderFactory].
+/// through [`ParquetFileReaderFactory`].
+///
+/// [`ParquetFileReaderFactory`]: crate::physical_plan::file_format::ParquetFileReaderFactory
 pub async fn fetch_parquet_metadata(
     store: &dyn ObjectStore,
     meta: &ObjectMeta,
@@ -548,44 +550,63 @@ pub(crate) mod test_util {
     use parquet::file::properties::WriterProperties;
     use tempfile::NamedTempFile;
 
+    /// How many rows per page should be written
+    const ROWS_PER_PAGE: usize = 2;
+
+    /// Writes `batches` to a temporary parquet file
+    ///
+    /// If multi_page is set to `true`, the parquet file(s) are written
+    /// with 2 rows per data page (used to test page filtering and
+    /// boundaries).
     pub async fn store_parquet(
         batches: Vec<RecordBatch>,
         multi_page: bool,
     ) -> Result<(Vec<ObjectMeta>, Vec<NamedTempFile>)> {
-        if multi_page {
-            // All batches write in to one file, each batch must have same schema.
-            let mut output = NamedTempFile::new().expect("creating temp file");
-            let mut builder = WriterProperties::builder();
-            builder = builder.set_data_page_row_count_limit(2);
-            let proper = builder.build();
-            let mut writer =
-                ArrowWriter::try_new(&mut output, batches[0].schema(), Some(proper))
-                    .expect("creating writer");
-            for b in batches {
-                writer.write(&b).expect("Writing batch");
-            }
-            writer.close().unwrap();
-            Ok((vec![local_unpartitioned_file(&output)], vec![output]))
-        } else {
-            // Each batch writes to their own file
-            let files: Vec<_> = batches
-                .into_iter()
-                .map(|batch| {
-                    let mut output = NamedTempFile::new().expect("creating temp file");
+        // Each batch writes to their own file
+        let files: Vec<_> = batches
+            .into_iter()
+            .map(|batch| {
+                let mut output = NamedTempFile::new().expect("creating temp file");
 
-                    let props = WriterProperties::builder().build();
-                    let mut writer =
-                        ArrowWriter::try_new(&mut output, batch.schema(), Some(props))
-                            .expect("creating writer");
+                let builder = WriterProperties::builder();
+                let props = if multi_page {
+                    builder.set_data_page_row_count_limit(ROWS_PER_PAGE)
+                } else {
+                    builder
+                }
+                .build();
 
+                let mut writer =
+                    ArrowWriter::try_new(&mut output, batch.schema(), Some(props))
+                        .expect("creating writer");
+
+                if multi_page {
+                    // write in smaller batches as the parquet writer
+                    // only checks datapage size limits on the boundaries of each batch
+                    write_in_chunks(&mut writer, &batch, ROWS_PER_PAGE);
+                } else {
                     writer.write(&batch).expect("Writing batch");
-                    writer.close().unwrap();
-                    output
-                })
-                .collect();
+                };
+                writer.close().unwrap();
+                output
+            })
+            .collect();
 
-            let meta: Vec<_> = files.iter().map(local_unpartitioned_file).collect();
-            Ok((meta, files))
+        let meta: Vec<_> = files.iter().map(local_unpartitioned_file).collect();
+        Ok((meta, files))
+    }
+
+    //// write batches chunk_size rows at a time
+    fn write_in_chunks<W: std::io::Write>(
+        writer: &mut ArrowWriter<W>,
+        batch: &RecordBatch,
+        chunk_size: usize,
+    ) {
+        let mut i = 0;
+        while i < batch.num_rows() {
+            let num = chunk_size.min(batch.num_rows() - i);
+            writer.write(&batch.slice(i, num)).unwrap();
+            i += num;
         }
     }
 }

@@ -22,14 +22,17 @@ use crate::expr_rewriter::{
     normalize_cols, rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields, from_plan};
+use crate::utils::{
+    columnize_expr, compare_sort_expr, ensure_any_column_reference_is_unambiguous,
+    exprlist_to_fields, from_plan,
+};
 use crate::{and, binary_expr, Operator};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
         JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
         Projection, Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan,
-        Union, Values, Window,
+        Union, Unnest, Values, Window,
     },
     utils::{
         can_hash, expand_qualified_wildcard, expand_wildcard,
@@ -403,6 +406,16 @@ impl LogicalPlanBuilder {
                 Ok(())
             })?;
 
+        self.create_sort_plan(exprs, missing_cols)
+    }
+
+    pub fn create_sort_plan(
+        self,
+        exprs: impl IntoIterator<Item = impl Into<Expr>> + Clone,
+        missing_cols: Vec<Column>,
+    ) -> Result<Self> {
+        let schema = self.plan.schema();
+
         if missing_cols.is_empty() {
             return Ok(Self::from(LogicalPlan::Sort(Sort {
                 expr: normalize_cols(exprs, &self.plan)?,
@@ -501,6 +514,25 @@ impl LogicalPlanBuilder {
                 "left_keys and right_keys were not the same length".to_string(),
             ));
         }
+
+        let filter = if let Some(expr) = filter {
+            // ambiguous check
+            ensure_any_column_reference_is_unambiguous(
+                &expr,
+                &[self.schema(), right.schema()],
+            )?;
+
+            // normalize all columns in expression
+            let using_columns = expr.to_columns()?;
+            let filter = normalize_col_with_schemas(
+                expr,
+                &[self.schema(), right.schema()],
+                &[using_columns],
+            )?;
+            Some(filter)
+        } else {
+            None
+        };
 
         let (left_keys, right_keys): (Vec<Result<Column>>, Vec<Result<Column>>) =
             join_keys
@@ -891,6 +923,11 @@ impl LogicalPlanBuilder {
             null_equals_null: false,
         })))
     }
+
+    /// Unnest the given column.
+    pub fn unnest_column(self, column: impl Into<Column>) -> Result<Self> {
+        Ok(Self::from(unnest(self.plan, column.into())?))
+    }
 }
 
 /// Creates a schema for a join operation.
@@ -1172,6 +1209,52 @@ impl TableSource for LogicalTableSource {
     fn schema(&self) -> SchemaRef {
         self.table_schema.clone()
     }
+}
+
+/// Create an unnest plan.
+pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
+    let unnest_field = input.schema().field_from_column(&column)?;
+
+    // Extract the type of the nested field in the list.
+    let unnested_field = match unnest_field.data_type() {
+        DataType::List(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::LargeList(field) => DFField::new(
+            unnest_field.qualifier().map(String::as_str),
+            unnest_field.name(),
+            field.data_type().clone(),
+            unnest_field.is_nullable(),
+        ),
+        _ => {
+            // If the unnest field is not a list type return the input plan.
+            return Ok(input);
+        }
+    };
+
+    // Update the schema with the unnest column type changed to contain the nested type.
+    let input_schema = input.schema();
+    let fields = input_schema
+        .fields()
+        .iter()
+        .map(|f| {
+            if f == unnest_field {
+                unnested_field.clone()
+            } else {
+                f.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let schema = Arc::new(DFSchema::new_with_metadata(
+        fields,
+        input_schema.metadata().clone(),
+    )?);
+
+    Ok(LogicalPlan::Unnest(Unnest {
+        input: Arc::new(input),
+        column: unnested_field.qualified_column(),
+        schema,
+    }))
 }
 
 #[cfg(test)]
@@ -1558,5 +1641,78 @@ mod tests {
         assert_eq!(err_msg1.to_string(), expected);
 
         Ok(())
+    }
+
+    #[test]
+    fn plan_builder_unnest() -> Result<()> {
+        // Unnesting a simple column should return the child plan.
+        let plan = nested_table_scan("test_table")?
+            .unnest_column("scalar")?
+            .build()?;
+
+        let expected = "TableScan: test_table";
+        assert_eq!(expected, format!("{plan:?}"));
+
+        // Unnesting the strings list.
+        let plan = nested_table_scan("test_table")?
+            .unnest_column("strings")?
+            .build()?;
+
+        let expected = "\
+        Unnest: test_table.strings\
+        \n  TableScan: test_table";
+        assert_eq!(expected, format!("{plan:?}"));
+
+        // Check unnested field is a scalar
+        let field = plan
+            .schema()
+            .field_with_name(Some("test_table"), "strings")
+            .unwrap();
+        assert_eq!(&DataType::Utf8, field.data_type());
+
+        // Unnesting multiple fields.
+        let plan = nested_table_scan("test_table")?
+            .unnest_column("strings")?
+            .unnest_column("structs")?
+            .build()?;
+
+        let expected = "\
+        Unnest: test_table.structs\
+        \n  Unnest: test_table.strings\
+        \n    TableScan: test_table";
+        assert_eq!(expected, format!("{plan:?}"));
+
+        // Check unnested struct list field should be a struct.
+        let field = plan
+            .schema()
+            .field_with_name(Some("test_table"), "structs")
+            .unwrap();
+        assert!(matches!(field.data_type(), DataType::Struct(_)));
+
+        // Unnesting missing column should fail.
+        let plan = nested_table_scan("test_table")?.unnest_column("missing");
+        assert!(plan.is_err());
+
+        Ok(())
+    }
+
+    fn nested_table_scan(table_name: &str) -> Result<LogicalPlanBuilder> {
+        // Create a schema with a scalar field, a list of strings, and a list of structs.
+        let struct_field = Box::new(Field::new(
+            "item",
+            DataType::Struct(vec![
+                Field::new("a", DataType::UInt32, false),
+                Field::new("b", DataType::UInt32, false),
+            ]),
+            false,
+        ));
+        let string_field = Box::new(Field::new("item", DataType::Utf8, false));
+        let schema = Schema::new(vec![
+            Field::new("scalar", DataType::UInt32, false),
+            Field::new("strings", DataType::List(string_field), false),
+            Field::new("structs", DataType::List(struct_field), false),
+        ]);
+
+        table_scan(Some(table_name), &schema, None)
     }
 }

@@ -18,8 +18,9 @@
 //! Simplify expressions optimizer rule and implementation
 
 use super::{ExprSimplifier, SimplifyContext};
+use crate::utils::merge_schema;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::Result;
+use datafusion_common::{DFSchemaRef, Result};
 use datafusion_expr::{logical_plan::LogicalPlan, utils::from_plan};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 
@@ -35,6 +36,7 @@ use datafusion_physical_expr::execution_props::ExecutionProps;
 /// is optimized to
 /// `Filter: b > 2`
 ///
+/// [`Expr`]: datafusion_expr::Expr
 #[derive(Default)]
 pub struct SimplifyExpressions {}
 
@@ -59,13 +61,12 @@ impl SimplifyExpressions {
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
     ) -> Result<LogicalPlan> {
-        // We need to pass down the all schemas within the plan tree to `optimize_expr` in order to
-        // to evaluate expression types. For example, a projection plan's schema will only include
-        // projected columns. With just the projected schema, it's not possible to infer types for
-        // expressions that references non-projected columns within the same project plan or its
-        // children plans.
-        let info = plan
-            .all_schemas()
+        // Pass down the `children merge schema` and `plan schema` to evaluate expression types.
+        // pass all `child schema` and `plan schema` isn't enough, because like `t1 semi join t2 on
+        // on t1.id = t2.id`, each individual schema can't contain all the columns in it.
+        let children_merge_schema = DFSchemaRef::new(merge_schema(plan.inputs()));
+        let schemas = vec![plan.schema(), &children_merge_schema];
+        let info = schemas
             .into_iter()
             .fold(SimplifyContext::new(execution_props), |context, schema| {
                 context.with_schema(schema.clone())

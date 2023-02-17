@@ -515,7 +515,7 @@ fn select_with_ambiguous_column() {
     let sql = "SELECT id FROM person a, person b";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Internal(\"column reference id is ambiguous\")",
+        "Plan(\"column reference id is ambiguous\")",
         format!("{err:?}")
     );
 }
@@ -531,6 +531,16 @@ fn join_with_ambiguous_column() {
                         \n    SubqueryAlias: b\
                         \n      TableScan: person";
     quick_test(sql, expected);
+}
+
+#[test]
+fn where_selection_with_ambiguous_column() {
+    let sql = "SELECT * FROM person a, person b WHERE id = id + 1";
+    let err = logical_plan(sql).expect_err("query should have failed");
+    assert_eq!(
+        "Plan(\"column reference id is ambiguous\")",
+        format!("{err:?}")
+    );
 }
 
 #[test]
@@ -3204,6 +3214,28 @@ fn test_select_join_key_inner_join() {
 }
 
 #[test]
+fn test_select_order_by() {
+    let sql = "SELECT '1' from person order by id";
+
+    let expected = "Projection: Utf8(\"1\")\n  Sort: person.id ASC NULLS LAST\n    Projection: Utf8(\"1\"), person.id\n      TableScan: person";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn test_select_distinct_order_by() {
+    let sql = "SELECT distinct '1' from person order by id";
+
+    let expected =
+        "Error during planning: For SELECT DISTINCT, ORDER BY expressions id must appear in select list";
+
+    // It should return error.
+    let result = logical_plan(sql);
+    assert!(result.is_err());
+    let err = result.err().unwrap();
+    assert_eq!(err.to_string(), expected);
+}
+
+#[test]
 fn test_duplicated_left_join_key_inner_join() {
     //  person.id * 2 happen twice in left side.
     let sql = "SELECT person.id, person.age
@@ -3509,6 +3541,47 @@ Projection: person.id, person.age
     let expected_plan = r#"
 Projection: person.id, person.age
   Filter: person.age = Int32(10)
+    TableScan: person
+        "#
+    .trim();
+    let plan = plan.replace_params_with_values(&param_values).unwrap();
+
+    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+}
+
+#[test]
+fn test_prepare_statement_infer_types_subquery() {
+    let sql = "SELECT id, age FROM person WHERE age = (select max(age) from person where id = $1)";
+
+    let expected_plan = r#"
+Projection: person.id, person.age
+  Filter: person.age = (<subquery>)
+    Subquery:
+      Projection: MAX(person.age)
+        Aggregate: groupBy=[[]], aggr=[[MAX(person.age)]]
+          Filter: person.id = $1
+            TableScan: person
+    TableScan: person
+        "#
+    .trim();
+
+    let expected_dt = "[Int32]";
+    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([("$1".to_string(), Some(DataType::UInt32))]);
+    assert_eq!(actual_types, expected_types);
+
+    // replace params with values
+    let param_values = vec![ScalarValue::UInt32(Some(10))];
+    let expected_plan = r#"
+Projection: person.id, person.age
+  Filter: person.age = (<subquery>)
+    Subquery:
+      Projection: MAX(person.age)
+        Aggregate: groupBy=[[]], aggr=[[MAX(person.age)]]
+          Filter: person.id = UInt32(10)
+            TableScan: person
     TableScan: person
         "#
     .trim();

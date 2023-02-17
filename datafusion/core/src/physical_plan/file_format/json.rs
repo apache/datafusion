@@ -33,6 +33,7 @@ use arrow::{datatypes::SchemaRef, json};
 
 use bytes::{Buf, Bytes};
 
+use crate::physical_plan::common::AbortOnDropSingle;
 use arrow::json::RawReaderBuilder;
 use futures::{ready, stream, StreamExt, TryStreamExt};
 use object_store::{GetResult, ObjectStore};
@@ -230,38 +231,38 @@ pub async fn plan_to_json(
     let path = path.as_ref();
     // create directory to contain the CSV files (one per partition)
     let fs_path = Path::new(path);
-    match fs::create_dir(fs_path) {
-        Ok(()) => {
-            let mut tasks = vec![];
-            for i in 0..plan.output_partitioning().partition_count() {
-                let plan = plan.clone();
-                let filename = format!("part-{i}.json");
-                let path = fs_path.join(filename);
-                let file = fs::File::create(path)?;
-                let mut writer = json::LineDelimitedWriter::new(file);
-                let task_ctx = Arc::new(TaskContext::from(state));
-                let stream = plan.execute(i, task_ctx)?;
-                let handle: JoinHandle<Result<()>> = task::spawn(async move {
-                    stream
-                        .map(|batch| writer.write(batch?))
-                        .try_collect()
-                        .await
-                        .map_err(DataFusionError::from)
-                });
-                tasks.push(handle);
-            }
-            futures::future::join_all(tasks)
-                .await
-                .into_iter()
-                .try_for_each(|result| {
-                    result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
-                })?;
-            Ok(())
-        }
-        Err(e) => Err(DataFusionError::Execution(format!(
+    if let Err(e) = fs::create_dir(fs_path) {
+        return Err(DataFusionError::Execution(format!(
             "Could not create directory {path}: {e:?}"
-        ))),
+        )));
     }
+
+    let mut tasks = vec![];
+    for i in 0..plan.output_partitioning().partition_count() {
+        let plan = plan.clone();
+        let filename = format!("part-{i}.json");
+        let path = fs_path.join(filename);
+        let file = fs::File::create(path)?;
+        let mut writer = json::LineDelimitedWriter::new(file);
+        let task_ctx = Arc::new(TaskContext::from(state));
+        let stream = plan.execute(i, task_ctx)?;
+        let handle: JoinHandle<Result<()>> = task::spawn(async move {
+            stream
+                .map(|batch| writer.write(batch?))
+                .try_collect()
+                .await
+                .map_err(DataFusionError::from)
+        });
+        tasks.push(AbortOnDropSingle::new(handle));
+    }
+
+    futures::future::join_all(tasks)
+        .await
+        .into_iter()
+        .try_for_each(|result| {
+            result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
+        })?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -280,7 +281,7 @@ mod tests {
     use crate::prelude::NdJsonReadOptions;
     use crate::prelude::*;
     use crate::test::partitioned_file_groups;
-    use datafusion_common::cast::{as_int32_array, as_int64_array};
+    use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
     use rstest::*;
     use tempfile::TempDir;
     use url::Url;
@@ -542,6 +543,62 @@ mod tests {
 
         assert_eq!(batch.num_rows(), 4);
         let values = as_int64_array(batch.column(0))?;
+        assert_eq!(values.value(0), 1);
+        assert_eq!(values.value(1), -10);
+        assert_eq!(values.value(2), 2);
+        Ok(())
+    }
+
+    #[rstest(
+        file_compression_type,
+        case(FileCompressionType::UNCOMPRESSED),
+        case(FileCompressionType::GZIP),
+        case(FileCompressionType::BZIP2),
+        case(FileCompressionType::XZ)
+    )]
+    #[tokio::test]
+    async fn nd_json_exec_file_mixed_order_projection(
+        file_compression_type: FileCompressionType,
+    ) -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let task_ctx = session_ctx.task_ctx();
+        let (object_store_url, file_groups, file_schema) =
+            prepare_store(&state, file_compression_type.to_owned()).await;
+
+        let exec = NdJsonExec::new(
+            FileScanConfig {
+                object_store_url,
+                file_groups,
+                file_schema,
+                statistics: Statistics::default(),
+                projection: Some(vec![3, 0, 2]),
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering: None,
+                infinite_source: false,
+            },
+            file_compression_type.to_owned(),
+        );
+        let inferred_schema = exec.schema();
+        assert_eq!(inferred_schema.fields().len(), 3);
+
+        inferred_schema.field_with_name("a").unwrap();
+        inferred_schema.field_with_name("b").unwrap_err();
+        inferred_schema.field_with_name("c").unwrap();
+        inferred_schema.field_with_name("d").unwrap();
+
+        let mut it = exec.execute(0, task_ctx)?;
+        let batch = it.next().await.unwrap()?;
+
+        assert_eq!(batch.num_rows(), 4);
+
+        let values = as_string_array(batch.column(0))?;
+        assert_eq!(values.value(0), "4");
+        assert_eq!(values.value(1), "4");
+        assert_eq!(values.value(2), "text");
+
+        let values = as_int64_array(batch.column(1))?;
         assert_eq!(values.value(0), 1);
         assert_eq!(values.value(1), -10);
         assert_eq!(values.value(2), 2);
