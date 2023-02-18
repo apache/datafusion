@@ -2187,8 +2187,8 @@ async fn left_anti_join() -> Result<()> {
 }
 
 #[tokio::test]
-// https://github.com/apache/arrow-datafusion/issues/4366
 async fn error_left_anti_join() -> Result<()> {
+    // https://github.com/apache/arrow-datafusion/issues/4366
     let test_repartition_joins = vec![true, false];
     for repartition_joins in test_repartition_joins {
         let ctx = create_left_semi_anti_join_context_with_null_ids(
