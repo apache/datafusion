@@ -30,14 +30,14 @@ CREATE TABLE t1(
 ;
 
 # log scalar function
-query IT rowsort
+query RR rowsort
 select log(2, 64) a, log(100) b union all select log(2, 8), log(10);
 ----
 3 1
 6 2
 
 # log scalar function
-query IT rowsort
+query RRR rowsort
 select log(a, 64) a, log(b), log(10, b) from t1;
 ----
 3.7855785 4 4
@@ -45,26 +45,26 @@ select log(a, 64) a, log(b), log(10, b) from t1;
 Infinity 2 2
 
 # log scalar nulls
-query IT rowsort
+query RR rowsort
 select log(null, 64) a, log(null) b
 ----
 NULL NULL
 
 # log scalar nulls 1
-query IT rowsort
+query RR rowsort
 select log(2, null) a, log(null) b
 ----
 NULL NULL
 
 # log scalar nulls 2
-query IT rowsort
+query RR rowsort
 select log(null, null) a, log(null) b
 ----
 NULL NULL
 
 # log scalar ops with zero edgecases
 # please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
-query IT rowsort
+query RR rowsort
 select log(0) a, log(1, 64) b
 ----
 -Infinity Infinity

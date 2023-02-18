@@ -29,6 +29,7 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::window_function::WindowFunction;
 use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::physical_plan::expressions::GetIndexedFieldExpr;
 use datafusion::physical_plan::expressions::LikeExpr;
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{
@@ -282,6 +283,17 @@ pub fn parse_physical_expr(
                 input_schema,
             )?,
         )),
+        ExprType::GetIndexedFieldExpr(get_indexed_field_expr) => {
+            Arc::new(GetIndexedFieldExpr::new(
+                parse_required_physical_expr(
+                    get_indexed_field_expr.arg.as_deref(),
+                    registry,
+                    "arg",
+                    input_schema,
+                )?,
+                convert_required!(get_indexed_field_expr.key)?,
+            ))
+        }
     };
 
     Ok(pexpr)

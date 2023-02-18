@@ -195,9 +195,11 @@ mod hash_join_tests {
     use crate::physical_optimizer::join_selection::swap_join_type;
     use crate::physical_optimizer::test_utils::SourceType;
     use crate::physical_plan::expressions::Column;
+    use crate::physical_plan::joins::PartitionMode;
     use crate::physical_plan::projection::ProjectionExec;
-    use crate::{physical_plan::joins::PartitionMode, test::exec::UnboundedExec};
+    use crate::test_util::UnboundedExec;
     use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
     use std::sync::Arc;
 
     struct TestCase {
@@ -529,17 +531,28 @@ mod hash_join_tests {
         }
         Ok(())
     }
+
     #[allow(clippy::vtable_address_comparisons)]
     async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
         let left_unbounded = t.initial_sources_unbounded.0 == SourceType::Unbounded;
         let right_unbounded = t.initial_sources_unbounded.1 == SourceType::Unbounded;
         let left_exec = Arc::new(UnboundedExec::new(
-            left_unbounded,
-            Schema::new(vec![Field::new("a", DataType::Int32, false)]),
+            (!left_unbounded).then_some(1),
+            RecordBatch::new_empty(Arc::new(Schema::new(vec![Field::new(
+                "a",
+                DataType::Int32,
+                false,
+            )]))),
+            2,
         )) as Arc<dyn ExecutionPlan>;
         let right_exec = Arc::new(UnboundedExec::new(
-            right_unbounded,
-            Schema::new(vec![Field::new("b", DataType::Int32, false)]),
+            (!right_unbounded).then_some(1),
+            RecordBatch::new_empty(Arc::new(Schema::new(vec![Field::new(
+                "b",
+                DataType::Int32,
+                false,
+            )]))),
+            2,
         )) as Arc<dyn ExecutionPlan>;
 
         let join = HashJoinExec::try_new(

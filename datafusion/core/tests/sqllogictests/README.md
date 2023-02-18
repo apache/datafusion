@@ -105,10 +105,13 @@ query <type_string> <sort_mode>
 
 - `test_name`: Uniquely identify the test name (arrow-datafusion only)
 - `type_string`: A short string that specifies the number of result columns and the expected datatype of each result column. There is one character in the <type_string> for each result column. The characters codes are:
-  - "T" for a text result,
-  - "I" for an integer result,
-  - "R" for a floating-point result,
-  - "?" for any other type.
+  - 'B' - **B**oolean,
+  - 'D' - **D**atetime,
+  - 'I' - **I**nteger,
+  - 'P' - timestam**P**,
+  - 'R' - floating-point results,
+  - 'T' - **T**ext,
+  - "?" - any other types
 - `expected_result`: In the results section, some values are converted according to some rules:
   - floating point values are rounded to the scale of "12",
   - NULL values are rendered as `NULL`,

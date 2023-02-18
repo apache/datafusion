@@ -62,7 +62,7 @@ limit 5
 
 # for window functions without order by the first, last, and nth function call does not make sense
 # csv_query_window_with_partition_by
-query IIIIII
+query IIRIII
 select
 c9,
 sum(cast(c4 as Int)) over (partition by c3) as sum1,
@@ -83,7 +83,7 @@ limit 5
 
 
 # async fn csv_query_window_with_order_by
-query IIIIII
+query IIRIIIIII
 select
 c9,
 sum(c5) over (order by c9) as sum1,
@@ -105,7 +105,7 @@ limit 5
 145294611 -3251637940 -650327588 5 623103518 -1927628110 61035129 -1899175111 -108973366
 
 # csv_query_window_with_partition_by_order_by
-query IIIIII
+query IIRIIIIII
 select
  c9,
  sum(c5) over (partition by c4 order by c9) as sum1,
@@ -127,7 +127,7 @@ limit 5
 145294611 -1899175111 -1899175111 1 -1899175111 -1899175111 -1899175111 -1899175111 NULL
 
 # window()
-query IIIIII
+query IIIIIIR
 SELECT
 c1,
 c2,
@@ -148,7 +148,7 @@ LIMIT 5
 
 
 # window_order_by
-query IIIIII
+query IIIIIIIIIIR
 SELECT
 c1,
 c2,
@@ -172,7 +172,7 @@ LIMIT 5
 0 4 5 0 4 1 10 5 4 0 2
 
 # window_partition_by
-query IIIIII
+query IIIIIIR
 SELECT
 c1,
 c2,
@@ -191,7 +191,7 @@ LIMIT 5
 0 3 12 4 3 3 3
 0 4 16 4 4 4 4
 
-query IIIIIIIIII
+query IIIIIIIIIIR
 SELECT
 c1,
 c2,
@@ -220,7 +220,7 @@ LIMIT 5
 #####
 
 # window expr is not referenced anywhere, eliminate it.
-query ??
+query TT
 EXPLAIN
 WITH _sample_data AS (
  SELECT 1 as a, 'aa' AS b
@@ -280,7 +280,7 @@ SortPreservingMergeExec: [b@0 ASC NULLS LAST]
                     EmptyExec: produce_one_row=true
 
 # Check actual result:
-query ?I
+query TI
 WITH _sample_data AS (
  SELECT 1 as a, 'aa' AS b
  UNION ALL
@@ -305,7 +305,7 @@ aa 3
 bb 7
 
 #   window expr is referenced by the output, keep it
-query ??
+query TT
 EXPLAIN
 WITH _sample_data AS (
  SELECT 1 as a, 'aa' AS b
@@ -375,7 +375,7 @@ SortPreservingMergeExec: [b@0 ASC NULLS LAST]
 
 # check actual result
 
-query ?II
+query TII
 WITH _sample_data AS (
  SELECT 1 as a, 'aa' AS b
  UNION ALL
