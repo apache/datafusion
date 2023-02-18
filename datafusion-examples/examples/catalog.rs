@@ -19,6 +19,7 @@
 //!
 //! Example requires git submodules to be initialized in repo as it uses data from
 //! the `parquet-testing` repo.
+
 use async_trait::async_trait;
 use datafusion::{
     arrow::util::pretty,
@@ -85,16 +86,18 @@ async fn main() -> Result<()> {
     ctx.register_catalog("dircat", Arc::new(catalog));
     // catalog was passed down into our custom catalog list since we overide the ctx's default
     let catalogs = catlist.catalogs.read().unwrap();
-    assert!(catalogs.contains_key("dircat"));
+    assert!(
+        catalogs.contains_key("dircat"),
+        "context should now be using custom catlog"
+    );
+    let parquet_tables = parquet_schema.tables.read().unwrap();
     // tables are now available to be queried in the context
-    for table in parquet_schema.tables.keys().take(5) {
+    for table in parquet_tables.keys().take(5) {
         println!("querying table {table} from parquet schema");
         let df = ctx
             .sql(&format!("select * from dircat.parquet.\"{table}\" "))
-            .await
-            .unwrap()
-            .limit(0, Some(5))
-            .unwrap();
+            .await?
+            .limit(0, Some(1))?;
         let result = df.collect().await;
         match result {
             Ok(batches) => {
@@ -105,6 +108,22 @@ async fn main() -> Result<()> {
             }
         }
     }
+    let table_to_drop = parquet_tables.keys().next().unwrap().to_owned();
+    drop(parquet_tables); // read lock
+
+    // DDL example
+    println!("dropping table {table_to_drop}...");
+    let df = ctx
+        .sql(&format!("DROP TABLE dircat.parquet.\"{table_to_drop}\""))
+        .await?;
+    df.collect().await?;
+    let parquet_tables = parquet_schema.tables.read().unwrap();
+    // datafusion has deregistered the table from our schema
+    // (called our schema's deregister func)
+    assert!(
+        !parquet_tables.contains_key(&table_to_drop),
+        "table should no longer exist in schema's hashmap"
+    );
     Ok(())
 }
 
@@ -116,7 +135,7 @@ struct DirSchemaOpts<'a> {
 /// Schema where every file with extension `ext` in a given `dir` is a table.
 struct DirSchema {
     ext: String,
-    tables: HashMap<String, Arc<dyn TableProvider>>,
+    tables: RwLock<HashMap<String, Arc<dyn TableProvider>>>,
 }
 impl DirSchema {
     async fn create(state: &SessionState, opts: DirSchemaOpts<'_>) -> Result<Arc<Self>> {
@@ -140,7 +159,7 @@ impl DirSchema {
             tables.insert(filename, Arc::new(table) as Arc<dyn TableProvider>);
         }
         Ok(Arc::new(Self {
-            tables,
+            tables: RwLock::new(tables),
             ext: ext.to_string(),
         }))
     }
@@ -157,15 +176,35 @@ impl SchemaProvider for DirSchema {
     }
 
     fn table_names(&self) -> Vec<String> {
-        self.tables.keys().cloned().collect::<Vec<_>>()
+        let tables = self.tables.read().unwrap();
+        tables.keys().cloned().collect::<Vec<_>>()
     }
 
     async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
-        self.tables.get(name).cloned()
+        let tables = self.tables.read().unwrap();
+        tables.get(name).cloned()
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        self.tables.contains_key(name)
+        let tables = self.tables.read().unwrap();
+        tables.contains_key(name)
+    }
+    fn register_table(
+        &self,
+        name: String,
+        table: Arc<dyn TableProvider>,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
+        let mut tables = self.tables.write().unwrap();
+        tables.insert(name, table.clone());
+        Ok(Some(table))
+    }
+
+    /// If supported by the implementation, removes an existing table from this schema and returns it.
+    /// If no table of that name exists, returns Ok(None).
+    #[allow(unused_variables)]
+    fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+        let mut tables = self.tables.write().unwrap();
+        Ok(tables.remove(name))
     }
 }
 /// Catalog holds multiple schemas
