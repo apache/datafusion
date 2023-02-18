@@ -84,11 +84,11 @@ async fn main() -> Result<()> {
     catalog.register_schema("csv", csv_schema.clone())?;
     // register our catalog in the context
     ctx.register_catalog("dircat", Arc::new(catalog));
-    // catalog was passed down into our custom catalog list since we overide the ctx's default
+    // CustomCatalogList now holds our DirCatalog since we overide the contexts default list
     let catalogs = catlist.catalogs.read().unwrap();
     assert!(
         catalogs.contains_key("dircat"),
-        "context should now be using custom catlog"
+        "context should now be using custom catalog"
     );
     let parquet_tables = parquet_schema.tables.read().unwrap();
     // tables are now available to be queried in the context
