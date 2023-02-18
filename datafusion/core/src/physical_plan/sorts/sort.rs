@@ -149,11 +149,10 @@ impl ExternalSorter {
             //
             // In addition, if it's row encoding was preserved, that would also change the size.
             let new_size = batch_byte_size(&partial.sorted_batch)
-                + partial
-                    .sort_data
-                    .rows
-                    .as_ref()
-                    .map_or(0, |rows| rows.size());
+                + match partial.sort_data {
+                    SortData::Rows(ref rows) => rows.size(),
+                    SortData::Arrays(_) => 0,
+                };
             match new_size.cmp(&size) {
                 Ordering::Greater => {
                     // We don't have to call try_grow here, since we have already used the
@@ -333,7 +332,10 @@ fn in_mem_partial_sort(
             sort_data,
             sorted_batch,
         } = result;
-        let rowbatch: Option<RowBatch> = sort_data.rows.map(Into::into);
+        let rowbatch: Option<RowBatch> = match sort_data {
+            SortData::Rows(rows) => Some(rows.into()),
+            SortData::Arrays(_) => None,
+        };
         let stream = Box::pin(SizedRecordBatchStream::new(
             schema,
             vec![Arc::new(sorted_batch)],
@@ -370,7 +372,10 @@ fn in_mem_partial_sort(
         };
         let rows = sort_data
             .into_iter()
-            .map(|d| d.rows)
+            .map(|d| match d {
+                SortData::Rows(rows) => Some(rows),
+                SortData::Arrays(_) => None,
+            })
             .collect::<Option<Vec<_>>>();
         let used_rows = rows.is_some();
         let batch_stream = Box::pin(SortedSizedRecordBatchStream::new(
@@ -407,7 +412,7 @@ fn get_sorted_iter(
         .iter()
         .enumerate()
         .flat_map(|(i, d)| {
-            (0..d.arrays[0].len()).map(move |r| CompositeIndex {
+            (0..d.num_rows()).map(move |r| CompositeIndex {
                 // since we original use UInt32Array to index the combined mono batch,
                 // component record batches won't overflow as well,
                 // use u32 here for space efficiency.
@@ -416,8 +421,13 @@ fn get_sorted_iter(
             })
         })
         .collect::<Vec<CompositeIndex>>();
-    let rows_per_batch: Option<Vec<&RowSelection>> =
-        sort_data.iter().map(|d| d.rows.as_ref()).collect();
+    let rows_per_batch: Option<Vec<&RowSelection>> = sort_data
+        .iter()
+        .map(|d| match d {
+            SortData::Rows(ref rows) => Some(rows),
+            SortData::Arrays(_) => None,
+        })
+        .collect();
     let indices = match rows_per_batch {
         Some(rows_per_batch) => {
             let mut to_sort = rows_per_batch
@@ -439,7 +449,11 @@ fn get_sorted_iter(
                 .map(|(i, expr)| {
                     let columns_i = sort_data
                         .iter()
-                        .map(|data| data.arrays[i].as_ref())
+                        .map(|data| match data {
+                            // todo fix
+                            SortData::Rows(_) => unreachable!(),
+                            SortData::Arrays(arrays) => arrays[i].as_ref(),
+                        })
                         .collect::<Vec<&dyn Array>>();
                     Ok(SortColumn {
                         values: concat(columns_i.as_slice())?,
@@ -1027,9 +1041,20 @@ impl ExecutionPlan for SortExec {
     }
 }
 
-struct SortData {
-    arrays: Vec<ArrayRef>,
-    rows: Option<RowSelection>,
+enum SortData {
+    Rows(RowSelection),
+    Arrays(Vec<ArrayRef>),
+}
+impl SortData {
+    fn num_rows(&self) -> usize {
+        match self {
+            SortData::Rows(r) => r.num_rows(),
+            SortData::Arrays(a) => {
+                let first_col = &a[0];
+                first_col.len()
+            }
+        }
+    }
 }
 struct BatchWithSortArray {
     sort_data: SortData,
@@ -1091,25 +1116,28 @@ fn sort_batch(
             })
             .collect::<Result<Vec<ArrayRef>, ArrowError>>()?,
     )?;
-
-    let sort_arrays = sort_columns
-        .into_iter()
-        .map(|sc| {
-            Ok(take(
-                sc.values.as_ref(),
-                &indices,
-                Some(TakeOptions {
-                    check_bounds: false,
-                }),
-            )?)
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let sort_data = match rows {
+        Some(rows) => SortData::Rows(rows),
+        None => {
+            // only need sort_arrays when we dont have rows.
+            let sort_arrays = sort_columns
+                .into_iter()
+                .map(|sc| {
+                    Ok(take(
+                        sc.values.as_ref(),
+                        &indices,
+                        Some(TakeOptions {
+                            check_bounds: false,
+                        }),
+                    )?)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            SortData::Arrays(sort_arrays)
+        }
+    };
 
     Ok(BatchWithSortArray {
-        sort_data: SortData {
-            arrays: sort_arrays,
-            rows,
-        },
+        sort_data,
         sorted_batch,
     })
 }
