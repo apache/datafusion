@@ -2818,9 +2818,6 @@ mod tests {
         async fn call_read_csv(&self) -> DataFrame;
         async fn call_read_avro(&self) -> DataFrame;
         async fn call_read_parquet(&self) -> DataFrame;
-        async fn call_read_csvs(&self) -> DataFrame;
-        async fn call_read_avros(&self) -> DataFrame;
-        async fn call_read_parquets(&self) -> DataFrame;
     }
 
     struct CallRead {}
@@ -2842,27 +2839,6 @@ mod tests {
         async fn call_read_parquet(&self) -> DataFrame {
             let ctx = SessionContext::new();
             ctx.read_parquet("dummy", ParquetReadOptions::default())
-                .await
-                .unwrap()
-        }
-
-        async fn call_read_csvs(&self) -> DataFrame {
-            let ctx = SessionContext::new();
-            ctx.read_csv(vec!["dummy", "dummy"], CsvReadOptions::new())
-                .await
-                .unwrap()
-        }
-
-        async fn call_read_avros(&self) -> DataFrame {
-            let ctx = SessionContext::new();
-            ctx.read_avro(vec!["dummy", "dummy"], AvroReadOptions::default())
-                .await
-                .unwrap()
-        }
-
-        async fn call_read_parquets(&self) -> DataFrame {
-            let ctx = SessionContext::new();
-            ctx.read_parquet(vec!["dummy", "dummy"], ParquetReadOptions::default())
                 .await
                 .unwrap()
         }
