@@ -168,7 +168,7 @@ impl PartialEq<dyn Any> for GetIndexedFieldExpr {
 mod tests {
     use super::*;
     use crate::expressions::{col, lit};
-    use arrow::array::{ArrayRef, GenericListArray, PrimitiveBuilder};
+    use arrow::array::{ArrayRef, Float64Array, GenericListArray, PrimitiveBuilder};
     use arrow::array::{
         Int64Array, Int64Builder, ListBuilder, StringBuilder, StructArray, StructBuilder,
     };
@@ -466,11 +466,7 @@ mod tests {
 
     fn float64_array(value: Option<f64>) -> ArrayRef {
         match value {
-            Some(v) => {
-                let mut b = PrimitiveBuilder::<Float64Type>::new();
-                b.append_value(v);
-                Arc::new(b.finish())
-            }
+            Some(v) => Arc::new(Float64Array::from_value(v, 1)),
             None => {
                 let mut b = PrimitiveBuilder::<Float64Type>::new();
                 b.append_null();
