@@ -222,16 +222,6 @@ pub(crate) fn record_poll_sort_item(
     poll
 }
 
-// pub(crate) struct SortedReceiverStream {
-//     batch_rx: ReceiverStream<Result<RecordBatch>>,
-//     row_rx: Option<ReceiverStream<Result<Option<RowBatch>>>>,
-//     #[allow(dead_code)]
-//     drop_helper: AbortOnDropSingle<()>,
-// }
-// impl Stream for SortedReceiverStream {
-
-// }
-
 /// Cloneable batch of rows taken from multiple [RowSelection]s
 #[derive(Debug, Clone)]
 pub struct RowBatch {

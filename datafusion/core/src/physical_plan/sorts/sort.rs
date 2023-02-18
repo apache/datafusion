@@ -19,7 +19,7 @@
 //! It will do in-memory sorting if it has enough memory budget
 //! but spills to disk if needed.
 
-use super::{RowBatch, RowSelection};
+use super::{record_poll_sort_item, RowBatch, RowSelection};
 use super::{SendableSortStream, SortStreamItem};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
@@ -37,7 +37,7 @@ use crate::physical_plan::sorts::SortedStream;
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::{
     displayable, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    SendableRecordBatchStream, Statistics,
 };
 use crate::prelude::SessionConfig;
 use arrow::array::{make_array, Array, ArrayRef, MutableArrayData, UInt32Array};
@@ -64,7 +64,6 @@ use std::task::{Context, Poll};
 use tempfile::NamedTempFile;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::{self, JoinHandle};
-use tokio_stream::wrappers::UnboundedReceiverStream;
 
 /// Sort arbitrary size of data to get a total order (may spill several times during sorting based on free memory available).
 ///
@@ -324,7 +323,6 @@ fn in_mem_partial_sort(
     tracking_metrics: MemTrackingMetrics,
     fetch: Option<usize>,
 ) -> Result<SortedStream> {
-    let (row_tx, row_rx) = mpsc::unbounded_channel();
     assert_ne!(buffered_batches.len(), 0);
     if buffered_batches.len() == 1 {
         let result = buffered_batches.pop().unwrap();
@@ -378,20 +376,19 @@ fn in_mem_partial_sort(
             })
             .collect::<Option<Vec<_>>>();
         let used_rows = rows.is_some();
-        let batch_stream = Box::pin(SortedSizedRecordBatchStream::new(
+        let batch_stream = SortedSizedStream::new(
             schema,
             batches,
             sorted_iter,
             tracking_metrics,
             rows.map(|rs| rs.into_iter().map(Arc::new).collect()),
-            Some(row_tx),
-        ));
-        if used_rows {
-            let row_stream = UnboundedReceiverStream::new(row_rx).boxed();
-            Ok(SortedStream::new_from_streams(batch_stream, 0, row_stream))
-        } else {
-            Ok(SortedStream::new_no_row_encoding(batch_stream, 0))
+        )
+        .boxed();
+        let mut stream = SortedStream::new(batch_stream, 0);
+        if !used_rows {
+            stream.row_encoding_ignored = true;
         }
+        Ok(stream)
     }
 }
 
@@ -574,17 +571,16 @@ fn group_indices(
 }
 
 /// Stream of sorted record batches
-struct SortedSizedRecordBatchStream {
+struct SortedSizedStream {
     schema: SchemaRef,
     batches: Vec<RecordBatch>,
     sorted_iter: SortedIterator,
     num_cols: usize,
     metrics: MemTrackingMetrics,
     rows: Option<Vec<Arc<RowSelection>>>,
-    rows_tx: Option<mpsc::UnboundedSender<Option<RowBatch>>>,
 }
 
-impl SortedSizedRecordBatchStream {
+impl SortedSizedStream {
     /// new
     pub fn new(
         schema: SchemaRef,
@@ -592,7 +588,6 @@ impl SortedSizedRecordBatchStream {
         sorted_iter: SortedIterator,
         mut metrics: MemTrackingMetrics,
         rows: Option<Vec<Arc<RowSelection>>>,
-        rows_tx: Option<mpsc::UnboundedSender<Option<RowBatch>>>,
     ) -> Self {
         let size = batches.iter().map(batch_byte_size).sum::<usize>()
             + sorted_iter.memory_size()
@@ -602,20 +597,19 @@ impl SortedSizedRecordBatchStream {
                 .map_or(0, |r| r.iter().map(|r| r.size()).sum());
         metrics.init_mem_used(size);
         let num_cols = batches[0].num_columns();
-        SortedSizedRecordBatchStream {
+        SortedSizedStream {
             schema,
             batches,
             sorted_iter,
             rows,
             num_cols,
             metrics,
-            rows_tx,
         }
     }
 }
 
-impl Stream for SortedSizedRecordBatchStream {
-    type Item = Result<RecordBatch>;
+impl Stream for SortedSizedStream {
+    type Item = SortStreamItem;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -665,16 +659,12 @@ impl Stream for SortedSizedRecordBatchStream {
                                 .collect::<Vec<_>>();
                             RowBatch::new(row_refs, indices)
                         });
-
-                        if let Some(ref tx) = self.rows_tx {
-                            tx.send(row_batch).ok();
-                        }
-                        let poll = Poll::Ready(Some(Ok(batch)));
-                        self.metrics.record_poll(poll)
+                        let poll = Poll::Ready(Some(Ok((batch, row_batch))));
+                        record_poll_sort_item(&self.metrics, poll)
                     }
                     Err(err) => {
                         let poll = Poll::Ready(Some(Err(err)));
-                        self.metrics.record_poll(poll)
+                        record_poll_sort_item(&self.metrics, poll)
                     }
                 }
             }
@@ -686,12 +676,6 @@ struct CompositeSlice {
     batch_idx: u32,
     start_row_idx: u32,
     len: usize,
-}
-
-impl RecordBatchStream for SortedSizedRecordBatchStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
 }
 
 async fn spill_partial_sorted_stream(
