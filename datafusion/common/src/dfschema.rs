@@ -314,6 +314,7 @@ impl DFSchema {
         }
     }
 
+    /// Find if the field exists with the given name
     pub fn has_column_with_unqualified_name(&self, name: &str) -> Result<bool> {
         let matches = self.fields_with_unqualified_name(name);
         match matches.len() {
@@ -328,6 +329,7 @@ impl DFSchema {
         }
     }
 
+    /// Find if the field exists with the given qualified name
     pub fn has_column_with_qualified_name(
         &self,
         qualifier: &str,
@@ -340,6 +342,7 @@ impl DFSchema {
         }
     }
 
+    /// Find if the field exists with the given qualified column
     pub fn has_column(&self, column: &Column) -> Result<bool> {
         match &column.relation {
             Some(r) => self.has_column_with_qualified_name(r, &column.name),
