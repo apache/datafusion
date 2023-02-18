@@ -88,11 +88,13 @@ async fn main() -> Result<()> {
         let catalogs = catlist.catalogs.read().unwrap();
         assert!(catalogs.contains_key("dircat"));
     };
+    // take the first 5 (arbitrary amount) keys from our schema's hashmap.
+    // in our `DirSchema`, the table names are equivalent to their key in the hashmap,
+    // so any key in the hashmap will now  be a queryable in our datafusion context.
     let parquet_tables = {
         let tables = parquet_schema.tables.read().unwrap();
         tables.keys().take(5).cloned().collect::<Vec<_>>()
     };
-    // tables are now available to be queried in the context
     for table in parquet_tables {
         println!("querying table {table} from parquet schema");
         let df = ctx
