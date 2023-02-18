@@ -1511,6 +1511,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_spill_no_row_encoding_edge_case() -> Result<()> {
+        // trigger spill there will be 4 batches with 5.5KB for each
+        let config = RuntimeConfig::new().with_memory_limit(12288, 1.0);
+        let runtime = Arc::new(RuntimeEnv::new(config)?);
+        let session_ctx = SessionContext::with_config_rt(SessionConfig::new(), runtime);
+
+        let partitions = 4;
+        let csv = test::scan_partitioned_csv(partitions)?;
+        let schema = csv.schema();
+
+        let sort_exec = Arc::new(SortExec::try_new(
+            vec![
+                // c2 uin32 column
+                PhysicalSortExpr {
+                    expr: col("c2", &schema)?,
+                    options: SortOptions::default(),
+                },
+            ],
+            Arc::new(CoalescePartitionsExec::new(csv)),
+            None,
+        )?);
+        let task_ctx = session_ctx.task_ctx();
+        let result = collect(sort_exec.clone(), task_ctx).await?;
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            session_ctx.runtime_env().memory_pool.reserved(),
+            0,
+            "The sort should have returned all memory used back to the memory manager"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_sort_fetch_memory_calculation() -> Result<()> {
         // This test mirrors down the size from the example above.
         let avg_batch_size = 5336;
