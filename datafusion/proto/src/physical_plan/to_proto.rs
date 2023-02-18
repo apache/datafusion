@@ -42,9 +42,9 @@ use datafusion::physical_plan::expressions::{
 use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 
 use crate::protobuf;
-use crate::protobuf::PhysicalSortExprNode;
+use crate::protobuf::{PhysicalSortExprNode, ScalarValue};
 use datafusion::logical_expr::BuiltinScalarFunction;
-use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
+use datafusion::physical_expr::expressions::{DateTimeIntervalExpr, GetIndexedFieldExpr};
 use datafusion::physical_expr::ScalarFunctionExpr;
 use datafusion::physical_plan::joins::utils::JoinSide;
 use datafusion_common::DataFusionError;
@@ -341,6 +341,17 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                         pattern: Some(Box::new(expr.pattern().to_owned().try_into()?)),
                     }),
                 )),
+            })
+        } else if let Some(expr) = expr.downcast_ref::<GetIndexedFieldExpr>() {
+            Ok(protobuf::PhysicalExprNode {
+                expr_type: Some(
+                    protobuf::physical_expr_node::ExprType::GetIndexedFieldExpr(
+                        Box::new(protobuf::PhysicalGetIndexedFieldExprNode {
+                            arg: Some(Box::new(expr.arg().to_owned().try_into()?)),
+                            key: Some(ScalarValue::try_from(expr.key())?),
+                        }),
+                    ),
+                ),
             })
         } else {
             Err(DataFusionError::Internal(format!(
