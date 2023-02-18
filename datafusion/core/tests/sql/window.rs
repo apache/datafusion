@@ -982,19 +982,20 @@ async fn window_frame_groups_multiple_order_columns() -> Result<()> {
 async fn window_frame_groups_without_order_by() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
-    // execute the query
-    let df = ctx
+    // Try executing an erroneous query (the ORDER BY clause is missing in the
+    // window frame):
+    let err = ctx
         .sql(
             "SELECT
             SUM(c4) OVER(PARTITION BY c2 GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
             FROM aggregate_test_100
             ORDER BY c9;",
         )
-        .await?;
-    let err = df.collect().await.unwrap_err();
+        .await
+        .unwrap_err();
     assert_contains!(
         err.to_string(),
-        "Execution error: GROUPS mode requires an ORDER BY clause".to_owned()
+        "Error during planning: GROUPS mode requires an ORDER BY clause".to_owned()
     );
     Ok(())
 }
@@ -1034,7 +1035,7 @@ async fn window_frame_creation() -> Result<()> {
     let results = df.collect().await;
     assert_eq!(
         results.err().unwrap().to_string(),
-        "Execution error: Invalid window frame: start bound (1 PRECEDING) cannot be larger than end bound (2 PRECEDING)"
+        "Error during planning: Invalid window frame: start bound (1 PRECEDING) cannot be larger than end bound (2 PRECEDING)"
     );
 
     let df = ctx
@@ -1047,7 +1048,20 @@ async fn window_frame_creation() -> Result<()> {
     let results = df.collect().await;
     assert_eq!(
         results.err().unwrap().to_string(),
-        "Execution error: Invalid window frame: start bound (2 FOLLOWING) cannot be larger than end bound (1 FOLLOWING)"
+        "Error during planning: Invalid window frame: start bound (2 FOLLOWING) cannot be larger than end bound (1 FOLLOWING)"
+    );
+
+    let err = ctx
+        .sql(
+            "SELECT
+                COUNT(c1) OVER(GROUPS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+                FROM aggregate_test_100;",
+        )
+        .await
+        .unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "Error during planning: GROUPS mode requires an ORDER BY clause"
     );
 
     Ok(())
@@ -1118,6 +1132,39 @@ async fn test_window_row_number_aggregate() -> Result<()> {
         "| 417 | 14  | 14  |",
         "| 794 | 95  | 95  |",
         "+-----+-----+-----+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_window_range_equivalent_frames() -> Result<()> {
+    let config = SessionConfig::new();
+    let ctx = SessionContext::with_config(config);
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT
+          c9,
+          COUNT(*) OVER(ORDER BY c9, c1 RANGE BETWEEN CURRENT ROW AND CURRENT ROW) AS cnt1,
+          COUNT(*) OVER(ORDER BY c9, c1 RANGE UNBOUNDED PRECEDING) AS cnt2,
+          COUNT(*) OVER(ORDER BY c9, c1 RANGE CURRENT ROW) AS cnt3,
+          COUNT(*) OVER(RANGE BETWEEN CURRENT ROW AND CURRENT ROW) AS cnt4,
+          COUNT(*) OVER(RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cnt5,
+          COUNT(*) OVER(RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS cnt6
+          FROM aggregate_test_100
+          ORDER BY c9
+          LIMIT 5";
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------+------+------+------+------+------+------+",
+        "| c9        | cnt1 | cnt2 | cnt3 | cnt4 | cnt5 | cnt6 |",
+        "+-----------+------+------+------+------+------+------+",
+        "| 28774375  | 1    | 1    | 1    | 100  | 100  | 100  |",
+        "| 63044568  | 1    | 2    | 1    | 100  | 100  | 100  |",
+        "| 141047417 | 1    | 3    | 1    | 100  | 100  | 100  |",
+        "| 141680161 | 1    | 4    | 1    | 100  | 100  | 100  |",
+        "| 145294611 | 1    | 5    | 1    | 100  | 100  | 100  |",
+        "+-----------+------+------+------+------+------+------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())

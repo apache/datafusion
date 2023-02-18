@@ -4,5 +4,6 @@ Sort: orders.o_orderpriority ASC NULLS LAST
       LeftSemi Join: orders.o_orderkey = lineitem.l_orderkey
         Filter: orders.o_orderdate >= Date32("8582") AND orders.o_orderdate < Date32("8674")
           TableScan: orders projection=[o_orderkey, o_orderdate, o_orderpriority]
-        Filter: lineitem.l_commitdate < lineitem.l_receiptdate
-          TableScan: lineitem projection=[l_orderkey, l_commitdate, l_receiptdate]
+        Projection: lineitem.l_orderkey
+          Filter: lineitem.l_commitdate < lineitem.l_receiptdate
+            TableScan: lineitem projection=[l_orderkey, l_commitdate, l_receiptdate]
