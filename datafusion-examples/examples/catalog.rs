@@ -42,7 +42,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-#[allow(clippy::await_holding_lock)] // sync lock simplifies code
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let repo_dir = std::fs::canonicalize(
@@ -83,12 +83,17 @@ async fn main() -> Result<()> {
     catalog.register_schema("csv", csv_schema.clone())?;
     // register our catalog in the context
     ctx.register_catalog("dircat", Arc::new(catalog));
-    // catalog was passed down into our custom catalog list since we overide the ctx's default
-    let catalogs = catlist.catalogs.read().unwrap();
-    assert!(catalogs.contains_key("dircat"));
-    let parquet_tables = parquet_schema.tables.read().unwrap();
+    {
+        // catalog was passed down into our custom catalog list since we overide the ctx's default
+        let catalogs = catlist.catalogs.read().unwrap();
+        assert!(catalogs.contains_key("dircat"));
+    };
+    let parquet_tables = {
+        let tables = parquet_schema.tables.read().unwrap();
+        tables.keys().take(5).cloned().collect::<Vec<_>>()
+    };
     // tables are now available to be queried in the context
-    for table in parquet_tables.keys().take(5) {
+    for table in parquet_tables {
         println!("querying table {table} from parquet schema");
         let df = ctx
             .sql(&format!("select * from dircat.parquet.\"{table}\" "))
@@ -104,9 +109,11 @@ async fn main() -> Result<()> {
             }
         }
     }
-    let table_to_drop = parquet_tables.keys().next().unwrap().to_owned();
-    drop(parquet_tables); // read lock
-                          // DDL example
+    let table_to_drop = {
+        let parquet_tables = parquet_schema.tables.read().unwrap();
+        parquet_tables.keys().next().unwrap().to_owned()
+    };
+    // DDL example
     let df = ctx
         .sql(&format!("DROP TABLE dircat.parquet.\"{table_to_drop}\""))
         .await?;
