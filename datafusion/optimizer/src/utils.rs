@@ -24,7 +24,7 @@ use datafusion_expr::expr::{BinaryExpr, Sort};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::expr_visitor::inspect_expr_pre;
 use datafusion_expr::logical_plan::LogicalPlanBuilder;
-use datafusion_expr::utils::{check_all_column_from_schema, from_plan};
+use datafusion_expr::utils::{check_all_columns_from_schema, from_plan};
 use datafusion_expr::{
     and,
     logical_plan::{Filter, LogicalPlan},
@@ -486,7 +486,7 @@ pub(crate) fn extract_join_filters(
         let mut subquery_filters: Vec<Expr> = vec![];
         for expr in subquery_filter_exprs {
             let cols = expr.to_columns()?;
-            if check_all_column_from_schema(&cols, input_schema.clone()) {
+            if check_all_columns_from_schema(&cols, input_schema.clone())? {
                 subquery_filters.push(expr.clone());
             } else {
                 join_filters.push(expr.clone())

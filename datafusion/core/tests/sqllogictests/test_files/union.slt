@@ -57,7 +57,7 @@ Alice
 John
 
 # union with type coercion
-query T rowsort
+query IT rowsort
 (   
     SELECT * FROM t1
     EXCEPT

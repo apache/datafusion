@@ -101,22 +101,22 @@ select 1.0::DECIMAL(5,3) as one, 2.023::DECIMAL(5,3) as two, 3.023::DECIMAL(5,2)
 ----
 1 2.023 3.02
 
-query ?
+query D
 select '2018-01-01'::DATE
 ----
 2018-01-01
 
-query ?
+query D
 select '12:00:01'::TIME
 ----
 12:00:01
 
-query ?
+query P
 select '2018-01-01 12:00:00'::TIMESTAMP
 ----
 2018-01-01T12:00:00
 
-query I
+query BB
 select true::BOOLEAN, 'false'::BOOLEAN
 ----
 true false
