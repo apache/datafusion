@@ -349,12 +349,7 @@ impl LogicalPlanBuilder {
                 input,
                 mut expr,
                 schema: _,
-            }) if missing_cols
-                .iter()
-                // TODO: how to return err in closure, maybe there is hethod like try_all in iter?
-                // or use 'for loop' instead of all
-                .all(|c| input.schema().has_column(c).unwrap()) =>
-            {
+            }) if missing_cols.iter().all(|c| input.schema().has_column(c)) => {
                 let mut missing_exprs = missing_cols
                     .iter()
                     .map(|c| normalize_col(Expr::Column(c.clone()), &input))
@@ -658,13 +653,13 @@ impl LogicalPlanBuilder {
         let mut join_on: Vec<(Expr, Expr)> = vec![];
         let mut filters: Option<Expr> = None;
         for (l, r) in &on {
-            if self.plan.schema().has_column(l)?
-                && right.schema().has_column(r)?
+            if self.plan.schema().has_column(l)
+                && right.schema().has_column(r)
                 && can_hash(self.plan.schema().field_from_column(l)?.data_type())
             {
                 join_on.push((Expr::Column(l.clone()), Expr::Column(r.clone())));
-            } else if self.plan.schema().has_column(l)?
-                && right.schema().has_column(r)?
+            } else if self.plan.schema().has_column(l)
+                && right.schema().has_column(r)
                 && can_hash(self.plan.schema().field_from_column(r)?.data_type())
             {
                 join_on.push((Expr::Column(r.clone()), Expr::Column(l.clone())));

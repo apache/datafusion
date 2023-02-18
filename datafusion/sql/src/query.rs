@@ -178,7 +178,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let columns = expr.to_columns()?;
 
                 columns.into_iter().try_for_each::<_, Result<()>>(|c| {
-                    if !schema.has_column(&c)? {
+                    if !schema.has_column(&c) {
                         missing_cols.push(c);
                     }
                     Ok(())

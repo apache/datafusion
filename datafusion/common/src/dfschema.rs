@@ -270,6 +270,21 @@ impl DFSchema {
             .collect()
     }
 
+    /// Find all fields match the given qualified name
+    pub fn fields_with_qualified_name(
+        &self,
+        qualifier: &str,
+        name: &str,
+    ) -> Vec<&DFField> {
+        self.fields
+            .iter()
+            .filter(|field| {
+                field.qualifier().map(|q| q.eq(qualifier)).unwrap_or(false)
+                    && field.name() == name
+            })
+            .collect()
+    }
+
     /// Find all fields match the given name
     pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&DFField> {
         self.fields
@@ -315,35 +330,25 @@ impl DFSchema {
     }
 
     /// Find if the field exists with the given name
-    pub fn has_column_with_unqualified_name(&self, name: &str) -> Result<bool> {
+    pub fn has_column_with_unqualified_name(&self, name: &str) -> bool {
         let matches = self.fields_with_unqualified_name(name);
         match matches.len() {
-            0 => Ok(false),
-            1 => Ok(true),
-            _ => Err(DataFusionError::SchemaError(
-                SchemaError::AmbiguousReference {
-                    qualifier: None,
-                    name: name.to_string(),
-                },
-            )),
+            1 => true,
+            _ => false,
         }
     }
 
     /// Find if the field exists with the given qualified name
-    pub fn has_column_with_qualified_name(
-        &self,
-        qualifier: &str,
-        name: &str,
-    ) -> Result<bool> {
-        let res = self.index_of_column_by_name(Some(qualifier), name)?;
-        match res {
-            Some(_) => Ok(true),
-            None => Ok(false),
+    pub fn has_column_with_qualified_name(&self, qualifier: &str, name: &str) -> bool {
+        let matches = self.fields_with_qualified_name(qualifier, name);
+        match matches.len() {
+            1 => true,
+            _ => false,
         }
     }
 
     /// Find if the field exists with the given qualified column
-    pub fn has_column(&self, column: &Column) -> Result<bool> {
+    pub fn has_column(&self, column: &Column) -> bool {
         match &column.relation {
             Some(r) => self.has_column_with_qualified_name(r, &column.name),
             None => self.has_column_with_unqualified_name(&column.name),
