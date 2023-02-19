@@ -26,6 +26,8 @@ use crate::error::Result;
 use crate::from_slice::FromSlice;
 use crate::logical_expr::LogicalPlan;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
+use crate::physical_plan::memory::MemoryExec;
+use crate::physical_plan::ExecutionPlan;
 use crate::test::object_store::local_unpartitioned_file;
 use crate::test_util::{aggr_test_schema, arrow_test_data};
 use array::ArrayRef;
@@ -196,7 +198,7 @@ pub fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {
     assert_eq!(actual, expected);
 }
 
-/// returns a table with 3 columns of i32 in memory
+/// returns record batch with 3 columns of i32 in memory
 pub fn build_table_i32(
     a: (&str, &Vec<i32>),
     b: (&str, &Vec<i32>),
@@ -217,6 +219,17 @@ pub fn build_table_i32(
         ],
     )
     .unwrap()
+}
+
+/// returns memory table scan wrapped around record batch with 3 columns of i32
+pub fn build_table_scan_i32(
+    a: (&str, &Vec<i32>),
+    b: (&str, &Vec<i32>),
+    c: (&str, &Vec<i32>),
+) -> Arc<dyn ExecutionPlan> {
+    let batch = build_table_i32(a, b, c);
+    let schema = batch.schema();
+    Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap())
 }
 
 /// Returns the column names on the schema
