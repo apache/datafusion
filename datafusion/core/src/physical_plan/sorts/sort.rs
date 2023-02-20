@@ -106,7 +106,6 @@ impl ExternalSorter {
         session_config: Arc<SessionConfig>,
         runtime: Arc<RuntimeEnv>,
         fetch: Option<usize>,
-        preserve_output_rows: bool,
     ) -> Self {
         let metrics = metrics_set.new_intermediate_baseline(partition_id);
 
@@ -125,8 +124,12 @@ impl ExternalSorter {
             fetch,
             reservation,
             partition_id,
-            preserve_output_rows,
+            preserve_output_rows: false,
         }
+    }
+
+    pub fn set_preserve_output_rows(&mut self, val: bool) {
+        self.preserve_output_rows = val;
     }
 
     async fn insert_batch(
@@ -1162,8 +1165,10 @@ async fn do_sort(
         Arc::new(context.session_config().clone()),
         context.runtime_env(),
         fetch,
-        preserve_rows,
     );
+    if preserve_rows {
+        sorter.set_preserve_output_rows(true);
+    }
     while let Some(batch) = input.next().await {
         let batch = batch?;
         sorter.insert_batch(batch, &tracking_metrics).await?;
