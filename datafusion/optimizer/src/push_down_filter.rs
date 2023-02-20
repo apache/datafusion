@@ -561,9 +561,7 @@ impl OptimizerRule for PushDownFilter {
             | LogicalPlan::Sort(_) => {
                 // commutable
                 let new_filter =
-                    plan.with_new_inputs(&[
-                        (**(child_plan.inputs().get(0).unwrap())).clone()
-                    ])?;
+                    plan.with_new_inputs(&[child_plan.inputs()[0].clone()])?;
                 child_plan.with_new_inputs(&[new_filter])?
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
