@@ -154,7 +154,7 @@ fn where_exists_distinct() -> Result<()> {
     let expected = "Projection: test.col_int32\
                     \n  LeftSemi Join: test.col_int32 = t2.col_int32\
                     \n    TableScan: test projection=[col_int32]\
-                    \n    Projection: t2.col_int32\
+                    \n    Distinct:\
                     \n      SubqueryAlias: t2\
                     \n        TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan:?}"));
