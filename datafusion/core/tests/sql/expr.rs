@@ -514,7 +514,7 @@ async fn query_without_from() -> Result<()> {
         "+---------------------+---------------------+---------------+",
         "| Int64(1) + Int64(2) | Int64(3) / Int64(4) | cos(Int64(0)) |",
         "+---------------------+---------------------+---------------+",
-        "| 3                   | 0                   | 1             |",
+        "| 3                   | 0                   | 1.0           |",
         "+---------------------+---------------------+---------------+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -818,18 +818,12 @@ async fn test_array_literals() -> Result<()> {
 
 #[tokio::test]
 async fn test_struct_literals() -> Result<()> {
-    test_expression!(
-        "STRUCT(1,2,3,4,5)",
-        "{\"c0\": 1, \"c1\": 2, \"c2\": 3, \"c3\": 4, \"c4\": 5}"
-    );
-    test_expression!("STRUCT(Null)", "{\"c0\": null}");
-    test_expression!("STRUCT(2)", "{\"c0\": 2}");
-    test_expression!("STRUCT('1',Null)", "{\"c0\": \"1\", \"c1\": null}");
-    test_expression!("STRUCT(true, false)", "{\"c0\": true, \"c1\": false}");
-    test_expression!(
-        "STRUCT('str1', 'str2')",
-        "{\"c0\": \"str1\", \"c1\": \"str2\"}"
-    );
+    test_expression!("STRUCT(1,2,3,4,5)", "{c0: 1, c1: 2, c2: 3, c3: 4, c4: 5}");
+    test_expression!("STRUCT(Null)", "{c0: }");
+    test_expression!("STRUCT(2)", "{c0: 2}");
+    test_expression!("STRUCT('1',Null)", "{c0: 1, c1: }");
+    test_expression!("STRUCT(true, false)", "{c0: true, c1: false}");
+    test_expression!("STRUCT('str1', 'str2')", "{c0: str1, c1: str2}");
 
     Ok(())
 }
@@ -1236,53 +1230,53 @@ async fn in_list_array() -> Result<()> {
 
 #[tokio::test]
 async fn test_extract_date_part() -> Result<()> {
-    test_expression!("date_part('YEAR', CAST('2000-01-01' AS DATE))", "2000");
+    test_expression!("date_part('YEAR', CAST('2000-01-01' AS DATE))", "2000.0");
     test_expression!(
         "EXTRACT(year FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "2020"
+        "2020.0"
     );
-    test_expression!("date_part('QUARTER', CAST('2000-01-01' AS DATE))", "1");
+    test_expression!("date_part('QUARTER', CAST('2000-01-01' AS DATE))", "1.0");
     test_expression!(
         "EXTRACT(quarter FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "3"
+        "3.0"
     );
-    test_expression!("date_part('MONTH', CAST('2000-01-01' AS DATE))", "1");
+    test_expression!("date_part('MONTH', CAST('2000-01-01' AS DATE))", "1.0");
     test_expression!(
         "EXTRACT(month FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "9"
+        "9.0"
     );
-    test_expression!("date_part('WEEK', CAST('2003-01-01' AS DATE))", "1");
+    test_expression!("date_part('WEEK', CAST('2003-01-01' AS DATE))", "1.0");
     test_expression!(
         "EXTRACT(WEEK FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "37"
+        "37.0"
     );
-    test_expression!("date_part('DAY', CAST('2000-01-01' AS DATE))", "1");
+    test_expression!("date_part('DAY', CAST('2000-01-01' AS DATE))", "1.0");
     test_expression!(
         "EXTRACT(day FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "8"
+        "8.0"
     );
-    test_expression!("date_part('DOY', CAST('2000-01-01' AS DATE))", "1");
+    test_expression!("date_part('DOY', CAST('2000-01-01' AS DATE))", "1.0");
     test_expression!(
         "EXTRACT(doy FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "252"
+        "252.0"
     );
-    test_expression!("date_part('DOW', CAST('2000-01-01' AS DATE))", "6");
+    test_expression!("date_part('DOW', CAST('2000-01-01' AS DATE))", "6.0");
     test_expression!(
         "EXTRACT(dow FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "2"
+        "2.0"
     );
-    test_expression!("date_part('HOUR', CAST('2000-01-01' AS DATE))", "0");
+    test_expression!("date_part('HOUR', CAST('2000-01-01' AS DATE))", "0.0");
     test_expression!(
         "EXTRACT(hour FROM to_timestamp('2020-09-08T12:03:03+00:00'))",
-        "12"
+        "12.0"
     );
     test_expression!(
         "EXTRACT(minute FROM to_timestamp('2020-09-08T12:12:00+00:00'))",
-        "12"
+        "12.0"
     );
     test_expression!(
         "date_part('minute', to_timestamp('2020-09-08T12:12:00+00:00'))",
-        "12"
+        "12.0"
     );
     test_expression!(
         "EXTRACT(second FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
@@ -1298,7 +1292,7 @@ async fn test_extract_date_part() -> Result<()> {
     );
     test_expression!(
         "EXTRACT(nanosecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
-        "12123456780"
+        "1.212345678e10"
     );
     test_expression!(
         "date_part('second', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
@@ -1314,7 +1308,7 @@ async fn test_extract_date_part() -> Result<()> {
     );
     test_expression!(
         "date_part('nanosecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
-        "12123456780"
+        "1.212345678e10"
     );
     Ok(())
 }
