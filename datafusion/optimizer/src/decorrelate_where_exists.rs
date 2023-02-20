@@ -16,14 +16,16 @@
 // under the License.
 
 use crate::optimizer::ApplyOrder;
-use crate::utils::{conjunction, extract_join_filters, split_conjunction};
+use crate::utils::{
+    collect_subquery_cols, conjunction, extract_join_filters, split_conjunction,
+};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_expr::{
     logical_plan::{Distinct, Filter, JoinType, Subquery},
     Expr, LogicalPlan, LogicalPlanBuilder,
 };
-use std::collections::BTreeSet;
+
 use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
@@ -196,22 +198,11 @@ fn optimize_subquery(
             }
 
             let input_schema = subquery_input.schema();
-            let subquery_cols: BTreeSet<Column> =
-                join_filters
-                    .iter()
-                    .try_fold(BTreeSet::new(), |mut cols, expr| {
-                        let using_cols: Vec<Column> = expr
-                            .to_columns()?
-                            .into_iter()
-                            .filter(|col| input_schema.field_from_column(col).is_ok())
-                            .collect::<_>();
-
-                        cols.extend(using_cols);
-                        Result::<_, DataFusionError>::Ok(cols)
-                    })?;
-
             let mut project_exprs: Vec<Expr> =
-                subquery_cols.into_iter().map(Expr::Column).collect();
+                collect_subquery_cols(&join_filters, input_schema.clone())?
+                    .into_iter()
+                    .map(Expr::Column)
+                    .collect();
             let original_project_exprs = &projection.expr;
             if keep_original_project && !original_project_exprs.is_empty() {
                 let exprs = original_project_exprs
