@@ -140,7 +140,13 @@ impl PlanWithSortRequirements {
         .map(
             |(child, from_parent, maintains_input_order, required_dist)| {
                 let child_satisfy_single_distribution =
-                    matches!(required_dist, Distribution::SinglePartition);
+                    matches!(required_dist, Distribution::SinglePartition)
+                        || (self.satisfy_single_distribution
+                            && self
+                                .plan
+                                .as_any()
+                                .downcast_ref::<CoalescePartitionsExec>()
+                                .is_none());
                 let child_impact_result_ordering = if self
                     .plan
                     .as_any()
@@ -637,7 +643,6 @@ fn analyze_immediate_sort_removal(
     // Remove unnecessary SortExec
     else if !requirements.impact_result_ordering {
         if requirements.satisfy_single_distribution
-            && !sort_exec.preserve_partitioning()
             && sort_exec.input().output_partitioning().partition_count() > 1
         {
             Some(PlanWithSortRequirements {
@@ -1750,6 +1755,60 @@ mod tests {
         let expected_optimized = [
             "SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
             "  MemoryExec: partitions=0, partition_sizes=[]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_remove_unnecessary_sort6() -> Result<()> {
+        let schema = create_test_schema()?;
+        let source1 = repartition_exec(memory_exec(&schema));
+
+        let source2 = repartition_exec(memory_exec(&schema));
+        let union = union_exec(vec![source1, source2]);
+
+        let sort_exprs = vec![sort_expr("non_nullable_col", &schema)];
+        let sort = sort_exec(sort_exprs.clone(), union);
+        let spm = sort_preserving_merge_exec(sort_exprs, sort);
+
+        let filter = filter_exec(
+            Arc::new(NotExpr::new(
+                col("non_nullable_col", schema.as_ref()).unwrap(),
+            )),
+            spm,
+        );
+
+        let sort_exprs = vec![
+            sort_expr("nullable_col", &schema),
+            sort_expr("non_nullable_col", &schema),
+        ];
+        let physical_plan = sort_exec(sort_exprs, filter);
+
+        // When removing a `SortPreservingMergeExec`, make sure that partitioning
+        // requirements are not violated. In some cases, we may need to replace
+        // it with a `CoalescePartitionsExec` instead of directly removing it.
+        let expected_input = vec![
+            "SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "  FilterExec: NOT non_nullable_col@1",
+            "    SortPreservingMergeExec: [non_nullable_col@1 ASC]",
+            "      SortExec: expr=[non_nullable_col@1 ASC], global=true",
+            "        UnionExec",
+            "          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=0",
+            "            MemoryExec: partitions=0, partition_sizes=[]",
+            "          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=0",
+            "            MemoryExec: partitions=0, partition_sizes=[]",
+        ];
+
+        let expected_optimized = vec![
+            "SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], global=true",
+            "  FilterExec: NOT non_nullable_col@1",
+            "    CoalescePartitionsExec",
+            "      UnionExec",
+            "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=0",
+            "          MemoryExec: partitions=0, partition_sizes=[]",
+            "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=0",
+            "          MemoryExec: partitions=0, partition_sizes=[]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())
