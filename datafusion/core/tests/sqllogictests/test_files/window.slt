@@ -528,7 +528,7 @@ LIMIT 5
 
 # async fn window_frame_ranges_preceding_following_desc
 # This query should pass. Tracked in  https://github.com/apache/arrow-datafusion/issues/5346
-query error DataFusion error: Internal error: Operator + is not implemented
+query error DataFusion error: Internal error: Operator \+ is not implemented
 SELECT
 SUM(c4) OVER(ORDER BY c2 DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
 SUM(c3) OVER(ORDER BY c2 DESC RANGE BETWEEN 10000 PRECEDING AND 10000 FOLLOWING),
