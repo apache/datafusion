@@ -87,6 +87,9 @@ struct ExternalSorter {
     fetch: Option<usize>,
     reservation: MemoryReservation,
     partition_id: usize,
+    // if this flag is true, the output of the sort will
+    // have non-None `RowBatch`
+    preserve_output_rows: bool,
 }
 struct Spill {
     record_batch_file: NamedTempFile,
@@ -103,6 +106,7 @@ impl ExternalSorter {
         session_config: Arc<SessionConfig>,
         runtime: Arc<RuntimeEnv>,
         fetch: Option<usize>,
+        preserve_output_rows: bool,
     ) -> Self {
         let metrics = metrics_set.new_intermediate_baseline(partition_id);
 
@@ -121,6 +125,7 @@ impl ExternalSorter {
             fetch,
             reservation,
             partition_id,
+            preserve_output_rows,
         }
     }
 
@@ -223,7 +228,7 @@ impl ExternalSorter {
                 &self.expr,
                 tracking_metrics,
                 self.session_config.batch_size(),
-                true,
+                self.preserve_output_rows,
             )?;
             Ok(SortedStream::new(Box::pin(sort_stream), 0))
         } else if !self.in_mem_batches.is_empty() {
@@ -826,7 +831,7 @@ impl SortExec {
     }
     /// to be used by parent nodes to run execute that incldues the row
     /// encodings in the result stream
-    pub(crate) fn execute_save_row_encoding(
+    pub(crate) fn execute_save_rows(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
@@ -849,13 +854,14 @@ impl SortExec {
                 self.metrics_set.clone(),
                 context,
                 self.fetch(),
+                true,
             ))
             .try_flatten(),
         ))
     }
     /// to be used by parent nodes to spawn execution into tokio threadpool
     /// and write results to `tx`
-    pub(crate) fn execution_spawn_task(
+    pub(crate) fn execution_spawn_save_rows(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
@@ -881,14 +887,17 @@ impl SortExec {
                 Ok(stream) => stream,
             };
             debug!("End SortExec's input.execute for partition: {}", partition);
-            let mut sort_item_stream =
-                match do_sort(input, partition, expr, metrics, context, fetch).await {
-                    Ok(stream) => stream,
-                    Err(err) => {
-                        tx.send(Err(err)).await.ok();
-                        return;
-                    }
-                };
+            let mut sort_item_stream = match do_sort(
+                input, partition, expr, metrics, context, fetch, true,
+            )
+            .await
+            {
+                Ok(stream) => stream,
+                Err(err) => {
+                    tx.send(Err(err)).await.ok();
+                    return;
+                }
+            };
             while let Some(item) = sort_item_stream.next().await {
                 if tx.send(item).await.is_err() {
                     debug!("Stopping execution: output is gone, plan cancelling: {disp}");
@@ -992,6 +1001,8 @@ impl ExecutionPlan for SortExec {
                 self.metrics_set.clone(),
                 context,
                 self.fetch(),
+                // default execute shouldnt save row encodings
+                false,
             ))
             .try_flatten()
             .map_ok(|(record_batch, _rows)| record_batch),
@@ -1132,6 +1143,7 @@ async fn do_sort(
     metrics_set: CompositeMetricsSet,
     context: Arc<TaskContext>,
     fetch: Option<usize>,
+    preserve_rows: bool,
 ) -> Result<SortedStream> {
     debug!(
         "Start do_sort for partition {} of context session_id {} and task_id {:?}",
@@ -1150,6 +1162,7 @@ async fn do_sort(
         Arc::new(context.session_config().clone()),
         context.runtime_env(),
         fetch,
+        preserve_rows,
     );
     while let Some(batch) = input.next().await {
         let batch = batch?;

@@ -198,7 +198,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                                 self.input.as_any().downcast_ref::<SortExec>()
                             {
                                 let (tx, rx) = mpsc::channel(1);
-                                let join_handle = sort_plan.execution_spawn_task(
+                                let join_handle = sort_plan.execution_spawn_save_rows(
                                     part_i,
                                     context.clone(),
                                     tx,
@@ -228,10 +228,8 @@ impl ExecutionPlan for SortPreservingMergeExec {
                             if let Some(sort_plan) =
                                 self.input.as_any().downcast_ref::<SortExec>()
                             {
-                                let sortstream = sort_plan.execute_save_row_encoding(
-                                    partition,
-                                    context.clone(),
-                                )?;
+                                let sortstream = sort_plan
+                                    .execute_save_rows(partition, context.clone())?;
                                 Ok(SortedStream::new(sortstream, 0))
                             } else {
                                 let stream =
@@ -443,27 +441,33 @@ impl SortPreservingMergeStream {
                 }
                 Some(Ok((batch, preserved_rows))) => {
                     if batch.num_rows() > 0 {
-                        let cols = self
-                            .column_expressions
-                            .iter()
-                            .map(|expr| {
-                                Ok(expr.evaluate(&batch)?.into_array(batch.num_rows()))
-                            })
-                            .collect::<Result<Vec<_>>>()?;
                         // use preserved row encoding if it existed, otherwise create now
                         let rows = match preserved_rows {
                             Some(rows) => {
                                 // dbg!(&rows);
                                 rows
                             }
-                            None => match self.row_converter.convert_columns(&cols) {
-                                Ok(rows) => rows.into(),
-                                Err(e) => {
-                                    return Poll::Ready(Err(
-                                        DataFusionError::ArrowError(e),
-                                    ));
+                            None => {
+                                let cols = self
+                                    .column_expressions
+                                    .iter()
+                                    .map(|expr| {
+                                        Ok(expr
+                                            .evaluate(&batch)?
+                                            .into_array(batch.num_rows()))
+                                    })
+                                    .collect::<Result<Vec<_>>>()?;
+                                match self.row_converter.convert_columns(&cols) {
+                                    // creates RowBatch where RowSelection refs array is empty
+                                    // as well as indices array
+                                    Ok(rows) => rows.into(),
+                                    Err(e) => {
+                                        return Poll::Ready(Err(
+                                            DataFusionError::ArrowError(e),
+                                        ));
+                                    }
                                 }
-                            },
+                            }
                         };
                         // if this stream should emit the row encoding, save it in
                         // batches so that the sorted rows can be constructed

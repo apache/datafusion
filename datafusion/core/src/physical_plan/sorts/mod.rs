@@ -229,6 +229,8 @@ pub struct RowBatch {
     rows: Vec<Arc<RowSelection>>,
     // first item = index of the ref in `rows`, second item=index within that `RowSelection`
     indices: Arc<Vec<(usize, usize)>>,
+    /// if wrapping a single rows object
+    single_rows: Option<Arc<Rows>>,
 }
 
 impl RowBatch {
@@ -240,18 +242,27 @@ impl RowBatch {
         Self {
             rows,
             indices: Arc::new(indices),
+            single_rows: None,
         }
     }
 
     /// Returns the nth row in the batch.
     pub fn row(&self, n: usize) -> Row {
-        let (rows_ref_idx, row_idx) = self.indices[n];
-        self.rows[rows_ref_idx].row(row_idx)
+        match &self.single_rows {
+            Some(rows) => rows.row(n),
+            None => {
+                let (rows_ref_idx, row_idx) = self.indices[n];
+                self.rows[rows_ref_idx].row(row_idx)
+            }
+        }
     }
 
     /// Number of rows selected
     pub fn num_rows(&self) -> usize {
-        self.indices.len()
+        match &self.single_rows {
+            Some(rows) => rows.num_rows(),
+            None => self.indices.len(),
+        }
     }
     /// Iterate over rows in their selected order
     pub fn iter(&self) -> RowBatchIter {
@@ -262,9 +273,14 @@ impl RowBatch {
     }
     /// Amount of bytes
     pub fn memory_size(&self) -> usize {
-        let indices_size = self.indices.len() * 2 * std::mem::size_of::<usize>();
-        let rows_size = self.rows.iter().map(|r| r.size()).sum::<usize>();
-        rows_size + indices_size + std::mem::size_of::<Self>()
+        match &self.single_rows {
+            Some(rows) => rows.size() + std::mem::size_of::<Self>(),
+            None => {
+                let indices_size = self.indices.len() * 2 * std::mem::size_of::<usize>();
+                let rows_size = self.rows.iter().map(|r| r.size()).sum::<usize>();
+                rows_size + indices_size + std::mem::size_of::<Self>()
+            }
+        }
     }
 }
 impl From<RowSelection> for RowBatch {
@@ -272,12 +288,17 @@ impl From<RowSelection> for RowBatch {
         Self {
             indices: Arc::new((0..value.num_rows()).map(|i| (0, i)).collect()),
             rows: vec![Arc::new(value)],
+            single_rows: None,
         }
     }
 }
 impl From<Rows> for RowBatch {
     fn from(value: Rows) -> Self {
-        Into::<RowSelection>::into(value).into()
+        Self {
+            rows: Vec::with_capacity(0),
+            indices: Arc::new(Vec::with_capacity(0)),
+            single_rows: Some(Arc::new(value)),
+        }
     }
 }
 
