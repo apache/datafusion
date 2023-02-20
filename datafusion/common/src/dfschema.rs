@@ -338,10 +338,7 @@ impl DFSchema {
     /// Find if the field exists with the given qualified name
     pub fn has_column_with_qualified_name(&self, qualifier: &str, name: &str) -> bool {
         let matches = self.fields_with_qualified_name(qualifier, name);
-        match matches.len() {
-            1 => true,
-            _ => false,
-        }
+matches.len() == 1 
     }
 
     /// Find if the field exists with the given qualified column
