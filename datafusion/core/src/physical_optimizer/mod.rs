@@ -31,7 +31,6 @@ pub mod sort_enforcement;
 mod utils;
 
 pub mod pipeline_fixer;
-pub mod sort_enforcement2;
 #[cfg(test)]
 pub mod test_utils;
 

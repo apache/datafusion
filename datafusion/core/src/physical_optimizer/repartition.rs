@@ -874,9 +874,7 @@ mod tests {
             sort_preserving_merge_exec(sort_exec(projection_exec(parquet_exec()), true));
 
         let expected = &[
-            "SortPreservingMergeExec: [c1@0 ASC]",
-            // Expect repartition on the input to the sort (as it can benefit from additional parallelism)
-            "SortExec: expr=[c1@0 ASC], global=false",
+            "SortExec: expr=[c1@0 ASC], global=true",
             "ProjectionExec: expr=[c1@0 as c1]",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
@@ -1058,7 +1056,6 @@ mod tests {
 
         // parallelization potentially could break sort order
         let expected = &[
-            "SortPreservingMergeExec: [c1@0 ASC]",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
         ];
 
@@ -1108,7 +1105,6 @@ mod tests {
 
         // data should not be repartitioned / resorted
         let expected = &[
-            "SortPreservingMergeExec: [c1@0 ASC]",
             "ProjectionExec: expr=[c1@0 as c1]",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
         ];

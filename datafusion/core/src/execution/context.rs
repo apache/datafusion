@@ -97,7 +97,7 @@ use crate::execution::memory_pool::MemoryPool;
 use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
-use crate::physical_optimizer::sort_enforcement2::TopDownEnforceSorting;
+use crate::physical_optimizer::sort_enforcement::EnforceSorting;
 use datafusion_optimizer::OptimizerConfig;
 use datafusion_sql::planner::object_name_to_table_reference;
 use uuid::Uuid;
@@ -1532,7 +1532,7 @@ impl SessionState {
             // ordering. Please make sure that the whole plan tree is determined before this rule.
             // Note that one should always run this rule after running the EnforceDistribution rule
             // as the latter may break local sorting requirements.
-            Arc::new(TopDownEnforceSorting::new()),
+            Arc::new(EnforceSorting::new()),
             // The CoalesceBatches rule will not influence the distribution and ordering of the
             // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
             Arc::new(CoalesceBatches::new()),

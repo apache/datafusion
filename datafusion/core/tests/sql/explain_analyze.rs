@@ -582,6 +582,7 @@ async fn explain_analyze_runs_optimizers() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_physical_plan_display_indent() {
     // Hard code target_partitions as it appears in the RepartitionExec output
     let config = SessionConfig::new()

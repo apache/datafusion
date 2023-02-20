@@ -971,7 +971,7 @@ mod tests {
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::physical_optimizer::sort_enforcement2::TopDownEnforceSorting;
+    use crate::physical_optimizer::sort_enforcement::EnforceSorting;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
@@ -1157,8 +1157,7 @@ mod tests {
             //       `EnforceSorting` and `EnfoceDistribution`.
             // TODO: Orthogonalize the tests here just to verify `EnforceDistribution` and create
             //       new tests for the cascade.
-            let optimizer = TopDownEnforceSorting {};
-            let optimized = optimizer.optimize(optimized, &config)?;
+            let optimized = EnforceSorting::new().optimize(optimized, &config)?;
 
             // Now format correctly
             let plan = displayable(optimized.as_ref()).indent().to_string();
@@ -2092,15 +2091,15 @@ mod tests {
         // Only two RepartitionExecs added
         let expected = &[
             "SortMergeJoin: join_type=Inner, on=[(Column { name: \"b3\", index: 1 }, Column { name: \"b2\", index: 1 }), (Column { name: \"a3\", index: 0 }, Column { name: \"a2\", index: 0 })]",
+            "SortExec: expr=[b3@1 ASC,a3@0 ASC], global=false",
             "ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]",
             "ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]",
-            "SortExec: expr=[b1@0 ASC,a1@1 ASC], global=false",
             "AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 0 }, Column { name: \"a1\", index: 1 }], 10), input_partitions=1",
             "AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "SortExec: expr=[b2@1 ASC,a2@0 ASC], global=false",
             "ProjectionExec: expr=[a@1 as a2, b@0 as b2]",
-            "SortExec: expr=[b@0 ASC,a@1 ASC], global=false",
             "AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b\", index: 0 }, Column { name: \"a\", index: 1 }], 10), input_partitions=1",
             "AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]",

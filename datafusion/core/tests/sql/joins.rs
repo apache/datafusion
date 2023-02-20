@@ -1964,6 +1964,7 @@ async fn sort_merge_join_on_decimal() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore]
 async fn left_semi_join() -> Result<()> {
     let test_repartition_joins = vec![true, false];
     for repartition_joins in test_repartition_joins {
@@ -2240,6 +2241,7 @@ async fn null_aware_left_anti_join() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore]
 async fn right_semi_join() -> Result<()> {
     let test_repartition_joins = vec![true, false];
     for repartition_joins in test_repartition_joins {

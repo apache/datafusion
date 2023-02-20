@@ -397,12 +397,16 @@ pub fn map_requirement_before_projection(
     parent_required: Option<&[PhysicalSortRequirements]>,
     proj_exprs: &[(Arc<dyn PhysicalExpr>, String)],
 ) -> Option<Vec<PhysicalSortRequirements>> {
+    println!("parent_required: {:?}", parent_required);
+    println!("proj_exprs: {:?}", proj_exprs);
     if let Some(requirement) = parent_required {
         let required_expr = create_sort_expr_from_requirement(requirement)
             .iter()
             .map(|sort_expr| sort_expr.expr.clone())
             .collect::<Vec<_>>();
+        println!("required_expr:{:?}", required_expr);
         let new_exprs = map_columns_before_projection(&required_expr, proj_exprs);
+        println!("new_exprs:{:?}", new_exprs);
         if new_exprs.len() == requirement.len() {
             let new_request = new_exprs
                 .iter()

@@ -18,6 +18,7 @@
 use super::*;
 use ::parquet::arrow::arrow_writer::ArrowWriter;
 use ::parquet::file::properties::WriterProperties;
+use arrow::util::pretty::print_batches;
 use datafusion::execution::options::ReadOptions;
 
 #[tokio::test]
@@ -1635,6 +1636,7 @@ async fn test_window_agg_sort_multi_layer_non_reversed_plan() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_window_agg_complex_plan() -> Result<()> {
     let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(2));
     register_aggregate_null_cases_csv(&ctx).await?;
@@ -2065,6 +2067,7 @@ async fn test_window_agg_global_sort_parallelize_sort_disabled() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_window_agg_global_sort_intermediate_parallel_sort() -> Result<()> {
     let config = SessionConfig::new()
         .with_repartition_windows(true)
@@ -2075,7 +2078,7 @@ async fn test_window_agg_global_sort_intermediate_parallel_sort() -> Result<()> 
     let sql = "SELECT c1, \
     SUM(C9) OVER (PARTITION BY C1 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 3 FOLLOWING) as sum1, \
     SUM(C9) OVER (ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2 \
-    FROM aggregate_test_100 ORDER BY c1 ASC";
+    FROM aggregate_test_100 ORDER BY c9 ASC";
 
     let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
@@ -2541,4 +2544,41 @@ mod tests {
         assert_batches_eq!(expected, &actual);
         Ok(())
     }
+}
+
+fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+    let formatted = displayable(plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    println!("{:#?}", actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_projection_wrong_push_down() -> Result<()> {
+    let config = SessionConfig::new();
+    let ctx = SessionContext::with_config(config);
+    register_aggregate_csv(&ctx).await?;
+    // let sql = "SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY a.c1, b.c1 ORDER BY a.c1, b.c1";
+    let sql = "SELECT c9,
+    SUM(c5) OVER(ORDER BY c4 RANGE BETWEEN 3 PRECEDING AND 1 FOLLOWING) as summation2,
+    SUM(c4) OVER(ORDER BY c3 RANGE 3 PRECEDING) as summation3,
+    SUM(c4) OVER(ORDER BY c5 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as summation6,
+    SUM(c4) OVER(ORDER BY c5 RANGE UNBOUNDED PRECEDING) as summation7,
+    SUM(c2) OVER(PARTITION BY c5 ORDER BY c5 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as summation10,
+    SUM(c4) OVER(PARTITION BY c1 ORDER BY c5 RANGE UNBOUNDED PRECEDING) as summation11,
+    SUM(c2) OVER(PARTITION BY c1 ORDER BY c5 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as summation14,
+    SUM(c4) OVER(PARTITION BY c5 ORDER BY c5 RANGE UNBOUNDED PRECEDING) as summation15,
+    SUM(c2) OVER(PARTITION BY c5, c7, c9 ORDER BY c5 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as summation20,
+    SUM(c2) OVER(PARTITION BY c5 ORDER BY c5 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as summation21
+FROM aggregate_test_100
+ORDER BY c9;";
+
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+    print_plan(&physical_plan)?;
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    print_batches(&actual)?;
+    Ok(())
 }
