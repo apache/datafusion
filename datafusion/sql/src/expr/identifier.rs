@@ -15,12 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{
-    idents_to_table_reference, ContextProvider, PlannerContext, SqlToRel,
-};
+use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::normalize_ident;
 use datafusion_common::{
-    Column, DFSchema, DataFusionError, OwnedTableReference, Result, ScalarValue,
+    Column, DFSchema, DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::{Case, Expr, GetIndexedField};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
@@ -52,11 +50,49 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
+    // (relation, column name)
+    fn form_identifier(idents: &[String]) -> Result<(Option<TableReference>, &String)> {
+        match idents.len() {
+            1 => Ok((None, &idents[0])),
+            2 => Ok((
+                Some(TableReference::Bare {
+                    table: (&idents[0]).into(),
+                }),
+                &idents[1],
+            )),
+            3 => Ok((
+                Some(TableReference::Partial {
+                    schema: (&idents[0]).into(),
+                    table: (&idents[1]).into(),
+                }),
+                &idents[2],
+            )),
+            4 => Ok((
+                Some(TableReference::Full {
+                    catalog: (&idents[0]).into(),
+                    schema: (&idents[1]).into(),
+                    table: (&idents[2]).into(),
+                }),
+                &idents[3],
+            )),
+            _ => Err(DataFusionError::Internal(format!(
+                "Incorrect number of identifiers: {}",
+                idents.len()
+            ))),
+        }
+    }
+
     pub(super) fn sql_compound_identifier_to_expr(
         &self,
         ids: Vec<Ident>,
         schema: &DFSchema,
     ) -> Result<Expr> {
+        if ids.len() < 2 {
+            return Err(DataFusionError::Internal(format!(
+                "Not a compound identifier: {ids:?}"
+            )));
+        }
+
         if ids[0].value.starts_with('@') {
             let var_names: Vec<_> = ids.into_iter().map(normalize_ident).collect();
             let ty = self
@@ -69,44 +105,100 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 })?;
             Ok(Expr::ScalarVariable(ty, var_names))
         } else {
-            // only support "schema.table" type identifiers here
-            let (name, relation) = match idents_to_table_reference(
-                ids,
-                self.options.enable_ident_normalization,
-            )? {
-                OwnedTableReference::Partial { schema, table } => (table, schema),
-                r @ OwnedTableReference::Bare { .. }
-                | r @ OwnedTableReference::Full { .. } => {
-                    return Err(DataFusionError::Plan(format!(
-                        "Unsupported compound identifier '{r:?}'",
-                    )));
-                }
-            };
+            let ids = ids
+                .into_iter()
+                .map(|id| {
+                    if self.options.enable_ident_normalization {
+                        normalize_ident(id)
+                    } else {
+                        id.value
+                    }
+                })
+                .collect::<Vec<_>>();
 
-            // Try and find the reference in schema
-            match schema.field_with_qualified_name(&relation, &name) {
-                Ok(_) => {
-                    // found an exact match on a qualified name so this is a table.column identifier
-                    Ok(Expr::Column(Column {
-                        relation: Some(relation),
-                        name,
-                    }))
+            // Possibilities we search with, in order from top to bottom for each len:
+            //
+            // len = 2:
+            // 1. (table.column)
+            // 2. (column).nested
+            //
+            // len = 3:
+            // 1. (schema.table.column)
+            // 2. (table.column).nested
+            // 3. (column).nested1.nested2
+            //
+            // len = 4:
+            // 1. (catalog.schema.table.column)
+            // 2. (schema.table.column).nested1
+            // 3. (table.column).nested1.nested2
+            // 4. (column).nested1.nested2.nested3
+            //
+            // len = 5:
+            // 1. (catalog.schema.table.column).nested
+            // 2. (schema.table.column).nested1.nested2
+            // 3. (table.column).nested1.nested2.nested3
+            // 4. (column).nested1.nested2.nested3.nested4
+            //
+            // len > 5:
+            // 1. (catalog.schema.table.column).nested[.nestedN]+
+            // 2. (schema.table.column).nested1.nested2[.nestedN]+
+            // 3. (table.column).nested1.nested2.nested3[.nestedN]+
+            // 4. (column).nested1.nested2.nested3.nested4[.nestedN]+
+            //
+            // Currently not supporting more than one nested level
+            // Though ideally once that support is in place, this code should work with it
+
+            // TODO: remove when can support multiple nested identifiers
+            if ids.len() > 5 {
+                return Err(DataFusionError::Internal(format!(
+                    "Unsupported compound identifier: {ids:?}"
+                )));
+            }
+
+            // take at most 4 identifiers to form a Column to search with
+            // - 1 for the column name
+            // - 0 to 3 for the TableReference
+            let bound = ids.len().min(4);
+            // search from most specific to least specific
+            let search_result = (0..bound).rev().find_map(|i| {
+                let nested_names_index = i + 1;
+                let s = &ids[0..nested_names_index];
+                let (relation, column_name) = Self::form_identifier(s).unwrap();
+                let field = schema.field_with_name(relation.as_ref(), column_name).ok();
+                field.map(|f| (f, nested_names_index))
+            });
+
+            match search_result {
+                // found matching field with spare identifier(s) for nested field(s) in structure
+                Some((field, index)) if index < ids.len() => {
+                    // TODO: remove when can support multiple nested identifiers
+                    if index < ids.len() - 1 {
+                        return Err(DataFusionError::Internal(format!(
+                            "Nested identifiers not yet supported for column {}",
+                            field.qualified_column().quoted_flat_name()
+                        )));
+                    }
+                    let nested_name = ids[index].to_string();
+                    Ok(Expr::GetIndexedField(GetIndexedField::new(
+                        Box::new(Expr::Column(field.qualified_column())),
+                        ScalarValue::Utf8(Some(nested_name)),
+                    )))
                 }
-                Err(_) => {
-                    if let Some(field) =
-                        schema.fields().iter().find(|f| f.name().eq(&relation))
-                    {
-                        // Access to a field of a column which is a structure, example: SELECT my_struct.key
-                        Ok(Expr::GetIndexedField(GetIndexedField::new(
-                            Box::new(Expr::Column(field.qualified_column())),
-                            ScalarValue::Utf8(Some(name)),
+                // found matching field with no spare identifier(s)
+                Some((field, _index)) => Ok(Expr::Column(field.qualified_column())),
+                // found no matching field, will return a default
+                None => {
+                    // return default where use all identifiers to not have a nested field
+                    // this len check is because at 5 identifiers will have to have a nested field
+                    if ids.len() == 5 {
+                        Err(DataFusionError::Internal(format!(
+                            "Unsupported compound identifier: {ids:?}"
                         )))
                     } else {
-                        // table.column identifier
-                        Ok(Expr::Column(Column {
-                            relation: Some(relation),
-                            name,
-                        }))
+                        let s = &ids[0..ids.len()];
+                        let (relation, column_name) = Self::form_identifier(s).unwrap();
+                        let relation = relation.map(|r| r.to_owned_reference());
+                        Ok(Expr::Column(Column::new(relation, column_name)))
                     }
                 }
             }

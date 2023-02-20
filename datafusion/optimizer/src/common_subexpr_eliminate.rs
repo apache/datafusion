@@ -312,7 +312,7 @@ fn build_common_expr_project_plan(
         match expr_set.get(&id) {
             Some((expr, _, data_type)) => {
                 // todo: check `nullable`
-                let field = DFField::new(None, &id, data_type.clone(), true);
+                let field = DFField::new::<&str>(None, &id, data_type.clone(), true);
                 fields_set.insert(field.name().to_owned());
                 project_exprs.push(expr.clone().alias(&id));
             }
@@ -624,8 +624,8 @@ mod test {
 
         let schema = Arc::new(DFSchema::new_with_metadata(
             vec![
-                DFField::new(None, "a", DataType::Int64, false),
-                DFField::new(None, "c", DataType::Int64, false),
+                DFField::new::<&str>(None, "a", DataType::Int64, false),
+                DFField::new::<&str>(None, "c", DataType::Int64, false),
             ],
             Default::default(),
         )?);

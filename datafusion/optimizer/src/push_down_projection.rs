@@ -469,10 +469,7 @@ fn replace_alias(
     let mut map = HashMap::new();
     for field in input_schema.fields() {
         let col = field.qualified_column();
-        let alias_col = Column {
-            relation: Some(alias.to_owned()),
-            name: col.name.clone(),
-        };
+        let alias_col = Column::new(Some(alias), col.name.clone());
         map.insert(alias_col, col);
     }
     required_columns
@@ -497,8 +494,10 @@ fn push_down_scan(
     let schema = scan.source.schema();
     let mut projection: BTreeSet<usize> = required_columns
         .iter()
+        // TODO: change scan.table_name from String?
         .filter(|c| {
-            c.relation.is_none() || c.relation.as_ref().unwrap() == &scan.table_name
+            c.relation.is_none()
+                || c.relation.as_ref().unwrap().to_string() == scan.table_name
         })
         .map(|c| schema.index_of(&c.name))
         .filter_map(ArrowResult::ok)

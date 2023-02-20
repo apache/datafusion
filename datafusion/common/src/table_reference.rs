@@ -15,13 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::Result;
-use sqlparser::{
-    ast::Ident,
-    dialect::GenericDialect,
-    parser::{Parser, ParserError},
-    tokenizer::{Token, TokenWithLocation},
-};
+use crate::utils::{parse_identifiers_normalized, quote_identifier};
 use std::borrow::Cow;
 
 /// A resolved path to a table of the form "catalog.schema.table"
@@ -67,9 +61,206 @@ pub enum TableReference<'a> {
     },
 }
 
+impl std::fmt::Display for TableReference<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TableReference::Bare { table } => write!(f, "{table}"),
+            TableReference::Partial { schema, table } => {
+                write!(f, "{schema}.{table}")
+            }
+            TableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => write!(f, "{catalog}.{schema}.{table}"),
+        }
+    }
+}
+
+impl<'a> TableReference<'a> {
+    /// Convenience method for creating a `Bare` variant of `TableReference`
+    pub fn bare(table: impl Into<Cow<'a, str>>) -> TableReference<'a> {
+        TableReference::Bare {
+            table: table.into(),
+        }
+    }
+
+    /// Convenience method for creating a `Partial` variant of `TableReference`
+    pub fn partial(
+        table: impl Into<Cow<'a, str>>,
+        schema: impl Into<Cow<'a, str>>,
+    ) -> TableReference<'a> {
+        TableReference::Partial {
+            table: table.into(),
+            schema: schema.into(),
+        }
+    }
+
+    /// Convenience method for creating a `Full` variant of `TableReference`
+    pub fn full(
+        table: impl Into<Cow<'a, str>>,
+        schema: impl Into<Cow<'a, str>>,
+        catalog: impl Into<Cow<'a, str>>,
+    ) -> TableReference<'a> {
+        TableReference::Full {
+            table: table.into(),
+            schema: schema.into(),
+            catalog: catalog.into(),
+        }
+    }
+
+    /// Retrieve the actual table name, regardless of qualification
+    pub fn table(&self) -> &str {
+        match self {
+            Self::Full { table, .. }
+            | Self::Partial { table, .. }
+            | Self::Bare { table } => table,
+        }
+    }
+
+    /// Retrieve the schema name if in the `Partial` or `Full` qualification
+    pub fn schema(&self) -> Option<&str> {
+        match self {
+            Self::Full { schema, .. } | Self::Partial { schema, .. } => Some(schema),
+            _ => None,
+        }
+    }
+
+    /// Retrieve the catalog name if in the `Full` qualification
+    pub fn catalog(&self) -> Option<&str> {
+        match self {
+            Self::Full { catalog, .. } => Some(catalog),
+            _ => None,
+        }
+    }
+
+    /// Compare with another `TableReference` as if both are resolved.
+    /// This allows comparing across variants, where if a field is not present
+    /// in both variants being compared then it is ignored in the comparison.
+    ///
+    /// e.g. this allows a `TableReference::Bare` to be considered equal to a
+    /// fully qualified `TableReference::Full` if the table names match.
+    pub fn resolved_eq(&self, other: &Self) -> bool {
+        match self {
+            TableReference::Bare { table } => table == other.table(),
+            TableReference::Partial { schema, table } => {
+                table == other.table() && other.schema().map_or(true, |s| s == schema)
+            }
+            TableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => {
+                table == other.table()
+                    && other.schema().map_or(true, |s| s == schema)
+                    && other.catalog().map_or(true, |c| c == catalog)
+            }
+        }
+    }
+
+    /// Given a default catalog and schema, ensure this table reference is fully resolved
+    pub fn resolve(
+        self,
+        default_catalog: &'a str,
+        default_schema: &'a str,
+    ) -> ResolvedTableReference<'a> {
+        match self {
+            Self::Full {
+                catalog,
+                schema,
+                table,
+            } => ResolvedTableReference {
+                catalog,
+                schema,
+                table,
+            },
+            Self::Partial { schema, table } => ResolvedTableReference {
+                catalog: default_catalog.into(),
+                schema,
+                table,
+            },
+            Self::Bare { table } => ResolvedTableReference {
+                catalog: default_catalog.into(),
+                schema: default_schema.into(),
+                table,
+            },
+        }
+    }
+
+    /// Converts directly into an [`OwnedTableReference`]
+    pub fn to_owned_reference(self) -> OwnedTableReference {
+        match self {
+            Self::Full {
+                catalog,
+                schema,
+                table,
+            } => OwnedTableReference::Full {
+                catalog: catalog.into(),
+                schema: schema.into(),
+                table: table.into(),
+            },
+            Self::Partial { schema, table } => OwnedTableReference::Partial {
+                schema: schema.into(),
+                table: table.into(),
+            },
+            Self::Bare { table } => OwnedTableReference::Bare {
+                table: table.into(),
+            },
+        }
+    }
+
+    /// Forms a string where the identifiers are quoted
+    pub fn to_quoted_string(&self) -> String {
+        match self {
+            TableReference::Bare { table } => quote_identifier(table),
+            TableReference::Partial { schema, table } => {
+                format!("{}.{}", quote_identifier(schema), quote_identifier(table))
+            }
+            TableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => format!(
+                "{}.{}.{}",
+                quote_identifier(catalog),
+                quote_identifier(schema),
+                quote_identifier(table)
+            ),
+        }
+    }
+
+    /// Forms a [`TableReference`] by attempting to parse `s` as a multipart identifier,
+    /// failing that then taking the entire unnormalized input as the identifier itself.
+    ///
+    /// Will normalize (convert to lowercase) any unquoted identifiers.
+    ///
+    /// e.g. `Foo` will be parsed as `foo`, and `"Foo"".bar"` will be parsed as
+    /// `Foo".bar` (note the preserved case and requiring two double quotes to represent
+    /// a single double quote in the identifier)
+    pub fn parse_str(s: &'a str) -> Self {
+        let mut parts = parse_identifiers_normalized(s);
+
+        match parts.len() {
+            1 => Self::Bare {
+                table: parts.remove(0).into(),
+            },
+            2 => Self::Partial {
+                schema: parts.remove(0).into(),
+                table: parts.remove(0).into(),
+            },
+            3 => Self::Full {
+                catalog: parts.remove(0).into(),
+                schema: parts.remove(0).into(),
+                table: parts.remove(0).into(),
+            },
+            _ => Self::Bare { table: s.into() },
+        }
+    }
+}
+
 /// Represents a path to a table that may require further resolution
 /// that owns the underlying names
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub enum OwnedTableReference {
     /// An unqualified table reference, e.g. "table"
     Bare {
@@ -92,6 +283,22 @@ pub enum OwnedTableReference {
         /// The table name
         table: String,
     },
+}
+
+impl std::fmt::Display for OwnedTableReference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OwnedTableReference::Bare { table } => write!(f, "{table}"),
+            OwnedTableReference::Partial { schema, table } => {
+                write!(f, "{schema}.{table}")
+            }
+            OwnedTableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => write!(f, "{catalog}.{schema}.{table}"),
+        }
+    }
 }
 
 impl OwnedTableReference {
@@ -125,21 +332,73 @@ impl OwnedTableReference {
             | Self::Bare { table } => table,
         }
     }
-}
 
-impl std::fmt::Display for OwnedTableReference {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    /// Forms a string where the identifiers are quoted
+    pub fn to_quoted_string(&self) -> String {
         match self {
-            OwnedTableReference::Bare { table } => write!(f, "{table}"),
+            OwnedTableReference::Bare { table } => quote_identifier(table),
             OwnedTableReference::Partial { schema, table } => {
-                write!(f, "{schema}.{table}")
+                format!("{}.{}", quote_identifier(schema), quote_identifier(table))
             }
             OwnedTableReference::Full {
                 catalog,
                 schema,
                 table,
-            } => write!(f, "{catalog}.{schema}.{table}"),
+            } => format!(
+                "{}.{}.{}",
+                quote_identifier(catalog),
+                quote_identifier(schema),
+                quote_identifier(table)
+            ),
         }
+    }
+}
+
+impl PartialEq<TableReference<'_>> for OwnedTableReference {
+    fn eq(&self, other: &TableReference<'_>) -> bool {
+        self.as_table_reference().eq(other)
+    }
+}
+
+impl PartialEq<OwnedTableReference> for TableReference<'_> {
+    fn eq(&self, other: &OwnedTableReference) -> bool {
+        self.eq(&other.as_table_reference())
+    }
+}
+
+/// Parse a `&str` into a OwnedTableReference
+impl From<&str> for OwnedTableReference {
+    fn from(s: &str) -> Self {
+        let table_reference: TableReference = s.into();
+        table_reference.to_owned_reference()
+    }
+}
+
+/// Parse a `String` into a OwnedTableReference
+impl From<String> for OwnedTableReference {
+    fn from(s: String) -> Self {
+        Self::from(s.as_str())
+    }
+}
+
+/// Parse a `&String` into a OwnedTableReference
+impl From<&String> for OwnedTableReference {
+    fn from(s: &String) -> Self {
+        Self::from(s.as_str())
+    }
+}
+
+/// Parse a `&String` into a OwnedTableReference
+impl From<&OwnedTableReference> for OwnedTableReference {
+    fn from(s: &OwnedTableReference) -> Self {
+        s.clone()
+    }
+}
+
+/// Parse a `TableReference` into a OwnedTableReference
+impl From<&'_ TableReference<'_>> for OwnedTableReference {
+    fn from(s: &'_ TableReference) -> Self {
+        s.to_owned().to_owned_reference()
     }
 }
 
@@ -151,139 +410,17 @@ impl<'a> From<&'a OwnedTableReference> for TableReference<'a> {
     }
 }
 
-impl<'a> TableReference<'a> {
-    /// Retrieve the actual table name, regardless of qualification
-    pub fn table(&self) -> &str {
-        match self {
-            Self::Full { table, .. }
-            | Self::Partial { table, .. }
-            | Self::Bare { table } => table,
-        }
-    }
-
-    /// Given a default catalog and schema, ensure this table reference is fully resolved
-    pub fn resolve(
-        self,
-        default_catalog: &'a str,
-        default_schema: &'a str,
-    ) -> ResolvedTableReference<'a> {
-        match self {
-            Self::Full {
-                catalog,
-                schema,
-                table,
-            } => ResolvedTableReference {
-                catalog,
-                schema,
-                table,
-            },
-            Self::Partial { schema, table } => ResolvedTableReference {
-                catalog: default_catalog.into(),
-                schema,
-                table,
-            },
-            Self::Bare { table } => ResolvedTableReference {
-                catalog: default_catalog.into(),
-                schema: default_schema.into(),
-                table,
-            },
-        }
-    }
-
-    /// Forms a [`TableReference`] by attempting to parse `s` as a multipart identifier,
-    /// failing that then taking the entire unnormalized input as the identifier itself.
-    ///
-    /// Will normalize (convert to lowercase) any unquoted identifiers.
-    ///
-    /// e.g. `Foo` will be parsed as `foo`, and `"Foo"".bar"` will be parsed as
-    /// `Foo".bar` (note the preserved case and requiring two double quotes to represent
-    /// a single double quote in the identifier)
-    pub fn parse_str(s: &'a str) -> Self {
-        let mut parts = parse_identifiers(s)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|id| match id.quote_style {
-                Some(_) => id.value,
-                None => id.value.to_ascii_lowercase(),
-            })
-            .collect::<Vec<_>>();
-
-        match parts.len() {
-            1 => Self::Bare {
-                table: parts.remove(0).into(),
-            },
-            2 => Self::Partial {
-                schema: parts.remove(0).into(),
-                table: parts.remove(0).into(),
-            },
-            3 => Self::Full {
-                catalog: parts.remove(0).into(),
-                schema: parts.remove(0).into(),
-                table: parts.remove(0).into(),
-            },
-            _ => Self::Bare { table: s.into() },
-        }
-    }
-}
-
-// TODO: remove when can use https://github.com/sqlparser-rs/sqlparser-rs/issues/805
-fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
-    let dialect = GenericDialect;
-    let mut parser = Parser::new(&dialect).try_with_sql(s)?;
-    let mut idents = vec![];
-
-    // expecting at least one word for identifier
-    match parser.next_token_no_skip() {
-        Some(TokenWithLocation {
-            token: Token::Word(w),
-            ..
-        }) => idents.push(w.to_ident()),
-        Some(TokenWithLocation { token, .. }) => {
-            return Err(ParserError::ParserError(format!(
-                "Unexpected token in identifier: {token}"
-            )))?
-        }
-        None => {
-            return Err(ParserError::ParserError(
-                "Empty input when parsing identifier".to_string(),
-            ))?
-        }
-    };
-
-    while let Some(TokenWithLocation { token, .. }) = parser.next_token_no_skip() {
-        match token {
-            // ensure that optional period is succeeded by another identifier
-            Token::Period => match parser.next_token_no_skip() {
-                Some(TokenWithLocation {
-                    token: Token::Word(w),
-                    ..
-                }) => idents.push(w.to_ident()),
-                Some(TokenWithLocation { token, .. }) => {
-                    return Err(ParserError::ParserError(format!(
-                        "Unexpected token following period in identifier: {token}"
-                    )))?
-                }
-                None => {
-                    return Err(ParserError::ParserError(
-                        "Trailing period in identifier".to_string(),
-                    ))?
-                }
-            },
-            _ => {
-                return Err(ParserError::ParserError(format!(
-                    "Unexpected token in identifier: {token}"
-                )))?
-            }
-        }
-    }
-    Ok(idents)
-}
-
 /// Parse a string into a TableReference, normalizing where appropriate
 ///
 /// See full details on [`TableReference::parse_str`]
 impl<'a> From<&'a str> for TableReference<'a> {
     fn from(s: &'a str) -> Self {
+        Self::parse_str(s)
+    }
+}
+
+impl<'a> From<&'a String> for TableReference<'a> {
+    fn from(s: &'a String) -> Self {
         Self::parse_str(s)
     }
 }
@@ -301,64 +438,6 @@ impl<'a> From<ResolvedTableReference<'a>> for TableReference<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_identifiers() -> Result<()> {
-        let s = "CATALOG.\"F(o)o. \"\"bar\".table";
-        let actual = parse_identifiers(s)?;
-        let expected = vec![
-            Ident {
-                value: "CATALOG".to_string(),
-                quote_style: None,
-            },
-            Ident {
-                value: "F(o)o. \"bar".to_string(),
-                quote_style: Some('"'),
-            },
-            Ident {
-                value: "table".to_string(),
-                quote_style: None,
-            },
-        ];
-        assert_eq!(expected, actual);
-
-        let s = "";
-        let err = parse_identifiers(s).expect_err("didn't fail to parse");
-        assert_eq!(
-            "SQL(ParserError(\"Empty input when parsing identifier\"))",
-            format!("{err:?}")
-        );
-
-        let s = "*schema.table";
-        let err = parse_identifiers(s).expect_err("didn't fail to parse");
-        assert_eq!(
-            "SQL(ParserError(\"Unexpected token in identifier: *\"))",
-            format!("{err:?}")
-        );
-
-        let s = "schema.table*";
-        let err = parse_identifiers(s).expect_err("didn't fail to parse");
-        assert_eq!(
-            "SQL(ParserError(\"Unexpected token in identifier: *\"))",
-            format!("{err:?}")
-        );
-
-        let s = "schema.table.";
-        let err = parse_identifiers(s).expect_err("didn't fail to parse");
-        assert_eq!(
-            "SQL(ParserError(\"Trailing period in identifier\"))",
-            format!("{err:?}")
-        );
-
-        let s = "schema.*";
-        let err = parse_identifiers(s).expect_err("didn't fail to parse");
-        assert_eq!(
-            "SQL(ParserError(\"Unexpected token following period in identifier: *\"))",
-            format!("{err:?}")
-        );
-
-        Ok(())
-    }
 
     #[test]
     fn test_table_reference_from_str_normalizes() {

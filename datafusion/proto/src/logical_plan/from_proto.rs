@@ -145,10 +145,7 @@ impl From<protobuf::Column> for Column {
     fn from(c: protobuf::Column) -> Self {
         let protobuf::Column { relation, name } = c;
 
-        Self {
-            relation: relation.map(|r| r.relation),
-            name,
-        }
+        Self::new(relation.map(|r| r.relation), name)
     }
 }
 

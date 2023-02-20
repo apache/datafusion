@@ -226,11 +226,11 @@ Dml: op=[Insert] table=[test_decimal]
 #[rstest]
 #[case::duplicate_columns(
     "INSERT INTO test_decimal (id, price, price) VALUES (1, 2, 3), (4, 5, 6)",
-    "Schema error: Schema contains duplicate unqualified field name 'price'"
+    "Schema error: Schema contains duplicate unqualified field name \"price\""
 )]
 #[case::non_existing_column(
     "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
-    "Schema error: No field named 'nonexistent'. Valid fields are 'id', 'price'."
+    "Schema error: No field named \"nonexistent\". Valid fields are \"id\", \"price\"."
 )]
 #[case::type_mismatch(
     "INSERT INTO test_decimal SELECT '2022-01-01', to_timestamp('2022-01-01T12:00:00')",
@@ -1121,9 +1121,9 @@ fn select_simple_aggregate_with_groupby_column_unselected() {
 fn select_simple_aggregate_with_groupby_and_column_in_group_by_does_not_exist() {
     let sql = "SELECT SUM(age) FROM person GROUP BY doesnotexist";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!("Schema error: No field named 'doesnotexist'. Valid fields are 'SUM(person.age)', \
-        'person'.'id', 'person'.'first_name', 'person'.'last_name', 'person'.'age', 'person'.'state', \
-        'person'.'salary', 'person'.'birth_date', 'person'.'😀'.", format!("{err}"));
+    assert_eq!("Schema error: No field named \"doesnotexist\". Valid fields are \"SUM(person.age)\", \
+        \"person\".\"id\", \"person\".\"first_name\", \"person\".\"last_name\", \"person\".\"age\", \"person\".\"state\", \
+        \"person\".\"salary\", \"person\".\"birth_date\", \"person\".\"😀\".", format!("{err}"));
 }
 
 #[test]
@@ -1429,6 +1429,17 @@ fn select_where_with_positive_operator() {
     let expected = "Projection: aggregate_test_100.c3\
             \n  Filter: aggregate_test_100.c3 > Float64(0.1) AND aggregate_test_100.c4 > Int64(0)\
             \n    TableScan: aggregate_test_100";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn select_where_compound_identifiers() {
+    let sql = "SELECT aggregate_test_100.c3 \
+    FROM public.aggregate_test_100 \
+    WHERE aggregate_test_100.c3 > 0.1";
+    let expected = "Projection: public.aggregate_test_100.c3\
+            \n  Filter: public.aggregate_test_100.c3 > Float64(0.1)\
+            \n    TableScan: public.aggregate_test_100";
     quick_test(sql, expected);
 }
 
@@ -3849,7 +3860,7 @@ fn assert_field_not_found(err: DataFusionError, name: &str) {
     match err {
         DataFusionError::SchemaError { .. } => {
             let msg = format!("{err}");
-            let expected = format!("Schema error: No field named '{name}'.");
+            let expected = format!("Schema error: No field named \"{name}\".");
             if !msg.starts_with(&expected) {
                 panic!("error [{msg}] did not start with [{expected}]");
             }

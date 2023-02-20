@@ -59,7 +59,7 @@ CREATE TABLE t2(t2_id INT, t2_name TEXT, t2_int INT) AS VALUES
 (55, 'w', 3);
 
 # left semi with wrong where clause
-query error DataFusion error: Schema error: No field named 't2'.'t2_id'. Valid fields are 't1'.'t1_id', 't1'.'t1_name', 't1'.'t1_int'.
+query error DataFusion error: Schema error: No field named "t2"."t2_id". Valid fields are "t1"."t1_id", "t1"."t1_name", "t1"."t1_int".
 SELECT t1.t1_id,
        t1.t1_name,
        t1.t1_int

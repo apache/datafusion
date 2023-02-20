@@ -194,23 +194,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .try_for_each(|col| match col {
                 Expr::Column(col) => match &col.relation {
                     Some(r) => {
-                        schema.field_with_qualified_name(r, &col.name)?;
+                        schema.field_with_qualified_name(
+                            &r.as_table_reference(),
+                            &col.name,
+                        )?;
                         Ok(())
                     }
                     None => {
                         if !schema.fields_with_unqualified_name(&col.name).is_empty() {
                             Ok(())
                         } else {
-                            Err(field_not_found(None, col.name.as_str(), schema))
+                            Err(field_not_found::<&str>(None, col.name.as_str(), schema))
                         }
                     }
                 }
                 .map_err(|_: DataFusionError| {
-                    field_not_found(
-                        col.relation.as_ref().map(|s| s.to_owned()),
-                        col.name.as_str(),
-                        schema,
-                    )
+                    field_not_found(col.relation.clone(), col.name.as_str(), schema)
                 }),
                 _ => Err(DataFusionError::Internal("Not a column".to_string())),
             })

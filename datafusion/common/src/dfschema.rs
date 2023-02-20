@@ -23,7 +23,8 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result, SchemaError};
-use crate::{field_not_found, Column, TableReference};
+use crate::utils::quote_identifier;
+use crate::{field_not_found, Column, OwnedTableReference, TableReference};
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -69,7 +70,7 @@ impl DFSchema {
                 if !qualified_names.insert((qualifier, field.name())) {
                     return Err(DataFusionError::SchemaError(
                         SchemaError::DuplicateQualifiedField {
-                            qualifier: qualifier.to_string(),
+                            qualifier: qualifier.clone(),
                             name: field.name().to_string(),
                         },
                     ));
@@ -89,18 +90,16 @@ impl DFSchema {
         let mut qualified_names = qualified_names
             .iter()
             .map(|(l, r)| (l.to_owned(), r.to_owned()))
-            .collect::<Vec<(&String, &String)>>();
-        qualified_names.sort_by(|a, b| {
-            let a = format!("{}.{}", a.0, a.1);
-            let b = format!("{}.{}", b.0, b.1);
-            a.cmp(&b)
-        });
+            .collect::<Vec<(&OwnedTableReference, &String)>>();
+        qualified_names.sort();
         for (qualifier, name) in &qualified_names {
             if unqualified_names.contains(name) {
                 return Err(DataFusionError::SchemaError(
                     SchemaError::AmbiguousReference {
-                        qualifier: Some(qualifier.to_string()),
-                        name: name.to_string(),
+                        field: Column {
+                            relation: Some((*qualifier).clone()),
+                            name: name.to_string(),
+                        },
                     },
                 ));
             }
@@ -139,7 +138,9 @@ impl DFSchema {
         for field in other_schema.fields() {
             // skip duplicate columns
             let duplicated_field = match field.qualifier() {
-                Some(q) => self.field_with_name(Some(q.as_str()), field.name()).is_ok(),
+                Some(q) => self
+                    .field_with_name(Some(&q.as_table_reference()), field.name())
+                    .is_ok(),
                 // for unqualified columns, check as unqualified name
                 None => self.field_with_unqualified_name(field.name()).is_ok(),
             };
@@ -172,7 +173,7 @@ impl DFSchema {
                 // a fully qualified field name is provided.
                 match &self.fields[i].qualifier {
                     Some(qualifier) => {
-                        if (qualifier.to_owned() + "." + self.fields[i].name()) == name {
+                        if (qualifier.to_string() + "." + self.fields[i].name()) == name {
                             return Err(DataFusionError::Plan(format!(
                                 "Fully qualified field name '{name}' was supplied to `index_of` \
                                 which is deprecated. Please use `index_of_column_by_name` instead"
@@ -184,12 +185,12 @@ impl DFSchema {
             }
         }
 
-        Err(field_not_found(None, name, self))
+        Err(field_not_found::<&str>(None, name, self))
     }
 
     pub fn index_of_column_by_name(
         &self,
-        qualifier: Option<&str>,
+        qualifier: Option<&TableReference>,
         name: &str,
     ) -> Result<Option<usize>> {
         let mut matches = self
@@ -200,19 +201,19 @@ impl DFSchema {
                 // field to lookup is qualified.
                 // current field is qualified and not shared between relations, compare both
                 // qualifier and name.
-                (Some(q), Some(field_q)) => q == field_q && field.name() == name,
+                (Some(q), Some(field_q)) => {
+                    q.resolved_eq(&field_q.as_table_reference()) && field.name() == name
+                }
                 // field to lookup is qualified but current field is unqualified.
                 (Some(qq), None) => {
                     // the original field may now be aliased with a name that matches the
                     // original qualified name
-                    let table_ref = TableReference::parse_str(field.name().as_str());
-                    match table_ref {
-                        TableReference::Partial { schema, table } => {
-                            schema == qq && table == name
-                        }
-                        TableReference::Full { schema, table, .. } => {
-                            schema == qq && table == name
-                        }
+                    let column = Column::from_qualified_name(field.name());
+                    match column {
+                        Column {
+                            relation: Some(r),
+                            name: column_name,
+                        } => &r == qq && column_name == name,
                         _ => false,
                     }
                 }
@@ -226,9 +227,11 @@ impl DFSchema {
                 None => Ok(Some(idx)),
                 // found more than one matches
                 Some(_) => Err(DataFusionError::Internal(format!(
-                    "Ambiguous reference to qualified field named '{}.{}'",
-                    qualifier.unwrap_or("<unqualified>"),
-                    name
+                    "Ambiguous reference to qualified field named {}.{}",
+                    qualifier
+                        .map(|q| q.to_quoted_string())
+                        .unwrap_or("<unqualified>".to_string()),
+                    quote_identifier(name)
                 ))),
             },
         }
@@ -236,23 +239,22 @@ impl DFSchema {
 
     /// Find the index of the column with the given qualifier and name
     pub fn index_of_column(&self, col: &Column) -> Result<usize> {
-        let qualifier = col.relation.as_deref();
-        self.index_of_column_by_name(col.relation.as_deref(), &col.name)?
-            .ok_or_else(|| {
-                field_not_found(qualifier.map(|s| s.to_string()), &col.name, self)
-            })
+        let tr = col.relation.as_ref().map(|r| r.as_table_reference());
+        self.index_of_column_by_name(tr.as_ref(), &col.name)?
+            .ok_or_else(|| field_not_found(col.relation.clone(), &col.name, self))
     }
 
     /// Check if the column is in the current schema
     pub fn is_column_from_schema(&self, col: &Column) -> Result<bool> {
-        self.index_of_column_by_name(col.relation.as_deref(), &col.name)
+        let tr = col.relation.as_ref().map(|r| r.as_table_reference());
+        self.index_of_column_by_name(tr.as_ref(), &col.name)
             .map(|idx| idx.is_some())
     }
 
     /// Find the field with the given name
     pub fn field_with_name(
         &self,
-        qualifier: Option<&str>,
+        qualifier: Option<&TableReference>,
         name: &str,
     ) -> Result<&DFField> {
         if let Some(qualifier) = qualifier {
@@ -263,7 +265,7 @@ impl DFSchema {
     }
 
     /// Find all fields having the given qualifier
-    pub fn fields_with_qualified(&self, qualifier: &str) -> Vec<&DFField> {
+    pub fn fields_with_qualified(&self, qualifier: &TableReference) -> Vec<&DFField> {
         self.fields
             .iter()
             .filter(|field| field.qualifier().map(|q| q.eq(qualifier)).unwrap_or(false))
@@ -282,12 +284,14 @@ impl DFSchema {
     pub fn field_with_unqualified_name(&self, name: &str) -> Result<&DFField> {
         let matches = self.fields_with_unqualified_name(name);
         match matches.len() {
-            0 => Err(field_not_found(None, name, self)),
+            0 => Err(field_not_found::<&str>(None, name, self)),
             1 => Ok(matches[0]),
             _ => Err(DataFusionError::SchemaError(
                 SchemaError::AmbiguousReference {
-                    qualifier: None,
-                    name: name.to_string(),
+                    field: Column {
+                        relation: None,
+                        name: name.to_string(),
+                    },
                 },
             )),
         }
@@ -296,7 +300,7 @@ impl DFSchema {
     /// Find the field with the given qualified name
     pub fn field_with_qualified_name(
         &self,
-        qualifier: &str,
+        qualifier: &TableReference,
         name: &str,
     ) -> Result<&DFField> {
         let idx = self
@@ -309,7 +313,9 @@ impl DFSchema {
     /// Find the field with the given qualified column
     pub fn field_from_column(&self, column: &Column) -> Result<&DFField> {
         match &column.relation {
-            Some(r) => self.field_with_qualified_name(r, &column.name),
+            Some(r) => {
+                self.field_with_qualified_name(&r.as_table_reference(), &column.name)
+            }
             None => self.field_with_unqualified_name(&column.name),
         }
     }
@@ -413,12 +419,13 @@ impl DFSchema {
     }
 
     /// Replace all field qualifier with new value in schema
-    pub fn replace_qualifier(self, qualifier: &str) -> Self {
+    pub fn replace_qualifier(self, qualifier: impl Into<OwnedTableReference>) -> Self {
+        let qualifier = qualifier.into();
         DFSchema {
             fields: self
                 .fields
                 .into_iter()
-                .map(|f| DFField::from_qualified(qualifier, f.field))
+                .map(|f| DFField::from_qualified(qualifier.clone(), f.field))
                 .collect(),
             ..self
         }
@@ -573,21 +580,21 @@ impl ExprSchema for DFSchema {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DFField {
     /// Optional qualifier (usually a table or relation name)
-    qualifier: Option<String>,
+    qualifier: Option<OwnedTableReference>,
     /// Arrow field definition
     field: Field,
 }
 
 impl DFField {
     /// Creates a new `DFField`
-    pub fn new(
-        qualifier: Option<&str>,
+    pub fn new<R: Into<OwnedTableReference>>(
+        qualifier: Option<R>,
         name: &str,
         data_type: DataType,
         nullable: bool,
     ) -> Self {
         DFField {
-            qualifier: qualifier.map(|s| s.to_owned()),
+            qualifier: qualifier.map(|s| s.into()),
             field: Field::new(name, data_type, nullable),
         }
     }
@@ -601,9 +608,12 @@ impl DFField {
     }
 
     /// Create a qualified field from an existing Arrow field
-    pub fn from_qualified(qualifier: &str, field: Field) -> Self {
+    pub fn from_qualified(
+        qualifier: impl Into<OwnedTableReference>,
+        field: Field,
+    ) -> Self {
         Self {
-            qualifier: Some(qualifier.to_owned()),
+            qualifier: Some(qualifier.into()),
             field,
         }
     }
@@ -649,7 +659,7 @@ impl DFField {
     }
 
     /// Get the optional qualifier
-    pub fn qualifier(&self) -> Option<&String> {
+    pub fn qualifier(&self) -> Option<&OwnedTableReference> {
         self.qualifier.as_ref()
     }
 
@@ -677,7 +687,7 @@ mod tests {
         // lookup with unqualified name "t1.c0"
         let err = schema.index_of_column(&col).err().unwrap();
         assert_eq!(
-            "Schema error: No field named 't1.c0'. Valid fields are 't1'.'c0', 't1'.'c1'.",
+            r#"Schema error: No field named "t1.c0". Valid fields are "t1"."c0", "t1"."c1"."#,
             &format!("{err}")
         );
         Ok(())
@@ -733,8 +743,12 @@ mod tests {
             join.to_string()
         );
         // test valid access
-        assert!(join.field_with_qualified_name("t1", "c0").is_ok());
-        assert!(join.field_with_qualified_name("t2", "c0").is_ok());
+        assert!(join
+            .field_with_qualified_name(&TableReference::bare("t1"), "c0")
+            .is_ok());
+        assert!(join
+            .field_with_qualified_name(&TableReference::bare("t2"), "c0")
+            .is_ok());
         // test invalid access
         assert!(join.field_with_unqualified_name("c0").is_err());
         assert!(join.field_with_unqualified_name("t1.c0").is_err());
@@ -750,7 +764,7 @@ mod tests {
         assert!(join.is_err());
         assert_eq!(
             "Schema error: Schema contains duplicate \
-        qualified field name \'t1\'.\'c0\'",
+        qualified field name \"t1\".\"c0\"",
             &format!("{}", join.err().unwrap())
         );
         Ok(())
@@ -764,7 +778,7 @@ mod tests {
         assert!(join.is_err());
         assert_eq!(
             "Schema error: Schema contains duplicate \
-        unqualified field name \'c0\'",
+        unqualified field name \"c0\"",
             &format!("{}", join.err().unwrap())
         );
         Ok(())
@@ -780,14 +794,18 @@ mod tests {
             join.to_string()
         );
         // test valid access
-        assert!(join.field_with_qualified_name("t1", "c0").is_ok());
+        assert!(join
+            .field_with_qualified_name(&TableReference::bare("t1"), "c0")
+            .is_ok());
         assert!(join.field_with_unqualified_name("c0").is_ok());
         assert!(join.field_with_unqualified_name("c100").is_ok());
         assert!(join.field_with_name(None, "c100").is_ok());
         // test invalid access
         assert!(join.field_with_unqualified_name("t1.c0").is_err());
         assert!(join.field_with_unqualified_name("t1.c100").is_err());
-        assert!(join.field_with_qualified_name("", "c100").is_err());
+        assert!(join
+            .field_with_qualified_name(&TableReference::bare(""), "c100")
+            .is_err());
         Ok(())
     }
 
@@ -799,7 +817,7 @@ mod tests {
         assert!(join.is_err());
         assert_eq!(
             "Schema error: Schema contains qualified \
-        field name \'t1\'.\'c0\' and unqualified field name \'c0\' which would be ambiguous",
+        field name \"t1\".\"c0\" and unqualified field name \"c0\" which would be ambiguous",
             &format!("{}", join.err().unwrap())
         );
         Ok(())
@@ -809,11 +827,11 @@ mod tests {
     #[test]
     fn helpful_error_messages() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-        let expected_help = "Valid fields are \'t1\'.\'c0\', \'t1\'.\'c1\'.";
+        let expected_help = "Valid fields are \"t1\".\"c0\", \"t1\".\"c1\".";
         // Pertinent message parts
-        let expected_err_msg = "Fully qualified field name \'t1.c0\'";
+        let expected_err_msg = "Fully qualified field name 't1.c0'";
         assert!(schema
-            .field_with_qualified_name("x", "y")
+            .field_with_qualified_name(&TableReference::bare("x"), "y")
             .unwrap_err()
             .to_string()
             .contains(expected_help));
@@ -841,12 +859,15 @@ mod tests {
 
         let col = Column::from_qualified_name("t1.c0");
         let err = schema.index_of_column(&col).err().unwrap();
-        assert_eq!("Schema error: No field named 't1'.'c0'.", &format!("{err}"));
+        assert_eq!(
+            r#"Schema error: No field named "t1"."c0"."#,
+            &format!("{err}")
+        );
 
         // the same check without qualifier
         let col = Column::from_name("c0");
         let err = schema.index_of_column(&col).err().unwrap();
-        assert_eq!("Schema error: No field named 'c0'.", &format!("{err}"));
+        assert_eq!(r#"Schema error: No field named "c0"."#, &format!("{err}"));
     }
 
     #[test]
@@ -1079,7 +1100,7 @@ mod tests {
         let arrow_schema_ref = Arc::new(arrow_schema.clone());
 
         let df_schema = DFSchema::new_with_metadata(
-            vec![DFField::new(None, "c0", DataType::Int64, true)],
+            vec![DFField::new::<&str>(None, "c0", DataType::Int64, true)],
             metadata,
         )
         .unwrap();

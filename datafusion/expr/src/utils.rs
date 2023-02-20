@@ -35,6 +35,7 @@ use crate::{
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    TableReference,
 };
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -188,8 +189,9 @@ pub fn expand_qualified_wildcard(
     qualifier: &str,
     schema: &DFSchema,
 ) -> Result<Vec<Expr>> {
+    let qualifier = TableReference::from(qualifier);
     let qualified_fields: Vec<DFField> = schema
-        .fields_with_qualified(qualifier)
+        .fields_with_qualified(&qualifier)
         .into_iter()
         .cloned()
         .collect();

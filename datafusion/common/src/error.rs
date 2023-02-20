@@ -23,7 +23,8 @@ use std::io;
 use std::result;
 use std::sync::Arc;
 
-use crate::{Column, DFSchema};
+use crate::utils::quote_identifier;
+use crate::{Column, DFSchema, OwnedTableReference};
 #[cfg(feature = "avro")]
 use apache_avro::Error as AvroError;
 use arrow::error::ArrowError;
@@ -120,29 +121,29 @@ macro_rules! plan_err {
 #[derive(Debug)]
 pub enum SchemaError {
     /// Schema contains a (possibly) qualified and unqualified field with same unqualified name
-    AmbiguousReference {
-        qualifier: Option<String>,
+    AmbiguousReference { field: Column },
+    /// Schema contains duplicate qualified field name
+    DuplicateQualifiedField {
+        qualifier: OwnedTableReference,
         name: String,
     },
-    /// Schema contains duplicate qualified field name
-    DuplicateQualifiedField { qualifier: String, name: String },
     /// Schema contains duplicate unqualified field name
     DuplicateUnqualifiedField { name: String },
     /// No field with this name
     FieldNotFound {
-        field: Column,
+        field: Box<Column>,
         valid_fields: Vec<Column>,
     },
 }
 
 /// Create a "field not found" DataFusion::SchemaError
-pub fn field_not_found(
-    qualifier: Option<String>,
+pub fn field_not_found<R: Into<OwnedTableReference>>(
+    qualifier: Option<R>,
     name: &str,
     schema: &DFSchema,
 ) -> DataFusionError {
     DataFusionError::SchemaError(SchemaError::FieldNotFound {
-        field: Column::new(qualifier, name),
+        field: Box::new(Column::new(qualifier, name)),
         valid_fields: schema
             .fields()
             .iter()
@@ -158,25 +159,14 @@ impl Display for SchemaError {
                 field,
                 valid_fields,
             } => {
-                write!(f, "No field named ")?;
-                if let Some(q) = &field.relation {
-                    write!(f, "'{}'.'{}'", q, field.name)?;
-                } else {
-                    write!(f, "'{}'", field.name)?;
-                }
+                write!(f, "No field named {}", field.quoted_flat_name())?;
                 if !valid_fields.is_empty() {
                     write!(
                         f,
                         ". Valid fields are {}",
                         valid_fields
                             .iter()
-                            .map(|field| {
-                                if let Some(q) = &field.relation {
-                                    format!("'{}'.'{}'", q, field.name)
-                                } else {
-                                    format!("'{}'", field.name)
-                                }
-                            })
+                            .map(|field| field.quoted_flat_name())
                             .collect::<Vec<String>>()
                             .join(", ")
                     )?;
@@ -186,20 +176,32 @@ impl Display for SchemaError {
             Self::DuplicateQualifiedField { qualifier, name } => {
                 write!(
                     f,
-                    "Schema contains duplicate qualified field name '{qualifier}'.'{name}'"
+                    "Schema contains duplicate qualified field name {}.{}",
+                    qualifier.to_quoted_string(),
+                    quote_identifier(name)
                 )
             }
             Self::DuplicateUnqualifiedField { name } => {
                 write!(
                     f,
-                    "Schema contains duplicate unqualified field name '{name}'"
+                    "Schema contains duplicate unqualified field name {}",
+                    quote_identifier(name)
                 )
             }
-            Self::AmbiguousReference { qualifier, name } => {
-                if let Some(q) = qualifier {
-                    write!(f, "Schema contains qualified field name '{q}'.'{name}' and unqualified field name '{name}' which would be ambiguous")
+            Self::AmbiguousReference { field } => {
+                if field.relation.is_some() {
+                    write!(
+                        f,
+                        "Schema contains qualified field name {} and unqualified field name {} which would be ambiguous",
+                        field.quoted_flat_name(),
+                        quote_identifier(&field.name)
+                    )
                 } else {
-                    write!(f, "Ambiguous reference to unqualified field '{name}'")
+                    write!(
+                        f,
+                        "Ambiguous reference to unqualified field {}",
+                        field.quoted_flat_name()
+                    )
                 }
             }
         }
