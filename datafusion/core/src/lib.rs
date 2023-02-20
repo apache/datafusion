@@ -78,7 +78,7 @@
 //! ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
 //!
 //! // create a plan
-//! let df = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100").await?;
+//! let df = ctx.sql("SELECT a, MIN(b) FROM example WHERE a <= b GROUP BY a LIMIT 100").await?;
 //!
 //! // execute the plan
 //! let results: Vec<RecordBatch> = df.collect().await?;
@@ -184,7 +184,7 @@
 //!
 //! ## Examples
 //!
-//! Examples are located in [datafusion-examples directory](https://github.com/apache/arrow-datafusion/tree/master/datafusion-examples)
+//! Examples are located in [datafusion-examples directory](https://github.com/apache/arrow-datafusion/tree/main/datafusion-examples)
 //!
 //! Here's how to run them
 //!

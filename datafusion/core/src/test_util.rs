@@ -19,17 +19,26 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::{env, error::Error, path::PathBuf, sync::Arc};
 
 use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::{empty::EmptyTable, provider_as_source, TableProvider};
-use crate::execution::context::SessionState;
+use crate::error::Result;
+use crate::execution::context::{SessionState, TaskContext};
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{
+    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream,
+};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion_common::DataFusionError;
+use datafusion_common::{DataFusionError, Statistics};
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
+use datafusion_physical_expr::PhysicalSortExpr;
+use futures::Stream;
 
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, with the result of pretty formatting record
@@ -329,6 +338,123 @@ impl TableProvider for TestTableProvider {
         _limit: Option<usize>,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         unimplemented!("TestTableProvider is a stub for testing.")
+    }
+}
+
+/// A mock execution plan that simply returns the provided data source characteristic
+#[derive(Debug, Clone)]
+pub struct UnboundedExec {
+    batch_produce: Option<usize>,
+    batch: RecordBatch,
+    partitions: usize,
+}
+impl UnboundedExec {
+    /// Create new exec that clones the given record batch to its output.
+    ///
+    /// Set `batch_produce` to `Some(n)` to emit exactly `n` batches per partition.
+    pub fn new(
+        batch_produce: Option<usize>,
+        batch: RecordBatch,
+        partitions: usize,
+    ) -> Self {
+        Self {
+            batch_produce,
+            batch,
+            partitions,
+        }
+    }
+}
+impl ExecutionPlan for UnboundedExec {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.batch.schema()
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        Partitioning::UnknownPartitioning(self.partitions)
+    }
+
+    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
+        Ok(self.batch_produce.is_none())
+    }
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(self)
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        Ok(Box::pin(UnboundedStream {
+            batch_produce: self.batch_produce,
+            count: 0,
+            batch: self.batch.clone(),
+        }))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(
+                    f,
+                    "UnboundableExec: unbounded={}",
+                    self.batch_produce.is_none(),
+                )
+            }
+        }
+    }
+
+    fn statistics(&self) -> Statistics {
+        Statistics::default()
+    }
+}
+
+#[derive(Debug)]
+struct UnboundedStream {
+    batch_produce: Option<usize>,
+    count: usize,
+    batch: RecordBatch,
+}
+
+impl Stream for UnboundedStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        if let Some(val) = self.batch_produce {
+            if val <= self.count {
+                return Poll::Ready(None);
+            }
+        }
+        self.count += 1;
+        Poll::Ready(Some(Ok(self.batch.clone())))
+    }
+}
+
+impl RecordBatchStream for UnboundedStream {
+    fn schema(&self) -> SchemaRef {
+        self.batch.schema()
     }
 }
 

@@ -27,7 +27,7 @@ use std::sync::Arc;
 use url::Url;
 
 /// A parsed URL identifying a particular [`ObjectStore`]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ObjectStoreUrl {
     url: Url,
 }

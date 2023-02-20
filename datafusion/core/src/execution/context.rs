@@ -1475,9 +1475,18 @@ pub fn default_session_builder(config: SessionConfig) -> SessionState {
 impl SessionState {
     /// Returns new SessionState using the provided configuration and runtime
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
+        let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
+        Self::with_config_rt_and_catalog_list(config, runtime, catalog_list)
+    }
+
+    /// Returns new SessionState using the provided configuration, runtime and catalog list.
+    pub fn with_config_rt_and_catalog_list(
+        config: SessionConfig,
+        runtime: Arc<RuntimeEnv>,
+        catalog_list: Arc<dyn CatalogList>,
+    ) -> Self {
         let session_id = Uuid::new_v4().to_string();
 
-        let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
         if config.create_default_catalog_and_schema() {
             let default_catalog = MemoryCatalogProvider::new();
 
@@ -1906,6 +1915,16 @@ impl SessionState {
     pub fn catalog_list(&self) -> Arc<dyn CatalogList> {
         self.catalog_list.clone()
     }
+
+    /// Return reference to scalar_functions
+    pub fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+        &self.scalar_functions
+    }
+
+    /// Return reference to aggregate_functions
+    pub fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+        &self.aggregate_functions
+    }
 }
 
 struct SessionContextProvider<'a> {
@@ -1923,11 +1942,11 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
-        self.state.scalar_functions.get(name).cloned()
+        self.state.scalar_functions().get(name).cloned()
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
-        self.state.aggregate_functions.get(name).cloned()
+        self.state.aggregate_functions().get(name).cloned()
     }
 
     fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType> {

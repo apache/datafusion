@@ -104,17 +104,15 @@ impl WindowExpr for BuiltInWindowExpr {
             let mut row_wise_results = vec![];
 
             let (values, order_bys) = self.get_values_orderbys(batch)?;
-            let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
-            let range = Range { start: 0, end: 0 };
+            let mut window_frame_ctx = WindowFrameContext::new(
+                &self.window_frame,
+                sort_options,
+                Range { start: 0, end: 0 },
+            );
             // We iterate on each row to calculate window frame range and and window function result
             for idx in 0..num_rows {
-                let range = window_frame_ctx.calculate_range(
-                    &order_bys,
-                    &sort_options,
-                    num_rows,
-                    idx,
-                    &range,
-                )?;
+                let range =
+                    window_frame_ctx.calculate_range(&order_bys, num_rows, idx)?;
                 let value = evaluator.evaluate_inside_range(&values, &range)?;
                 row_wise_results.push(value);
             }
@@ -168,7 +166,13 @@ impl WindowExpr for BuiltInWindowExpr {
             // We iterate on each row to perform a running calculation.
             let record_batch = &partition_batch_state.record_batch;
             let num_rows = record_batch.num_rows();
-            let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
+            let last_range = state.window_frame_range.clone();
+            let mut window_frame_ctx = WindowFrameContext::new(
+                &self.window_frame,
+                sort_options.clone(),
+                // Start search from the last range
+                last_range,
+            );
             let sort_partition_points = if evaluator.include_rank() {
                 let columns = self.sort_columns(record_batch)?;
                 self.evaluate_partition_points(num_rows, &columns)?
@@ -179,13 +183,7 @@ impl WindowExpr for BuiltInWindowExpr {
             let mut last_range = state.window_frame_range.clone();
             for idx in state.last_calculated_index..num_rows {
                 state.window_frame_range = if self.expr.uses_window_frame() {
-                    window_frame_ctx.calculate_range(
-                        &order_bys,
-                        &sort_options,
-                        num_rows,
-                        idx,
-                        &state.window_frame_range,
-                    )
+                    window_frame_ctx.calculate_range(&order_bys, num_rows, idx)
                 } else {
                     evaluator.get_range(state, num_rows)
                 }?;

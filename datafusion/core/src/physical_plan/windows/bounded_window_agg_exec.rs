@@ -31,7 +31,9 @@ use crate::physical_plan::{
     RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
 use arrow::array::Array;
-use arrow::compute::{concat, lexicographical_partition_ranges, SortColumn};
+use arrow::compute::{
+    concat, concat_batches, lexicographical_partition_ranges, SortColumn,
+};
 use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
@@ -48,7 +50,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::physical_plan::common::merge_batches;
 use datafusion_physical_expr::window::{
     PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
     WindowAggState, WindowState,
@@ -406,10 +407,9 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
                 if let Some(partition_batch_state) =
                     self.partition_buffers.get_mut(&partition_row)
                 {
-                    partition_batch_state.record_batch = merge_batches(
-                        &partition_batch_state.record_batch,
-                        &partition_batch,
-                        self.input.schema(),
+                    partition_batch_state.record_batch = concat_batches(
+                        &self.input.schema(),
+                        [&partition_batch_state.record_batch, &partition_batch],
                     )?;
                 } else {
                     let partition_batch_state = PartitionBatchState {
@@ -430,7 +430,7 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
         self.input_buffer = if self.input_buffer.num_rows() == 0 {
             record_batch
         } else {
-            merge_batches(&self.input_buffer, &record_batch, self.input.schema())?
+            concat_batches(&self.input.schema(), [&self.input_buffer, &record_batch])?
         };
 
         Ok(())
