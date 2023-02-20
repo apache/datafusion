@@ -19,7 +19,7 @@
 #
 
 # Usage:
-# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-datafusion.sh master 8.0.0 7.1.0
+# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-datafusion.sh main 8.0.0 7.1.0
 # CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-datafusion.sh maint-7.x 7.1.0 7.0.0
 
 RELEASE_BRANCH=$1

@@ -15,58 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Benchmarks for Merge performance
-//!
-//! Each benchmark:
-//! 1. Creates a sorted RecordBatch of some number of columns
-//!
-//! 2. Divides that `RecordBatch` into some number of "streams"
-//! (`RecordBatch`s with a subset of the rows, still ordered)
-//!
-//! 3. Times how long it takes for [`SortPreservingMergeExec`] to
-//! merge the "streams" back together into the original RecordBatch.
-//!
-//! Pictorally:
-//!
-//! ```
-//!                           Rows are randombly
-//!                          divided into separate
-//!                         RecordBatch "streams",
-//! ┌────┐ ┌────┐ ┌────┐     preserving the order        ┌────┐ ┌────┐ ┌────┐
-//! │    │ │    │ │    │                                 │    │ │    │ │    │
-//! │    │ │    │ │    │ ──────────────┐                 │    │ │    │ │    │
-//! │    │ │    │ │    │               └─────────────▶   │ C1 │ │... │ │ CN │
-//! │    │ │    │ │    │ ───────────────┐                │    │ │    │ │    │
-//! │    │ │    │ │    │               ┌┼─────────────▶  │    │ │    │ │    │
-//! │    │ │    │ │    │               ││                │    │ │    │ │    │
-//! │    │ │    │ │    │               ││                └────┘ └────┘ └────┘
-//! │    │ │    │ │    │               ││                ┌────┐ ┌────┐ ┌────┐
-//! │    │ │    │ │    │               │└───────────────▶│    │ │    │ │    │
-//! │    │ │    │ │    │               │                 │    │ │    │ │    │
-//! │    │ │    │ │    │         ...   │                 │ C1 │ │... │ │ CN │
-//! │    │ │    │ │    │ ──────────────┘                 │    │ │    │ │    │
-//! │    │ │    │ │    │                ┌──────────────▶ │    │ │    │ │    │
-//! │ C1 │ │... │ │ CN │                │                │    │ │    │ │    │
-//! │    │ │    │ │    │───────────────┐│                └────┘ └────┘ └────┘
-//! │    │ │    │ │    │               ││
-//! │    │ │    │ │    │               ││
-//! │    │ │    │ │    │               ││                         ...
-//! │    │ │    │ │    │   ────────────┼┼┐
-//! │    │ │    │ │    │               │││
-//! │    │ │    │ │    │               │││               ┌────┐ ┌────┐ ┌────┐
-//! │    │ │    │ │    │ ──────────────┼┘│               │    │ │    │ │    │
-//! │    │ │    │ │    │               │ │               │    │ │    │ │    │
-//! │    │ │    │ │    │               │ │               │ C1 │ │... │ │ CN │
-//! │    │ │    │ │    │               └─┼────────────▶  │    │ │    │ │    │
-//! │    │ │    │ │    │                 │               │    │ │    │ │    │
-//! │    │ │    │ │    │                 └─────────────▶ │    │ │    │ │    │
-//! └────┘ └────┘ └────┘                                 └────┘ └────┘ └────┘
-//!    Input RecordBatch                                  NUM_STREAMS input
-//!      Columns 1..N                                       RecordBatches
-//! INPUT_SIZE sorted rows                                (still INPUT_SIZE total
-//!     ~10% duplicates                                          rows)
-//! ```
-
+//! Adapted from merge benchmark. Primary difference is that the input data is not ordered.
 use std::sync::Arc;
 
 use arrow::array::DictionaryArray;
@@ -78,15 +27,12 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-/// Benchmarks for SortPreservingMerge stream
+/// Benchmarks for SortExec
 use criterion::{criterion_group, criterion_main, Criterion};
-use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::{
     execution::context::TaskContext,
-    physical_plan::{
-        memory::MemoryExec, sorts::sort_preserving_merge::SortPreservingMergeExec,
-        ExecutionPlan,
-    },
+    physical_plan::{memory::MemoryExec, sorts::sort::SortExec, ExecutionPlan},
     prelude::SessionContext,
 };
 use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
@@ -131,112 +77,109 @@ lazy_static! {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("merge i64", |b| {
-        let case = MergeBenchCase::new(&I64_STREAMS);
+    c.bench_function("sort i64", |b| {
+        let case = SortBenchCase::new(&I64_STREAMS);
+
+        b.iter(move || case.run())
+    });
+    c.bench_function("sort i64 preserve partitioning", |b| {
+        let case = SortBenchCasePreservePartitioning::new(&I64_STREAMS);
 
         b.iter(move || case.run())
     });
 
-    c.bench_function("merge i64 SortExec input", |b| {
-        let case = MergeBenchCase::new_with_sort_input(&I64_STREAMS);
+    c.bench_function("sort f64", |b| {
+        let case = SortBenchCase::new(&F64_STREAMS);
+
+        b.iter(move || case.run())
+    });
+    c.bench_function("sort f64 preserve partitioning", |b| {
+        let case = SortBenchCasePreservePartitioning::new(&F64_STREAMS);
 
         b.iter(move || case.run())
     });
 
-    c.bench_function("merge f64", |b| {
-        let case = MergeBenchCase::new(&F64_STREAMS);
+    c.bench_function("sort utf8 low cardinality", |b| {
+        let case = SortBenchCase::new(&UTF8_LOW_CARDINALITY_STREAMS);
 
         b.iter(move || case.run())
     });
-    c.bench_function("merge f64 SortExec input", |b| {
-        let case = MergeBenchCase::new_with_sort_input(&F64_STREAMS);
-
-        b.iter(move || case.run())
-    });
-
-    c.bench_function("merge utf8 low cardinality", |b| {
-        let case = MergeBenchCase::new(&UTF8_LOW_CARDINALITY_STREAMS);
+    c.bench_function("sort utf8 low cardinality preserve partitioning", |b| {
+        let case = SortBenchCasePreservePartitioning::new(&UTF8_LOW_CARDINALITY_STREAMS);
 
         b.iter(move || case.run())
     });
 
-    c.bench_function("merge utf8 low cardinality SortExec", |b| {
-        let case = MergeBenchCase::new_with_sort_input(&UTF8_LOW_CARDINALITY_STREAMS);
+    c.bench_function("sort utf8 high cardinality", |b| {
+        let case = SortBenchCase::new(&UTF8_HIGH_CARDINALITY_STREAMS);
+
+        b.iter(move || case.run())
+    });
+    c.bench_function("sort utf8 high cardinality preserve partitioning", |b| {
+        let case = SortBenchCasePreservePartitioning::new(&UTF8_HIGH_CARDINALITY_STREAMS);
 
         b.iter(move || case.run())
     });
 
-    c.bench_function("merge utf8 high cardinality", |b| {
-        let case = MergeBenchCase::new(&UTF8_HIGH_CARDINALITY_STREAMS);
+    c.bench_function("sort utf8 tuple", |b| {
+        let case = SortBenchCase::new(&UTF8_TUPLE_STREAMS);
+
+        b.iter(move || case.run())
+    });
+    c.bench_function("sort utf8 tuple preserve partitioning", |b| {
+        let case = SortBenchCasePreservePartitioning::new(&UTF8_TUPLE_STREAMS);
 
         b.iter(move || case.run())
     });
 
-    c.bench_function("merge utf8 high cardinality SortExec input", |b| {
-        let case = MergeBenchCase::new_with_sort_input(&UTF8_HIGH_CARDINALITY_STREAMS);
+    c.bench_function("sort utf8 dictionary", |b| {
+        let case = SortBenchCase::new(&DICTIONARY_STREAMS);
+
+        b.iter(move || case.run())
+    });
+    c.bench_function("sort utf8 dictionary preserve partitioning", |b| {
+        let case = SortBenchCasePreservePartitioning::new(&DICTIONARY_STREAMS);
 
         b.iter(move || case.run())
     });
 
-    c.bench_function("merge utf8 tuple", |b| {
-        let case = MergeBenchCase::new(&UTF8_TUPLE_STREAMS);
-
+    c.bench_function("sort utf8 dictionary tuple", |b| {
+        let case = SortBenchCase::new(&DICTIONARY_TUPLE_STREAMS);
+        b.iter(move || case.run())
+    });
+    c.bench_function("sort utf8 dictionary tuple preserve partitioning", |b| {
+        let case = SortBenchCasePreservePartitioning::new(&DICTIONARY_TUPLE_STREAMS);
         b.iter(move || case.run())
     });
 
-    c.bench_function("merge utf8 tuple SortExec input", |b| {
-        let case = MergeBenchCase::new_with_sort_input(&UTF8_TUPLE_STREAMS);
-
+    c.bench_function("sort mixed utf8 dictionary tuple", |b| {
+        let case = SortBenchCase::new(&MIXED_DICTIONARY_TUPLE_STREAMS);
         b.iter(move || case.run())
     });
 
-    c.bench_function("merge utf8 dictionary", |b| {
-        let case = MergeBenchCase::new(&DICTIONARY_STREAMS);
+    c.bench_function(
+        "sort mixed utf8 dictionary tuple preserve partitioning",
+        |b| {
+            let case =
+                SortBenchCasePreservePartitioning::new(&MIXED_DICTIONARY_TUPLE_STREAMS);
+            b.iter(move || case.run())
+        },
+    );
+
+    c.bench_function("sort mixed tuple", |b| {
+        let case = SortBenchCase::new(&MIXED_TUPLE_STREAMS);
 
         b.iter(move || case.run())
     });
-
-    c.bench_function("merge utf8 dictionary SortExec input", |b| {
-        let case = MergeBenchCase::new_with_sort_input(&DICTIONARY_STREAMS);
-
-        b.iter(move || case.run())
-    });
-
-    c.bench_function("merge utf8 dictionary tuple", |b| {
-        let case = MergeBenchCase::new(&DICTIONARY_TUPLE_STREAMS);
-        b.iter(move || case.run())
-    });
-
-    c.bench_function("merge utf8 dictionary tuple SortExec input", |b| {
-        let case = MergeBenchCase::new_with_sort_input(&DICTIONARY_TUPLE_STREAMS);
-        b.iter(move || case.run())
-    });
-
-    c.bench_function("merge mixed utf8 dictionary tuple", |b| {
-        let case = MergeBenchCase::new(&MIXED_DICTIONARY_TUPLE_STREAMS);
-        b.iter(move || case.run())
-    });
-
-    c.bench_function("merge mixed utf8 dictionary tuple SortExec input", |b| {
-        let case = MergeBenchCase::new_with_sort_input(&MIXED_DICTIONARY_TUPLE_STREAMS);
-        b.iter(move || case.run())
-    });
-
-    c.bench_function("merge mixed tuple", |b| {
-        let case = MergeBenchCase::new(&MIXED_TUPLE_STREAMS);
-
-        b.iter(move || case.run())
-    });
-
-    c.bench_function("merge mixed tuple SortExec input", |b| {
-        let case = MergeBenchCase::new_with_sort_input(&MIXED_TUPLE_STREAMS);
+    c.bench_function("sort mixed tuple preserve partitioning", |b| {
+        let case = SortBenchCasePreservePartitioning::new(&MIXED_TUPLE_STREAMS);
 
         b.iter(move || case.run())
     });
 }
 
-/// Encapsulates running each test case
-struct MergeBenchCase {
+/// Encapsulates running a test case where input partitioning is not preserved.
+struct SortBenchCase {
     runtime: Runtime,
     task_ctx: Arc<TaskContext>,
 
@@ -244,7 +187,7 @@ struct MergeBenchCase {
     plan: Arc<dyn ExecutionPlan>,
 }
 
-impl MergeBenchCase {
+impl SortBenchCase {
     /// Prepare to run a benchmark that merges the specified
     /// partitions (streams) together using all keyes
     fn new(partitions: &[Vec<RecordBatch>]) -> Self {
@@ -257,27 +200,8 @@ impl MergeBenchCase {
 
         let projection = None;
         let exec = MemoryExec::try_new(partitions, schema, projection).unwrap();
-        let plan = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
-
-        Self {
-            runtime,
-            task_ctx,
-            plan,
-        }
-    }
-
-    fn new_with_sort_input(partitions: &[Vec<RecordBatch>]) -> Self {
-        let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-
-        let schema = partitions[0][0].schema();
-        let sort = make_sort_exprs(schema.as_ref());
-
-        let projection = None;
-        let exec = Arc::new(MemoryExec::try_new(partitions, schema, projection).unwrap());
-        let sort_exec = SortExec::try_new(sort.to_owned(), exec, None).unwrap();
-        let plan = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(sort_exec)));
+        let exec = Arc::new(CoalescePartitionsExec::new(Arc::new(exec)));
+        let plan = Arc::new(SortExec::try_new(sort, exec, None).unwrap());
 
         Self {
             runtime,
@@ -298,6 +222,66 @@ impl MergeBenchCase {
             let mut stream = plan.execute(0, task_ctx).unwrap();
             while let Some(b) = stream.next().await {
                 b.expect("unexpected execution error");
+            }
+        })
+    }
+}
+/// Encapsulates running a test case where input partitioning is not preserved.
+struct SortBenchCasePreservePartitioning {
+    runtime: Runtime,
+    task_ctx: Arc<TaskContext>,
+
+    // The plan to run
+    plan: Arc<dyn ExecutionPlan>,
+    partition_count: usize,
+}
+
+impl SortBenchCasePreservePartitioning {
+    /// Prepare to run a benchmark that merges the specified
+    /// partitions (streams) together using all keyes
+    fn new(partitions: &[Vec<RecordBatch>]) -> Self {
+        let partition_count = partitions.len();
+        let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+
+        let schema = partitions[0][0].schema();
+        let sort = make_sort_exprs(schema.as_ref());
+
+        let projection = None;
+        let exec = MemoryExec::try_new(partitions, schema, projection).unwrap();
+        let plan = Arc::new(SortExec::new_with_partitioning(
+            sort,
+            Arc::new(exec),
+            true,
+            None,
+        ));
+
+        Self {
+            runtime,
+            task_ctx,
+            plan,
+            partition_count,
+        }
+    }
+
+    /// runs the specified plan to completion, draining all input and
+    /// panic'ing on error
+    fn run(&self) {
+        let plan = Arc::clone(&self.plan);
+        let task_ctx = Arc::clone(&self.task_ctx);
+
+        assert_eq!(
+            plan.output_partitioning().partition_count(),
+            self.partition_count
+        );
+
+        self.runtime.block_on(async move {
+            for i in 0..self.partition_count {
+                let mut stream = plan.execute(i, task_ctx.clone()).unwrap();
+                while let Some(b) = stream.next().await {
+                    b.expect("unexpected execution error");
+                }
             }
         })
     }
@@ -509,18 +493,11 @@ impl DataGenerator {
         }
     }
 
-    /// Create an array of i64 sorted values (where approximately 1/3 values is repeated)
+    /// Create an array of i64 unsorted values (where approximately 1/3 values is repeated)
     fn i64_values(&mut self) -> Vec<i64> {
-        let mut vec: Vec<_> = (0..INPUT_SIZE)
+        (0..INPUT_SIZE)
             .map(|_| self.rng.gen_range(0..INPUT_SIZE as i64))
-            .collect();
-
-        vec.sort_unstable();
-
-        // 6287 distinct / 10000 total
-        //let num_distinct = vec.iter().collect::<HashSet<_>>().len();
-        //println!("{} distinct / {} total", num_distinct, vec.len());
-        vec
+            .collect()
     }
 
     /// Create an array of f64 sorted values (with same distribution of `i64_values`)
@@ -535,27 +512,21 @@ impl DataGenerator {
             .collect::<Vec<_>>();
 
         // pick from the 100 strings randomly
-        let mut input = (0..INPUT_SIZE)
+        (0..INPUT_SIZE)
             .map(|_| {
                 let idx = self.rng.gen_range(0..strings.len());
                 let s = Arc::clone(&strings[idx]);
                 Some(s)
             })
-            .collect::<Vec<_>>();
-
-        input.sort_unstable();
-        input
+            .collect::<Vec<_>>()
     }
 
-    /// Create sorted values of high  cardinality (~ no duplicates) utf8 values
+    /// Create values of high  cardinality (~ no duplicates) utf8 values
     fn utf8_high_cardinality_values(&mut self) -> Vec<Option<String>> {
         // make random strings
-        let mut input = (0..INPUT_SIZE)
+        (0..INPUT_SIZE)
             .map(|_| Some(self.random_string()))
-            .collect::<Vec<_>>();
-
-        input.sort_unstable();
-        input
+            .collect::<Vec<_>>()
     }
 
     fn random_string(&mut self) -> String {
@@ -568,7 +539,7 @@ impl DataGenerator {
     }
 }
 
-/// Splits the (sorted) `input_batch` randomly into `NUM_STREAMS` approximately evenly sorted streams
+/// Splits the `input_batch` randomly into `NUM_STREAMS` approximately evenly sorted streams
 fn split_batch(input_batch: RecordBatch) -> Vec<Vec<RecordBatch>> {
     // figure out which inputs go where
     let mut rng = StdRng::seed_from_u64(1337);

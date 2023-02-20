@@ -51,4 +51,4 @@ Table of Contents
    contributor-guide/quarterly_roadmap
    contributor-guide/specification/index
    Issue tracker <https://github.com/apache/arrow-datafusion/issues>
-   Code of conduct <https://github.com/apache/arrow-datafusion/blob/master/CODE_OF_CONDUCT.md>
+   Code of conduct <https://github.com/apache/arrow-datafusion/blob/main/CODE_OF_CONDUCT.md>

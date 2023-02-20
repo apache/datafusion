@@ -24,7 +24,6 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion::from_slice::FromSlice;
-use datafusion_common::DataFusionError;
 use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
@@ -146,18 +145,29 @@ async fn sort_on_distinct_unprojected_columns() -> Result<()> {
 
     let ctx = SessionContext::new();
     ctx.register_batch("t", batch).unwrap();
+    let df = ctx
+        .table("t")
+        .await
+        .unwrap()
+        .select(vec![col("a")])
+        .unwrap()
+        .distinct()
+        .unwrap()
+        .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))])
+        .unwrap();
+    let results = df.collect().await.unwrap();
 
-    assert!(matches!(
-        ctx.table("t")
-            .await
-            .unwrap()
-            .select(vec![col("a")])
-            .unwrap()
-            .distinct()
-            .unwrap()
-            .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))]),
-        Err(DataFusionError::Plan(_))
-    ));
+    #[rustfmt::skip]
+    let expected = vec![
+        "+-----+",
+        "| a   |",
+        "+-----+",
+        "| 100 |",
+        "| 10  |",
+        "| 1   |",
+        "+-----+",
+    ];
+    assert_batches_eq!(expected, &results);
     Ok(())
 }
 
@@ -632,6 +642,43 @@ async fn unnest_columns() -> Result<()> {
         .count()
         .await?;
     assert_eq!(count, results.iter().map(|r| r.num_rows()).sum::<usize>());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn unnest_aggregate_columns() -> Result<()> {
+    const NUM_ROWS: usize = 5;
+
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let results = df.select_columns(&["tags"])?.collect().await?;
+    let expected = vec![
+        r#"+--------------------+"#,
+        r#"| tags               |"#,
+        r#"+--------------------+"#,
+        r#"| [tag1]             |"#,
+        r#"| [tag1, tag2]       |"#,
+        r#"|                    |"#,
+        r#"| [tag1, tag2, tag3] |"#,
+        r#"| [tag1, tag2, tag3] |"#,
+        r#"+--------------------+"#,
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let results = df
+        .unnest_column("tags")?
+        .aggregate(vec![], vec![count(col("tags"))])?
+        .collect()
+        .await?;
+    let expected = vec![
+        r#"+--------------------+"#,
+        r#"| COUNT(shapes.tags) |"#,
+        r#"+--------------------+"#,
+        r#"| 9                  |"#,
+        r#"+--------------------+"#,
+    ];
+    assert_batches_sorted_eq!(expected, &results);
 
     Ok(())
 }

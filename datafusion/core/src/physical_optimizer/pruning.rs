@@ -29,7 +29,7 @@
 //! other source (e.g. a catalog)
 
 use std::convert::TryFrom;
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use crate::execution::context::ExecutionProps;
 use crate::prelude::lit;
@@ -233,25 +233,18 @@ impl PruningPredicate {
             .unwrap_or_default()
     }
 
-    /// Returns all need column indexes to evaluate this pruning predicate
-    pub(crate) fn need_input_columns_ids(&self) -> HashSet<usize> {
-        let mut set = HashSet::new();
-        self.required_columns.columns.iter().for_each(|x| {
-            match self.schema().column_with_name(x.0.name.as_str()) {
-                None => {}
-                Some(y) => {
-                    set.insert(y.0);
-                }
-            }
-        });
-        set
+    pub(crate) fn required_columns(&self) -> &RequiredStatColumns {
+        &self.required_columns
     }
 }
 
+/// Records for which columns statistics are necessary to evaluate a
+/// pruning predicate.
+///
 /// Handles creating references to the min/max statistics
 /// for columns as well as recording which statistics are needed
 #[derive(Debug, Default, Clone)]
-struct RequiredStatColumns {
+pub(crate) struct RequiredStatColumns {
     /// The statistics required to evaluate this predicate:
     /// * The unqualified column in the input schema
     /// * Statistics type (e.g. Min or Max or Null_Count)
@@ -267,7 +260,7 @@ impl RequiredStatColumns {
 
     /// Returns an iterator over items in columns (see doc on
     /// `self.columns` for details)
-    fn iter(&self) -> impl Iterator<Item = &(Column, StatisticsType, Field)> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &(Column, StatisticsType, Field)> {
         self.columns.iter()
     }
 
@@ -852,7 +845,7 @@ fn build_statistics_expr(expr_builder: &mut PruningExpressionBuilder) -> Result<
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum StatisticsType {
+pub(crate) enum StatisticsType {
     Min,
     Max,
     NullCount,

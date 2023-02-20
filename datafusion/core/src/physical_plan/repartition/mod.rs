@@ -532,6 +532,10 @@ impl RepartitionExec {
                 }
                 timer.done();
             }
+
+            // If the input stream is endless, we may spin forever and never yield back to tokio. Hence let us yield.
+            // See https://github.com/apache/arrow-datafusion/issues/5278.
+            tokio::task::yield_now().await;
         }
 
         Ok(())
