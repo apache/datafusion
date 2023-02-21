@@ -23,7 +23,7 @@ use datafusion_expr::Distinct;
 use datafusion_expr::{Aggregate, LogicalPlan};
 use ApplyOrder::BottomUp;
 
-/// Optimizer pass that replaces logical [[Distinct]] with a logical [[Aggregate]]
+/// Optimizer that replaces logical [[Distinct]] with a logical [[Aggregate]]
 ///
 /// ```text
 /// SELECT DISTINCT a, b FROM tab
