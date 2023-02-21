@@ -267,7 +267,7 @@ statement error For SELECT DISTINCT, ORDER BY expressions time must appear in se
 SELECT DISTINCT date_trunc('hour', time)  FROM t ORDER BY time;
 
 # distinct on a column that is in the select list but aliasted should work
-query I
+query P
 SELECT DISTINCT time as "first_seen" FROM t ORDER BY "first_seen";
 ----
 2022-01-01T00:00:30
@@ -276,7 +276,7 @@ SELECT DISTINCT time as "first_seen" FROM t ORDER BY "first_seen";
 
 # distinct on a column that is in the select list, but aliased (though
 # the reference is to original expr) should work
-query I
+query P
 SELECT DISTINCT time as "first_seen" FROM t ORDER BY time;
 ----
 2022-01-01T00:00:30
@@ -285,12 +285,13 @@ SELECT DISTINCT time as "first_seen" FROM t ORDER BY time;
 
 # distinct on a column that is in the select list, but aliased (though
 # the reference is its ordinal position) should work
-query I
+query P
 SELECT DISTINCT time as "first_seen" FROM t ORDER BY 1;
 ----
 2022-01-01T00:00:30
 2022-01-01T01:00:10
 2022-01-02T00:00:20
+
 ## Cleanup
 statement ok
 drop table t;
