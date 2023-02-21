@@ -1149,4 +1149,34 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn in_subquery_with_same_table() -> Result<()> {
+        let outer_scan = test_table_scan()?;
+        let subquery_scan = test_table_scan()?;
+        let subquery = LogicalPlanBuilder::from(subquery_scan)
+            .filter(col("test.a").gt(col("test.b")))?
+            .project(vec![col("c")])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(in_subquery(col("test.a"), Arc::new(subquery)))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        let expected = "Projection: test.b [b:UInt32]\
+                      \n  LeftSemi Join:  Filter: test.a = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]\
+                      \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+                      \n    SubqueryAlias: __correlated_sq_1 [c:UInt32]\
+                      \n      Projection: test.c AS c [c:UInt32]\
+                      \n        Filter: test.a > test.b [a:UInt32, b:UInt32, c:UInt32]\
+                      \n          TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(DecorrelateWhereIn::new()),
+            &plan,
+            expected,
+        );
+        Ok(())
+    }
 }

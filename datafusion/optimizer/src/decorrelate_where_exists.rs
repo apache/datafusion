@@ -644,4 +644,29 @@ mod tests {
 
         assert_plan_eq(&plan, expected)
     }
+
+    #[test]
+    fn exists_subquery_with_same_table() -> Result<()> {
+        let outer_scan = test_table_scan()?;
+        let subquery_scan = test_table_scan()?;
+        let subquery = LogicalPlanBuilder::from(subquery_scan)
+            .filter(col("test.a").gt(col("test.b")))?
+            .project(vec![col("c")])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(exists(Arc::new(subquery)))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        let expected = "Projection: test.b [b:UInt32]\
+                      \n  Filter: EXISTS (<subquery>) [a:UInt32, b:UInt32, c:UInt32]\
+                      \n    Subquery: [c:UInt32]\
+                      \n      Projection: test.c [c:UInt32]\
+                      \n        Filter: test.a > test.b [a:UInt32, b:UInt32, c:UInt32]\
+                      \n          TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+                      \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_plan_eq(&plan, expected)
+    }
 }
