@@ -310,7 +310,7 @@ impl SortBenchCasePreservePartitioning {
         let partitions = (0..partitions.len())
             .map(|i| {
                 if i == 0 {
-                    partitions.iter().cloned().flatten().collect::<Vec<_>>()
+                    partitions.iter().flatten().cloned().collect::<Vec<_>>()
                 } else {
                     vec![]
                 }
