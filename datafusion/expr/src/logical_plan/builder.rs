@@ -499,7 +499,6 @@ impl LogicalPlanBuilder {
 
         let is_distinct = false;
         let plan = Self::add_missing_columns(self.plan, &missing_cols, is_distinct)?;
-        println!("Result plan is\n{plan:#?}");
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_cols(exprs, &plan)?,
             input: Arc::new(plan),
