@@ -87,7 +87,6 @@ pub mod explain_analyze;
 pub mod expr;
 pub mod functions;
 pub mod group_by;
-pub mod intersection;
 pub mod joins;
 pub mod json;
 pub mod limit;
