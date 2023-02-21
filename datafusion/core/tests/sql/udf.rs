@@ -158,7 +158,7 @@ async fn simple_udaf() -> Result<()> {
         "+-------------+",
         "| my_avg(t.a) |",
         "+-------------+",
-        "| 3           |",
+        "| 3.0         |",
         "+-------------+",
     ];
     assert_batches_eq!(expected, &result);
