@@ -2215,15 +2215,13 @@ mod roundtrip_tests {
             DataType::Map(
                 new_box_field(
                     "entries",
-                    DataType::Struct(
-                        vec![
-                            Field::new("keys", DataType::Utf8, false),
-                            Field::new("values", DataType::Int32, true)
-                        ]
-                    ),
-                    true
+                    DataType::Struct(vec![
+                        Field::new("keys", DataType::Utf8, false),
+                        Field::new("values", DataType::Int32, true),
+                    ]),
+                    true,
                 ),
-                false
+                false,
             ),
         ];
 
