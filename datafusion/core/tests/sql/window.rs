@@ -103,7 +103,7 @@ async fn window_frame_rows_preceding() -> Result<()> {
         "| -48302                     | -16100.666666666666        | 3               |",
         "| 11243                      | 3747.6666666666665         | 3               |",
         "| -51311                     | -17103.666666666668        | 3               |",
-        "| -2391                      | -797                       | 3               |",
+        "| -2391                      | -797.0                     | 3               |",
         "| 46756                      | 15585.333333333334         | 3               |",
         "+----------------------------+----------------------------+-----------------+",
     ];
@@ -158,7 +158,7 @@ async fn window_frame_rows_preceding_with_partition_unique_order_by() -> Result<
         "| -38611                     | -19305.5                   | 2               |",
         "| 17547                      | 8773.5                     | 2               |",
         "| -1301                      | -650.5                     | 2               |",
-        "| 26638                      | 13319                      | 3               |",
+        "| 26638                      | 13319.0                    | 3               |",
         "| 26861                      | 8953.666666666666          | 3               |",
         "+----------------------------+----------------------------+-----------------+",
     ];
@@ -982,19 +982,20 @@ async fn window_frame_groups_multiple_order_columns() -> Result<()> {
 async fn window_frame_groups_without_order_by() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
-    // execute the query
-    let df = ctx
+    // Try executing an erroneous query (the ORDER BY clause is missing in the
+    // window frame):
+    let err = ctx
         .sql(
             "SELECT
             SUM(c4) OVER(PARTITION BY c2 GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
             FROM aggregate_test_100
             ORDER BY c9;",
         )
-        .await?;
-    let err = df.collect().await.unwrap_err();
+        .await
+        .unwrap_err();
     assert_contains!(
         err.to_string(),
-        "Execution error: GROUPS mode requires an ORDER BY clause".to_owned()
+        "Error during planning: GROUPS mode requires an ORDER BY clause".to_owned()
     );
     Ok(())
 }
@@ -1034,7 +1035,7 @@ async fn window_frame_creation() -> Result<()> {
     let results = df.collect().await;
     assert_eq!(
         results.err().unwrap().to_string(),
-        "Execution error: Invalid window frame: start bound (1 PRECEDING) cannot be larger than end bound (2 PRECEDING)"
+        "Error during planning: Invalid window frame: start bound (1 PRECEDING) cannot be larger than end bound (2 PRECEDING)"
     );
 
     let df = ctx
@@ -1047,7 +1048,20 @@ async fn window_frame_creation() -> Result<()> {
     let results = df.collect().await;
     assert_eq!(
         results.err().unwrap().to_string(),
-        "Execution error: Invalid window frame: start bound (2 FOLLOWING) cannot be larger than end bound (1 FOLLOWING)"
+        "Error during planning: Invalid window frame: start bound (2 FOLLOWING) cannot be larger than end bound (1 FOLLOWING)"
+    );
+
+    let err = ctx
+        .sql(
+            "SELECT
+                COUNT(c1) OVER(GROUPS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+                FROM aggregate_test_100;",
+        )
+        .await
+        .unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "Error during planning: GROUPS mode requires an ORDER BY clause"
     );
 
     Ok(())
@@ -1124,6 +1138,39 @@ async fn test_window_row_number_aggregate() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_window_range_equivalent_frames() -> Result<()> {
+    let config = SessionConfig::new();
+    let ctx = SessionContext::with_config(config);
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT
+          c9,
+          COUNT(*) OVER(ORDER BY c9, c1 RANGE BETWEEN CURRENT ROW AND CURRENT ROW) AS cnt1,
+          COUNT(*) OVER(ORDER BY c9, c1 RANGE UNBOUNDED PRECEDING) AS cnt2,
+          COUNT(*) OVER(ORDER BY c9, c1 RANGE CURRENT ROW) AS cnt3,
+          COUNT(*) OVER(RANGE BETWEEN CURRENT ROW AND CURRENT ROW) AS cnt4,
+          COUNT(*) OVER(RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cnt5,
+          COUNT(*) OVER(RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS cnt6
+          FROM aggregate_test_100
+          ORDER BY c9
+          LIMIT 5";
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------+------+------+------+------+------+------+",
+        "| c9        | cnt1 | cnt2 | cnt3 | cnt4 | cnt5 | cnt6 |",
+        "+-----------+------+------+------+------+------+------+",
+        "| 28774375  | 1    | 1    | 1    | 100  | 100  | 100  |",
+        "| 63044568  | 1    | 2    | 1    | 100  | 100  | 100  |",
+        "| 141047417 | 1    | 3    | 1    | 100  | 100  | 100  |",
+        "| 141680161 | 1    | 4    | 1    | 100  | 100  | 100  |",
+        "| 145294611 | 1    | 5    | 1    | 100  | 100  | 100  |",
+        "+-----------+------+------+------+------+------+------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_window_cume_dist() -> Result<()> {
     let config = SessionConfig::new();
     let ctx = SessionContext::with_config(config);
@@ -1176,9 +1223,9 @@ async fn test_window_rank() -> Result<()> {
         "+-----------+-------+-------+-------------+-------------+---------------------+---------------------+",
         "| 28774375  | 80    | 80    | 5           | 5           | 0.797979797979798   | 0.797979797979798   |",
         "| 63044568  | 62    | 62    | 4           | 4           | 0.6161616161616161  | 0.6161616161616161  |",
-        "| 141047417 | 1     | 1     | 1           | 1           | 0                   | 0                   |",
+        "| 141047417 | 1     | 1     | 1           | 1           | 0.0                 | 0.0                 |",
         "| 141680161 | 41    | 41    | 3           | 3           | 0.40404040404040403 | 0.40404040404040403 |",
-        "| 145294611 | 1     | 1     | 1           | 1           | 0                   | 0                   |",
+        "| 145294611 | 1     | 1     | 1           | 1           | 0.0                 | 0.0                 |",
         "+-----------+-------+-------+-------------+-------------+---------------------+---------------------+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -2474,11 +2521,11 @@ mod tests {
             "+------+------+------+------+------+------+--------+--------+-------------------+-------------------+",
             "| sum1 | sum2 | min1 | min2 | max1 | max2 | count1 | count2 | avg1              | avg2              |",
             "+------+------+------+------+------+------+--------+--------+-------------------+-------------------+",
-            "| 16   | 6    | 1    | 1    | 10   | 5    | 3      | 2      | 5.333333333333333 | 3                 |",
-            "| 16   | 6    | 1    | 1    | 10   | 5    | 3      | 2      | 5.333333333333333 | 3                 |",
+            "| 16   | 6    | 1    | 1    | 10   | 5    | 3      | 2      | 5.333333333333333 | 3.0               |",
+            "| 16   | 6    | 1    | 1    | 10   | 5    | 3      | 2      | 5.333333333333333 | 3.0               |",
             "| 51   | 16   | 1    | 1    | 20   | 10   | 5      | 3      | 10.2              | 5.333333333333333 |",
-            "| 72   | 72   | 1    | 1    | 21   | 21   | 6      | 6      | 12                | 12                |",
-            "| 72   | 72   | 1    | 1    | 21   | 21   | 6      | 6      | 12                | 12                |",
+            "| 72   | 72   | 1    | 1    | 21   | 21   | 6      | 6      | 12.0              | 12.0              |",
+            "| 72   | 72   | 1    | 1    | 21   | 21   | 6      | 6      | 12.0              | 12.0              |",
             "+------+------+------+------+------+------+--------+--------+-------------------+-------------------+",
         ];
         assert_batches_eq!(expected, &actual);
