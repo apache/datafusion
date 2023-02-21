@@ -169,9 +169,9 @@ fn intersect() -> Result<()> {
     let plan = test_sql(sql)?;
     let expected =
         "LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
-    \n  Distinct:\
+    \n  Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
     \n    LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
-    \n      Distinct:\
+    \n      Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
     \n        TableScan: test projection=[col_int32, col_utf8]\
     \n      TableScan: test projection=[col_int32, col_utf8]\
     \n  TableScan: test projection=[col_int32, col_utf8]";
