@@ -38,7 +38,7 @@ impl EliminateCrossJoin {
     }
 }
 
-/// Attempt to reorder join tp eliminate cross joins to inner joins.
+/// Attempt to reorder join to eliminate cross joins to inner joins.
 /// for queries:
 /// 'select ... from a, b where a.x = b.y and b.xx = 100;'
 /// 'select ... from a, b where (a.x = b.y and b.xx = 100) or (a.x = b.y and b.xx = 200);'

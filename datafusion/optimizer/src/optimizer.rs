@@ -63,7 +63,7 @@ pub trait OptimizerRule {
 
     /// How should the rule be applied by the optimizer? See comments on [`ApplyOrder`] for details.
     ///
-    /// If a rule use default None, its should traverse recursively plan inside itself
+    /// If a rule use default None, it should traverse recursively plan inside itself
     fn apply_order(&self) -> Option<ApplyOrder> {
         None
     }
