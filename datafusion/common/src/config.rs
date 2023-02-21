@@ -397,6 +397,13 @@ impl ConfigOptions {
         Self::default()
     }
 
+    /// Creates a new [`ConfigOptions`] with extensions set to provided value
+    pub fn with_extensions(extensions: Extensions) -> Self {
+        let mut config = Self::new();
+        config.extensions = extensions;
+        config
+    }
+
     /// Set a configuration option
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let (prefix, key) = key.split_once('.').ok_or_else(|| {
