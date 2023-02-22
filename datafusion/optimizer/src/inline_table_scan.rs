@@ -54,8 +54,9 @@ impl OptimizerRule for InlineTableScan {
                 if let Some(sub_plan) = source.get_logical_plan() {
                     let plan = LogicalPlanBuilder::from(sub_plan.clone())
                         .project(vec![Expr::Wildcard])?
-                        .alias(table_name)?;
-                    Ok(Some(plan.build()?))
+                        .alias(table_name)?
+                        .build()?;
+                    Ok(Some(plan))
                 } else {
                     Ok(None)
                 }
