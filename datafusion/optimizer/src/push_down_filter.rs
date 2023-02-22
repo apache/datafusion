@@ -27,6 +27,7 @@ use datafusion_expr::{
     utils::from_plan,
     BinaryExpr, Expr, Filter, Operator, TableProviderFilterPushDown,
 };
+use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::iter::once;
 use std::sync::Arc;
@@ -695,30 +696,27 @@ impl OptimizerRule for PushDownFilter {
                 push_down_all_join(predicates, &filter.input, left, right, vec![])?
             }
             LogicalPlan::TableScan(scan) => {
-                let mut new_scan_filters = scan.filters.clone();
-                let mut new_predicate = vec![];
+                let filter_predicates = split_conjunction(&filter.predicate);
+                let results = scan
+                    .source
+                    .supports_filters_pushdown(filter_predicates.as_slice())?;
+                let zip = filter_predicates.iter().zip(results.into_iter());
 
-                let filter_predicates =
-                    utils::split_conjunction_owned(filter.predicate.clone());
-
-                for filter_expr in &filter_predicates {
-                    let (preserve_filter_node, add_to_provider) =
-                        match scan.source.supports_filter_pushdown(filter_expr)? {
-                            TableProviderFilterPushDown::Unsupported => (true, false),
-                            TableProviderFilterPushDown::Inexact => (true, true),
-                            TableProviderFilterPushDown::Exact => (false, true),
-                        };
-                    if preserve_filter_node {
-                        new_predicate.push(filter_expr.clone());
-                    }
-                    if add_to_provider {
-                        // avoid reduplicated filter expr.
-                        if new_scan_filters.contains(filter_expr) {
-                            continue;
-                        }
-                        new_scan_filters.push(filter_expr.clone());
-                    }
-                }
+                let new_scan_filters = zip
+                    .clone()
+                    .filter(|(_, res)| res != &TableProviderFilterPushDown::Unsupported)
+                    .map(|(pred, _)| *pred);
+                let new_scan_filters: Vec<Expr> = scan
+                    .filters
+                    .iter()
+                    .chain(new_scan_filters)
+                    .unique()
+                    .cloned()
+                    .collect();
+                let new_predicate: Vec<Expr> = zip
+                    .filter(|(_, res)| res != &TableProviderFilterPushDown::Exact)
+                    .map(|(pred, _)| (*pred).clone())
+                    .collect();
 
                 let new_scan = LogicalPlan::TableScan(TableScan {
                     source: scan.source.clone(),
@@ -1903,7 +1901,7 @@ mod tests {
 
         fn supports_filter_pushdown(
             &self,
-            _: &Expr,
+            _e: &Expr,
         ) -> Result<TableProviderFilterPushDown> {
             Ok(self.filter_support.clone())
         }
@@ -2009,6 +2007,37 @@ mod tests {
         let expected = "Projection: a, b\
             \n  Filter: a = Int64(10) AND b > Int64(11)\
             \n    TableScan: test projection=[a], partial_filters=[a = Int64(10), b > Int64(11)]";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn multi_combined_filter_exact() -> Result<()> {
+        let test_provider = PushDownProvider {
+            filter_support: TableProviderFilterPushDown::Exact,
+        };
+
+        let table_scan = LogicalPlan::TableScan(TableScan {
+            table_name: "test".to_string(),
+            filters: vec![],
+            projected_schema: Arc::new(DFSchema::try_from(
+                (*test_provider.schema()).clone(),
+            )?),
+            projection: Some(vec![0]),
+            source: Arc::new(test_provider),
+            fetch: None,
+        });
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+
+        let expected = r#"
+Projection: a, b
+  TableScan: test projection=[a], full_filters=[a = Int64(10), b > Int64(11)]
+        "#
+        .trim();
 
         assert_optimized_plan_eq(&plan, expected)
     }
