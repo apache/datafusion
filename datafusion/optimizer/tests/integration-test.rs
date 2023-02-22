@@ -319,6 +319,22 @@ fn push_down_filter_groupby_expr_contains_alias() {
     assert_eq!(expected, format!("{plan:?}"));
 }
 
+#[test]
+// issue: https://github.com/apache/arrow-datafusion/issues/5334
+fn test_same_name_but_not_ambiguous() {
+    let sql = "SELECT t1.col_int32 AS col_int32 FROM test t1 intersect SELECT col_int32 FROM test t2";
+    let plan = test_sql(sql).unwrap();
+    let expected = "LeftSemi Join: col_int32 = t2.col_int32\
+    \n  Distinct:\
+    \n    Projection: t1.col_int32 AS col_int32\
+    \n      SubqueryAlias: t1\
+    \n        TableScan: test projection=[col_int32]\
+    \n  Projection: t2.col_int32\
+    \n    SubqueryAlias: t2\
+    \n      TableScan: test projection=[col_int32]";
+    assert_eq!(expected, format!("{plan:?}"));
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
@@ -347,10 +363,7 @@ struct MySchemaProvider {
 }
 
 impl ContextProvider for MySchemaProvider {
-    fn get_table_provider(
-        &self,
-        name: TableReference,
-    ) -> datafusion_common::Result<Arc<dyn TableSource>> {
+    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         let table_name = name.table();
         if table_name.starts_with("test") {
             let schema = Schema::new_with_metadata(
