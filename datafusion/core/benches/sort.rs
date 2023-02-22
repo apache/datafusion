@@ -29,6 +29,7 @@ use arrow::{
 
 /// Benchmarks for SortExec
 use criterion::{criterion_group, criterion_main, Criterion};
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::{
     execution::context::TaskContext,
     physical_plan::{memory::MemoryExec, sorts::sort::SortExec, ExecutionPlan},
@@ -104,7 +105,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(move || case.run())
     });
     c.bench_function("sort utf8 low cardinality preserve partitioning", |b| {
-        let case = SortBenchCase::new(&UTF8_LOW_CARDINALITY_STREAMS);
+        let case = SortBenchCasePreservePartitioning::new(&UTF8_LOW_CARDINALITY_STREAMS);
 
         b.iter(move || case.run())
     });
@@ -199,7 +200,8 @@ impl SortBenchCase {
 
         let projection = None;
         let exec = MemoryExec::try_new(partitions, schema, projection).unwrap();
-        let plan = Arc::new(SortExec::try_new(sort, Arc::new(exec), None).unwrap());
+        let exec = Arc::new(CoalescePartitionsExec::new(Arc::new(exec)));
+        let plan = Arc::new(SortExec::try_new(sort, exec, None).unwrap());
 
         Self {
             runtime,

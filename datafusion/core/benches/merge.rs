@@ -80,6 +80,7 @@ use arrow::{
 
 /// Benchmarks for SortPreservingMerge stream
 use criterion::{criterion_group, criterion_main, Criterion};
+use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::{
     execution::context::TaskContext,
     physical_plan::{
@@ -136,8 +137,19 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(move || case.run())
     });
 
+    c.bench_function("merge i64 SortExec input", |b| {
+        let case = MergeBenchCase::new_with_sort_input(&I64_STREAMS);
+
+        b.iter(move || case.run())
+    });
+
     c.bench_function("merge f64", |b| {
         let case = MergeBenchCase::new(&F64_STREAMS);
+
+        b.iter(move || case.run())
+    });
+    c.bench_function("merge f64 SortExec input", |b| {
+        let case = MergeBenchCase::new_with_sort_input(&F64_STREAMS);
 
         b.iter(move || case.run())
     });
@@ -148,8 +160,20 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(move || case.run())
     });
 
+    c.bench_function("merge utf8 low cardinality SortExec", |b| {
+        let case = MergeBenchCase::new_with_sort_input(&UTF8_LOW_CARDINALITY_STREAMS);
+
+        b.iter(move || case.run())
+    });
+
     c.bench_function("merge utf8 high cardinality", |b| {
         let case = MergeBenchCase::new(&UTF8_HIGH_CARDINALITY_STREAMS);
+
+        b.iter(move || case.run())
+    });
+
+    c.bench_function("merge utf8 high cardinality SortExec input", |b| {
+        let case = MergeBenchCase::new_with_sort_input(&UTF8_HIGH_CARDINALITY_STREAMS);
 
         b.iter(move || case.run())
     });
@@ -160,8 +184,20 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(move || case.run())
     });
 
+    c.bench_function("merge utf8 tuple SortExec input", |b| {
+        let case = MergeBenchCase::new_with_sort_input(&UTF8_TUPLE_STREAMS);
+
+        b.iter(move || case.run())
+    });
+
     c.bench_function("merge utf8 dictionary", |b| {
         let case = MergeBenchCase::new(&DICTIONARY_STREAMS);
+
+        b.iter(move || case.run())
+    });
+
+    c.bench_function("merge utf8 dictionary SortExec input", |b| {
+        let case = MergeBenchCase::new_with_sort_input(&DICTIONARY_STREAMS);
 
         b.iter(move || case.run())
     });
@@ -171,13 +207,29 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(move || case.run())
     });
 
+    c.bench_function("merge utf8 dictionary tuple SortExec input", |b| {
+        let case = MergeBenchCase::new_with_sort_input(&DICTIONARY_TUPLE_STREAMS);
+        b.iter(move || case.run())
+    });
+
     c.bench_function("merge mixed utf8 dictionary tuple", |b| {
         let case = MergeBenchCase::new(&MIXED_DICTIONARY_TUPLE_STREAMS);
         b.iter(move || case.run())
     });
 
+    c.bench_function("merge mixed utf8 dictionary tuple SortExec input", |b| {
+        let case = MergeBenchCase::new_with_sort_input(&MIXED_DICTIONARY_TUPLE_STREAMS);
+        b.iter(move || case.run())
+    });
+
     c.bench_function("merge mixed tuple", |b| {
         let case = MergeBenchCase::new(&MIXED_TUPLE_STREAMS);
+
+        b.iter(move || case.run())
+    });
+
+    c.bench_function("merge mixed tuple SortExec input", |b| {
+        let case = MergeBenchCase::new_with_sort_input(&MIXED_TUPLE_STREAMS);
 
         b.iter(move || case.run())
     });
@@ -206,6 +258,26 @@ impl MergeBenchCase {
         let projection = None;
         let exec = MemoryExec::try_new(partitions, schema, projection).unwrap();
         let plan = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+
+        Self {
+            runtime,
+            task_ctx,
+            plan,
+        }
+    }
+
+    fn new_with_sort_input(partitions: &[Vec<RecordBatch>]) -> Self {
+        let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+
+        let schema = partitions[0][0].schema();
+        let sort = make_sort_exprs(schema.as_ref());
+
+        let projection = None;
+        let exec = Arc::new(MemoryExec::try_new(partitions, schema, projection).unwrap());
+        let sort_exec = SortExec::try_new(sort.to_owned(), exec, None).unwrap();
+        let plan = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(sort_exec)));
 
         Self {
             runtime,
