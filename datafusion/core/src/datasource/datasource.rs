@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion_common::Statistics;
+use datafusion_common::{Column, Statistics};
 use datafusion_expr::{CreateExternalTable, LogicalPlan};
 pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
@@ -29,6 +29,7 @@ use crate::arrow::datatypes::SchemaRef;
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
+use crate::physical_plan::sorts::sort::SortOptions;
 use crate::physical_plan::ExecutionPlan;
 
 /// Source table
@@ -77,6 +78,11 @@ pub trait TableProvider: Sync + Send {
         _filter: &Expr,
     ) -> Result<TableProviderFilterPushDown> {
         Ok(TableProviderFilterPushDown::Unsupported)
+    }
+
+    /// Returns a vector of indexes, each of which is represented by a vector of sorted columns
+    fn ordered_indexes(&self) -> Result<Vec<Vec<(Column, SortOptions)>>> {
+        Ok(vec![])
     }
 
     /// Get statistics for this table, if available
