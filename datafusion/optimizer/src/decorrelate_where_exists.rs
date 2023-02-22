@@ -189,7 +189,7 @@ fn optimize_subquery(
                     )
                 });
             Ok(optimized_plan)
-        } // Aggregate maybe a distinct
+        } // Aggregate may be a distinct
         LogicalPlan::Aggregate(aggregate) => {
             if !aggregate.is_distinct()? {
                 return Ok(None);
