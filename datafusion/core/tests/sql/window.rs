@@ -1131,7 +1131,7 @@ async fn window_frame_creation_type_checking() -> Result<()> {
     // Error is returned from the logical plan.
     check_query(
         false,
-        "Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: Execution error: Cannot cast Utf8(\"1 DAY\") to UInt32."
+        "Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: This feature is not implemented: Cannot cast Utf8(\"1 DAY\") to UInt32."
     ).await
 }
 

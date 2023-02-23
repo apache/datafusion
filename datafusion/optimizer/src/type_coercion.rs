@@ -476,7 +476,7 @@ fn convert_to_coerced_type_with_bound_check(
             return coerced_val;
         }
     }
-    Err(DataFusionError::Execution(format!(
+    Err(DataFusionError::NotImplemented(format!(
         "Cannot cast {:?} to {:?}",
         value, coerced_type
     )))
