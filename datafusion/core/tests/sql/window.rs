@@ -226,8 +226,8 @@ async fn window_frame_ranges_preceding_following_desc() -> Result<()> {
 async fn window_frame_large_range() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
-    // 10000 is outside the valid range for Int8 (type of c3). In this case we should be able to still produce correct result.
-    // See issue: https://github.com/apache/arrow-datafusion/issues/5346
+    // Range offset 10000 is too big for Int8 (i.e. the type of c3).
+    // In this case, we should be able to still produce correct results.
     let sql = "SELECT
                SUM(c3) OVER(ORDER BY c3 DESC RANGE BETWEEN 10000 PRECEDING AND 10000 FOLLOWING) as summation1
                FROM aggregate_test_100
