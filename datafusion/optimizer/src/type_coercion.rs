@@ -482,24 +482,18 @@ fn convert_to_coerced_type_with_bound_check(
     )))
 }
 
-/// This function return the types that can safely represent `in_type`.
-// For instance: For Int8, we return vec![Int8, Int16, Int32, Int64]
+/// This function return the `in_type` itself and the largest type that can safely represent `in_type`.
+// For instance: For Int8, we return vec![Int8, Int64]
 fn get_safe_large_types(in_type: &DataType) -> Vec<&DataType> {
     let mut res = vec![in_type];
     match in_type {
-        DataType::UInt8 => res.extend(vec![
-            &DataType::UInt16,
-            &DataType::UInt32,
-            &DataType::UInt64,
-        ]),
-        DataType::UInt16 => res.extend(vec![&DataType::UInt32, &DataType::UInt64]),
+        DataType::UInt8 => res.extend(vec![&DataType::UInt64]),
+        DataType::UInt16 => res.extend(vec![&DataType::UInt64]),
         DataType::UInt32 => res.extend(vec![&DataType::UInt64]),
-        DataType::Int8 => {
-            res.extend(vec![&DataType::Int16, &DataType::Int32, &DataType::Int64])
-        }
-        DataType::Int16 => res.extend(vec![&DataType::Int32, &DataType::Int64]),
+        DataType::Int8 => res.extend(vec![&DataType::Int64]),
+        DataType::Int16 => res.extend(vec![&DataType::Int64]),
         DataType::Int32 => res.extend(vec![&DataType::Int64]),
-        DataType::Float16 => res.extend(vec![&DataType::Float32, &DataType::Float64]),
+        DataType::Float16 => res.extend(vec![&DataType::Float64]),
         DataType::Float32 => res.extend(vec![&DataType::Float64]),
         _ => {}
     }
