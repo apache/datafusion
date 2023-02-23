@@ -111,7 +111,10 @@ mod tests {
         }
 
         fn schema(&self) -> arrow::datatypes::SchemaRef {
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]))
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int64, false),
+                Field::new("b", DataType::Int64, false),
+            ]))
         }
 
         fn supports_filter_pushdown(
@@ -170,8 +173,24 @@ mod tests {
         let plan = scan.filter(col("x.a").eq(lit(1)))?.build()?;
         let expected = "Filter: x.a = Int32(1)\
         \n  SubqueryAlias: x\
-        \n    Projection: y.a\
+        \n    Projection: y.a, y.b\
         \n      TableScan: y";
+
+        assert_optimized_plan_eq(Arc::new(InlineTableScan::new()), &plan, expected)
+    }
+
+    #[test]
+    fn inline_table_scan_with_projection() -> datafusion_common::Result<()> {
+        let scan = LogicalPlanBuilder::scan(
+            "x".to_string(),
+            Arc::new(CustomSource::new()),
+            Some(vec![0]),
+        )?;
+
+        let plan = scan.build()?;
+        let expected = "SubqueryAlias: x\
+        \n  Projection: y.a\
+        \n    TableScan: y";
 
         assert_optimized_plan_eq(Arc::new(InlineTableScan::new()), &plan, expected)
     }
