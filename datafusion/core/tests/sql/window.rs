@@ -2375,6 +2375,115 @@ async fn get_test_context(tmpdir: &TempDir) -> Result<SessionContext> {
     Ok(ctx)
 }
 
+fn write_test_data_to_parquet2(tmpdir: &TempDir, n_file: usize) -> Result<()> {
+    let low_card_col1 = Field::new("low_card_col1", DataType::Int32, false);
+    let low_card_col2 = Field::new("low_card_col2", DataType::Int32, false);
+    let inc_col = Field::new("inc_col", DataType::Int32, false);
+    let unsorted_col = Field::new("unsorted_col", DataType::Int32, false);
+    // let inc_field = Field::new("inc_col", DataType::Int32, false);
+    // let desc_field = Field::new("desc_col", DataType::Int32, false);
+    // let low_card_field = Field::new("low_card_col", DataType::Int32, false);
+
+    let schema = Arc::new(Schema::new(vec![
+        low_card_col1,
+        low_card_col2,
+        inc_col,
+        unsorted_col,
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int32Array::from_slice([
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                1, 1, 1, 1,
+            ])),
+            Arc::new(Int32Array::from_slice([
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+                2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+                3, 3, 3, 3,
+            ])),
+            Arc::new(Int32Array::from_slice([
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
+                39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56,
+                57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74,
+                75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92,
+                93, 94, 95, 96, 97, 98, 99,
+            ])),
+            Arc::new(Int32Array::from_slice([
+                0, 2, 0, 0, 1, 1, 0, 2, 1, 4, 4, 2, 2, 1, 2, 3, 3, 2, 1, 4, 0, 3, 0, 0,
+                4, 0, 2, 0, 1, 1, 3, 4, 2, 2, 4, 0, 1, 4, 0, 1, 1, 3, 3, 2, 3, 0, 0, 1,
+                1, 3, 0, 3, 1, 1, 4, 2, 1, 1, 1, 2, 4, 3, 1, 4, 4, 0, 2, 4, 1, 1, 0, 2,
+                1, 1, 4, 2, 0, 2, 1, 4, 2, 0, 4, 2, 1, 1, 1, 4, 3, 4, 1, 2, 0, 0, 2, 0,
+                4, 2, 4, 3,
+            ])),
+        ],
+    )?;
+    let n_chunk = batch.num_rows() / n_file;
+    for i in 0..n_file {
+        let target_file = tmpdir.path().join(format!("{i}.parquet"));
+        let file = File::create(target_file).unwrap();
+        // Default writer properties
+        let props = WriterProperties::builder().build();
+        let chunks_start = i * n_chunk;
+        let cur_batch = batch.slice(chunks_start, n_chunk);
+        // let chunks_end = chunks_start + n_chunk;
+        let mut writer =
+            ArrowWriter::try_new(file, cur_batch.schema(), Some(props)).unwrap();
+
+        writer.write(&cur_batch).expect("Writing batch");
+
+        // writer must be closed to write footer
+        writer.close().unwrap();
+    }
+    Ok(())
+}
+
+async fn get_test_context2(tmpdir: &TempDir) -> Result<SessionContext> {
+    let session_config = SessionConfig::new().with_target_partitions(1);
+    let ctx = SessionContext::with_config(session_config);
+
+    let parquet_read_options = ParquetReadOptions::default();
+    // The sort order is specified (not actually correct in this case)
+    // let file_sort_order = [col("ts")]
+    //     .into_iter()
+    //     .map(|e| {
+    //         let ascending = true;
+    //         let nulls_first = false;
+    //         e.sort(ascending, nulls_first)
+    //     })
+    //     .collect::<Vec<_>>();
+    let file_sort_order = vec![
+        col("low_card_col1").sort(true, false),
+        col("low_card_col2").sort(true, false),
+        col("inc_col").sort(true, false),
+    ];
+
+    let options_sort = parquet_read_options
+        .to_listing_options(&ctx.copied_config())
+        .with_file_sort_order(Some(file_sort_order));
+
+    write_test_data_to_parquet2(tmpdir, 1)?;
+    let provided_schema = None;
+    let sql_definition = None;
+    ctx.register_listing_table(
+        "annotated_data2",
+        tmpdir.path().to_string_lossy(),
+        options_sort.clone(),
+        provided_schema,
+        sql_definition,
+    )
+    .await
+    .unwrap();
+    Ok(ctx)
+}
+
 mod tests {
     use super::*;
 
@@ -2777,6 +2886,147 @@ mod tests {
             "| 301     | 1            | 862  | 1128 |",
             "| 305     | 2            | 879  | 1127 |",
             "+---------+--------------+------+------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_source_partially_sorted_partition_by() -> Result<()> {
+        let tmpdir = TempDir::new().unwrap();
+        let ctx = get_test_context2(&tmpdir).await?;
+
+        let sql = "SELECT inc_col, low_card_col1,
+        SUM(inc_col) OVER(PARTITION BY low_card_col1, unsorted_col ORDER BY inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum1
+           FROM annotated_data2
+           ORDER BY inc_col ASC";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let expected = {
+            vec![
+                "SortExec: [inc_col@0 ASC NULLS LAST]",
+                "  ProjectionExec: expr=[inc_col@1 as inc_col, low_card_col@2 as low_card_col, SUM(annotated_data.inc_col) PARTITION BY [annotated_data.low_card_col] ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@3 as sum1, SUM(annotated_data.inc_col) PARTITION BY [annotated_data.low_card_col] ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING@4 as sum2]",
+                "    BoundedWindowAggExec: wdw=[SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(3)), end_bound: Following(UInt64(1)) }]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        let actual_len = actual.len();
+        let actual_trim_last = &actual[..actual_len - 1];
+        assert_eq!(
+            expected, actual_trim_last,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+---------+---------------+------+",
+            "| inc_col | low_card_col1 | sum1 |",
+            "+---------+---------------+------+",
+            "| 0       | 0             | 2    |",
+            "| 1       | 0             | 8    |",
+            "| 2       | 0             | 5    |",
+            "| 3       | 0             | 11   |",
+            "| 4       | 0             | 9    |",
+            "| 5       | 0             | 17   |",
+            "| 6       | 0             | 31   |",
+            "| 7       | 0             | 19   |",
+            "| 8       | 0             | 30   |",
+            "| 9       | 0             | 19   |",
+            "| 10      | 0             | 38   |",
+            "| 11      | 0             | 31   |",
+            "| 12      | 0             | 44   |",
+            "| 13      | 0             | 44   |",
+            "| 14      | 0             | 54   |",
+            "| 15      | 0             | 31   |",
+            "| 16      | 0             | 52   |",
+            "| 17      | 0             | 69   |",
+            "| 18      | 0             | 67   |",
+            "| 19      | 0             | 62   |",
+            "| 20      | 0             | 51   |",
+            "| 21      | 0             | 82   |",
+            "| 22      | 0             | 71   |",
+            "| 23      | 0             | 90   |",
+            "| 24      | 0             | 84   |",
+            "| 25      | 0             | 97   |",
+            "| 26      | 0             | 89   |",
+            "| 27      | 0             | 110  |",
+            "| 28      | 0             | 88   |",
+            "| 29      | 0             | 111  |",
+            "| 30      | 0             | 108  |",
+            "| 31      | 0             | 108  |",
+            "| 32      | 0             | 108  |",
+            "| 33      | 0             | 134  |",
+            "| 34      | 0             | 126  |",
+            "| 35      | 0             | 125  |",
+            "| 36      | 0             | 132  |",
+            "| 37      | 0             | 102  |",
+            "| 38      | 0             | 145  |",
+            "| 39      | 0             | 144  |",
+            "| 40      | 0             | 162  |",
+            "| 41      | 0             | 134  |",
+            "| 42      | 0             | 157  |",
+            "| 43      | 0             | 108  |",
+            "| 44      | 0             | 176  |",
+            "| 45      | 0             | 164  |",
+            "| 46      | 0             | 129  |",
+            "| 47      | 0             | 174  |",
+            "| 48      | 0             | 135  |",
+            "| 49      | 0             | 135  |",
+            "| 50      | 1             | 115  |",
+            "| 51      | 1             | 112  |",
+            "| 52      | 1             | 105  |",
+            "| 53      | 1             | 161  |",
+            "| 54      | 1             | 114  |",
+            "| 55      | 1             | 114  |",
+            "| 56      | 1             | 218  |",
+            "| 57      | 1             | 224  |",
+            "| 58      | 1             | 233  |",
+            "| 59      | 1             | 180  |",
+            "| 60      | 1             | 177  |",
+            "| 61      | 1             | 200  |",
+            "| 62      | 1             | 245  |",
+            "| 63      | 1             | 241  |",
+            "| 64      | 1             | 254  |",
+            "| 65      | 1             | 185  |",
+            "| 66      | 1             | 251  |",
+            "| 67      | 1             | 268  |",
+            "| 68      | 1             | 257  |",
+            "| 69      | 1             | 271  |",
+            "| 70      | 1             | 261  |",
+            "| 71      | 1             | 271  |",
+            "| 72      | 1             | 282  |",
+            "| 73      | 1             | 292  |",
+            "| 74      | 1             | 284  |",
+            "| 75      | 1             | 289  |",
+            "| 76      | 1             | 292  |",
+            "| 77      | 1             | 303  |",
+            "| 78      | 1             | 307  |",
+            "| 79      | 1             | 302  |",
+            "| 80      | 1             | 315  |",
+            "| 81      | 1             | 319  |",
+            "| 82      | 1             | 322  |",
+            "| 83      | 1             | 331  |",
+            "| 84      | 1             | 320  |",
+            "| 85      | 1             | 333  |",
+            "| 86      | 1             | 345  |",
+            "| 87      | 1             | 337  |",
+            "| 88      | 1             | 299  |",
+            "| 89      | 1             | 354  |",
+            "| 90      | 1             | 261  |",
+            "| 91      | 1             | 348  |",
+            "| 92      | 1             | 342  |",
+            "| 93      | 1             | 361  |",
+            "| 94      | 1             | 365  |",
+            "| 95      | 1             | 280  |",
+            "| 96      | 1             | 370  |",
+            "| 97      | 1             | 282  |",
+            "| 98      | 1             | 283  |",
+            "| 99      | 1             | 248  |",
+            "+---------+---------------+------+",
         ];
         assert_batches_eq!(expected, &actual);
         Ok(())
