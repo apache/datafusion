@@ -82,7 +82,7 @@ impl OptimizerRule for MergeProjection {
     }
 
     fn name(&self) -> &str {
-        "eliminate_filter"
+        "merge_projection"
     }
 
     fn apply_order(&self) -> Option<ApplyOrder> {
@@ -97,12 +97,8 @@ pub fn collect_projection_expr(projection: &Projection) -> HashMap<String, Expr>
         .iter()
         .enumerate()
         .flat_map(|(i, field)| {
-            // strip alias, as they should not be part of filters
-            let expr = match &projection.expr[i] {
-                Expr::Alias(expr, _) => expr.as_ref().clone(),
-                expr => expr.clone(),
-            };
-
+            // strip alias
+            let expr = projection.expr[i].clone().unalias();
             // Convert both qualified and unqualified fields
             [
                 (field.name().clone(), expr.clone()),
