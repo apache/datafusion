@@ -457,18 +457,67 @@ fn convert_to_coerced_type(
     }
 }
 
+/// This function casts value to coerced_type. If value is outside the range it casted to None.
+// It tries to do so for safe equal or larger types (For Int16, safe equal or larger types are: Int16, Int32, Int64) until it succeeds.
+// If succeeded type is different than coerced type. We treat range as unbounded.
+// Otherwise we use the successfully casted value for range calculation.
+fn convert_to_coerced_type_with_bound_check(
+    coerced_type: &DataType,
+    value: &ScalarValue,
+) -> Result<ScalarValue> {
+    let types = get_safe_large_types(coerced_type);
+    for cur_type in types {
+        let mut coerced_val = convert_to_coerced_type(cur_type, value);
+        if coerced_val.is_ok() {
+            if coerced_type != cur_type {
+                // Entered range is outside the type range, hence we can treat it as unbounded
+                coerced_val = ScalarValue::try_from(coerced_type)
+            }
+            return coerced_val;
+        }
+    }
+    Err(DataFusionError::Execution(format!(
+        "Cannot cast {:?} to {:?}",
+        value, coerced_type
+    )))
+}
+
+/// This function return the types that can safely represent `in_type`.
+// For instance: For Int8, we return vec![Int8, Int16, Int32, Int64]
+fn get_safe_large_types(in_type: &DataType) -> Vec<&DataType> {
+    let mut res = vec![in_type];
+    match in_type {
+        DataType::UInt8 => res.extend(vec![
+            &DataType::UInt16,
+            &DataType::UInt32,
+            &DataType::UInt64,
+        ]),
+        DataType::UInt16 => res.extend(vec![&DataType::UInt32, &DataType::UInt64]),
+        DataType::UInt32 => res.extend(vec![&DataType::UInt64]),
+        DataType::Int8 => {
+            res.extend(vec![&DataType::Int16, &DataType::Int32, &DataType::Int64])
+        }
+        DataType::Int16 => res.extend(vec![&DataType::Int32, &DataType::Int64]),
+        DataType::Int32 => res.extend(vec![&DataType::Int64]),
+        DataType::Float16 => res.extend(vec![&DataType::Float32, &DataType::Float64]),
+        DataType::Float32 => res.extend(vec![&DataType::Float64]),
+        _ => {}
+    }
+    res
+}
+
 fn coerce_frame_bound(
     coerced_type: &DataType,
     bound: &WindowFrameBound,
 ) -> Result<WindowFrameBound> {
     Ok(match bound {
-        WindowFrameBound::Preceding(val) => {
-            WindowFrameBound::Preceding(convert_to_coerced_type(coerced_type, val)?)
-        }
+        WindowFrameBound::Preceding(val) => WindowFrameBound::Preceding(
+            convert_to_coerced_type_with_bound_check(coerced_type, val)?,
+        ),
         WindowFrameBound::CurrentRow => WindowFrameBound::CurrentRow,
-        WindowFrameBound::Following(val) => {
-            WindowFrameBound::Following(convert_to_coerced_type(coerced_type, val)?)
-        }
+        WindowFrameBound::Following(val) => WindowFrameBound::Following(
+            convert_to_coerced_type_with_bound_check(coerced_type, val)?,
+        ),
     })
 }
 

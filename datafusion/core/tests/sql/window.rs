@@ -223,6 +223,33 @@ async fn window_frame_ranges_preceding_following_desc() -> Result<()> {
 }
 
 #[tokio::test]
+async fn window_frame_large_range() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    // 10000 is outside the valid range for Int8 (type of c3). In this case we should be able to still produce correct result.
+    // See issue: https://github.com/apache/arrow-datafusion/issues/5346
+    let sql = "SELECT
+               SUM(c3) OVER(ORDER BY c3 DESC RANGE BETWEEN 10000 PRECEDING AND 10000 FOLLOWING) as summation1
+               FROM aggregate_test_100
+               ORDER BY c9
+               LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------------+",
+        "| summation1 |",
+        "+------------+",
+        "| 781        |",
+        "| 781        |",
+        "| 781        |",
+        "| 781        |",
+        "| 781        |",
+        "+------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn window_frame_order_by_asc_desc_large() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
@@ -1104,7 +1131,7 @@ async fn window_frame_creation_type_checking() -> Result<()> {
     // Error is returned from the logical plan.
     check_query(
         false,
-        "Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: Arrow error: Cast error: Cannot cast string '1 DAY' to value of UInt32 type"
+        "Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: Execution error: Cannot cast Utf8(\"1 DAY\") to UInt32."
     ).await
 }
 
