@@ -416,7 +416,7 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 /// Rewrites `expr` using `rewriter`, ensuring that the output has the
 /// same name as `expr` prior to rewrite, adding an alias if necessary.
 ///
-/// This is important when optimzing plans to ensure the the output
+/// This is important when optimizing plans to ensure the the output
 /// schema of plan nodes don't change after optimization
 pub fn rewrite_preserving_name<R>(expr: Expr, rewriter: &mut R) -> Result<Expr>
 where
