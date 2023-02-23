@@ -56,7 +56,7 @@ pub fn add_sort_above(
     sort_expr: Vec<PhysicalSortExpr>,
 ) -> Result<()> {
     // If the ordering requirement is already satisfied, do not add a sort.
-    if !ordering_satisfy(node.output_ordering(), Some(&sort_expr), || {
+    if !ordering_satisfy(node.output_ordering(), Some(&sort_expr), &|| {
         node.equivalence_properties()
     }) {
         *node = Arc::new(if node.output_partitioning().partition_count() > 1 {

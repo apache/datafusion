@@ -28,6 +28,7 @@ use arrow::datatypes::SchemaRef;
 
 use arrow_schema::SortOptions;
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::Arc;
 
 /// Compare the two expr lists are equal no matter the order.
@@ -219,10 +220,10 @@ pub fn normalize_sort_requirement_with_equivalence_properties(
 }
 
 /// Checks whether the required [PhysicalSortExpr]s are satisfied by the provided [PhysicalSortExpr]s.
-pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
+pub fn ordering_satisfy<F: Fn() -> EquivalenceProperties>(
     provided: Option<&[PhysicalSortExpr]>,
     required: Option<&[PhysicalSortExpr]>,
-    equal_properties: F,
+    equal_properties: &F,
 ) -> bool {
     match (provided, required) {
         (_, None) => true,
@@ -233,10 +234,10 @@ pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
     }
 }
 
-fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(
+fn ordering_satisfy_concrete<F: Fn() -> EquivalenceProperties>(
     provided: &[PhysicalSortExpr],
     required: &[PhysicalSortExpr],
-    equal_properties: F,
+    equal_properties: &F,
 ) -> bool {
     if required.len() > provided.len() {
         false
@@ -246,7 +247,9 @@ fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(
         .all(|(order1, order2)| order1.eq(order2))
     {
         true
-    } else if let eq_classes @ [_, ..] = equal_properties().classes() {
+    } else {
+        let eq_props = equal_properties();
+        let eq_classes = eq_props.classes();
         let normalized_required_exprs = required
             .iter()
             .map(|e| {
@@ -263,16 +266,14 @@ fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(
             .iter()
             .zip(normalized_provided_exprs.iter())
             .all(|(order1, order2)| order1.eq(order2))
-    } else {
-        false
     }
 }
 
 /// Checks whether the required ordering requirements are satisfied by the provided [PhysicalSortExpr]s.
-pub fn ordering_satisfy_requirement<F: FnOnce() -> EquivalenceProperties>(
+pub fn ordering_satisfy_requirement<F: Fn() -> EquivalenceProperties>(
     provided: Option<&[PhysicalSortExpr]>,
     required: Option<&[PhysicalSortRequirements]>,
-    equal_properties: F,
+    equal_properties: &F,
 ) -> bool {
     match (provided, required) {
         (_, None) => true,
@@ -283,10 +284,10 @@ pub fn ordering_satisfy_requirement<F: FnOnce() -> EquivalenceProperties>(
     }
 }
 
-pub fn ordering_satisfy_requirement_concrete<F: FnOnce() -> EquivalenceProperties>(
+pub fn ordering_satisfy_requirement_concrete<F: Fn() -> EquivalenceProperties>(
     provided: &[PhysicalSortExpr],
     required: &[PhysicalSortRequirements],
-    equal_properties: F,
+    equal_properties: &F,
 ) -> bool {
     if required.len() > provided.len() {
         false
@@ -296,7 +297,9 @@ pub fn ordering_satisfy_requirement_concrete<F: FnOnce() -> EquivalencePropertie
         .all(|(order1, order2)| order2.satisfy(order1))
     {
         true
-    } else if let eq_classes @ [_, ..] = equal_properties().classes() {
+    } else {
+        let eq_props = equal_properties();
+        let eq_classes = eq_props.classes();
         let normalized_requirements = required
             .iter()
             .map(|e| {
@@ -316,16 +319,14 @@ pub fn ordering_satisfy_requirement_concrete<F: FnOnce() -> EquivalencePropertie
             .iter()
             .zip(normalized_provided_exprs.iter())
             .all(|(order1, order2)| order2.satisfy(order1))
-    } else {
-        false
     }
 }
 
 /// Provided requirements are compatible with the required, which means the provided requirements are equal or more specific than the required
-pub fn requirements_compatible<F: FnOnce() -> EquivalenceProperties>(
+pub fn requirements_compatible<F: Fn() -> EquivalenceProperties>(
     provided: Option<&[PhysicalSortRequirements]>,
     required: Option<&[PhysicalSortRequirements]>,
-    equal_properties: F,
+    equal_properties: &F,
 ) -> bool {
     match (provided, required) {
         (_, None) => true,
@@ -339,13 +340,15 @@ pub fn requirements_compatible<F: FnOnce() -> EquivalenceProperties>(
                 .all(|(req, pro)| pro.compatible(req))
             {
                 true
-            } else if let eq_classes @ [_, ..] = equal_properties().classes() {
+            } else {
+                let eq_props = equal_properties();
+                let eq_classes = eq_props.classes();
                 let normalized_required = required
                     .iter()
                     .map(|e| {
                         normalize_sort_requirement_with_equivalence_properties(
                             e.clone(),
-                            eq_classes,
+                            eq_classes.deref(),
                         )
                     })
                     .collect::<Vec<_>>();
@@ -354,7 +357,7 @@ pub fn requirements_compatible<F: FnOnce() -> EquivalenceProperties>(
                     .map(|e| {
                         normalize_sort_requirement_with_equivalence_properties(
                             e.clone(),
-                            eq_classes,
+                            eq_classes.deref(),
                         )
                     })
                     .collect::<Vec<_>>();
@@ -362,11 +365,18 @@ pub fn requirements_compatible<F: FnOnce() -> EquivalenceProperties>(
                     .iter()
                     .zip(normalized_provided.iter())
                     .all(|(req, pro)| pro.compatible(req))
-            } else {
-                false
             }
         }
     }
+}
+
+pub fn required_provided_either_compatible<F: Fn() -> EquivalenceProperties>(
+    provided: Option<&[PhysicalSortRequirements]>,
+    required: Option<&[PhysicalSortRequirements]>,
+    equal_properties: &F,
+) -> bool {
+    requirements_compatible(provided, required, equal_properties)
+        || requirements_compatible(required, provided, equal_properties)
 }
 
 pub fn map_columns_before_projection(
@@ -427,10 +437,10 @@ pub fn create_sort_expr_from_requirement(
     let parent_required_expr = required
         .iter()
         .map(|prop| {
-            if prop.sort_options.is_some() {
+            if let Some(sort_options) = prop.sort_options {
                 PhysicalSortExpr {
                     expr: prop.expr.clone(),
-                    options: prop.sort_options.unwrap(),
+                    options: sort_options,
                 }
             } else {
                 PhysicalSortExpr {
@@ -629,10 +639,10 @@ mod tests {
             fields: vec![],
             metadata: Default::default(),
         });
-        assert!(ordering_satisfy(finer, crude, || {
+        assert!(ordering_satisfy(finer, crude, &|| {
             EquivalenceProperties::new(empty_schema.clone())
         }));
-        assert!(!ordering_satisfy(crude, finer, || {
+        assert!(!ordering_satisfy(crude, finer, &|| {
             EquivalenceProperties::new(empty_schema.clone())
         }));
         Ok(())

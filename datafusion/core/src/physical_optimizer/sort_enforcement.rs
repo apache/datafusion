@@ -445,7 +445,7 @@ fn ensure_sorting(
                 let is_ordering_satisfied = ordering_satisfy_requirement_concrete(
                     physical_ordering,
                     &required_ordering,
-                    || child.equivalence_properties(),
+                    &|| child.equivalence_properties(),
                 );
                 if !is_ordering_satisfied {
                     // Make sure we preserve the ordering requirements:
@@ -509,7 +509,7 @@ fn analyze_immediate_sort_removal(
         if ordering_satisfy(
             sort_input.output_ordering(),
             sort_exec.output_ordering(),
-            || sort_input.equivalence_properties(),
+            &|| sort_input.equivalence_properties(),
         ) {
             // Since we know that a `SortExec` has exactly one child,
             // we can use the zero index safely:

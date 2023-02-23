@@ -60,7 +60,8 @@ use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::{
     create_sort_expr_from_requirement, map_requirement_before_projection,
-    ordering_satisfy, ordering_satisfy_requirement, requirements_compatible,
+    ordering_satisfy, ordering_satisfy_requirement, required_provided_either_compatible,
+    requirements_compatible,
 };
 use datafusion_physical_expr::window::WindowExpr;
 use datafusion_physical_expr::{
@@ -104,8 +105,7 @@ impl PlanWithSortRequirements {
     pub fn init(plan: Arc<dyn ExecutionPlan>) -> Self {
         let impact_result_ordering = plan.output_ordering().is_some()
             || plan.output_partitioning().partition_count() <= 1
-            || plan.as_any().downcast_ref::<GlobalLimitExec>().is_some()
-            || plan.as_any().downcast_ref::<LocalLimitExec>().is_some();
+            || is_limit(&plan);
         let request_ordering = plan.required_input_ordering();
         PlanWithSortRequirements {
             plan,
@@ -147,17 +147,7 @@ impl PlanWithSortRequirements {
                                 .as_any()
                                 .downcast_ref::<CoalescePartitionsExec>()
                                 .is_none());
-                let child_impact_result_ordering = if self
-                    .plan
-                    .as_any()
-                    .downcast_ref::<GlobalLimitExec>()
-                    .is_some()
-                    || self
-                        .plan
-                        .as_any()
-                        .downcast_ref::<LocalLimitExec>()
-                        .is_some()
-                {
+                let child_impact_result_ordering = if is_limit(&self.plan) {
                     true
                 } else {
                     maintains_input_order && self.impact_result_ordering
@@ -221,7 +211,7 @@ impl PhysicalOptimizerRule for TopDownEnforceSorting {
                 if ordering_satisfy(
                     sort_exec.input().output_ordering(),
                     sort_exec.output_ordering(),
-                    || sort_exec.input().equivalence_properties(),
+                    &|| sort_exec.input().equivalence_properties(),
                 ) {
                     Ok(Some(Arc::new(TombStoneExec::new(
                         sort_exec.input().clone(),
@@ -253,6 +243,18 @@ impl PhysicalOptimizerRule for TopDownEnforceSorting {
     }
 }
 
+/// Checks whether the given plan is a limit plan;
+/// i.e. either a `LocalLimitExec` or a `GlobalLimitExec`.
+fn is_limit(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<GlobalLimitExec>() || plan.as_any().is::<LocalLimitExec>()
+}
+
+/// Checks whether the given plan is a window plan;
+/// i.e. either a `WindowAggExec` or a `BoundedWindowAggExec`.
+fn is_window(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<WindowAggExec>() || plan.as_any().is::<BoundedWindowAggExec>()
+}
+
 fn ensure_sorting(
     requirements: PlanWithSortRequirements,
 ) -> Result<Option<PlanWithSortRequirements>> {
@@ -266,7 +268,7 @@ fn ensure_sorting(
         .as_any()
         .downcast_ref::<SortPreservingMergeExec>()
     {
-        // SortPreservingMergeExec + SortExec(local/global) is the same as the global SortExec
+        // SortExec(local/global) -> SortPreservingMergeExe is the same as the global SortExec
         // Remove unnecessary SortPreservingMergeExec + SortExec(local/global)
         if let Some(child_sort_exec) =
             sort_pres_exec.input().as_any().downcast_ref::<SortExec>()
@@ -294,7 +296,7 @@ fn ensure_sorting(
     }
     let plan = &requirements.plan;
     let parent_required = requirements.required_ordering.as_deref();
-    if ordering_satisfy_requirement(plan.output_ordering(), parent_required, || {
+    if ordering_satisfy_requirement(plan.output_ordering(), parent_required, &|| {
         plan.equivalence_properties()
     }) {
         // Can satisfy the parent requirements, change the adjusted_request_ordering for UnionExec and WindowAggExec(BoundedWindowAggExec)
@@ -312,12 +314,7 @@ fn ensure_sorting(
                 ],
                 ..requirements
             }));
-        } else if plan.as_any().downcast_ref::<WindowAggExec>().is_some()
-            || plan
-                .as_any()
-                .downcast_ref::<BoundedWindowAggExec>()
-                .is_some()
-        {
+        } else if is_window(plan) {
             // WindowAggExec(BoundedWindowAggExec) might reverse their sort requirements
             let request_child = requirements.adjusted_request_ordering[0].as_deref();
             let reversed_request_child = reverse_window_sort_requirements(request_child);
@@ -331,7 +328,7 @@ fn ensure_sorting(
                     window_expr,
                     input_schema,
                     partition_keys,
-                } = extract_window_info_from_plan(plan).unwrap();
+                } = extract_window_info_from_plan(plan)?;
 
                 let new_window_expr = window_expr
                     .iter()
@@ -396,10 +393,9 @@ fn ensure_sorting(
         // For UnionExec, we can always push down
         if (maintains_input_order.is_empty()
             || !maintains_input_order.iter().any(|o| *o)
-            || plan.as_any().downcast_ref::<RepartitionExec>().is_some()
-            || plan.as_any().downcast_ref::<FilterExec>().is_some()
-            || plan.as_any().downcast_ref::<GlobalLimitExec>().is_some()
-            || plan.as_any().downcast_ref::<LocalLimitExec>().is_some())
+            || plan.as_any().is::<RepartitionExec>()
+            || plan.as_any().is::<FilterExec>()
+            || is_limit(plan))
             && plan.as_any().downcast_ref::<UnionExec>().is_none()
         {
             let mut new_plan = plan.clone();
@@ -407,12 +403,7 @@ fn ensure_sorting(
             Ok(Some(
                 PlanWithSortRequirements::new_without_impact_result_ordering(new_plan),
             ))
-        } else if plan.as_any().downcast_ref::<WindowAggExec>().is_some()
-            || plan
-                .as_any()
-                .downcast_ref::<BoundedWindowAggExec>()
-                .is_some()
-        {
+        } else if is_window(plan) {
             let request_child = requirements.adjusted_request_ordering[0].as_deref();
             let child_plan = plan.children()[0].clone();
             match determine_children_requirement(
@@ -433,12 +424,12 @@ fn ensure_sorting(
                         window_expr,
                         input_schema,
                         partition_keys,
-                    } = extract_window_info_from_plan(plan).unwrap();
+                    } = extract_window_info_from_plan(plan)?;
                     if should_reverse_window_exec(
                         parent_required,
                         request_child,
                         &input_schema,
-                    ) {
+                    )? {
                         let new_physical_ordering = parent_required_expr.to_vec();
                         let new_window_expr = window_expr
                             .iter()
@@ -630,7 +621,7 @@ fn analyze_immediate_sort_removal(
     if ordering_satisfy(
         sort_exec.input().output_ordering(),
         sort_exec.output_ordering(),
-        || sort_exec.input().equivalence_properties(),
+        &|| sort_exec.input().equivalence_properties(),
     ) {
         Some(PlanWithSortRequirements {
             plan: Arc::new(TombStoneExec::new(sort_exec.input().clone())),
@@ -676,7 +667,7 @@ fn analyze_immediate_spm_removal(
     if ordering_satisfy(
         spm_exec.input().output_ordering(),
         Some(spm_exec.expr()),
-        || spm_exec.input().equivalence_properties(),
+        &|| spm_exec.input().equivalence_properties(),
     ) && spm_exec.input().output_partitioning().partition_count() <= 1
     {
         Some(PlanWithSortRequirements {
@@ -710,12 +701,12 @@ fn determine_children_requirement(
     request_child: Option<&[PhysicalSortRequirements]>,
     child_plan: Arc<dyn ExecutionPlan>,
 ) -> RequirementsCompatibility {
-    if requirements_compatible(request_child, parent_required, || {
+    if requirements_compatible(request_child, parent_required, &|| {
         child_plan.equivalence_properties()
     }) {
         // request child requirements are more specific, no need to push down the parent requirements
         RequirementsCompatibility::Satisfy
-    } else if requirements_compatible(parent_required, request_child, || {
+    } else if requirements_compatible(parent_required, request_child, &|| {
         child_plan.equivalence_properties()
     }) {
         // parent requirements are more specific, adjust the request child requirements and push down the new requirements
@@ -732,22 +723,25 @@ fn check_alignment(
     input_schema: &SchemaRef,
     window_request: &PhysicalSortRequirements,
     parent_required_expr: &PhysicalSortRequirements,
-) -> bool {
-    if parent_required_expr.expr.eq(&window_request.expr)
-        && window_request.sort_options.is_some()
-        && parent_required_expr.sort_options.is_some()
-    {
-        let nullable = parent_required_expr.expr.nullable(input_schema).unwrap();
-        let window_request_opts = window_request.sort_options.unwrap();
-        let parent_required_opts = parent_required_expr.sort_options.unwrap();
-        if nullable {
-            window_request_opts == reverse_sort_options(parent_required_opts)
+) -> Result<bool> {
+    if parent_required_expr.expr.eq(&window_request.expr) {
+        let nullable = parent_required_expr.expr.nullable(input_schema)?;
+        if let Some(window_request_opts) = window_request.sort_options {
+            if let Some(parent_required_opts) = parent_required_expr.sort_options {
+                if nullable {
+                    Ok(window_request_opts == reverse_sort_options(parent_required_opts))
+                } else {
+                    // If the column is not nullable, NULLS FIRST/LAST is not important.
+                    Ok(window_request_opts.descending != parent_required_opts.descending)
+                }
+            } else {
+                Ok(false)
+            }
         } else {
-            // If the column is not nullable, NULLS FIRST/LAST is not important.
-            window_request_opts.descending != parent_required_opts.descending
+            Ok(false)
         }
     } else {
-        false
+        Ok(false)
     }
 }
 
@@ -788,97 +782,70 @@ fn should_reverse_window_sort_requirements(
     if reverse_window_expr.is_none() {
         return false;
     }
-    let flags = window_plan
-        .children()
-        .into_iter()
-        .map(|child| {
-            // If the child is leaf node, check the output ordering
-            if child.children().is_empty()
-                && ordering_satisfy_requirement(
-                    child.output_ordering(),
-                    top_requirement,
-                    || child.equivalence_properties(),
-                )
-            {
-                false
-            } else if child.children().is_empty()
-                && ordering_satisfy_requirement(
-                    child.output_ordering(),
-                    top_reversed_requirement,
-                    || child.equivalence_properties(),
-                )
-            {
-                true
-            } else if child.as_any().downcast_ref::<WindowAggExec>().is_some()
-                || child
-                    .as_any()
-                    .downcast_ref::<BoundedWindowAggExec>()
-                    .is_some()
-            {
-                // If the child is WindowExec, check the child requirements
-                if requirements_compatible(
-                    top_requirement,
-                    child.required_input_ordering()[0].as_deref(),
-                    || child.equivalence_properties(),
-                ) || requirements_compatible(
-                    child.required_input_ordering()[0].as_deref(),
-                    top_requirement,
-                    || child.equivalence_properties(),
-                ) || requirements_compatible(
-                    top_reversed_requirement,
-                    child.required_input_ordering()[0].as_deref(),
-                    || child.equivalence_properties(),
-                ) || requirements_compatible(
-                    child.required_input_ordering()[0].as_deref(),
-                    top_reversed_requirement,
-                    || child.equivalence_properties(),
-                ) {
-                    should_reverse_window_sort_requirements(
-                        child,
-                        top_requirement,
-                        top_reversed_requirement,
-                    )
-                } else {
-                    requirements_compatible(
-                        top_reversed_requirement,
-                        window_plan.required_input_ordering()[0].as_deref(),
-                        || window_plan.equivalence_properties(),
-                    ) || requirements_compatible(
-                        window_plan.required_input_ordering()[0].as_deref(),
-                        top_reversed_requirement,
-                        || window_plan.equivalence_properties(),
-                    )
-                }
-            } else {
-                requirements_compatible(
-                    top_reversed_requirement,
-                    window_plan.required_input_ordering()[0].as_deref(),
-                    || window_plan.equivalence_properties(),
-                ) || requirements_compatible(
-                    window_plan.required_input_ordering()[0].as_deref(),
-                    top_reversed_requirement,
-                    || window_plan.equivalence_properties(),
-                )
-            }
+    // Since we know that a window plan has exactly one child,
+    // we can use the zero index safely:
+    let window_child = window_plan.children()[0].clone();
+    let window_child_output = window_child.output_ordering();
+    // If the child is leaf node, check the output ordering
+    if window_child.children().is_empty()
+        && ordering_satisfy_requirement(window_child_output, top_requirement, &|| {
+            window_child.equivalence_properties()
         })
-        .collect::<Vec<_>>();
-
-    flags.iter().all(|o| *o)
+    {
+        false
+    } else if window_child.children().is_empty()
+        && ordering_satisfy_requirement(
+            window_child_output,
+            top_reversed_requirement,
+            &|| window_child.equivalence_properties(),
+        )
+    {
+        true
+    } else if is_window(&window_child) {
+        // If the child is WindowExec, check the child requirements
+        if required_provided_either_compatible(
+            top_requirement,
+            window_child.required_input_ordering()[0].as_deref(),
+            &|| window_child.equivalence_properties(),
+        ) || required_provided_either_compatible(
+            top_reversed_requirement,
+            window_child.required_input_ordering()[0].as_deref(),
+            &|| window_child.equivalence_properties(),
+        ) {
+            should_reverse_window_sort_requirements(
+                window_child,
+                top_requirement,
+                top_reversed_requirement,
+            )
+        } else {
+            required_provided_either_compatible(
+                top_reversed_requirement,
+                window_plan.required_input_ordering()[0].as_deref(),
+                &|| window_plan.equivalence_properties(),
+            )
+        }
+    } else {
+        required_provided_either_compatible(
+            top_reversed_requirement,
+            window_plan.required_input_ordering()[0].as_deref(),
+            &|| window_plan.equivalence_properties(),
+        )
+    }
 }
 
 fn should_reverse_window_exec(
     required: Option<&[PhysicalSortRequirements]>,
     request_ordering: Option<&[PhysicalSortRequirements]>,
     input_schema: &SchemaRef,
-) -> bool {
+) -> Result<bool> {
     match (required, request_ordering) {
-        (_, None) => false,
-        (None, Some(_)) => false,
+        (_, None) => Ok(false),
+        (None, Some(_)) => Ok(false),
         (Some(required), Some(request_ordering)) => {
             if required.len() > request_ordering.len() {
-                return false;
+                return Ok(false);
             }
-            let alignment_flags = required
+            let alignment_flags_rs: Result<Vec<bool>> = required
                 .iter()
                 .zip(request_ordering.iter())
                 .filter_map(|(required_expr, request_expr)| {
@@ -890,14 +857,15 @@ fn should_reverse_window_exec(
                     } else if request_expr.expr.eq(&required_expr.expr) {
                         None
                     } else {
-                        Some(false)
+                        Some(Ok(false))
                     }
                 })
-                .collect::<Vec<_>>();
+                .collect();
+            let alignment_flags = alignment_flags_rs?;
             if alignment_flags.is_empty() {
-                false
+                Ok(false)
             } else {
-                alignment_flags.iter().all(|o| *o)
+                Ok(alignment_flags.iter().all(|o| *o))
             }
         }
     }
@@ -905,9 +873,9 @@ fn should_reverse_window_exec(
 
 fn extract_window_info_from_plan(
     plan: &Arc<dyn ExecutionPlan>,
-) -> Option<WindowExecInfo> {
+) -> Result<WindowExecInfo> {
     if let Some(exec) = plan.as_any().downcast_ref::<BoundedWindowAggExec>() {
-        Some(WindowExecInfo {
+        Ok(WindowExecInfo {
             window_expr: exec.window_expr().to_vec(),
             input_schema: exec.input_schema(),
             partition_keys: exec.partition_keys.clone(),
@@ -919,6 +887,12 @@ fn extract_window_info_from_plan(
                 window_expr: exec.window_expr().to_vec(),
                 input_schema: exec.input_schema(),
                 partition_keys: exec.partition_keys.clone(),
+            })
+            .ok_or_else(|| {
+                DataFusionError::Plan(
+                    "Expects to receive either WindowAggExec of BoundedWindowAggExec"
+                        .to_string(),
+                )
             })
     }
 }
@@ -1006,7 +980,7 @@ fn expr_source_sides(
             if required_exprs
                 .iter()
                 .filter_map(|r| {
-                    if r.expr.as_any().downcast_ref::<Column>().is_some() {
+                    if r.expr.as_any().is::<Column>() {
                         Some(JoinSide::Left)
                     } else {
                         None
@@ -1024,7 +998,7 @@ fn expr_source_sides(
             if required_exprs
                 .iter()
                 .filter_map(|r| {
-                    if r.expr.as_any().downcast_ref::<Column>().is_some() {
+                    if r.expr.as_any().is::<Column>() {
                         Some(JoinSide::Right)
                     } else {
                         None
@@ -1251,7 +1225,7 @@ mod tests {
                 }),
             };
             let reverse =
-                check_alignment(&schema, &physical_ordering, &required_ordering);
+                check_alignment(&schema, &physical_ordering, &required_ordering)?;
             assert_eq!(reverse, reverse_expected);
         }
 
@@ -1291,7 +1265,7 @@ mod tests {
                 }),
             };
             let reverse =
-                check_alignment(&schema, &physical_ordering, &required_ordering);
+                check_alignment(&schema, &physical_ordering, &required_ordering)?;
             assert_eq!(reverse, reverse_expected);
         }
 
@@ -1334,7 +1308,7 @@ mod tests {
             Some(required_ordering1.deref()),
             Some(window_request_ordering1.deref()),
             &schema,
-        );
+        )?;
         assert!(reverse);
 
         // order by nullable_col, non_nullable_col
@@ -1373,7 +1347,7 @@ mod tests {
             Some(required_ordering2.deref()),
             Some(window_request_ordering2.deref()),
             &schema,
-        );
+        )?;
         assert!(reverse);
 
         // wrong partition columns
@@ -1412,7 +1386,7 @@ mod tests {
             Some(required_ordering3.deref()),
             Some(window_request_ordering3.deref()),
             &schema,
-        );
+        )?;
         assert!(!reverse);
 
         Ok(())
@@ -1552,7 +1526,6 @@ mod tests {
         let sort1 = sort_exec(sort_exprs1.clone(), source);
         let window_agg1 = window_exec("non_nullable_col", sort_exprs1.clone(), sort1);
         let window_agg2 = window_exec("non_nullable_col", sort_exprs2, window_agg1);
-        // let filter_exec = sort_exec;
         let physical_plan = window_exec("non_nullable_col", sort_exprs1, window_agg2);
 
         let expected_input = vec![
