@@ -216,23 +216,19 @@ impl Accumulator for DistinctCountAccumulator {
     }
 
     fn size(&self) -> usize {
+        // temporarily calculating the size approximately, taking first batch size * number of batches
+        // such approach has some inaccuracy for variable length values, like strings.
         std::mem::size_of_val(self)
             + (std::mem::size_of::<DistinctScalarValues>() * self.values.capacity())
             + self
                 .values
                 .iter()
+                .next()
                 .map(|vals| {
-                    ScalarValue::size_of_vec(&vals.0) - std::mem::size_of_val(&vals.0)
+                    (ScalarValue::size_of_vec(&vals.0) - std::mem::size_of_val(&vals.0))
+                        * self.values.capacity()
                 })
-                .sum::<usize>()
-            + (std::mem::size_of::<DataType>() * self.state_data_types.capacity())
-            + self
-                .state_data_types
-                .iter()
-                .map(|dt| dt.size() - std::mem::size_of_val(dt))
-                .sum::<usize>()
-            + self.count_data_type.size()
-            - std::mem::size_of_val(&self.count_data_type)
+                .unwrap_or(0)
     }
 }
 
