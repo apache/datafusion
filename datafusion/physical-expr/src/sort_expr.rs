@@ -71,9 +71,8 @@ impl PhysicalSortExpr {
     }
 
     pub fn satisfy(&self, requirement: &PhysicalSortRequirements) -> bool {
-        if requirement.sort_options.is_some() {
-            self.options == requirement.sort_options.unwrap()
-                && self.expr.eq(&requirement.expr)
+        if let Some(sort_options) = requirement.sort_options {
+            self.options == sort_options && self.expr.eq(&requirement.expr)
         } else {
             self.expr.eq(&requirement.expr)
         }
