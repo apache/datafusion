@@ -28,6 +28,7 @@
 //! entities (e.g. entire files) if the statistics are known via some
 //! other source (e.g. a catalog)
 
+use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
@@ -256,6 +257,14 @@ pub(crate) struct RequiredStatColumns {
 impl RequiredStatColumns {
     fn new() -> Self {
         Self::default()
+    }
+
+    /// Returns number of unique columns.
+    pub(crate) fn n_columns(&self) -> usize {
+        self.iter()
+            .map(|(c, _s, _f)| c)
+            .collect::<HashSet<_>>()
+            .len()
     }
 
     /// Returns an iterator over items in columns (see doc on
