@@ -49,11 +49,14 @@ impl OptimizerRule for InlineTableScan {
                 source,
                 table_name,
                 filters,
+                projection,
                 ..
             }) if filters.is_empty() => {
                 if let Some(sub_plan) = source.get_logical_plan() {
+                    let projection_exprs =
+                        generate_projection_expr(projection, sub_plan)?;
                     let plan = LogicalPlanBuilder::from(sub_plan.clone())
-                        .project(vec![Expr::Wildcard])?
+                        .project(projection_exprs)?
                         .alias(table_name)?;
                     Ok(Some(plan.build()?))
                 } else {
@@ -71,6 +74,23 @@ impl OptimizerRule for InlineTableScan {
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::BottomUp)
     }
+}
+
+fn generate_projection_expr(
+    projection: &Option<Vec<usize>>,
+    sub_plan: &LogicalPlan,
+) -> Result<Vec<Expr>> {
+    let mut exprs = vec![];
+    if let Some(projection) = projection {
+        for i in projection {
+            exprs.push(Expr::Column(
+                sub_plan.schema().fields()[*i].qualified_column(),
+            ));
+        }
+    } else {
+        exprs.push(Expr::Wildcard);
+    }
+    Ok(exprs)
 }
 
 #[cfg(test)]
