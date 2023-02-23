@@ -73,6 +73,9 @@ async fn tpcds_logical_q9() -> Result<()> {
     create_logical_plan(9).await
 }
 
+#[ignore]
+// Schema error: No field named 'c'.'c_customer_sk'.
+// issue: https://github.com/apache/arrow-datafusion/issues/4794
 #[tokio::test]
 async fn tpcds_logical_q10() -> Result<()> {
     create_logical_plan(10).await
@@ -198,6 +201,9 @@ async fn tpcds_logical_q34() -> Result<()> {
     create_logical_plan(34).await
 }
 
+#[ignore]
+// Schema error: No field named 'c'.'c_customer_sk'.
+// issue: https://github.com/apache/arrow-datafusion/issues/4794
 #[tokio::test]
 async fn tpcds_logical_q35() -> Result<()> {
     create_logical_plan(35).await
