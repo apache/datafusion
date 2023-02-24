@@ -469,7 +469,7 @@ fn coerce_scalar_range_aware(
         if let Some(largest_type) = get_widest_type_in_family(target_type) {
             coerce_scalar(largest_type, value).map_or_else(
                 |_| {
-                    Err(DataFusionError::NotImplemented(format!(
+                    Err(DataFusionError::Execution(format!(
                         "Cannot cast {:?} to {:?}",
                         value, target_type
                     )))
