@@ -128,7 +128,7 @@ async fn sort_on_unprojected_columns() -> Result<()> {
 }
 
 #[tokio::test]
-async fn sort_on_distinct_unprojected_columns() -> Result<()> {
+async fn sort_on_distinct_columns() -> Result<()> {
     let schema = Schema::new(vec![
         Field::new("a", DataType::Int32, false),
         Field::new("b", DataType::Int32, false),
@@ -138,7 +138,7 @@ async fn sort_on_distinct_unprojected_columns() -> Result<()> {
         Arc::new(schema.clone()),
         vec![
             Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
-            Arc::new(Int32Array::from_slice([2, 12, 12, 120])),
+            Arc::new(Int32Array::from_slice([2, 3, 4, 5])),
         ],
     )
     .unwrap();
@@ -153,7 +153,7 @@ async fn sort_on_distinct_unprojected_columns() -> Result<()> {
         .unwrap()
         .distinct()
         .unwrap()
-        .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))])
+        .sort(vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))])
         .unwrap();
     let results = df.collect().await.unwrap();
 
@@ -168,6 +168,38 @@ async fn sort_on_distinct_unprojected_columns() -> Result<()> {
         "+-----+",
     ];
     assert_batches_eq!(expected, &results);
+    Ok(())
+}
+#[tokio::test]
+async fn sort_on_distinct_unprojected_columns() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![
+            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
+            Arc::new(Int32Array::from_slice([2, 3, 4, 5])),
+        ],
+    )
+    .unwrap();
+
+    // Cannot sort on a column after distinct that would add a new column
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch).unwrap();
+    let err = ctx
+        .table("t")
+        .await
+        .unwrap()
+        .select(vec![col("a")])
+        .unwrap()
+        .distinct()
+        .unwrap()
+        .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))])
+        .unwrap_err();
+    assert_eq!(err.to_string(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions b must appear in select list");
     Ok(())
 }
 

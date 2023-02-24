@@ -26,6 +26,7 @@ pub mod eliminate_outer_join;
 pub mod extract_equijoin_predicate;
 pub mod filter_null_join_keys;
 pub mod inline_table_scan;
+pub mod merge_projection;
 pub mod optimizer;
 pub mod propagate_empty_relation;
 pub mod push_down_filter;
