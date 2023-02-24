@@ -51,6 +51,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::{reverse_sort_options, DataFusionError};
 use datafusion_physical_expr::utils::{ordering_satisfy, ordering_satisfy_concrete};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use hashbrown::HashSet;
 use itertools::{concat, izip};
 use std::iter::zip;
 use std::sync::Arc;
@@ -558,6 +559,36 @@ pub fn find_match_indices<T: PartialEq>(
     Ok(result)
 }
 
+pub fn get_partition_by_indices(
+    to_search: &[Arc<dyn PhysicalExpr>],
+    searched: &[PhysicalSortExpr],
+) -> Result<Vec<usize>> {
+    let mut result = vec![];
+    for item in to_search {
+        if let Some((idx, _elem)) =
+            searched.iter().enumerate().find(|(idx, e)| e.expr.eq(item))
+        {
+            result.push(idx);
+        }
+    }
+    Ok(result)
+}
+
+pub fn get_order_by_indices(
+    to_search: &[PhysicalSortExpr],
+    searched: &[PhysicalSortExpr],
+) -> Result<Vec<usize>> {
+    let mut result = vec![];
+    for item in to_search {
+        if let Some((idx, _elem)) =
+        searched.iter().enumerate().find(|(idx, e)| e.expr.eq(&item.expr))
+        {
+            result.push(idx);
+        }
+    }
+    Ok(result)
+}
+
 pub fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec<T>> {
     let mut result = vec![];
     for idx in indices {
@@ -566,10 +597,31 @@ pub fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec
     Ok(result)
 }
 
+fn get_sorted_merged_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
+    let set: HashSet<_> = in1.iter().chain(in2.iter()).map(|elem| *elem).collect();
+    let mut res: Vec<_> = set.into_iter().collect();
+    res.sort();
+    res
+}
+
+fn is_consecutive_from_zero(in1: &[usize]) -> bool {
+    in1.iter().zip(0..in1.len()).all(|(lhs, rhs)| *lhs == rhs)
+}
+
+fn get_set_diff_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
+    let set1: HashSet<_> = in1.iter().cloned().collect();
+    let set2: HashSet<_> = in2.iter().cloned().collect();
+    let diff = &set1-&set2;
+    let mut res: Vec<_> = diff.into_iter().collect();
+    res.sort();
+    res
+}
+
 fn can_skip_ordering_fn(
     sort_tree: &ExecTree,
     search_indices: &[usize],
-    partition_keys: &[Arc<dyn PhysicalExpr>],
+    partitionby_keys: &[Arc<dyn PhysicalExpr>],
+    orderby_keys: &[PhysicalSortExpr],
 ) -> Result<Option<bool>> {
     let mut first_should_reverse = None;
     let mut physical_ordering_common = vec![];
@@ -595,8 +647,44 @@ fn can_skip_ordering_fn(
             {
                 physical_ordering_common = physical_ordering.to_vec();
             }
+            let orderby_indices =
+                get_order_by_indices(&orderby_keys, &physical_ordering)?;
+            let mut partitionby_indices =
+                get_partition_by_indices(&partitionby_keys, &physical_ordering)?;
+            partitionby_indices.sort();
+            println!("physical_ordering: {:?}", physical_ordering);
+            println!("partition_keys: {:?}", partitionby_keys);
+            println!("orderby_keys: {:?}", orderby_keys);
+            println!("partitionby_indices:{:?}", partitionby_indices);
+            println!("orderby_indices:{:?}", orderby_indices);
+            let merged_indices =
+                get_sorted_merged_indices(&partitionby_indices, &orderby_indices);
+            println!("merged_indices: {:?}", merged_indices);
+            let is_consecutive = is_consecutive_from_zero(&merged_indices);
+            let all_partition = merged_indices == partitionby_indices;
+            let contains_all_orderbys = orderby_indices.len() == orderby_keys.len();
+            let only_orderby_indices = get_set_diff_indices(&orderby_indices, &partitionby_indices);
+            let input_orderby_columns = get_at_indices(physical_ordering, &only_orderby_indices)?;
+            let expected_orderby_columns = get_at_indices(orderby_keys, &find_match_indices(&only_orderby_indices, &orderby_indices)?)?;
+            println!("input_orderby_columns   :{:?}", input_orderby_columns);
+            println!("expected_orderby_columns:{:?}", expected_orderby_columns);
+            let streamable = (is_consecutive
+                || (all_partition && merged_indices[0] == 0) && contains_all_orderbys);
+            let partition_by_consecutive = is_consecutive_from_zero(&partitionby_indices);
+            let is_first_partition_by = partitionby_indices
+                .get(0)
+                .map(|elem| *elem == 0)
+                .unwrap_or(false);
+            let mode = if is_first_partition_by && partition_by_consecutive {
+                "Sorted"
+            } else if is_first_partition_by {
+                "PartiallySorted"
+            } else {
+                "Linear"
+            };
+            println!("is_consecutive:{:?}, all_partition: {:?}, contains_all_orderbys:{:?}, streamable: {:?}, partition_by_consecutive:{:?}, is_first_partition_by:{:?}, mode:{:?}", is_consecutive, all_partition, contains_all_orderbys, streamable, partition_by_consecutive, is_first_partition_by, mode);
             let (can_skip_sorting, should_reverse) = can_skip_sort(
-                partition_keys,
+                partitionby_keys,
                 required_ordering,
                 &sort_input.schema(),
                 physical_ordering,
@@ -657,6 +745,14 @@ fn analyze_window_sort_removal(
     if let Some(sort_keys) = sort_keys {
         search_indices[0] = (0..sort_keys.len()).collect();
         search_indices[1] = find_match_indices(&orderby_sort_keys, &sort_keys)?;
+
+        // let partition_by_cols = window_expr[0].partition_by();
+        // let orderby_indices = find_match_indices(&orderby_sort_keys, &sort_keys)?;
+        // let partitionby_indices = get_partition_by_indices(&partition_by_cols, &sort_keys)?;
+        // println!("sort_keys: {:?}", sort_keys);
+        // println!("partition_by_cols: {:?}", partition_by_cols);
+        // println!("orderby_indices:{:?}", orderby_indices);
+        // println!("partitionby_indices:{:?}", partitionby_indices);
     }
     let mut first_should_reverse = None;
     let mut partition_search_mode = PartitionSearchMode::Linear;
@@ -669,6 +765,7 @@ fn analyze_window_sort_removal(
             sort_tree,
             search_indices,
             window_expr[0].partition_by(),
+            &orderby_sort_keys,
         )?;
         if let Some(_) = res {
             can_skip_sorting = true;
@@ -1052,6 +1149,28 @@ mod tests {
             assert_eq!(reverse, reverse_expected);
         }
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sorted_merged_indices() -> Result<()> {
+        let res = get_sorted_merged_indices(&vec![0, 3, 4], &[1, 3, 5]);
+        assert_eq!(res, vec![0, 1, 3, 4, 5]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_is_consecutive_from_zero() -> Result<()> {
+        assert!(!is_consecutive_from_zero(&vec![0, 3, 4]));
+        assert!(is_consecutive_from_zero(&vec![0, 1, 2]));
+        assert!(is_consecutive_from_zero(&vec![]));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_set_diff_indices() -> Result<()> {
+        assert_eq!(get_set_diff_indices(&vec![0, 3, 4], &vec![1, 2]), vec![0, 3, 4]);
+        assert_eq!(get_set_diff_indices(&vec![0, 3, 4], &vec![1, 2, 4]), vec![0, 3]);
         Ok(())
     }
 
