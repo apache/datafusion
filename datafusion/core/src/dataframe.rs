@@ -380,8 +380,7 @@ impl DataFrame {
                         .collect::<Vec<_>>(),
                 )?
                 .collect()
-                .await?
-                .clone(),
+                .await?,
             // null_count aggregation
             self.clone()
                 .aggregate(
@@ -399,8 +398,7 @@ impl DataFrame {
                         .collect::<Vec<_>>(),
                 )?
                 .collect()
-                .await?
-                .clone(),
+                .await?,
             // max aggregation
             self.clone()
                 .aggregate(
@@ -417,8 +415,7 @@ impl DataFrame {
                         .collect::<Vec<_>>(),
                 )?
                 .collect()
-                .await?
-                .clone(),
+                .await?,
             // min aggregation
             self.clone()
                 .aggregate(
@@ -435,15 +432,14 @@ impl DataFrame {
                         .collect::<Vec<_>>(),
                 )?
                 .collect()
-                .await?
-                .clone(),
+                .await?,
         ];
 
         let mut array_ref_vec: Vec<ArrayRef> = vec![];
         for field in self.schema().fields().iter() {
             let mut array_datas = vec![];
             for record_batch in describe_record_batch.iter() {
-                let column = record_batch.get(0).unwrap().column_by_name(&field.name());
+                let column = record_batch.get(0).unwrap().column_by_name(field.name());
                 match column {
                     Some(c) => {
                         if field.data_type().is_numeric() {
