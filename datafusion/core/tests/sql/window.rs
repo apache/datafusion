@@ -2897,7 +2897,7 @@ mod tests {
         let ctx = get_test_context2(&tmpdir).await?;
 
         let sql = "SELECT low_card_col1, low_card_col2, inc_col,
-        SUM(inc_col) OVER(PARTITION BY low_card_col1, unsorted_col ORDER BY low_card_col2, inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum1
+        SUM(inc_col) OVER(PARTITION BY low_card_col1, inc_col ORDER BY low_card_col2 ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum1
            FROM annotated_data2
            ORDER BY inc_col ASC";
 

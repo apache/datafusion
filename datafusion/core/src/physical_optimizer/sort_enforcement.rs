@@ -55,6 +55,7 @@ use hashbrown::HashSet;
 use itertools::{concat, izip};
 use std::iter::zip;
 use std::sync::Arc;
+use futures::StreamExt;
 
 /// This rule inspects `SortExec`'s in the given physical plan and removes the
 /// ones it can prove unnecessary.
@@ -619,11 +620,10 @@ fn get_set_diff_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
 
 fn can_skip_ordering_fn(
     sort_tree: &ExecTree,
-    search_indices: &[usize],
     partitionby_keys: &[Arc<dyn PhysicalExpr>],
     orderby_keys: &[PhysicalSortExpr],
-) -> Result<Option<bool>> {
-    let mut first_should_reverse = None;
+) -> Result<Option<(bool, PartitionSearchMode)>> {
+    let mut res = None;
     let mut physical_ordering_common = vec![];
     for sort_any in sort_tree.get_leaves() {
         let sort_output_ordering = sort_any.output_ordering();
@@ -637,10 +637,10 @@ fn can_skip_ordering_fn(
         //       ordering required by the window executor instead of `sort_output_ordering`.
         //       This will enable us to handle cases such as (a,b) -> Sort -> (a,b,c) -> Required(a,b).
         //       Currently, we can not remove such sorts.
-        let required_ordering = sort_output_ordering.ok_or_else(|| {
-            DataFusionError::Plan("A SortExec should have output ordering".to_string())
-        })?;
-        let required_ordering = &get_at_indices(required_ordering, search_indices)?;
+        // let required_ordering = sort_output_ordering.ok_or_else(|| {
+        //     DataFusionError::Plan("A SortExec should have output ordering".to_string())
+        // })?;
+        // let required_ordering = &get_at_indices(required_ordering, search_indices)?;
         if let Some(physical_ordering) = physical_ordering {
             if physical_ordering_common.is_empty()
                 || physical_ordering.len() < physical_ordering_common.len()
@@ -668,38 +668,42 @@ fn can_skip_ordering_fn(
             let expected_orderby_columns = get_at_indices(orderby_keys, &find_match_indices(&only_orderby_indices, &orderby_indices)?)?;
             println!("input_orderby_columns   :{:?}", input_orderby_columns);
             println!("expected_orderby_columns:{:?}", expected_orderby_columns);
+            let is_same_ordering = input_orderby_columns.iter().zip(&expected_orderby_columns).all(|(lhs, rhs)| lhs.options==rhs.options);
+            let should_reverse = input_orderby_columns.iter().zip(&expected_orderby_columns).all(|(lhs, rhs)| lhs.options==reverse_sort_options(rhs.options));
+            let is_aligned= is_same_ordering || should_reverse;
+            println!("is_same_ordering: {:?}, is_reversed_ordering: {:?}, is_aligned: {:?}", is_same_ordering, should_reverse, is_aligned);
             let streamable = (is_consecutive
-                || (all_partition && merged_indices[0] == 0) && contains_all_orderbys);
+                || (all_partition && merged_indices[0] == 0) && contains_all_orderbys && is_aligned);
             let partition_by_consecutive = is_consecutive_from_zero(&partitionby_indices);
             let is_first_partition_by = partitionby_indices
                 .get(0)
                 .map(|elem| *elem == 0)
                 .unwrap_or(false);
             let mode = if is_first_partition_by && partition_by_consecutive {
-                "Sorted"
+                PartitionSearchMode::Sorted
             } else if is_first_partition_by {
-                "PartiallySorted"
+                println!("should have been Partially Sorted");
+                // TODO: Add partially sorted
+                PartitionSearchMode::Linear
             } else {
-                "Linear"
+                PartitionSearchMode::Linear
             };
             println!("is_consecutive:{:?}, all_partition: {:?}, contains_all_orderbys:{:?}, streamable: {:?}, partition_by_consecutive:{:?}, is_first_partition_by:{:?}, mode:{:?}", is_consecutive, all_partition, contains_all_orderbys, streamable, partition_by_consecutive, is_first_partition_by, mode);
-            let (can_skip_sorting, should_reverse) = can_skip_sort(
-                partitionby_keys,
-                required_ordering,
-                &sort_input.schema(),
-                physical_ordering,
-            )?;
-            if !can_skip_sorting {
-                // break;
+            // let (can_skip_sorting, should_reverse) = can_skip_sort(
+            //     partitionby_keys,
+            //     required_ordering,
+            //     &sort_input.schema(),
+            //     physical_ordering,
+            // )?;
+            if !streamable {
                 return Ok(None);
             }
-            if let Some(first_should_reverse) = first_should_reverse {
-                if first_should_reverse != should_reverse {
-                    // break;
+            if let Some((first_should_reverse, first_mode)) = res {
+                if first_should_reverse != should_reverse || first_mode!= mode {
                     return Ok(None);
                 }
             } else {
-                first_should_reverse = Some(should_reverse);
+                res = Some((should_reverse, mode));
             }
         } else {
             // If there is no physical ordering, there is no way to remove a
@@ -707,11 +711,7 @@ fn can_skip_ordering_fn(
             return Ok(None);
         }
     }
-    // if can_skip_sorting {
-    //     partition_search_mode = search_mode;
-    //     break;
-    // }
-    Ok(first_should_reverse)
+    Ok(res)
 }
 /// Analyzes a [WindowAggExec] or a [BoundedWindowAggExec] to determine whether
 /// it may allow removing a sort.
@@ -741,44 +741,18 @@ fn analyze_window_sort_removal(
         ));
     };
 
-    let mut search_indices = vec![vec![], vec![]];
-    if let Some(sort_keys) = sort_keys {
-        search_indices[0] = (0..sort_keys.len()).collect();
-        search_indices[1] = find_match_indices(&orderby_sort_keys, &sort_keys)?;
-
-        // let partition_by_cols = window_expr[0].partition_by();
-        // let orderby_indices = find_match_indices(&orderby_sort_keys, &sort_keys)?;
-        // let partitionby_indices = get_partition_by_indices(&partition_by_cols, &sort_keys)?;
-        // println!("sort_keys: {:?}", sort_keys);
-        // println!("partition_by_cols: {:?}", partition_by_cols);
-        // println!("orderby_indices:{:?}", orderby_indices);
-        // println!("partitionby_indices:{:?}", partitionby_indices);
-    }
-    let mut first_should_reverse = None;
-    let mut partition_search_mode = PartitionSearchMode::Linear;
-    let mut can_skip_sorting = false;
-    for (search_indices, search_mode) in search_indices.iter().zip(vec![
-        PartitionSearchMode::Sorted,
-        PartitionSearchMode::Linear,
-    ]) {
-        let res = can_skip_ordering_fn(
-            sort_tree,
-            search_indices,
-            window_expr[0].partition_by(),
-            &orderby_sort_keys,
-        )?;
-        if let Some(_) = res {
-            can_skip_sorting = true;
-            first_should_reverse = res;
-            partition_search_mode = search_mode;
-            break;
-        }
-    }
-    if !can_skip_sorting {
-        return Ok(None);
-    }
+    let (should_reverse, partition_search_mode) = if let Some((should_reverse, partition_search_mode)) = can_skip_ordering_fn(
+        sort_tree,
+        window_expr[0].partition_by(),
+        &orderby_sort_keys,
+    )?{
+        (should_reverse, partition_search_mode)
+    } else {
+        // cannot skip sort
+        return Ok(None)
+    };
     println!("partition_search mode:{:?}", partition_search_mode);
-    let new_window_expr = if first_should_reverse.unwrap() {
+    let new_window_expr = if should_reverse {
         window_expr
             .iter()
             .map(|e| e.get_reverse_expr())

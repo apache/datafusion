@@ -61,7 +61,7 @@ use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use indexmap::IndexMap;
 use log::debug;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PartitionSearchMode {
     Linear,
     Sorted,
