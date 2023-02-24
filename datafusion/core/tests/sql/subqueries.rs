@@ -121,7 +121,7 @@ where o_orderstatus in (
 async fn exists_subquery_with_same_table() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id", true)?;
 
-    // Subquey and outer query relates to the same table.
+    // Subquery and outer query refer to the same table.
     // It will not be rewritten to join because it is not a correlated subquery.
     let sql = "SELECT t1_id, t1_name, t1_int FROM t1 WHERE EXISTS(SELECT t1_int FROM t1 WHERE t1.t1_id > t1.t1_int)";
     let msg = format!("Creating logical plan for '{sql}'");
@@ -152,7 +152,7 @@ async fn exists_subquery_with_same_table() -> Result<()> {
 async fn in_subquery_with_same_table() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id", true)?;
 
-    // Subquey and outer query relates to the same table.
+    // Subquery and outer query refer to the same table.
     // It will be rewritten to join because in-subquery has extra predicate(`t1.t1_id = __correlated_sq_1.t1_int`).
     let sql = "SELECT t1_id, t1_name, t1_int FROM t1 WHERE t1_id IN(SELECT t1_int FROM t1 WHERE t1.t1_id > t1.t1_int)";
     let msg = format!("Creating logical plan for '{sql}'");

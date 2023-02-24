@@ -1164,7 +1164,7 @@ mod tests {
             .project(vec![col("test.b")])?
             .build()?;
 
-        // Subquey and outer query relates to the same table.
+        // Subquery and outer query refer to the same table.
         let expected = "Projection: test.b [b:UInt32]\
                       \n  LeftSemi Join:  Filter: test.a = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]\
                       \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\

@@ -659,7 +659,7 @@ mod tests {
             .project(vec![col("test.b")])?
             .build()?;
 
-        // Subquey and outer query relates to the same table.
+        // Subquery and outer query refer to the same table.
         let expected = "Projection: test.b [b:UInt32]\
                       \n  Filter: EXISTS (<subquery>) [a:UInt32, b:UInt32, c:UInt32]\
                       \n    Subquery: [c:UInt32]\
