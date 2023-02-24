@@ -527,8 +527,7 @@ LIMIT 5
 #// }
 
 # async fn window_frame_ranges_preceding_following_desc
-# This query should pass. Tracked in  https://github.com/apache/arrow-datafusion/issues/5346
-query error DataFusion error: Internal error: Operator \+ is not implemented
+query III
 SELECT
 SUM(c4) OVER(ORDER BY c2 DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
 SUM(c3) OVER(ORDER BY c2 DESC RANGE BETWEEN 10000 PRECEDING AND 10000 FOLLOWING),
@@ -536,6 +535,31 @@ COUNT(*) OVER(ORDER BY c2 DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
 FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
+----
+52276 781 56
+260620 781 63
+-28623 781 37
+260620 781 63
+260620 781 63
+
+# async fn window_frame_large_range
+# Range offset 10000 is too big for Int8 (i.e. the type of c3).
+# In this case, we should be able to still produce correct results.
+# See the issue: https://github.com/apache/arrow-datafusion/issues/5346
+# below over clause is equivalent to OVER(ORDER BY c3 DESC RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+# in terms of behaviour.
+query I
+SELECT
+SUM(c3) OVER(ORDER BY c3 DESC RANGE BETWEEN 10000 PRECEDING AND 10000 FOLLOWING) as summation1
+FROM aggregate_test_100
+ORDER BY c9
+LIMIT 5
+----
+781
+781
+781
+781
+781
 
 # async fn window_frame_order_by_asc_desc_large
 query I
