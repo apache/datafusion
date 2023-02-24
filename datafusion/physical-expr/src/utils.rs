@@ -19,14 +19,18 @@ use crate::equivalence::EquivalentClass;
 use crate::expressions::BinaryExpr;
 use crate::expressions::Column;
 use crate::expressions::UnKnownColumn;
+use crate::rewrite::RewriteRecursion;
 use crate::rewrite::TreeNodeRewritable;
+use crate::rewrite::TreeNodeRewriter;
 use crate::PhysicalSortExpr;
 use crate::{EquivalenceProperties, PhysicalExpr};
+use datafusion_common::DataFusionError;
 use datafusion_expr::Operator;
 
 use arrow::datatypes::SchemaRef;
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Compare the two expr lists are equal no matter the order.
@@ -232,6 +236,41 @@ pub fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(
             .all(|(order1, order2)| order1.eq(order2))
     } else {
         false
+    }
+}
+
+/// Extract referenced [`Column`]s within a [`PhysicalExpr`].
+///
+/// This works recursively.
+pub fn get_phys_expr_columns(pred: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
+    let mut rewriter = ColumnCollector::default();
+    pred.clone()
+        .transform_using(&mut rewriter)
+        .expect("never fail");
+    rewriter.cols
+}
+
+#[derive(Debug, Default)]
+struct ColumnCollector {
+    cols: HashSet<Column>,
+}
+
+impl TreeNodeRewriter<Arc<dyn PhysicalExpr>> for ColumnCollector {
+    fn pre_visit(
+        &mut self,
+        node: &Arc<dyn PhysicalExpr>,
+    ) -> Result<RewriteRecursion, DataFusionError> {
+        if let Some(column) = node.as_any().downcast_ref::<Column>() {
+            self.cols.insert(column.clone());
+        }
+        Ok(RewriteRecursion::Continue)
+    }
+
+    fn mutate(
+        &mut self,
+        expr: Arc<dyn PhysicalExpr>,
+    ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
+        Ok(expr)
     }
 }
 
