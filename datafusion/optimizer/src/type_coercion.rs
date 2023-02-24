@@ -949,6 +949,35 @@ mod test {
         assert!(err.unwrap_err().to_string().contains(
             "There isn't a common type to coerce Int64 and Utf8 in LIKE expression"
         ));
+
+        // ilike
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
+        let ilike_expr = Expr::ILike(Like::new(false, expr, pattern, None));
+        let empty = empty_with_type(DataType::Utf8);
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
+        let expected = "Projection: a ILIKE Utf8(\"abc\")\n  EmptyRelation";
+        assert_optimized_plan_eq(&plan, expected)?;
+
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit(ScalarValue::Null));
+        let ilike_expr = Expr::ILike(Like::new(false, expr, pattern, None));
+        let empty = empty_with_type(DataType::Utf8);
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
+        let expected = "Projection: a ILIKE CAST(NULL AS Utf8) AS a ILIKE NULL \
+             \n  EmptyRelation";
+        assert_optimized_plan_eq(&plan, expected)?;
+
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
+        let ilike_expr = Expr::ILike(Like::new(false, expr, pattern, None));
+        let empty = empty_with_type(DataType::Int64);
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
+        let err = assert_optimized_plan_eq(&plan, expected);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains(
+            "There isn't a common type to coerce Int64 and Utf8 in ILIKE expression"
+        ));
         Ok(())
     }
 
@@ -1029,6 +1058,21 @@ mod test {
 
     #[test]
     fn test_type_coercion_rewrite() -> Result<()> {
+        // gt
+        let schema = Arc::new(
+            DFSchema::new_with_metadata(
+                vec![DFField::new(None, "a", DataType::Int64, true)],
+                std::collections::HashMap::new(),
+            )
+            .unwrap(),
+        );
+        let mut rewriter = TypeCoercionRewriter { schema };
+        let expr = is_true(lit(12i32).gt(lit(13i64)));
+        let expected = is_true(cast(lit(12i32), DataType::Int64).gt(lit(13i64)));
+        let result = expr.rewrite(&mut rewriter)?;
+        assert_eq!(expected, result);
+
+        // eq
         let schema = Arc::new(
             DFSchema::new_with_metadata(
                 vec![DFField::new(None, "a", DataType::Int64, true)],
@@ -1041,8 +1085,22 @@ mod test {
         let expected = is_true(cast(lit(12i32), DataType::Int64).eq(lit(13i64)));
         let result = expr.rewrite(&mut rewriter)?;
         assert_eq!(expected, result);
+
+        // lt
+        let schema = Arc::new(
+            DFSchema::new_with_metadata(
+                vec![DFField::new(None, "a", DataType::Int64, true)],
+                std::collections::HashMap::new(),
+            )
+            .unwrap(),
+        );
+        let mut rewriter = TypeCoercionRewriter { schema };
+        let expr = is_true(lit(12i32).lt(lit(13i64)));
+        let expected = is_true(cast(lit(12i32), DataType::Int64).lt(lit(13i64)));
+        let result = expr.rewrite(&mut rewriter)?;
+        assert_eq!(expected, result);
+
         Ok(())
-        // TODO add more test for this
     }
 
     #[test]
