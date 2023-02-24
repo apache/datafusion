@@ -394,7 +394,7 @@ pub fn create_physical_expr(
                 )?);
             }
             // udfs with zero params expect null array as input
-            if args.len() == 0 {
+            if args.is_empty() {
                 physical_args.push(Arc::new(Literal::new(ScalarValue::Null)));
             }
             udf::create_physical_expr(fun.clone().as_ref(), &physical_args, input_schema)
