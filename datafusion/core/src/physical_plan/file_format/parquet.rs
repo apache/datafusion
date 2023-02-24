@@ -62,7 +62,7 @@ use parquet::file::{metadata::ParquetMetaData, properties::WriterProperties};
 use parquet::schema::types::ColumnDescriptor;
 
 mod metrics;
-mod page_filter;
+pub mod page_filter;
 mod row_filter;
 mod row_groups;
 
