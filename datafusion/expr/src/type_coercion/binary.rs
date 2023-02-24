@@ -241,19 +241,25 @@ fn comparison_binary_numeric_coercion(
         // start checking from Int64, that is the most inclusive integer type
         (Int64, _)
         | (_, Int64)
-        | (Int32, UInt32)
-        | (UInt32, Int32)
-        | (Int16, UInt32)
-        | (UInt32, Int16)
+        | (UInt64, Int8)
+        | (Int8, UInt64)
+        | (UInt64, Int16)
+        | (Int16, UInt64)
+        | (UInt64, Int32)
+        | (Int32, UInt64)
+        | (UInt32, Int8)
         | (Int8, UInt32)
-        | (UInt32, Int8) => Some(Int64),
+        | (UInt32, Int16)
+        | (Int16, UInt32)
+        | (UInt32, Int32)
+        | (Int32, UInt32) => Some(Int64),
         (UInt64, _) | (_, UInt64) => Some(UInt64),
         (Int32, _)
         | (_, Int32)
-        | (Int16, UInt16)
         | (UInt16, Int16)
-        | (Int8, UInt16)
-        | (UInt16, Int8) => Some(Int32),
+        | (Int16, UInt16)
+        | (UInt16, Int8)
+        | (Int8, UInt16) => Some(Int32),
         (UInt32, _) | (_, UInt32) => Some(UInt32),
         (Int16, _) | (_, Int16) | (Int8, UInt8) | (UInt8, Int8) => Some(Int16),
         (UInt16, _) | (_, UInt16) => Some(UInt16),
