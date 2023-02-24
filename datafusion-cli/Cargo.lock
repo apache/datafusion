@@ -681,7 +681,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "18.0.0"
+version = "19.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -726,7 +726,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "18.0.0"
+version = "19.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -744,7 +744,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "18.0.0"
+version = "19.0.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -756,7 +756,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "18.0.0"
+version = "19.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -767,7 +767,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-optimizer"
-version = "18.0.0"
+version = "19.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -782,7 +782,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "18.0.0"
+version = "19.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-row"
-version = "18.0.0"
+version = "19.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -821,7 +821,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "18.0.0"
+version = "19.0.0"
 dependencies = [
  "arrow-schema",
  "datafusion-common",
