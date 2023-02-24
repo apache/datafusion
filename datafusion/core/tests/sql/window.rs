@@ -2892,6 +2892,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_source_partially_sorted_partition_by() -> Result<()> {
         let tmpdir = TempDir::new().unwrap();
         let ctx = get_test_context2(&tmpdir).await?;

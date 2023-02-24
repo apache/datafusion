@@ -51,11 +51,11 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::{reverse_sort_options, DataFusionError};
 use datafusion_physical_expr::utils::{ordering_satisfy, ordering_satisfy_concrete};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use futures::StreamExt;
 use hashbrown::HashSet;
 use itertools::{concat, izip};
 use std::iter::zip;
 use std::sync::Arc;
-use futures::StreamExt;
 
 /// This rule inspects `SortExec`'s in the given physical plan and removes the
 /// ones it can prove unnecessary.
@@ -581,8 +581,10 @@ pub fn get_order_by_indices(
 ) -> Result<Vec<usize>> {
     let mut result = vec![];
     for item in to_search {
-        if let Some((idx, _elem)) =
-        searched.iter().enumerate().find(|(idx, e)| e.expr.eq(&item.expr))
+        if let Some((idx, _elem)) = searched
+            .iter()
+            .enumerate()
+            .find(|(idx, e)| e.expr.eq(&item.expr))
         {
             result.push(idx);
         }
@@ -609,12 +611,28 @@ fn is_consecutive_from_zero(in1: &[usize]) -> bool {
     in1.iter().zip(0..in1.len()).all(|(lhs, rhs)| *lhs == rhs)
 }
 
+fn is_consecutive(in1: &[usize]) -> bool {
+    if !in1.is_empty() {
+        in1.iter()
+            .zip(in1[0]..in1[0] + in1.len())
+            .all(|(lhs, rhs)| *lhs == rhs)
+    } else {
+        true
+    }
+}
+
 fn get_set_diff_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
-    let set1: HashSet<_> = in1.iter().cloned().collect();
-    let set2: HashSet<_> = in2.iter().cloned().collect();
-    let diff = &set1-&set2;
-    let mut res: Vec<_> = diff.into_iter().collect();
-    res.sort();
+    let mut res = vec![];
+    for lhs in in1 {
+        if in2.iter().position(|&rhs| *lhs == rhs).is_none() {
+            res.push(*lhs);
+        }
+    }
+    // let set1: HashSet<_> = in1.iter().cloned().collect();
+    // let set2: HashSet<_> = in2.iter().cloned().collect();
+    // let diff = &set1 - &set2;
+    // let mut res: Vec<_> = diff.into_iter().collect();
+    // res.sort();
     res
 }
 
@@ -652,34 +670,50 @@ fn can_skip_ordering_fn(
             let mut partitionby_indices =
                 get_partition_by_indices(&partitionby_keys, &physical_ordering)?;
             partitionby_indices.sort();
-            println!("physical_ordering: {:?}", physical_ordering);
-            println!("partition_keys: {:?}", partitionby_keys);
-            println!("orderby_keys: {:?}", orderby_keys);
-            println!("partitionby_indices:{:?}", partitionby_indices);
-            println!("orderby_indices:{:?}", orderby_indices);
             let merged_indices =
                 get_sorted_merged_indices(&partitionby_indices, &orderby_indices);
-            println!("merged_indices: {:?}", merged_indices);
-            let is_consecutive = is_consecutive_from_zero(&merged_indices);
+            let is_merge_consecutive = is_consecutive_from_zero(&merged_indices);
             let all_partition = merged_indices == partitionby_indices;
             let contains_all_orderbys = orderby_indices.len() == orderby_keys.len();
-            let only_orderby_indices = get_set_diff_indices(&orderby_indices, &partitionby_indices);
-            let input_orderby_columns = get_at_indices(physical_ordering, &only_orderby_indices)?;
-            let expected_orderby_columns = get_at_indices(orderby_keys, &find_match_indices(&only_orderby_indices, &orderby_indices)?)?;
-            println!("input_orderby_columns   :{:?}", input_orderby_columns);
-            println!("expected_orderby_columns:{:?}", expected_orderby_columns);
-            let is_same_ordering = input_orderby_columns.iter().zip(&expected_orderby_columns).all(|(lhs, rhs)| lhs.options==rhs.options);
-            let should_reverse = input_orderby_columns.iter().zip(&expected_orderby_columns).all(|(lhs, rhs)| lhs.options==reverse_sort_options(rhs.options));
-            let is_aligned= is_same_ordering || should_reverse;
-            println!("is_same_ordering: {:?}, is_reversed_ordering: {:?}, is_aligned: {:?}", is_same_ordering, should_reverse, is_aligned);
-            let streamable = (is_consecutive
-                || (all_partition && merged_indices[0] == 0) && contains_all_orderbys && is_aligned);
+            let only_orderby_indices =
+                get_set_diff_indices(&orderby_indices, &partitionby_indices);
+            let is_orderby_diff_consecutive = is_consecutive(&only_orderby_indices);
+            println!(
+                "only_orderby_indices:{:?}, is_orderby_diff_consecutive:{:?}",
+                only_orderby_indices, is_orderby_diff_consecutive
+            );
+            let input_orderby_columns =
+                get_at_indices(physical_ordering, &only_orderby_indices)?;
+            let expected_orderby_columns = get_at_indices(
+                orderby_keys,
+                &find_match_indices(&only_orderby_indices, &orderby_indices)?,
+            )?;
+            let is_same_ordering = input_orderby_columns
+                .iter()
+                .zip(&expected_orderby_columns)
+                .all(|(lhs, rhs)| lhs.options == rhs.options);
+            let should_reverse = input_orderby_columns
+                .iter()
+                .zip(&expected_orderby_columns)
+                .all(|(lhs, rhs)| lhs.options == reverse_sort_options(rhs.options));
+            let is_aligned = is_same_ordering || should_reverse;
+            // let res = can_skip_sort(&vec![], &expected_orderby_columns, &input_orderby_columns)
+            let streamable = (is_merge_consecutive
+                || (all_partition && merged_indices[0] == 0))
+                && contains_all_orderbys
+                && is_aligned
+                && is_orderby_diff_consecutive;
             let partition_by_consecutive = is_consecutive_from_zero(&partitionby_indices);
-            let is_first_partition_by = partitionby_indices
+            let mut is_first_partition_by = partitionby_indices
                 .get(0)
                 .map(|elem| *elem == 0)
-                .unwrap_or(false);
-            let mode = if is_first_partition_by && partition_by_consecutive {
+                .unwrap_or(true);
+            let contains_all_partition_bys =
+                partitionby_indices.len() == partitionby_keys.len();
+            let mode = if is_first_partition_by
+                && partition_by_consecutive
+                && contains_all_partition_bys
+            {
                 PartitionSearchMode::Sorted
             } else if is_first_partition_by {
                 println!("should have been Partially Sorted");
@@ -688,7 +722,25 @@ fn can_skip_ordering_fn(
             } else {
                 PartitionSearchMode::Linear
             };
-            println!("is_consecutive:{:?}, all_partition: {:?}, contains_all_orderbys:{:?}, streamable: {:?}, partition_by_consecutive:{:?}, is_first_partition_by:{:?}, mode:{:?}", is_consecutive, all_partition, contains_all_orderbys, streamable, partition_by_consecutive, is_first_partition_by, mode);
+
+            println!("physical_ordering: {:?}", physical_ordering);
+            println!("partition_keys: {:?}", partitionby_keys);
+            println!("orderby_keys: {:?}", orderby_keys);
+            println!("partitionby_indices:{:?}", partitionby_indices);
+            println!("orderby_indices:{:?}", orderby_indices);
+            println!("merged_indices: {:?}", merged_indices);
+            println!("input_orderby_columns   :{:?}", input_orderby_columns);
+            println!("expected_orderby_columns:{:?}", expected_orderby_columns);
+            println!(
+                "is_same_ordering: {:?}, is_reversed_ordering: {:?}, is_aligned: {:?}",
+                is_same_ordering, should_reverse, is_aligned
+            );
+            println!(
+                "contains_all_partition_bys:{:?}, contains_all_orderbys:{:?}",
+                contains_all_partition_bys, contains_all_orderbys
+            );
+            println!("is_consecutive:{:?}, all_partition: {:?}, streamable: {:?}, partition_by_consecutive:{:?}, is_first_partition_by:{:?}, mode:{:?}", is_merge_consecutive, all_partition, streamable, partition_by_consecutive, is_first_partition_by, mode);
+
             // let (can_skip_sorting, should_reverse) = can_skip_sort(
             //     partitionby_keys,
             //     required_ordering,
@@ -699,7 +751,7 @@ fn can_skip_ordering_fn(
                 return Ok(None);
             }
             if let Some((first_should_reverse, first_mode)) = res {
-                if first_should_reverse != should_reverse || first_mode!= mode {
+                if first_should_reverse != should_reverse || first_mode != mode {
                     return Ok(None);
                 }
             } else {
@@ -741,15 +793,15 @@ fn analyze_window_sort_removal(
         ));
     };
 
-    let (should_reverse, partition_search_mode) = if let Some((should_reverse, partition_search_mode)) = can_skip_ordering_fn(
+    let (should_reverse, partition_search_mode) = if let Some(res) = can_skip_ordering_fn(
         sort_tree,
         window_expr[0].partition_by(),
         &orderby_sort_keys,
-    )?{
-        (should_reverse, partition_search_mode)
+    )? {
+        res
     } else {
         // cannot skip sort
-        return Ok(None)
+        return Ok(None);
     };
     println!("partition_search mode:{:?}", partition_search_mode);
     let new_window_expr = if should_reverse {
@@ -1143,8 +1195,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_set_diff_indices() -> Result<()> {
-        assert_eq!(get_set_diff_indices(&vec![0, 3, 4], &vec![1, 2]), vec![0, 3, 4]);
-        assert_eq!(get_set_diff_indices(&vec![0, 3, 4], &vec![1, 2, 4]), vec![0, 3]);
+        assert_eq!(
+            get_set_diff_indices(&vec![0, 3, 4], &vec![1, 2]),
+            vec![0, 3, 4]
+        );
+        assert_eq!(
+            get_set_diff_indices(&vec![0, 3, 4], &vec![1, 2, 4]),
+            vec![0, 3]
+        );
         Ok(())
     }
 
