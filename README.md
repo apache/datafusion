@@ -57,7 +57,7 @@ DataFusion can be used without modification as an embedded SQL
 engine or can be customized and used as a foundation for
 building new systems. Here are some examples of systems built using DataFusion:
 
-- Specialized Analytical Database systems such as [CeresDB] and more general spark like system such a [Ballista].
+- Specialized Analytical Database systems such as [CeresDB] and more general Apache Spark like system such a [Ballista].
 - New query language engines such as [prql-query] and accelerators such as [VegaFusion]
 - Research platform for new Database Systems, such as [Flock]
 - SQL support to another library, such as [dask sql]
