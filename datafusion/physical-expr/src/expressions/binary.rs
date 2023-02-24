@@ -118,7 +118,34 @@ impl BinaryExpr {
 
 impl std::fmt::Display for BinaryExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{} {} {}", self.left, self.op, self.right)
+        // Put parentheses around child binary expressions so that we can see the difference
+        // between `(a OR b) AND c` and `a OR (b AND c)`. We only insert parentheses when needed,
+        // based on operator precedence. For example, `(a AND b) OR c` and `a AND b OR c` are
+        // equivalent and the parentheses are not necessary.
+
+        fn write_child(
+            f: &mut std::fmt::Formatter,
+            expr: &dyn PhysicalExpr,
+            precedence: u8,
+        ) -> std::fmt::Result {
+            if let Some(child) = expr.as_any().downcast_ref::<BinaryExpr>() {
+                let p = child.op.precedence();
+                if p == 0 || p < precedence {
+                    write!(f, "({child})")?;
+                } else {
+                    write!(f, "{child}")?;
+                }
+            } else {
+                write!(f, "{expr}")?;
+            }
+
+            Ok(())
+        }
+
+        let precedence = self.op.precedence();
+        write_child(f, self.left.as_ref(), precedence)?;
+        write!(f, " {} ", self.op)?;
+        write_child(f, self.right.as_ref(), precedence)
     }
 }
 
@@ -4248,5 +4275,68 @@ mod tests {
         assert_eq!(predicate_boundaries.selectivity, Some(0.5));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_display_and_or_combo() {
+        let expr = BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                lit(ScalarValue::from(1)),
+                Operator::And,
+                lit(ScalarValue::from(2)),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                lit(ScalarValue::from(3)),
+                Operator::And,
+                lit(ScalarValue::from(4)),
+            )),
+        );
+        assert_eq!(expr.to_string(), "1 AND 2 AND 3 AND 4");
+
+        let expr = BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                lit(ScalarValue::from(1)),
+                Operator::Or,
+                lit(ScalarValue::from(2)),
+            )),
+            Operator::Or,
+            Arc::new(BinaryExpr::new(
+                lit(ScalarValue::from(3)),
+                Operator::Or,
+                lit(ScalarValue::from(4)),
+            )),
+        );
+        assert_eq!(expr.to_string(), "1 OR 2 OR 3 OR 4");
+
+        let expr = BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                lit(ScalarValue::from(1)),
+                Operator::And,
+                lit(ScalarValue::from(2)),
+            )),
+            Operator::Or,
+            Arc::new(BinaryExpr::new(
+                lit(ScalarValue::from(3)),
+                Operator::And,
+                lit(ScalarValue::from(4)),
+            )),
+        );
+        assert_eq!(expr.to_string(), "1 AND 2 OR 3 AND 4");
+
+        let expr = BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                lit(ScalarValue::from(1)),
+                Operator::Or,
+                lit(ScalarValue::from(2)),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                lit(ScalarValue::from(3)),
+                Operator::Or,
+                lit(ScalarValue::from(4)),
+            )),
+        );
+        assert_eq!(expr.to_string(), "(1 OR 2) AND (3 OR 4)");
     }
 }
