@@ -24,7 +24,7 @@ mod csv;
 mod delimited_stream;
 mod file_stream;
 mod json;
-mod parquet;
+pub mod parquet;
 
 pub(crate) use self::csv::plan_to_csv;
 pub use self::csv::CsvExec;
