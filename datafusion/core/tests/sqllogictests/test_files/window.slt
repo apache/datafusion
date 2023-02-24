@@ -542,6 +542,25 @@ LIMIT 5
 260620 781 63
 260620 781 63
 
+# async fn window_frame_large_range
+# Range offset 10000 is too big for Int8 (i.e. the type of c3).
+# In this case, we should be able to still produce correct results.
+# See the issue: https://github.com/apache/arrow-datafusion/issues/5346
+# below over clause is equivalent to OVER(ORDER BY c3 DESC RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+# in terms of behaviour.
+query I
+SELECT
+SUM(c3) OVER(ORDER BY c3 DESC RANGE BETWEEN 10000 PRECEDING AND 10000 FOLLOWING) as summation1
+FROM aggregate_test_100
+ORDER BY c9
+LIMIT 5
+----
+781
+781
+781
+781
+781
+
 # async fn window_frame_order_by_asc_desc_large
 query I
 SELECT
