@@ -152,7 +152,7 @@ impl FileCompressionType {
                     .map_err(err_converter),
             ),
             #[cfg(not(feature = "compression"))]
-            GZIP | BZIP2 | XZ => {
+            GZIP | BZIP2 | XZ | ZSTD => {
                 return Err(DataFusionError::NotImplemented(
                     "Compression feature is not enabled".to_owned(),
                 ))
