@@ -46,6 +46,8 @@ impl OptimizerRule for EliminateProjection {
                     | LogicalPlan::CrossJoin(_)
                     | LogicalPlan::Union(_)
                     | LogicalPlan::Filter(_)
+                    | LogicalPlan::TableScan(_)
+                    | LogicalPlan::SubqueryAlias(_)
                     | LogicalPlan::Sort(_) => {
                         if can_eliminate(projection, child_plan.schema()) {
                             Ok(Some(child_plan.clone()))
