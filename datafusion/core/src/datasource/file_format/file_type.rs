@@ -179,7 +179,7 @@ impl FileCompressionType {
                 Err(e) => return Err(DataFusionError::External(Box::new(e))),
             },
             #[cfg(not(feature = "compression"))]
-            GZIP | BZIP2 | XZ => {
+            GZIP | BZIP2 | XZ | ZSTD => {
                 return Err(DataFusionError::NotImplemented(
                     "Compression feature is not enabled".to_owned(),
                 ))
