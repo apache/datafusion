@@ -49,11 +49,14 @@ impl OptimizerRule for InlineTableScan {
                 source,
                 table_name,
                 filters,
+                projection,
                 ..
             }) if filters.is_empty() => {
                 if let Some(sub_plan) = source.get_logical_plan() {
+                    let projection_exprs =
+                        generate_projection_expr(projection, sub_plan)?;
                     let plan = LogicalPlanBuilder::from(sub_plan.clone())
-                        .project(vec![Expr::Wildcard])?
+                        .project(projection_exprs)?
                         .alias(table_name)?;
                     Ok(Some(plan.build()?))
                 } else {
@@ -71,6 +74,23 @@ impl OptimizerRule for InlineTableScan {
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::BottomUp)
     }
+}
+
+fn generate_projection_expr(
+    projection: &Option<Vec<usize>>,
+    sub_plan: &LogicalPlan,
+) -> Result<Vec<Expr>> {
+    let mut exprs = vec![];
+    if let Some(projection) = projection {
+        for i in projection {
+            exprs.push(Expr::Column(
+                sub_plan.schema().fields()[*i].qualified_column(),
+            ));
+        }
+    } else {
+        exprs.push(Expr::Wildcard);
+    }
+    Ok(exprs)
 }
 
 #[cfg(test)]
@@ -91,7 +111,10 @@ mod tests {
         }
 
         fn schema(&self) -> arrow::datatypes::SchemaRef {
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]))
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int64, false),
+                Field::new("b", DataType::Int64, false),
+            ]))
         }
 
         fn supports_filter_pushdown(
@@ -150,8 +173,24 @@ mod tests {
         let plan = scan.filter(col("x.a").eq(lit(1)))?.build()?;
         let expected = "Filter: x.a = Int32(1)\
         \n  SubqueryAlias: x\
-        \n    Projection: y.a\
+        \n    Projection: y.a, y.b\
         \n      TableScan: y";
+
+        assert_optimized_plan_eq(Arc::new(InlineTableScan::new()), &plan, expected)
+    }
+
+    #[test]
+    fn inline_table_scan_with_projection() -> datafusion_common::Result<()> {
+        let scan = LogicalPlanBuilder::scan(
+            "x".to_string(),
+            Arc::new(CustomSource::new()),
+            Some(vec![0]),
+        )?;
+
+        let plan = scan.build()?;
+        let expected = "SubqueryAlias: x\
+        \n  Projection: y.a\
+        \n    TableScan: y";
 
         assert_optimized_plan_eq(Arc::new(InlineTableScan::new()), &plan, expected)
     }

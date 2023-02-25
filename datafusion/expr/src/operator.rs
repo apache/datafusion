@@ -142,6 +142,35 @@ impl Operator {
             | Operator::StringConcat => None,
         }
     }
+
+    /// Get the operator precedence
+    /// use <https://www.postgresql.org/docs/7.0/operators.htm#AEN2026> as a reference
+    pub fn precedence(&self) -> u8 {
+        match self {
+            Operator::Or => 5,
+            Operator::And => 10,
+            Operator::NotEq
+            | Operator::Eq
+            | Operator::Lt
+            | Operator::LtEq
+            | Operator::Gt
+            | Operator::GtEq => 20,
+            Operator::Plus | Operator::Minus => 30,
+            Operator::Multiply | Operator::Divide | Operator::Modulo => 40,
+            Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom
+            | Operator::RegexMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotIMatch
+            | Operator::BitwiseAnd
+            | Operator::BitwiseOr
+            | Operator::BitwiseShiftLeft
+            | Operator::BitwiseShiftRight
+            | Operator::BitwiseXor
+            | Operator::StringConcat => 0,
+        }
+    }
 }
 
 impl fmt::Display for Operator {

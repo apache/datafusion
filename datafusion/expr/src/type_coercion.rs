@@ -33,7 +33,7 @@
 
 use arrow::datatypes::DataType;
 
-/// Determine if a DataType is signed numeric or not
+/// Determine whether the given data type `dt` represents unsigned numeric values.
 pub fn is_signed_numeric(dt: &DataType) -> bool {
     matches!(
         dt,
@@ -48,12 +48,12 @@ pub fn is_signed_numeric(dt: &DataType) -> bool {
     )
 }
 
-// Determine if a DataType is Null or not
+/// Determine whether the given data type `dt` is `Null`.
 pub fn is_null(dt: &DataType) -> bool {
     *dt == DataType::Null
 }
 
-/// Determine if a DataType is numeric or not
+/// Determine whether the given data type `dt` represents numeric values.
 pub fn is_numeric(dt: &DataType) -> bool {
     is_signed_numeric(dt)
         || matches!(
@@ -62,17 +62,18 @@ pub fn is_numeric(dt: &DataType) -> bool {
         )
 }
 
-/// Determine if a DataType is Timestamp or not
+/// Determine whether the given data type `dt` is a `Timestamp`.
 pub fn is_timestamp(dt: &DataType) -> bool {
     matches!(dt, DataType::Timestamp(_, _))
 }
 
-/// Determine if a DataType is Date or not
+/// Determine whether the given data type `dt` is a `Date`.
 pub fn is_date(dt: &DataType) -> bool {
     matches!(dt, DataType::Date32 | DataType::Date64)
 }
 
-pub fn is_uft8(dt: &DataType) -> bool {
+/// Determine whether the given data type `dt` is a `Utf8`.
+pub fn is_utf8(dt: &DataType) -> bool {
     matches!(dt, DataType::Utf8)
 }
 

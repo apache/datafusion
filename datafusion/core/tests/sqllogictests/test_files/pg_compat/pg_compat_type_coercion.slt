@@ -15,108 +15,37 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query ??
+query BB
 select true and true, false and false;
 ----
 true false
 
 
-onlyif DataFusion
-query ??
-select arrow_typeof(true and true), arrow_typeof(false and false);
-----
-Boolean Boolean
-
-
-onlyif postgres
-query ??
-select pg_typeof(true and true), pg_typeof(false and false);
-----
-bool bool
-
-
-query ??
+query BB
 select true or true, false or false;
 ----
 true false
 
 
-onlyif DataFusion
-query ??
-select arrow_typeof(true or true), arrow_typeof(false or false);
-----
-Boolean Boolean
-
-
-onlyif postgres
-query ??
-select pg_typeof(true or true), pg_typeof(false or false);
-----
-bool bool
-
-
-query ??
+query BB
 select false and true, true and false;
 ----
 false false
 
 
-onlyif DataFusion
-query ??
-select arrow_typeof(false and true), arrow_typeof(true and false);
-----
-Boolean Boolean
-
-
-onlyif postgres
-query ??
-select pg_typeof(false and true), pg_typeof(true and false);
-----
-bool bool
-
-
-query ??
+query BB
 select false or true, true or false;
 ----
 true true
 
 
-onlyif DataFusion
-query ??
-select arrow_typeof(false or true), arrow_typeof(true or false);
-----
-Boolean Boolean
-
-
-onlyif postgres
-query ??
-select pg_typeof(false or true), pg_typeof(true or false);
-----
-bool bool
-
-
-query ??
+query BB
 select null and null, null or null;
 ----
 NULL NULL
 
 
-onlyif DataFusion
-query ??
-select arrow_typeof(null and null), arrow_typeof(null or null);
-----
-Boolean Boolean
-
-
-onlyif postgres
-query ??
-select pg_typeof(null and null), pg_typeof(null or null);
-----
-bool bool
-
-
-onlyif postgres
-query ????
+query BBBB
 select true and null,
        false and null,
        null and true,
@@ -125,51 +54,10 @@ select true and null,
 NULL false NULL false
 
 
-onlyif DataFusion
-query ????
-select arrow_typeof(true and null),
-       arrow_typeof(false and null),
-       arrow_typeof(null and true),
-       arrow_typeof(null and false);
-----
-Boolean Boolean Boolean Boolean
-
-
-onlyif postgres
-query ????
-select pg_typeof(true and null),
-       pg_typeof(false and null),
-       pg_typeof(null and true),
-       pg_typeof(null and false);
-----
-bool bool bool bool
-
-
-onlyif postgres
-query ????
+query BBBB
 select true or null,
        false or null,
        null or true,
        null or false;
 ----
 true NULL true NULL
-
-
-onlyif DataFusion
-query ????
-select arrow_typeof(true or null),
-       arrow_typeof(false or null),
-       arrow_typeof(null or true),
-       arrow_typeof(null or false);
-----
-Boolean Boolean Boolean Boolean
-
-
-onlyif postgres
-query ????
-select pg_typeof(true or null),
-       pg_typeof(false or null),
-       pg_typeof(null or true),
-       pg_typeof(null or false);
-----
-bool bool bool bool

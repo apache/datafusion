@@ -608,7 +608,12 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 } else {
                     Some(sort.fetch as usize)
                 };
-                Ok(Arc::new(SortExec::try_new(exprs, input, fetch)?))
+                Ok(Arc::new(SortExec::new_with_partitioning(
+                    exprs,
+                    input,
+                    sort.preserve_partitioning,
+                    fetch,
+                )))
             }
             PhysicalPlanType::SortPreservingMerge(sort) => {
                 let input: Arc<dyn ExecutionPlan> =
@@ -1043,6 +1048,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             Some(n) => n as i64,
                             _ => -1,
                         },
+                        preserve_partitioning: exec.preserve_partitioning(),
                     },
                 ))),
             })
@@ -1212,7 +1218,7 @@ mod roundtrip_tests {
     use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
     use datafusion::physical_expr::ScalarFunctionExpr;
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
-    use datafusion::physical_plan::expressions::like;
+    use datafusion::physical_plan::expressions::{like, GetIndexedFieldExpr};
     use datafusion::physical_plan::functions;
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::physical_plan::projection::ProjectionExec;
@@ -1442,6 +1448,43 @@ mod roundtrip_tests {
     }
 
     #[test]
+    fn roundtrip_sort_preserve_partitioning() -> Result<()> {
+        let field_a = Field::new("a", DataType::Boolean, false);
+        let field_b = Field::new("b", DataType::Int64, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+        let sort_exprs = vec![
+            PhysicalSortExpr {
+                expr: col("a", &schema)?,
+                options: SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            },
+            PhysicalSortExpr {
+                expr: col("b", &schema)?,
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            },
+        ];
+
+        roundtrip_test(Arc::new(SortExec::new_with_partitioning(
+            sort_exprs.clone(),
+            Arc::new(EmptyExec::new(false, schema.clone())),
+            false,
+            None,
+        )))?;
+
+        roundtrip_test(Arc::new(SortExec::new_with_partitioning(
+            sort_exprs,
+            Arc::new(EmptyExec::new(false, schema)),
+            true,
+            None,
+        )))
+    }
+
+    #[test]
     fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         let scan_config = FileScanConfig {
             object_store_url: ObjectStoreUrl::local_filesystem(),
@@ -1583,6 +1626,32 @@ mod roundtrip_tests {
             vec![(like_expr, "result".to_string())],
             input,
         )?);
+        roundtrip_test(plan)
+    }
+
+    #[test]
+    fn roundtrip_get_indexed_field() -> Result<()> {
+        let fields = vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new(
+                "a",
+                DataType::List(Box::new(Field::new("item", DataType::Float64, true))),
+                true,
+            ),
+        ];
+
+        let schema = Schema::new(fields);
+        let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
+
+        let col_a = col("a", &schema)?;
+        let key = ScalarValue::Int64(Some(1));
+        let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(col_a, key));
+
+        let plan = Arc::new(ProjectionExec::try_new(
+            vec![(get_indexed_field_expr, "result".to_string())],
+            input,
+        )?);
+
         roundtrip_test(plan)
     }
 }
