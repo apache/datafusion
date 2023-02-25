@@ -40,7 +40,7 @@ path = "src/lib.rs"
 [features]
 # Used to enable the avro format
 avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
-compression = ["xz2", "bzip2", "flate2", "async-compression"]
+compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions"]
 default = ["crypto_expressions", "regex_expressions", "unicode_expressions", "compression"]
 # Enables support for non-scalar, binary operations on dictionaries
@@ -61,7 +61,7 @@ unicode_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 apache-avro = { version = "0.14", optional = true }
 arrow = { version = "32.0.0", features = ["prettyprint"] }
-async-compression = { version = "0.3.14", features = ["bzip2", "gzip", "xz", "futures-io", "tokio"], optional = true }
+async-compression = { version = "0.3.14", features = ["bzip2", "gzip", "xz", "zstd", "futures-io", "tokio"], optional = true }
 async-trait = "0.1.41"
 bytes = "1.1"
 bzip2 = { version = "0.4.3", optional = true }
@@ -101,6 +101,7 @@ tokio-util = { version = "0.7.4", features = ["io"] }
 url = "2.2"
 uuid = { version = "1.0", features = ["v4"] }
 xz2 = { version = "0.1", optional = true }
+zstd = { version = "0.11", optional = true, default-features = false }
 
 
 [dev-dependencies]

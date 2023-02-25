@@ -1588,7 +1588,7 @@ pub struct CreateExternalTable {
     pub if_not_exists: bool,
     /// SQL used to create the table, if available
     pub definition: Option<String>,
-    /// File compression type (GZIP, BZIP2, XZ)
+    /// File compression type (GZIP, BZIP2, XZ, ZSTD)
     pub file_compression_type: CompressionTypeVariant,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
