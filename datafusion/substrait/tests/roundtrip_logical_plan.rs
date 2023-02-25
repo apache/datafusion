@@ -231,7 +231,8 @@ mod tests {
             \n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int16(1))]]\
             \n    LeftSemi Join: data.a = data2.a\
             \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
-            \n        TableScan: data projection=[a]\
+            \n        Projection: data.a\
+            \n          TableScan: data projection=[a]\
             \n      Projection: data2.a\
             \n        TableScan: data2 projection=[a]",
         )

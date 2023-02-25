@@ -38,6 +38,7 @@ pub mod single_distinct_to_groupby;
 pub mod type_coercion;
 pub mod utils;
 
+pub mod replace_distinct_aggregate;
 pub mod rewrite_disjunctive_predicate;
 #[cfg(test)]
 pub mod test;
