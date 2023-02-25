@@ -72,9 +72,9 @@ pub fn is_date(dt: &DataType) -> bool {
     matches!(dt, DataType::Date32 | DataType::Date64)
 }
 
-/// Determine whether the given data type `dt` is a `Utf8`.
-pub fn is_utf8(dt: &DataType) -> bool {
-    matches!(dt, DataType::Utf8)
+/// Determine whether the given data type `dt` is a `Utf8` or `LargeUtf8`.
+pub fn is_utf8_or_large_utf8(dt: &DataType) -> bool {
+    matches!(dt, DataType::Utf8 | DataType::LargeUtf8)
 }
 
 pub mod aggregates;

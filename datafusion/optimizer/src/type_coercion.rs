@@ -34,7 +34,9 @@ use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_when, get_coerce_type_for_list,
 };
-use datafusion_expr::type_coercion::{is_date, is_numeric, is_timestamp, is_utf8};
+use datafusion_expr::type_coercion::{
+    is_date, is_numeric, is_timestamp, is_utf8_or_large_utf8,
+};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     aggregate_function, function, is_false, is_not_false, is_not_true, is_not_unknown,
@@ -525,7 +527,7 @@ fn coerce_window_frame(
     let target_type = match window_frame.units {
         WindowFrameUnits::Range => {
             if let Some(col_type) = current_types.first() {
-                if is_numeric(col_type) || is_utf8(col_type) {
+                if is_numeric(col_type) || is_utf8_or_large_utf8(col_type) {
                     col_type
                 } else if is_timestamp(col_type) || is_date(col_type) {
                     &DataType::Interval(IntervalUnit::MonthDayNano)
