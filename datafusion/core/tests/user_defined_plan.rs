@@ -218,8 +218,7 @@ async fn topk_plan() -> Result<()> {
 
     let mut expected = vec![
         "| logical_plan after topk                               | TopK: k=3                                                                     |",
-        "|                                                       |   Projection: sales.customer_id, sales.revenue                              |",
-        "|                                                       |     TableScan: sales projection=[customer_id,revenue]                                  |",
+        "|                                                       |   TableScan: sales projection=[customer_id,revenue]                                  |",
     ].join("\n");
 
     let explain_query = format!("EXPLAIN VERBOSE {QUERY}");

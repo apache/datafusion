@@ -140,18 +140,16 @@ async fn avro_explain() {
     let expected = vec![
         vec![
             "logical_plan",
-            "Projection: COUNT(UInt8(1))\
-            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-            \n    TableScan: alltypes_plain projection=[id]",
+            "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+            \n  TableScan: alltypes_plain projection=[id]",
         ],
         vec![
             "physical_plan",
-            "ProjectionExec: expr=[COUNT(UInt8(1))@0 as COUNT(UInt8(1))]\
-            \n  AggregateExec: mode=Final, gby=[], aggr=[COUNT(UInt8(1))]\
-            \n    CoalescePartitionsExec\
-            \n      AggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]\
-            \n        RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1\
-            \n          AvroExec: files={1 group: [[ARROW_TEST_DATA/avro/alltypes_plain.avro]]}, limit=None\
+            "AggregateExec: mode=Final, gby=[], aggr=[COUNT(UInt8(1))]\
+            \n  CoalescePartitionsExec\
+            \n    AggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]\
+            \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1\
+            \n        AvroExec: files={1 group: [[ARROW_TEST_DATA/avro/alltypes_plain.avro]]}, limit=None\
             \n",
         ],
     ];

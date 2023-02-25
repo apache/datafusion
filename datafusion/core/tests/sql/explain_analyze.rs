@@ -757,10 +757,9 @@ async fn explain_logical_plan_only() {
     let expected = vec![
         vec![
             "logical_plan",
-            "Projection: COUNT(UInt8(1))\
-            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-            \n    SubqueryAlias: t\
-            \n      Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))",
+            "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+            \n  SubqueryAlias: t\
+            \n    Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))",
         ]];
     assert_eq!(expected, actual);
 }
@@ -776,9 +775,8 @@ async fn explain_physical_plan_only() {
 
     let expected = vec![vec![
         "physical_plan",
-        "ProjectionExec: expr=[COUNT(UInt8(1))@0 as COUNT(UInt8(1))]\
-        \n  ProjectionExec: expr=[2 as COUNT(UInt8(1))]\
-        \n    EmptyExec: produce_one_row=true\
+        "ProjectionExec: expr=[2 as COUNT(UInt8(1))]\
+        \n  EmptyExec: produce_one_row=true\
         \n",
     ]];
     assert_eq!(expected, actual);
