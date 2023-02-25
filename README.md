@@ -145,6 +145,7 @@ Here are some of the projects known to use DataFusion:
 - [Synnada](https://synnada.ai/) Streaming-first framework for data products
 - [Tensorbase](https://github.com/tensorbase/tensorbase)
 - [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
+- [ZincObserve](https://github.com/zinclabs/zincobserve) Distributed cloud native observability platform
 
 [ballista]: https://github.com/apache/arrow-ballista
 [blaze]: https://github.com/blaze-init/blaze
@@ -166,7 +167,8 @@ Here are some of the projects known to use DataFusion:
 [seafowl]: https://github.com/splitgraph/seafowl
 [synnada]: https://synnada.ai/
 [tensorbase]: https://github.com/tensorbase/tensorbase
-[vegafusion]: https://vegafusion.io/ "if you know of another project, please submit a PR to add a link!"
+[vegafusion]: https://vegafusion.io/
+[zincobserve]: https://github.com/zinclabs/zincobserve "if you know of another project, please submit a PR to add a link!"
 
 ## Examples
 
