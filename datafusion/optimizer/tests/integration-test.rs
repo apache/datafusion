@@ -325,7 +325,7 @@ fn test_same_name_but_not_ambiguous() {
     let sql = "SELECT t1.col_int32 AS col_int32 FROM test t1 intersect SELECT col_int32 FROM test t2";
     let plan = test_sql(sql).unwrap();
     let expected = "LeftSemi Join: col_int32 = t2.col_int32\
-    \n  Distinct:\
+    \n  Aggregate: groupBy=[[col_int32]], aggr=[[]]\
     \n    Projection: t1.col_int32 AS col_int32\
     \n      SubqueryAlias: t1\
     \n        TableScan: test projection=[col_int32]\
