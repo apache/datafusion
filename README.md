@@ -167,7 +167,7 @@ Here are some of the projects known to use DataFusion:
 [seafowl]: https://github.com/splitgraph/seafowl
 [synnada]: https://synnada.ai/
 [tensorbase]: https://github.com/tensorbase/tensorbase
-[vegafusion]: https://vegafusion.io/ 
+[vegafusion]: https://vegafusion.io/
 [zincobserve]: https://github.com/zinclabs/zincobserve "if you know of another project, please submit a PR to add a link!"
 
 ## Examples
