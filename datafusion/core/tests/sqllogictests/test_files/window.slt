@@ -378,11 +378,6 @@ SortPreservingMergeExec: [b@0 ASC NULLS LAST]
                         EmptyExec: produce_one_row=true
 
 
-
-
-
-
-
 # check actual result
 
 query TII
@@ -411,12 +406,12 @@ bb 7 2
 
 
 # async fn window_in_expression
-query I
+query I rowsort
 select 1 - lag(amount, 1) over (order by idx) as column1 from (values ('a', 1, 100), ('a', 2, 150)) as t (col1, idx, amount)
 ---
 ----
-NULL
 -99
+NULL
 
 
 # async fn window_with_agg_in_expression
