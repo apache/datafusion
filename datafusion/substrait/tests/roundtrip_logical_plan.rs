@@ -107,7 +107,7 @@ mod tests {
     #[tokio::test]
     async fn simple_distinct() -> Result<()> {
         test_alias(
-            "SELECT * FROM (SELECT distinct a FROM data)", // `SELECT *` is used to add `projection` at the root
+            "SELECT distinct a FROM data",
             "SELECT a FROM data GROUP BY a",
         )
         .await
@@ -116,7 +116,7 @@ mod tests {
     #[tokio::test]
     async fn select_distinct_two_fields() -> Result<()> {
         test_alias(
-            "SELECT * FROM (SELECT distinct a, b FROM data)", // `SELECT *` is used to add `projection` at the root
+            "SELECT distinct a, b FROM data",
             "SELECT a, b FROM data GROUP BY a, b",
         )
         .await

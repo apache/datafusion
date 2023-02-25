@@ -1600,11 +1600,12 @@ async fn reduce_left_join_3() -> Result<()> {
             "  Left Join: t3.t1_int = t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
             "    SubqueryAlias: t3 [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
             "      Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "        Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_int:UInt32;N]",
+            "        Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N]",
             "          Filter: t1.t1_id < UInt32(100) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
             "            TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "          Filter: t2.t2_int < UInt32(3) AND t2.t2_id < UInt32(100) [t2_id:UInt32;N, t2_int:UInt32;N]",
-            "            TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
+            "          Projection: t2.t2_id [t2_id:UInt32;N]",
+            "            Filter: t2.t2_int < UInt32(3) AND t2.t2_id < UInt32(100) [t2_id:UInt32;N, t2_int:UInt32;N]",
+            "              TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
             "    TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         ];
         let formatted = plan.display_indent_schema().to_string();
@@ -2104,8 +2105,9 @@ async fn left_semi_join_pushdown() -> Result<()> {
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  LeftSemi Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N]",
         "    TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
-        "    Filter: t2.t2_int > UInt32(1) [t2_id:UInt32;N, t2_int:UInt32;N]",
-        "      TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
+        "    Projection: t2.t2_id [t2_id:UInt32;N]",
+        "      Filter: t2.t2_int > UInt32(1) [t2_id:UInt32;N, t2_int:UInt32;N]",
+        "        TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -3268,13 +3270,13 @@ async fn right_as_inner_table_nested_loop_join() -> Result<()> {
 
     // right is single partition side, so it will be visited many times.
     let expected = vec![
-        "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@1 as t2_id]",
-        "  NestedLoopJoinExec: join_type=Inner, filter=BinaryExpr { left: Column { name: \"t1_id\", index: 0 }, op: Gt, right: Column { name: \"t2_id\", index: 1 } }",
-        "    CoalesceBatchesExec: target_batch_size=4096",
-        "      FilterExec: t1_id@0 > 10",
-        "        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
-        "          MemoryExec: partitions=1, partition_sizes=[1]",
-        "    CoalescePartitionsExec",
+        "NestedLoopJoinExec: join_type=Inner, filter=BinaryExpr { left: Column { name: \"t1_id\", index: 0 }, op: Gt, right: Column { name: \"t2_id\", index: 1 } }",
+        "  CoalesceBatchesExec: target_batch_size=4096",
+        "    FilterExec: t1_id@0 > 10",
+        "      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+        "        MemoryExec: partitions=1, partition_sizes=[1]",
+        "  CoalescePartitionsExec",
+        "    ProjectionExec: expr=[t2_id@0 as t2_id]",
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        FilterExec: t2_int@1 > 1",
         "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
