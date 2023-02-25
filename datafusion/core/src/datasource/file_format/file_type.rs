@@ -98,7 +98,7 @@ impl FileCompressionType {
     /// Xz-ed file (liblzma)
     pub const XZ: Self = Self { variant: XZ };
 
-    /// Xz-ed file (liblzma)
+    /// Zstd-ed file
     pub const ZSTD: Self = Self { variant: ZSTD };
 
     /// Uncompressed file
