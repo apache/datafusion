@@ -451,9 +451,9 @@ impl LogicalPlanBuilder {
             .map(|col| col.flat_name())
             .collect::<String>();
 
-        return Err(DataFusionError::Plan(format!(
+        Err(DataFusionError::Plan(format!(
             "For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list",
-        )));
+        )))
     }
 
     /// Apply a sort

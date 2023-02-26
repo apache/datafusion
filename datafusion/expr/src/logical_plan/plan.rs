@@ -962,10 +962,13 @@ impl LogicalPlan {
                             let mut full_filter = vec![];
                             let mut partial_filter = vec![];
                             let mut unsupported_filters = vec![];
+                            let filters: Vec<&Expr> = filters.iter().collect();
 
-                            filters.iter().for_each(|x| {
-                                if let Ok(t) = source.supports_filter_pushdown(x) {
-                                    match t {
+                            if let Ok(results) =
+                                source.supports_filters_pushdown(&filters)
+                            {
+                                filters.iter().zip(results.iter()).for_each(
+                                    |(x, res)| match res {
                                         TableProviderFilterPushDown::Exact => {
                                             full_filter.push(x)
                                         }
@@ -975,9 +978,9 @@ impl LogicalPlan {
                                         TableProviderFilterPushDown::Unsupported => {
                                             unsupported_filters.push(x)
                                         }
-                                    }
-                                }
-                            });
+                                    },
+                                );
+                            }
 
                             if !full_filter.is_empty() {
                                 write!(f, ", full_filters={full_filter:?}")?;
