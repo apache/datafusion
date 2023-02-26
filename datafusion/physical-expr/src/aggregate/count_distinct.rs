@@ -151,7 +151,7 @@ impl DistinctCountAccumulator {
     }
 
     // calculating the size approximately, taking first batch size * number of batches
-    // such approach has some inaccuracy for variable length values, like strings.
+    // approx_size has some inaccuracy for variable length values, like strings.
     fn approx_size(&self) -> usize {
         std::mem::size_of_val(self)
             + (std::mem::size_of::<DistinctScalarValues>() * self.values.capacity())
@@ -166,6 +166,7 @@ impl DistinctCountAccumulator {
                 .unwrap_or(0)
     }
 
+    // calculates the size as accurate as possible, call to this method is expensive
     fn full_size(&self) -> usize {
         std::mem::size_of_val(self)
             + (std::mem::size_of::<DistinctScalarValues>() * self.values.capacity())
