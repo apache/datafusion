@@ -686,14 +686,15 @@ async fn test_remove_unnecessary_sort_in_sub_query() -> Result<()> {
             "    CoalescePartitionsExec",
             "      AggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=8",
-            "          AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[]",
-            "            CoalesceBatchesExec: target_batch_size=4096",
-            "              RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
-            "                AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]",
-            "                  ProjectionExec: expr=[c1@0 as c1]",
-            "                    CoalesceBatchesExec: target_batch_size=4096",
-            "                      FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
-            "                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "          ProjectionExec: expr=[c1@0 as c1]",
+            "            AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[COUNT(UInt8(1))]",
+            "              CoalesceBatchesExec: target_batch_size=4096",
+            "                RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "                  AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[COUNT(UInt8(1))]",
+            "                    ProjectionExec: expr=[c1@0 as c1]",
+            "                      CoalesceBatchesExec: target_batch_size=4096",
+            "                        FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
+            "                          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
         ]
     };
 

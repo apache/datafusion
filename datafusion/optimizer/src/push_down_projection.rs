@@ -23,9 +23,11 @@ use crate::optimizer::ApplyOrder;
 use crate::push_down_filter::replace_cols_by_name;
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::error::Result as ArrowResult;
+use datafusion_common::ScalarValue::UInt8;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ToDFSchema,
 };
+use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::utils::exprlist_to_fields;
 use datafusion_expr::{
     logical_plan::{Aggregate, LogicalPlan, Projection, TableScan, Union},
@@ -262,7 +264,6 @@ impl OptimizerRule for PushDownProjection {
                 generate_plan!(projection_is_empty, plan, new_alias)
             }
             LogicalPlan::Aggregate(agg) => {
-                // remove any aggregate expression that is not required
                 let mut required_columns = HashSet::new();
                 exprlist_to_columns(&projection.expr, &mut required_columns)?;
                 // Gather all columns needed for expressions in this Aggregate
@@ -271,6 +272,21 @@ impl OptimizerRule for PushDownProjection {
                     let column = Column::from_name(e.display_name()?);
                     if required_columns.contains(&column) {
                         new_aggr_expr.push(e.clone());
+                    }
+                }
+
+                // if new_aggr_expr emtpy and aggr is COUNT(UInt8(1)), push it
+                if new_aggr_expr.is_empty() && agg.aggr_expr.len() == 1 {
+                    if let Expr::AggregateFunction(AggregateFunction {
+                        fun, args, ..
+                    }) = &agg.aggr_expr[0]
+                    {
+                        if matches!(fun, datafusion_expr::AggregateFunction::Count)
+                            && args.len() == 1
+                            && args[0] == Expr::Literal(UInt8(Some(1)))
+                        {
+                            new_aggr_expr.push(agg.aggr_expr[0].clone());
+                        }
                     }
                 }
 
