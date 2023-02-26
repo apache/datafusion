@@ -28,7 +28,7 @@ use chrono::Duration;
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::TableProvider;
 use datafusion::from_slice::FromSlice;
-use datafusion::logical_expr::{Aggregate, LogicalPlan, Projection, TableScan};
+use datafusion::logical_expr::{Aggregate, LogicalPlan, TableScan};
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::ExecutionPlanVisitor;
@@ -1588,18 +1588,15 @@ async fn nyc() -> Result<()> {
     let optimized_plan = dataframe.into_optimized_plan().unwrap();
 
     match &optimized_plan {
-        LogicalPlan::Projection(Projection { input, .. }) => match input.as_ref() {
-            LogicalPlan::Aggregate(Aggregate { input, .. }) => match input.as_ref() {
-                LogicalPlan::TableScan(TableScan {
-                    ref projected_schema,
-                    ..
-                }) => {
-                    assert_eq!(2, projected_schema.fields().len());
-                    assert_eq!(projected_schema.field(0).name(), "passenger_count");
-                    assert_eq!(projected_schema.field(1).name(), "fare_amount");
-                }
-                _ => unreachable!(),
-            },
+        LogicalPlan::Aggregate(Aggregate { input, .. }) => match input.as_ref() {
+            LogicalPlan::TableScan(TableScan {
+                ref projected_schema,
+                ..
+            }) => {
+                assert_eq!(2, projected_schema.fields().len());
+                assert_eq!(projected_schema.field(0).name(), "passenger_count");
+                assert_eq!(projected_schema.field(1).name(), "fare_amount");
+            }
             _ => unreachable!(),
         },
         _ => unreachable!(),

@@ -250,7 +250,7 @@ async fn select_with_alias_overwrite() -> Result<()> {
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("t", batch).unwrap();
+    ctx.register_batch("t", batch)?;
 
     let df = ctx
         .table("t")
@@ -502,12 +502,11 @@ async fn right_semi_with_alias_filter() -> Result<()> {
         .select(vec![col("t2.a"), col("t2.b"), col("t2.c")])?;
     let optimized_plan = df.clone().into_optimized_plan()?;
     let expected = vec![
-        "Projection: t2.a, t2.b, t2.c [a:UInt32, b:Utf8, c:Int32]",
-        "  RightSemi Join: t1.a = t2.a [a:UInt32, b:Utf8, c:Int32]",
-        "    Filter: t1.c > Int32(1) [a:UInt32, c:Int32]",
-        "      TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]",
-        "    Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]",
-        "      TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
+        "RightSemi Join: t1.a = t2.a [a:UInt32, b:Utf8, c:Int32]",
+        "  Filter: t1.c > Int32(1) [a:UInt32, c:Int32]",
+        "    TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]",
+        "  Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]",
+        "    TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
     ];
 
     let formatted = optimized_plan.display_indent_schema().to_string();
@@ -547,11 +546,10 @@ async fn right_anti_filter_push_down() -> Result<()> {
         .select(vec![col("t2.a"), col("t2.b"), col("t2.c")])?;
     let optimized_plan = df.clone().into_optimized_plan()?;
     let expected = vec![
-        "Projection: t2.a, t2.b, t2.c [a:UInt32, b:Utf8, c:Int32]",
-        "  RightAnti Join: t1.a = t2.a Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]",
-        "    Filter: t1.c > Int32(1) [a:UInt32, c:Int32]",
-        "      TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]",
-        "    TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
+        "RightAnti Join: t1.a = t2.a Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]",
+        "  Filter: t1.c > Int32(1) [a:UInt32, c:Int32]",
+        "    TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]",
+        "  TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
     ];
 
     let formatted = optimized_plan.display_indent_schema().to_string();

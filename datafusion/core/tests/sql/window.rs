@@ -1741,7 +1741,6 @@ async fn test_window_agg_with_global_limit() -> Result<()> {
             "    AggregateExec: mode=Partial, gby=[], aggr=[ARRAYAGG(aggregate_test_100.c13)]",
             "      GlobalLimitExec: skip=0, fetch=1",
             "        SortExec: fetch=1, expr=[c13@0 ASC NULLS LAST]",
-            "          ProjectionExec: expr=[c13@0 as c13]",
         ]
     };
 
