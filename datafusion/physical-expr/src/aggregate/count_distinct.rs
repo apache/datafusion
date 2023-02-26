@@ -149,6 +149,42 @@ impl DistinctCountAccumulator {
             self.update(&row_values)
         })
     }
+
+    // calculating the size approximately, taking first batch size * number of batches
+    // such approach has some inaccuracy for variable length values, like strings.
+    fn approx_size(&self) -> usize {
+        std::mem::size_of_val(self)
+            + (std::mem::size_of::<DistinctScalarValues>() * self.values.capacity())
+            + self
+                .values
+                .iter()
+                .next()
+                .map(|vals| {
+                    (ScalarValue::size_of_vec(&vals.0) - std::mem::size_of_val(&vals.0))
+                        * self.values.capacity()
+                })
+                .unwrap_or(0)
+    }
+
+    fn full_size(&self) -> usize {
+        std::mem::size_of_val(self)
+            + (std::mem::size_of::<DistinctScalarValues>() * self.values.capacity())
+            + self
+                .values
+                .iter()
+                .map(|vals| {
+                    ScalarValue::size_of_vec(&vals.0) - std::mem::size_of_val(&vals.0)
+                })
+                .sum::<usize>()
+            + (std::mem::size_of::<DataType>() * self.state_data_types.capacity())
+            + self
+                .state_data_types
+                .iter()
+                .map(|dt| dt.size() - std::mem::size_of_val(dt))
+                .sum::<usize>()
+            + self.count_data_type.size()
+            - std::mem::size_of_val(&self.count_data_type)
+    }
 }
 
 impl Accumulator for DistinctCountAccumulator {
@@ -216,19 +252,27 @@ impl Accumulator for DistinctCountAccumulator {
     }
 
     fn size(&self) -> usize {
-        // temporarily calculating the size approximately, taking first batch size * number of batches
-        // such approach has some inaccuracy for variable length values, like strings.
-        std::mem::size_of_val(self)
-            + (std::mem::size_of::<DistinctScalarValues>() * self.values.capacity())
-            + self
-                .values
-                .iter()
-                .next()
-                .map(|vals| {
-                    (ScalarValue::size_of_vec(&vals.0) - std::mem::size_of_val(&vals.0))
-                        * self.values.capacity()
-                })
-                .unwrap_or(0)
+        match &self.count_data_type {
+            DataType::Boolean
+            | DataType::Date32
+            | DataType::Date64
+            | DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Int8
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Null
+            | DataType::Timestamp(_, _)
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::UInt8 => self.approx_size(),
+            _ => self.full_size(),
+        }
     }
 }
 
