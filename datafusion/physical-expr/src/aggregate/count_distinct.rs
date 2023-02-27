@@ -253,26 +253,10 @@ impl Accumulator for DistinctCountAccumulator {
     }
 
     fn size(&self) -> usize {
-        match &self.count_data_type {
-            DataType::Boolean
-            | DataType::Date32
-            | DataType::Date64
-            | DataType::Float16
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Int8
-            | DataType::Time32(_)
-            | DataType::Time64(_)
-            | DataType::Null
-            | DataType::Timestamp(_, _)
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::UInt8 => self.fixed_size(),
-            _ => self.full_size(),
+        if self.count_data_type.is_primitive() {
+            self.fixed_size()
+        } else {
+            self.full_size()
         }
     }
 }
