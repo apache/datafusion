@@ -151,7 +151,7 @@ impl DistinctCountAccumulator {
     }
 
     // calculating the size for fixed length values, taking first batch size * number of batches
-    // This method is faster than .size, however it is not suitable for variable length values like strings or complex types
+    // This method is faster than .full_size(), however it is not suitable for variable length values like strings or complex types
     fn fixed_size(&self) -> usize {
         std::mem::size_of_val(self)
             + (std::mem::size_of::<DistinctScalarValues>() * self.values.capacity())
