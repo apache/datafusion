@@ -762,12 +762,13 @@ fn can_skip_ordering_fn(
                 let first_n = calc_first_n(&partitionby_indices);
                 assert_eq!(first_n, partitionby_keys.len());
                 PartitionSearchMode::Sorted
-            } else if is_first_partition_by {
+            } else if is_first_partition_by && !partitionby_indices.is_empty(){
                 println!("should have been Partially Sorted");
                 // TODO: Add partially sorted
                 let first_n = calc_first_n(&partitionby_indices);
                 assert!(first_n < partitionby_keys.len());
                 println!("first_n:{:?}", first_n);
+                println!("partitionby_indices: {:?}", partitionby_indices);
                 PartitionSearchMode::PartiallySorted(
                     physical_ordering[0..first_n].to_vec(),
                 )

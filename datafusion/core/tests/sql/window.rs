@@ -2891,143 +2891,165 @@ mod tests {
         Ok(())
     }
 
+    fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()>{
+        let formatted = displayable(plan.as_ref()).indent().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        println!("{:#?}", actual);
+        Ok(())
+    }
+
     #[tokio::test]
     #[ignore]
     async fn test_source_partially_sorted_partition_by() -> Result<()> {
         let tmpdir = TempDir::new().unwrap();
         let ctx = get_test_context2(&tmpdir).await?;
 
-        let sql = "SELECT low_card_col1, low_card_col2, inc_col,
-        SUM(inc_col) OVER(PARTITION BY low_card_col1, unsorted_col ORDER BY low_card_col2, inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum1
+        // let sql = "SELECT low_card_col1, low_card_col2, inc_col,
+        // SUM(inc_col) OVER(PARTITION BY low_card_col1, unsorted_col ORDER BY low_card_col2, inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum1,
+        // SUM(inc_col) OVER(PARTITION BY unsorted_col ORDER BY low_card_col1, low_card_col2, inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum2,
+        // SUM(inc_col) OVER(PARTITION BY low_card_col1, low_card_col2 ORDER BY inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum3,
+        // SUM(inc_col) OVER(PARTITION BY low_card_col2, low_card_col1 ORDER BY inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum4
+        // SUM(inc_col) OVER(PARTITION BY low_card_col1, low_card_col2, unsorted_col ORDER BY inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum5,
+        // SUM(inc_col) OVER(PARTITION BY low_card_col2, low_card_col1, unsorted_col ORDER BY inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum6
+        //    FROM annotated_data2
+        //    ORDER BY inc_col ASC";
+
+        let sql = "SELECT
+        SUM(inc_col) OVER(PARTITION BY low_card_col1, inc_col ORDER BY low_card_col2 ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum5,
+        SUM(inc_col) OVER(PARTITION BY inc_col, low_card_col1 ORDER BY low_card_col2 ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum6
            FROM annotated_data2
            ORDER BY inc_col ASC";
 
         let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
-        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
-        let expected = {
-            vec![
-                "SortExec: [inc_col@2 ASC NULLS LAST]",
-                "  ProjectionExec: expr=[low_card_col1@0 as low_card_col1, low_card_col2@1 as low_card_col2, inc_col@2 as inc_col, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col1, annotated_data2.unsorted_col] ORDER BY [annotated_data2.low_card_col2 ASC NULLS LAST, annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@4 as sum1]",
-                "    BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }]",
-            ]
-        };
+        // let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        // let expected = {
+        //     vec![
+        //         "SortExec: [inc_col@2 ASC NULLS LAST]",
+        //         "  ProjectionExec: expr=[low_card_col1@0 as low_card_col1, low_card_col2@1 as low_card_col2, inc_col@2 as inc_col, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col1, annotated_data2.unsorted_col] ORDER BY [annotated_data2.low_card_col2 ASC NULLS LAST, annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@5 as sum1, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.unsorted_col] ORDER BY [annotated_data2.low_card_col1 ASC NULLS LAST, annotated_data2.low_card_col2 ASC NULLS LAST, annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@7 as sum2, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col1, annotated_data2.low_card_col2] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@4 as sum3, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col2, annotated_data2.low_card_col1] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@6 as sum4]",
+        //         "    BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }]",
+        //         "      BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }]",
+        //         "        BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }]",
+        //         "          BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }]",
+        //      ]
+        // };
+        //
+        // let actual: Vec<&str> = formatted.trim().lines().collect();
+        // let actual_len = actual.len();
+        // let actual_trim_last = &actual[..actual_len - 1];
+        // assert_eq!(
+        //     expected, actual_trim_last,
+        //     "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        // );
 
-        let actual: Vec<&str> = formatted.trim().lines().collect();
-        let actual_len = actual.len();
-        let actual_trim_last = &actual[..actual_len - 1];
-        assert_eq!(
-            expected, actual_trim_last,
-            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-
+        print_plan(&physical_plan)?;
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
-            "+---------------+---------------+---------+------+",
-            "| low_card_col1 | low_card_col2 | inc_col | sum1 |",
-            "+---------------+---------------+---------+------+",
-            "| 0             | 0             | 0       | 2    |",
-            "| 0             | 0             | 1       | 8    |",
-            "| 0             | 0             | 2       | 5    |",
-            "| 0             | 0             | 3       | 11   |",
-            "| 0             | 0             | 4       | 9    |",
-            "| 0             | 0             | 5       | 17   |",
-            "| 0             | 0             | 6       | 31   |",
-            "| 0             | 0             | 7       | 19   |",
-            "| 0             | 0             | 8       | 30   |",
-            "| 0             | 0             | 9       | 19   |",
-            "| 0             | 0             | 10      | 38   |",
-            "| 0             | 0             | 11      | 31   |",
-            "| 0             | 0             | 12      | 44   |",
-            "| 0             | 0             | 13      | 44   |",
-            "| 0             | 0             | 14      | 54   |",
-            "| 0             | 0             | 15      | 31   |",
-            "| 0             | 0             | 16      | 52   |",
-            "| 0             | 0             | 17      | 69   |",
-            "| 0             | 0             | 18      | 67   |",
-            "| 0             | 0             | 19      | 62   |",
-            "| 0             | 0             | 20      | 51   |",
-            "| 0             | 0             | 21      | 82   |",
-            "| 0             | 0             | 22      | 71   |",
-            "| 0             | 0             | 23      | 90   |",
-            "| 0             | 0             | 24      | 84   |",
-            "| 0             | 1             | 25      | 97   |",
-            "| 0             | 1             | 26      | 89   |",
-            "| 0             | 1             | 27      | 110  |",
-            "| 0             | 1             | 28      | 88   |",
-            "| 0             | 1             | 29      | 111  |",
-            "| 0             | 1             | 30      | 108  |",
-            "| 0             | 1             | 31      | 108  |",
-            "| 0             | 1             | 32      | 108  |",
-            "| 0             | 1             | 33      | 134  |",
-            "| 0             | 1             | 34      | 126  |",
-            "| 0             | 1             | 35      | 125  |",
-            "| 0             | 1             | 36      | 132  |",
-            "| 0             | 1             | 37      | 102  |",
-            "| 0             | 1             | 38      | 145  |",
-            "| 0             | 1             | 39      | 144  |",
-            "| 0             | 1             | 40      | 162  |",
-            "| 0             | 1             | 41      | 134  |",
-            "| 0             | 1             | 42      | 157  |",
-            "| 0             | 1             | 43      | 108  |",
-            "| 0             | 1             | 44      | 176  |",
-            "| 0             | 1             | 45      | 164  |",
-            "| 0             | 1             | 46      | 129  |",
-            "| 0             | 1             | 47      | 174  |",
-            "| 0             | 1             | 48      | 135  |",
-            "| 0             | 1             | 49      | 135  |",
-            "| 1             | 2             | 50      | 115  |",
-            "| 1             | 2             | 51      | 112  |",
-            "| 1             | 2             | 52      | 105  |",
-            "| 1             | 2             | 53      | 161  |",
-            "| 1             | 2             | 54      | 114  |",
-            "| 1             | 2             | 55      | 114  |",
-            "| 1             | 2             | 56      | 218  |",
-            "| 1             | 2             | 57      | 224  |",
-            "| 1             | 2             | 58      | 233  |",
-            "| 1             | 2             | 59      | 180  |",
-            "| 1             | 2             | 60      | 177  |",
-            "| 1             | 2             | 61      | 200  |",
-            "| 1             | 2             | 62      | 245  |",
-            "| 1             | 2             | 63      | 241  |",
-            "| 1             | 2             | 64      | 254  |",
-            "| 1             | 2             | 65      | 185  |",
-            "| 1             | 2             | 66      | 251  |",
-            "| 1             | 2             | 67      | 268  |",
-            "| 1             | 2             | 68      | 257  |",
-            "| 1             | 2             | 69      | 271  |",
-            "| 1             | 2             | 70      | 261  |",
-            "| 1             | 2             | 71      | 271  |",
-            "| 1             | 2             | 72      | 282  |",
-            "| 1             | 2             | 73      | 292  |",
-            "| 1             | 2             | 74      | 284  |",
-            "| 1             | 3             | 75      | 289  |",
-            "| 1             | 3             | 76      | 292  |",
-            "| 1             | 3             | 77      | 303  |",
-            "| 1             | 3             | 78      | 307  |",
-            "| 1             | 3             | 79      | 302  |",
-            "| 1             | 3             | 80      | 315  |",
-            "| 1             | 3             | 81      | 319  |",
-            "| 1             | 3             | 82      | 322  |",
-            "| 1             | 3             | 83      | 331  |",
-            "| 1             | 3             | 84      | 320  |",
-            "| 1             | 3             | 85      | 333  |",
-            "| 1             | 3             | 86      | 345  |",
-            "| 1             | 3             | 87      | 337  |",
-            "| 1             | 3             | 88      | 299  |",
-            "| 1             | 3             | 89      | 354  |",
-            "| 1             | 3             | 90      | 261  |",
-            "| 1             | 3             | 91      | 348  |",
-            "| 1             | 3             | 92      | 342  |",
-            "| 1             | 3             | 93      | 361  |",
-            "| 1             | 3             | 94      | 365  |",
-            "| 1             | 3             | 95      | 280  |",
-            "| 1             | 3             | 96      | 370  |",
-            "| 1             | 3             | 97      | 282  |",
-            "| 1             | 3             | 98      | 283  |",
-            "| 1             | 3             | 99      | 248  |",
-            "+---------------+---------------+---------+------+",
+            "+---------------+---------------+---------+------+------+------+------+",
+            "| low_card_col1 | low_card_col2 | inc_col | sum1 | sum2 | sum3 | sum4 |",
+            "+---------------+---------------+---------+------+------+------+------+",
+            "| 0             | 0             | 0       | 2    | 2    | 1    | 1    |",
+            "| 0             | 0             | 1       | 8    | 8    | 3    | 3    |",
+            "| 0             | 0             | 2       | 5    | 5    | 6    | 6    |",
+            "| 0             | 0             | 3       | 11   | 11   | 10   | 10   |",
+            "| 0             | 0             | 4       | 9    | 9    | 14   | 14   |",
+            "| 0             | 0             | 5       | 17   | 17   | 18   | 18   |",
+            "| 0             | 0             | 6       | 31   | 31   | 22   | 22   |",
+            "| 0             | 0             | 7       | 19   | 19   | 26   | 26   |",
+            "| 0             | 0             | 8       | 30   | 30   | 30   | 30   |",
+            "| 0             | 0             | 9       | 19   | 19   | 34   | 34   |",
+            "| 0             | 0             | 10      | 38   | 38   | 38   | 38   |",
+            "| 0             | 0             | 11      | 31   | 31   | 42   | 42   |",
+            "| 0             | 0             | 12      | 44   | 44   | 46   | 46   |",
+            "| 0             | 0             | 13      | 44   | 44   | 50   | 50   |",
+            "| 0             | 0             | 14      | 54   | 54   | 54   | 54   |",
+            "| 0             | 0             | 15      | 31   | 31   | 58   | 58   |",
+            "| 0             | 0             | 16      | 52   | 52   | 62   | 62   |",
+            "| 0             | 0             | 17      | 69   | 69   | 66   | 66   |",
+            "| 0             | 0             | 18      | 67   | 67   | 70   | 70   |",
+            "| 0             | 0             | 19      | 62   | 62   | 74   | 74   |",
+            "| 0             | 0             | 20      | 51   | 51   | 78   | 78   |",
+            "| 0             | 0             | 21      | 82   | 82   | 82   | 82   |",
+            "| 0             | 0             | 22      | 71   | 71   | 86   | 86   |",
+            "| 0             | 0             | 23      | 90   | 90   | 90   | 90   |",
+            "| 0             | 0             | 24      | 84   | 84   | 69   | 69   |",
+            "| 0             | 1             | 25      | 97   | 97   | 51   | 51   |",
+            "| 0             | 1             | 26      | 89   | 89   | 78   | 78   |",
+            "| 0             | 1             | 27      | 110  | 110  | 106  | 106  |",
+            "| 0             | 1             | 28      | 88   | 88   | 110  | 110  |",
+            "| 0             | 1             | 29      | 111  | 111  | 114  | 114  |",
+            "| 0             | 1             | 30      | 108  | 108  | 118  | 118  |",
+            "| 0             | 1             | 31      | 108  | 108  | 122  | 122  |",
+            "| 0             | 1             | 32      | 108  | 108  | 126  | 126  |",
+            "| 0             | 1             | 33      | 134  | 134  | 130  | 130  |",
+            "| 0             | 1             | 34      | 126  | 126  | 134  | 134  |",
+            "| 0             | 1             | 35      | 125  | 125  | 138  | 138  |",
+            "| 0             | 1             | 36      | 132  | 132  | 142  | 142  |",
+            "| 0             | 1             | 37      | 102  | 156  | 146  | 146  |",
+            "| 0             | 1             | 38      | 145  | 145  | 150  | 150  |",
+            "| 0             | 1             | 39      | 144  | 144  | 154  | 154  |",
+            "| 0             | 1             | 40      | 162  | 162  | 158  | 158  |",
+            "| 0             | 1             | 41      | 134  | 134  | 162  | 162  |",
+            "| 0             | 1             | 42      | 157  | 157  | 166  | 166  |",
+            "| 0             | 1             | 43      | 108  | 163  | 170  | 170  |",
+            "| 0             | 1             | 44      | 176  | 176  | 174  | 174  |",
+            "| 0             | 1             | 45      | 164  | 164  | 178  | 178  |",
+            "| 0             | 1             | 46      | 129  | 179  | 182  | 182  |",
+            "| 0             | 1             | 47      | 174  | 174  | 186  | 186  |",
+            "| 0             | 1             | 48      | 135  | 187  | 190  | 190  |",
+            "| 0             | 1             | 49      | 135  | 186  | 144  | 144  |",
+            "| 1             | 2             | 50      | 115  | 206  | 101  | 101  |",
+            "| 1             | 2             | 51      | 112  | 205  | 153  | 153  |",
+            "| 1             | 2             | 52      | 105  | 200  | 206  | 206  |",
+            "| 1             | 2             | 53      | 161  | 209  | 210  | 210  |",
+            "| 1             | 2             | 54      | 114  | 185  | 214  | 214  |",
+            "| 1             | 2             | 55      | 114  | 190  | 218  | 218  |",
+            "| 1             | 2             | 56      | 218  | 218  | 222  | 222  |",
+            "| 1             | 2             | 57      | 224  | 224  | 226  | 226  |",
+            "| 1             | 2             | 58      | 233  | 233  | 230  | 230  |",
+            "| 1             | 2             | 59      | 180  | 223  | 234  | 234  |",
+            "| 1             | 2             | 60      | 177  | 214  | 238  | 238  |",
+            "| 1             | 2             | 61      | 200  | 249  | 242  | 242  |",
+            "| 1             | 2             | 62      | 245  | 245  | 246  | 246  |",
+            "| 1             | 2             | 63      | 241  | 241  | 250  | 250  |",
+            "| 1             | 2             | 64      | 254  | 254  | 254  | 254  |",
+            "| 1             | 2             | 65      | 185  | 231  | 258  | 258  |",
+            "| 1             | 2             | 66      | 251  | 251  | 262  | 262  |",
+            "| 1             | 2             | 67      | 268  | 268  | 266  | 266  |",
+            "| 1             | 2             | 68      | 257  | 257  | 270  | 270  |",
+            "| 1             | 2             | 69      | 271  | 271  | 274  | 274  |",
+            "| 1             | 2             | 70      | 261  | 261  | 278  | 278  |",
+            "| 1             | 2             | 71      | 271  | 271  | 282  | 282  |",
+            "| 1             | 2             | 72      | 282  | 282  | 286  | 286  |",
+            "| 1             | 2             | 73      | 292  | 292  | 290  | 290  |",
+            "| 1             | 2             | 74      | 284  | 284  | 219  | 219  |",
+            "| 1             | 3             | 75      | 289  | 289  | 151  | 151  |",
+            "| 1             | 3             | 76      | 292  | 292  | 228  | 228  |",
+            "| 1             | 3             | 77      | 303  | 303  | 306  | 306  |",
+            "| 1             | 3             | 78      | 307  | 307  | 310  | 310  |",
+            "| 1             | 3             | 79      | 302  | 302  | 314  | 314  |",
+            "| 1             | 3             | 80      | 315  | 315  | 318  | 318  |",
+            "| 1             | 3             | 81      | 319  | 319  | 322  | 322  |",
+            "| 1             | 3             | 82      | 322  | 322  | 326  | 326  |",
+            "| 1             | 3             | 83      | 331  | 331  | 330  | 330  |",
+            "| 1             | 3             | 84      | 320  | 320  | 334  | 334  |",
+            "| 1             | 3             | 85      | 333  | 333  | 338  | 338  |",
+            "| 1             | 3             | 86      | 345  | 345  | 342  | 342  |",
+            "| 1             | 3             | 87      | 337  | 337  | 346  | 346  |",
+            "| 1             | 3             | 88      | 299  | 299  | 350  | 350  |",
+            "| 1             | 3             | 89      | 354  | 354  | 354  | 354  |",
+            "| 1             | 3             | 90      | 261  | 261  | 358  | 358  |",
+            "| 1             | 3             | 91      | 348  | 348  | 362  | 362  |",
+            "| 1             | 3             | 92      | 342  | 342  | 366  | 366  |",
+            "| 1             | 3             | 93      | 361  | 361  | 370  | 370  |",
+            "| 1             | 3             | 94      | 365  | 365  | 374  | 374  |",
+            "| 1             | 3             | 95      | 280  | 280  | 378  | 378  |",
+            "| 1             | 3             | 96      | 370  | 370  | 382  | 382  |",
+            "| 1             | 3             | 97      | 282  | 282  | 386  | 386  |",
+            "| 1             | 3             | 98      | 283  | 283  | 390  | 390  |",
+            "| 1             | 3             | 99      | 248  | 248  | 294  | 294  |",
+            "+---------------+---------------+---------+------+------+------+------+",
         ];
         assert_batches_eq!(expected, &actual);
         Ok(())
