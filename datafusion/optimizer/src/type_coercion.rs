@@ -472,8 +472,7 @@ fn coerce_scalar_range_aware(
             coerce_scalar(largest_type, value).map_or_else(
                 |_| {
                     Err(DataFusionError::Execution(format!(
-                        "Cannot cast {:?} to {:?}",
-                        value, target_type
+                        "Cannot cast {value:?} to {target_type:?}"
                     )))
                 },
                 |_| ScalarValue::try_from(target_type),
