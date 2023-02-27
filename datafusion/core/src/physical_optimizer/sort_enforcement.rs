@@ -665,6 +665,7 @@ fn can_skip_ordering_fn(
             {
                 physical_ordering_common = physical_ordering.to_vec();
             }
+            let schema = sort_any.schema();
             let orderby_indices =
                 get_order_by_indices(&orderby_keys, &physical_ordering)?;
             let mut partitionby_indices =
@@ -688,15 +689,42 @@ fn can_skip_ordering_fn(
                 orderby_keys,
                 &find_match_indices(&only_orderby_indices, &orderby_indices)?,
             )?;
-            let is_same_ordering = input_orderby_columns
-                .iter()
-                .zip(&expected_orderby_columns)
-                .all(|(lhs, rhs)| lhs.options == rhs.options);
-            let should_reverse = input_orderby_columns
-                .iter()
-                .zip(&expected_orderby_columns)
-                .all(|(lhs, rhs)| lhs.options == reverse_sort_options(rhs.options));
+            let schema = sort_input.schema();
+            let nullables = input_orderby_columns.iter().map(|elem| elem.expr.nullable(&schema)).collect::<Result<Vec<_>>>()?;
+            println!("nullables:{:?}", nullables);
+            let is_same_ordering = izip!(&input_orderby_columns, &expected_orderby_columns, &nullables).all(|(input, expected, is_nullable)|{if *is_nullable{
+                input.options == expected.options
+            }else{
+                input.options.descending == expected.options.descending
+            }});
+            let should_reverse = izip!(&input_orderby_columns, &expected_orderby_columns, &nullables).all(|(input, expected, is_nullable)|{if *is_nullable{
+                input.options == reverse_sort_options(expected.options)
+            } else {
+                input.options.descending == !expected.options.descending
+            }});
             let is_aligned = is_same_ordering || should_reverse;
+
+            // let is_same_ordering = input_orderby_columns
+            //     .iter()
+            //     .zip(&expected_orderby_columns)
+            //     .all(|(lhs, rhs)| lhs.options == rhs.options);
+            // let should_reverse = input_orderby_columns
+            //     .iter()
+            //     .zip(&expected_orderby_columns)
+            //     .all(|(lhs, rhs)| lhs.options == reverse_sort_options(rhs.options));
+            // let is_aligned = is_same_ordering || should_reverse;
+
+            // let (is_aligned, should_reverse) = can_skip_sort(
+            //     &vec![],
+            //     &expected_orderby_columns,
+            //     &sort_input.schema(),
+            //     &input_orderby_columns,
+            // )?;
+            // let mut is_same_ordering = false;
+            // if is_aligned && !should_reverse{
+            //     is_same_ordering = true;
+            // }
+
             // let res = can_skip_sort(&vec![], &expected_orderby_columns, &input_orderby_columns)
             let streamable = (is_merge_consecutive
                 || (all_partition && merged_indices[0] == 0))
@@ -741,12 +769,6 @@ fn can_skip_ordering_fn(
             );
             println!("is_consecutive:{:?}, all_partition: {:?}, streamable: {:?}, partition_by_consecutive:{:?}, is_first_partition_by:{:?}, mode:{:?}", is_merge_consecutive, all_partition, streamable, partition_by_consecutive, is_first_partition_by, mode);
 
-            // let (can_skip_sorting, should_reverse) = can_skip_sort(
-            //     partitionby_keys,
-            //     required_ordering,
-            //     &sort_input.schema(),
-            //     physical_ordering,
-            // )?;
             if !streamable {
                 return Ok(None);
             }
