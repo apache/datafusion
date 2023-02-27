@@ -39,7 +39,7 @@ jit = []
 arrow = { version = "34.0.0", default-features = false }
 cranelift = "0.89.0"
 cranelift-jit = "0.89.0"
-cranelift-module = "0.89.0"
+cranelift-module = "0.93.0"
 cranelift-native = "0.89.0"
 datafusion-common = { path = "../common", version = "19.0.0", features = ["jit"] }
 datafusion-expr = { path = "../expr", version = "19.0.0" }
