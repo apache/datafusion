@@ -30,6 +30,7 @@ use std::fmt::{Debug, Display};
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterator};
 
+use crate::intervals::Interval;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -80,6 +81,20 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// related APIs) are experimental and subject to change.
     fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
         context
+    }
+
+    /// Computes bounds for the expression using interval arithmetic
+    fn evaluate_bound(&self, _child_intervals: &[&Interval]) -> Result<Interval> {
+        Err(DataFusionError::Internal("Not supported".to_owned()))
+    }
+
+    /// Updates/shrinks bounds for the expression using interval arithmetic
+    fn propagate_constraints(
+        &self,
+        _parent_interval: &Interval,
+        _child_intervals: &[&Interval],
+    ) -> Result<Vec<Option<Interval>>> {
+        Err(DataFusionError::Internal("Not supported".to_owned()))
     }
 }
 

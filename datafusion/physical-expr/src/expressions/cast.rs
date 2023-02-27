@@ -19,6 +19,7 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::intervals::Interval;
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::compute;
@@ -114,6 +115,26 @@ impl PhysicalExpr for CastExpr {
                 safe: self.cast_options.safe,
             },
         )))
+    }
+
+    fn evaluate_bound(&self, _child_intervals: &[&Interval]) -> Result<Interval> {
+        let interval = _child_intervals[0];
+        // Cast current node's interval to the right type
+        interval.cast_to(&self.cast_type, &self.cast_options)
+    }
+
+    fn propagate_constraints(
+        &self,
+        _parent_interval: &Interval,
+        _child_intervals: &[&Interval],
+    ) -> Result<Vec<Option<Interval>>> {
+        let child_interval = _child_intervals[0];
+        // Get child's datatype
+        let cast_type = child_interval.get_datatype();
+
+        Ok(vec![Some(
+            _parent_interval.cast_to(&cast_type, self.cast_options())?,
+        )])
     }
 }
 

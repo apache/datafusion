@@ -17,7 +17,7 @@
 
 use crate::equivalence::EquivalentClass;
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
-use crate::rewrite::TreeNodeRewritable;
+use crate::rewrite::{TreeNodeRewritable, TreeNodeRewriter};
 use crate::{EquivalenceProperties, PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
@@ -277,10 +277,55 @@ impl<T: Clone> TreeNodeRewritable for ExprTreeNode<T> {
     }
 }
 
-/// This function converts the [PhysicalExpr] tree into a DAG by collecting identical
-/// expressions in one node. Caller specifies the node type in this DAG via the
-/// `constructor` argument, which constructs nodes in this DAG from the [ExprTreeNode]
-/// ancillary object.
+/// This struct  converts the [PhysicalExpr] tree into a DAG by collecting identical
+/// expressions in one node using a rewriter to transform an input expression tree.
+/// Caller specifies the node type in this DAG via the `constructor` argument,
+/// which constructs nodes in this DAG from the [ExprTreeNode] ancillary object.
+struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&'_ ExprTreeNode<NodeIndex>) -> T> {
+    // A graph containing physical expression trees.
+    graph: StableGraph<T, usize>,
+    // A vector of visited expression nodes and their corresponding node indices.
+    visited_plans: Vec<(Arc<dyn PhysicalExpr>, NodeIndex)>,
+    // A function to convert an input expression node to T.
+    constructor: &'a F,
+}
+
+impl<'a, T, F: Fn(&'_ ExprTreeNode<NodeIndex>) -> T>
+    TreeNodeRewriter<ExprTreeNode<NodeIndex>> for PhysicalExprDAEGBuilder<'a, T, F>
+{
+    // This method mutates an expression node by transforming it to a physical expression
+    // and adding it to the graph. The method returns the mutated expression node.
+    fn mutate(
+        &mut self,
+        mut node: ExprTreeNode<NodeIndex>,
+    ) -> Result<ExprTreeNode<NodeIndex>> {
+        // Get the expression associated with the input expression node.
+        let expr = &node.expr;
+
+        // Check if the expression has already been visited.
+        let node_idx = match self.visited_plans.iter().find(|(e, _)| expr.eq(e)) {
+            // If the expression has been visited, return the corresponding node index.
+            Some((_, idx)) => *idx,
+            // If the expression has not been visited, add a new node to the graph and
+            // add edges to its child nodes. Add the visited expression to the vector
+            // of visited expressions and return the newly created node index.
+            None => {
+                let node_idx = self.graph.add_node((self.constructor)(&node));
+                for expr_node in node.child_nodes.iter() {
+                    self.graph.add_edge(node_idx, expr_node.data.unwrap(), 0);
+                }
+                self.visited_plans.push((expr.clone(), node_idx));
+                node_idx
+            }
+        };
+        // Set the data field of the input expression node to the corresponding node index.
+        node.data = Some(node_idx);
+        // Return the mutated expression node.
+        Ok(node)
+    }
+}
+
+// A function that builds a directed acyclic graph of physical expression trees.
 pub fn build_dag<T, F>(
     expr: Arc<dyn PhysicalExpr>,
     constructor: &F,
@@ -288,39 +333,136 @@ pub fn build_dag<T, F>(
 where
     F: Fn(&ExprTreeNode<NodeIndex>) -> T,
 {
+    // Create a new expression tree node from the input expression.
     let init = ExprTreeNode::new(expr);
-    let mut graph = StableGraph::<T, usize>::new();
-    let mut visited_plans = Vec::<(Arc<dyn PhysicalExpr>, NodeIndex)>::new();
-    let root = init.mutable_transform_up(&mut |mut input| {
-        let expr = &input.expr;
-        let node_idx = match visited_plans.iter().find(|(e, _)| expr.eq(e)) {
-            Some((_, idx)) => *idx,
-            None => {
-                let node_idx = graph.add_node(constructor(&input));
-                for expr_node in input.child_nodes.iter() {
-                    graph.add_edge(node_idx, expr_node.data.unwrap(), 0);
-                }
-                visited_plans.push((expr.clone(), node_idx));
-                node_idx
-            }
-        };
-        input.data = Some(node_idx);
-        Ok(Some(input))
-    })?;
-    Ok((root.data.unwrap(), graph))
+    // Create a new PhysicalExprDAEGBuilder instance.
+    let mut builder = PhysicalExprDAEGBuilder {
+        graph: StableGraph::<T, usize>::new(),
+        visited_plans: Vec::<(Arc<dyn PhysicalExpr>, NodeIndex)>::new(),
+        constructor,
+    };
+    // Use the builder to transform the expression tree node into a DAG.
+    let root = init.transform_using(&mut builder)?;
+    // Return a tuple containing the root node index and the DAG.
+    Ok((root.data.unwrap(), builder.graph))
 }
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
-    use crate::expressions::Column;
+    use crate::expressions::{binary, cast, col, lit, Column, Literal};
     use crate::PhysicalSortExpr;
     use arrow::compute::SortOptions;
-    use datafusion_common::Result;
+    use datafusion_common::{Result, ScalarValue};
+    use std::fmt::{Display, Formatter};
 
-    use arrow_schema::Schema;
+    use arrow_schema::{DataType, Field, Schema};
+    use petgraph::visit::Bfs;
     use std::sync::Arc;
+
+    fn make_dummy_nodes(node: &ExprTreeNode<NodeIndex>) -> PhysicalExprDummyNode {
+        let expr = node.expression().clone();
+        let dummy_property = if expr.as_any().is::<BinaryExpr>() {
+            "Binary"
+        } else if expr.as_any().is::<Column>() {
+            "Column"
+        } else if expr.as_any().is::<Literal>() {
+            "Literal"
+        } else {
+            "Other"
+        }
+        .to_owned();
+        PhysicalExprDummyNode {
+            expr,
+            property: DummyProperty {
+                expr_type: dummy_property,
+            },
+        }
+    }
+    #[derive(Clone)]
+    struct DummyProperty {
+        expr_type: String,
+    }
+
+    /// This is a node in the DAEG; it encapsulates a reference to the actual
+    /// [PhysicalExpr] as well as a dummy property to use it in DAEG traversal.
+    #[derive(Clone)]
+    struct PhysicalExprDummyNode {
+        pub expr: Arc<dyn PhysicalExpr>,
+        pub property: DummyProperty,
+    }
+
+    impl Display for PhysicalExprDummyNode {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.expr)
+        }
+    }
+
+    #[test]
+    fn testing_build_dag() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("0", DataType::Int32, true),
+            Field::new("1", DataType::Int32, true),
+            Field::new("2", DataType::Int32, true),
+        ]);
+        let expr = binary(
+            cast(
+                binary(
+                    col("0", &schema)?,
+                    Operator::Plus,
+                    col("1", &schema)?,
+                    &schema,
+                )?,
+                &schema,
+                DataType::Int64,
+            )?,
+            Operator::Gt,
+            binary(
+                cast(col("2", &schema)?, &schema, DataType::Int64)?,
+                Operator::Plus,
+                lit(ScalarValue::Int64(Some(10))),
+                &schema,
+            )?,
+            &schema,
+        )?;
+        let mut vector_dummy_props = vec![];
+        let (root, graph) = build_dag(expr, &make_dummy_nodes)?;
+        let mut bfs = Bfs::new(&graph, root);
+        while let Some(node_index) = bfs.next(&graph) {
+            let node = &graph[node_index];
+            vector_dummy_props.push(node.property.clone());
+        }
+
+        assert_eq!(
+            vector_dummy_props
+                .iter()
+                .filter(|property| property.expr_type == "Binary")
+                .count(),
+            3
+        );
+        assert_eq!(
+            vector_dummy_props
+                .iter()
+                .filter(|property| property.expr_type == "Column")
+                .count(),
+            3
+        );
+        assert_eq!(
+            vector_dummy_props
+                .iter()
+                .filter(|property| property.expr_type == "Literal")
+                .count(),
+            1
+        );
+        assert_eq!(
+            vector_dummy_props
+                .iter()
+                .filter(|property| property.expr_type == "Other")
+                .count(),
+            2
+        );
+        Ok(())
+    }
 
     #[test]
     fn expr_list_eq_test() -> Result<()> {

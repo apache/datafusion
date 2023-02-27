@@ -1423,7 +1423,7 @@ impl SymmetricHashJoinStream {
 mod tests {
     use std::fs::File;
 
-    use arrow::array::{Array, ArrayRef};
+    use arrow::array::ArrayRef;
     use arrow::array::{Int32Array, TimestampNanosecondArray};
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1584,23 +1584,6 @@ mod tests {
         Ok(result)
     }
 
-    fn build_record_batch(columns: Vec<(&str, ArrayRef)>) -> Result<RecordBatch> {
-        let schema = Schema::new(
-            columns
-                .iter()
-                .map(|(name, array)| {
-                    let null = array.null_count() > 0;
-                    Field::new(*name, array.data_type().clone(), null)
-                })
-                .collect(),
-        );
-        let batch = RecordBatch::try_new(
-            Arc::new(schema),
-            columns.into_iter().map(|(_, array)| array).collect(),
-        )?;
-        Ok(batch)
-    }
-
     fn join_expr_tests_fixture(
         expr_id: usize,
         left_col: Arc<dyn PhysicalExpr>,
@@ -1683,149 +1666,69 @@ mod tests {
         let initial_range = 0..table_size;
         let index = (table_size as f64 * null_ratio).round() as i32;
         let rest_of = index..table_size;
-        let left = build_record_batch(vec![
-            (
-                "la1",
-                Arc::new(Int32Array::from_iter(
-                    initial_range.clone().collect::<Vec<i32>>(),
-                )),
-            ),
-            (
-                "lb1",
-                Arc::new(Int32Array::from_iter(
-                    initial_range.clone().map(|x| x % 4).collect::<Vec<i32>>(),
-                )),
-            ),
-            (
-                "lc1",
-                Arc::new(Int32Array::from_iter(
-                    initial_range
-                        .clone()
-                        .map(|x| x % key_cardinality.0)
-                        .collect::<Vec<i32>>(),
-                )),
-            ),
-            (
-                "lt1",
-                Arc::new(TimestampNanosecondArray::from(
-                    initial_range
-                        .clone()
-                        .map(|x| 1664264591000000000 + (5000000000 * (x as i64)))
-                        .collect::<Vec<i64>>(),
-                )),
-            ),
-            (
-                "la2",
-                Arc::new(Int32Array::from_iter(
-                    initial_range.clone().collect::<Vec<i32>>(),
-                )),
-            ),
-            (
-                "la1_des",
-                Arc::new(Int32Array::from_iter(
-                    initial_range.clone().rev().collect::<Vec<i32>>(),
-                )),
-            ),
-            (
-                "l_asc_null_first",
-                Arc::new(Int32Array::from_iter({
-                    std::iter::repeat(None)
-                        .take(index as usize)
-                        .chain(rest_of.clone().map(Some))
-                        .collect::<Vec<Option<i32>>>()
-                })),
-            ),
-            (
-                "l_asc_null_last",
-                Arc::new(Int32Array::from_iter({
-                    rest_of
-                        .clone()
-                        .map(Some)
-                        .chain(std::iter::repeat(None).take(index as usize))
-                        .collect::<Vec<Option<i32>>>()
-                })),
-            ),
-            (
-                "l_desc_null_first",
-                Arc::new(Int32Array::from_iter({
-                    std::iter::repeat(None)
-                        .take(index as usize)
-                        .chain(rest_of.clone().rev().map(Some))
-                        .collect::<Vec<Option<i32>>>()
-                })),
-            ),
+        let ordered: ArrayRef = Arc::new(Int32Array::from_iter(
+            initial_range.clone().collect::<Vec<i32>>(),
+        ));
+        let ordered_des: ArrayRef = Arc::new(Int32Array::from_iter(
+            initial_range.clone().rev().collect::<Vec<i32>>(),
+        ));
+        let cardinality: ArrayRef = Arc::new(Int32Array::from_iter(
+            initial_range.clone().map(|x| x % 4).collect::<Vec<i32>>(),
+        ));
+        let cardinality_key: ArrayRef = Arc::new(Int32Array::from_iter(
+            initial_range
+                .clone()
+                .map(|x| x % key_cardinality.0)
+                .collect::<Vec<i32>>(),
+        ));
+        let ordered_asc_null_first: ArrayRef = Arc::new(Int32Array::from_iter({
+            std::iter::repeat(None)
+                .take(index as usize)
+                .chain(rest_of.clone().map(Some))
+                .collect::<Vec<Option<i32>>>()
+        }));
+        let ordered_asc_null_last: ArrayRef = Arc::new(Int32Array::from_iter({
+            rest_of
+                .clone()
+                .map(Some)
+                .chain(std::iter::repeat(None).take(index as usize))
+                .collect::<Vec<Option<i32>>>()
+        }));
+
+        let ordered_desc_null_first: ArrayRef = Arc::new(Int32Array::from_iter({
+            std::iter::repeat(None)
+                .take(index as usize)
+                .chain(rest_of.rev().map(Some))
+                .collect::<Vec<Option<i32>>>()
+        }));
+
+        let time: ArrayRef = Arc::new(TimestampNanosecondArray::from(
+            initial_range
+                .map(|x| 1664264591000000000 + (5000000000 * (x as i64)))
+                .collect::<Vec<i64>>(),
+        ));
+
+        let left = RecordBatch::try_from_iter(vec![
+            ("la1", ordered.clone()),
+            ("lb1", cardinality.clone()),
+            ("lc1", cardinality_key.clone()),
+            ("lt1", time.clone()),
+            ("la2", ordered.clone()),
+            ("la1_des", ordered_des.clone()),
+            ("l_asc_null_first", ordered_asc_null_first.clone()),
+            ("l_asc_null_last", ordered_asc_null_last.clone()),
+            ("l_desc_null_first", ordered_desc_null_first.clone()),
         ])?;
-        let right = build_record_batch(vec![
-            (
-                "ra1",
-                Arc::new(Int32Array::from_iter(
-                    initial_range.clone().collect::<Vec<i32>>(),
-                )),
-            ),
-            (
-                "rb1",
-                Arc::new(Int32Array::from_iter(
-                    initial_range.clone().map(|x| x % 7).collect::<Vec<i32>>(),
-                )),
-            ),
-            (
-                "rc1",
-                Arc::new(Int32Array::from_iter(
-                    initial_range
-                        .clone()
-                        .map(|x| x % key_cardinality.1)
-                        .collect::<Vec<i32>>(),
-                )),
-            ),
-            (
-                "rt1",
-                Arc::new(TimestampNanosecondArray::from(
-                    initial_range
-                        .clone()
-                        .map(|x| 1664264591000000000 + (5000000000 * (x as i64)))
-                        .collect::<Vec<i64>>(),
-                )),
-            ),
-            (
-                "ra2",
-                Arc::new(Int32Array::from_iter(
-                    initial_range.clone().collect::<Vec<i32>>(),
-                )),
-            ),
-            (
-                "ra1_des",
-                Arc::new(Int32Array::from_iter(
-                    initial_range.rev().collect::<Vec<i32>>(),
-                )),
-            ),
-            (
-                "r_asc_null_first",
-                Arc::new(Int32Array::from_iter({
-                    std::iter::repeat(None)
-                        .take(index as usize)
-                        .chain(rest_of.clone().map(Some))
-                        .collect::<Vec<Option<i32>>>()
-                })),
-            ),
-            (
-                "r_asc_null_last",
-                Arc::new(Int32Array::from_iter({
-                    rest_of
-                        .clone()
-                        .map(Some)
-                        .chain(std::iter::repeat(None).take(index as usize))
-                        .collect::<Vec<Option<i32>>>()
-                })),
-            ),
-            (
-                "r_desc_null_first",
-                Arc::new(Int32Array::from_iter({
-                    std::iter::repeat(None)
-                        .take(index as usize)
-                        .chain(rest_of.rev().map(Some))
-                        .collect::<Vec<Option<i32>>>()
-                })),
-            ),
+        let right = RecordBatch::try_from_iter(vec![
+            ("ra1", ordered.clone()),
+            ("rb1", cardinality),
+            ("rc1", cardinality_key),
+            ("rt1", time),
+            ("ra2", ordered),
+            ("ra1_des", ordered_des),
+            ("r_asc_null_first", ordered_asc_null_first),
+            ("r_asc_null_last", ordered_asc_null_last),
+            ("r_desc_null_first", ordered_desc_null_first),
         ])?;
         Ok((left, right))
     }
@@ -1838,18 +1741,22 @@ mod tests {
         batch_size: usize,
     ) -> Result<(Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>)> {
         Ok((
-            Arc::new(MemoryExec::try_new_with_sort_information(
-                &[split_record_batches(&left_batch, batch_size).unwrap()],
-                left_batch.schema(),
-                None,
-                Some(left_sorted),
-            )?),
-            Arc::new(MemoryExec::try_new_with_sort_information(
-                &[split_record_batches(&right_batch, batch_size).unwrap()],
-                right_batch.schema(),
-                None,
-                Some(right_sorted),
-            )?),
+            Arc::new(
+                MemoryExec::try_new(
+                    &[split_record_batches(&left_batch, batch_size).unwrap()],
+                    left_batch.schema(),
+                    None,
+                )?
+                .with_sort_information(left_sorted),
+            ),
+            Arc::new(
+                MemoryExec::try_new(
+                    &[split_record_batches(&right_batch, batch_size).unwrap()],
+                    right_batch.schema(),
+                    None,
+                )?
+                .with_sort_information(right_sorted),
+            ),
         ))
     }
 
@@ -1958,7 +1865,7 @@ mod tests {
             Field::new(filter_col_2.name(), DataType::Int32, true),
         ]);
 
-        let filter_expr = complicated_filter();
+        let filter_expr = complicated_filter(&intermediate_schema)?;
 
         let filter = JoinFilter::new(
             filter_expr,
@@ -2480,7 +2387,7 @@ mod tests {
             Field::new(filter_col_2.name(), DataType::Int32, true),
         ]);
 
-        let filter_expr = complicated_filter();
+        let filter_expr = complicated_filter(&intermediate_schema)?;
 
         let filter = JoinFilter::new(
             filter_expr,

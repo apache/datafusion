@@ -19,7 +19,6 @@
 
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
-use std::ops::Index;
 use std::sync::Arc;
 
 use arrow_schema::DataType;
@@ -30,7 +29,7 @@ use petgraph::stable_graph::{DefaultIx, StableGraph};
 use petgraph::visit::{Bfs, Dfs, DfsPostOrder, EdgeRef};
 use petgraph::Outgoing;
 
-use crate::expressions::{BinaryExpr, CastExpr, Literal};
+use crate::expressions::Literal;
 use crate::intervals::interval_aritmetic::{apply_operator, Interval};
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
@@ -454,24 +453,12 @@ impl ExprIntervalGraph {
             if children.is_empty() {
                 continue;
             }
-            let expr_any = self.graph[node].expr.as_any();
-            if let Some(binary) = expr_any.downcast_ref::<BinaryExpr>() {
-                // Get children intervals:
-                let left_child_idx = children[1];
-                let right_child_idx = children[0];
-                let left_interval = self.graph[left_child_idx].interval();
-                let right_interval = self.graph[right_child_idx].interval();
-                // Calculate and replace current node's interval:
-                self.graph[node].interval =
-                    apply_operator(binary.op(), left_interval, right_interval)?;
-            } else if let Some(cast_expr) = expr_any.downcast_ref::<CastExpr>() {
-                let cast_type = cast_expr.cast_type();
-                let cast_options = cast_expr.cast_options();
-                let child = self.graph.index(children[0]);
-                // Cast current node's interval to the right type:
-                self.graph[node].interval =
-                    child.interval.cast_to(cast_type, cast_options)?;
-            }
+            let children_intervals = children
+                .into_iter()
+                .map(|child| self.graph[child].interval())
+                .collect::<Vec<_>>();
+            self.graph[node].interval =
+                self.graph[node].expr.evaluate_bound(&children_intervals)?;
         }
         Ok(&self.graph[self.root].interval)
     }
@@ -482,66 +469,36 @@ impl ExprIntervalGraph {
         let mut bfs = Bfs::new(&self.graph, self.root);
         while let Some(node) = bfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(node, Outgoing);
-            let children = neighbors.collect::<Vec<_>>();
+            let mut children = neighbors.collect::<Vec<_>>();
+            // Reverse the children index order to align it with the ExecutionPlan's children order.
+            children.reverse();
             // If the current expression is a leaf, its range is now final.
             // So, just continue with the propagation procedure:
             if children.is_empty() {
                 continue;
             }
             let node_interval = self.graph[node].interval();
-            let expr_any = self.graph[node].expr.as_any();
-            if let Some(binary) = expr_any.downcast_ref::<BinaryExpr>() {
-                // Get children intervals:
-                let left_child_idx = children[1];
-                let right_child_idx = children[0];
-                let left_interval = self.graph[left_child_idx].interval();
-                let right_interval = self.graph[right_child_idx].interval();
-
-                let op = binary.op();
-                if let (Some(new_left_interval), Some(new_right_interval)) =
-                    if op.is_logic_operator() {
-                        // TODO: Currently, this implementation only supports the AND operator
-                        //       and does not require any further propagation. In the future,
-                        //       upon adding support for additional logical operators, this
-                        //       method will require modification to support propagating the
-                        //       changes accordingly.
-                        continue;
-                    } else if op.is_comparison_operator() {
-                        if let Interval {
-                            lower: ScalarValue::Boolean(Some(false)),
-                            upper: ScalarValue::Boolean(Some(false)),
-                        } = node_interval
-                        {
-                            // TODO: The optimization of handling strictly false clauses through
-                            //       conversion to equivalent comparison operators (e.g. GT to LE, LT to GE)
-                            //       can be implemented once open/closed intervals are supported.
-                            continue;
-                        }
-                        // Propagate the comparison operator.
-                        propagate_comparison(op, left_interval, right_interval)?
-                    } else {
-                        // Propagate the arithmetic operator.
-                        propagate_arithmetic(
-                            op,
-                            node_interval,
-                            left_interval,
-                            right_interval,
-                        )?
-                    }
-                {
-                    self.graph[left_child_idx].interval = new_left_interval;
-                    self.graph[right_child_idx].interval = new_right_interval;
-                } else {
-                    return Ok(PropagationResult::Infeasible);
-                };
-            } else if let Some(cast) = expr_any.downcast_ref::<CastExpr>() {
-                let child_index = children[0];
-                let child = self.graph.index(child_index);
-                // Get child's data type:
-                let cast_type = child.interval().get_datatype();
-                self.graph[child_index].interval =
-                    node_interval.cast_to(&cast_type, cast.cast_options())?;
+            let children_intervals = children
+                .iter()
+                .map(|child| self.graph[*child].interval())
+                .collect::<Vec<_>>();
+            let propagated_intervals = self.graph[node]
+                .expr
+                .propagate_constraints(node_interval, &children_intervals)?;
+            // No new interval is calculated for node leafs.
+            if propagated_intervals.is_empty() {
+                continue;
             }
+            // There is a feasibility problem
+            if propagated_intervals.iter().any(|i| i.is_none()) {
+                return Ok(PropagationResult::Infeasible);
+            }
+            children
+                .iter()
+                .zip(propagated_intervals.into_iter())
+                .for_each(|(child_index, new_interval)| {
+                    self.graph[*child_index].interval = new_interval.unwrap()
+                });
         }
         Ok(PropagationResult::Success)
     }
@@ -577,7 +534,7 @@ mod tests {
     use crate::intervals::test_utils::gen_conjunctive_numeric_expr;
     use itertools::Itertools;
 
-    use crate::expressions::Column;
+    use crate::expressions::{BinaryExpr, Column};
     use datafusion_common::ScalarValue;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};

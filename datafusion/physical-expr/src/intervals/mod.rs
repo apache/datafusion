@@ -18,8 +18,8 @@
 //! Interval calculations
 //!
 
-mod cp_solver;
-mod interval_aritmetic;
+pub mod cp_solver;
+pub mod interval_aritmetic;
 
 pub mod test_utils;
 pub use cp_solver::ExprIntervalGraph;

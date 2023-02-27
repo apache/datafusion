@@ -254,64 +254,59 @@ pub mod tests {
         expressions::PhysicalSortExpr,
         joins::utils::{ColumnIndex, JoinFilter, JoinSide},
     };
-    use arrow::compute::{CastOptions, SortOptions};
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr, Literal};
+    use datafusion_physical_expr::expressions::{binary, cast, col, lit, BinaryExpr};
     use std::sync::Arc;
 
     /// Filter expr for a + b > c + 10 AND a + b < c + 100
-    pub(crate) fn complicated_filter() -> Arc<dyn PhysicalExpr> {
-        let left_expr = BinaryExpr::new(
-            Arc::new(CastExpr::new(
-                Arc::new(BinaryExpr::new(
-                    Arc::new(Column::new("0", 0)),
+    pub(crate) fn complicated_filter(
+        filter_schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let left_expr = binary(
+            cast(
+                binary(
+                    col("0", filter_schema)?,
                     Operator::Plus,
-                    Arc::new(Column::new("1", 1)),
-                )),
+                    col("1", filter_schema)?,
+                    filter_schema,
+                )?,
+                filter_schema,
                 DataType::Int64,
-                CastOptions { safe: false },
-            )),
+            )?,
             Operator::Gt,
-            Arc::new(BinaryExpr::new(
-                Arc::new(CastExpr::new(
-                    Arc::new(Column::new("2", 2)),
-                    DataType::Int64,
-                    CastOptions { safe: false },
-                )),
+            binary(
+                cast(col("2", filter_schema)?, filter_schema, DataType::Int64)?,
                 Operator::Plus,
-                Arc::new(Literal::new(ScalarValue::Int64(Some(10)))),
-            )),
-        );
+                lit(ScalarValue::Int64(Some(10))),
+                filter_schema,
+            )?,
+            filter_schema,
+        )?;
 
-        let right_expr = BinaryExpr::new(
-            Arc::new(CastExpr::new(
-                Arc::new(BinaryExpr::new(
-                    Arc::new(Column::new("0", 0)),
+        let right_expr = binary(
+            cast(
+                binary(
+                    col("0", filter_schema)?,
                     Operator::Plus,
-                    Arc::new(Column::new("1", 1)),
-                )),
+                    col("1", filter_schema)?,
+                    filter_schema,
+                )?,
+                filter_schema,
                 DataType::Int64,
-                CastOptions { safe: false },
-            )),
+            )?,
             Operator::Lt,
-            Arc::new(BinaryExpr::new(
-                Arc::new(CastExpr::new(
-                    Arc::new(Column::new("2", 2)),
-                    DataType::Int64,
-                    CastOptions { safe: false },
-                )),
+            binary(
+                cast(col("2", filter_schema)?, filter_schema, DataType::Int64)?,
                 Operator::Plus,
-                Arc::new(Literal::new(ScalarValue::Int64(Some(100)))),
-            )),
-        );
-
-        Arc::new(BinaryExpr::new(
-            Arc::new(left_expr),
-            Operator::And,
-            Arc::new(right_expr),
-        ))
+                lit(ScalarValue::Int64(Some(100))),
+                filter_schema,
+            )?,
+            filter_schema,
+        )?;
+        binary(left_expr, Operator::And, right_expr, filter_schema)
     }
 
     #[test]
@@ -323,7 +318,7 @@ pub mod tests {
         )]));
         // Sorting information for the left side:
         let left_child_sort_expr = PhysicalSortExpr {
-            expr: Arc::new(Column::new("left_1", 0)),
+            expr: col("left_1", left_child_schema.as_ref())?,
             options: SortOptions::default(),
         };
 
@@ -333,11 +328,12 @@ pub mod tests {
         ]));
         // Sorting information for the right side:
         let right_child_sort_expr = PhysicalSortExpr {
-            expr: Arc::new(BinaryExpr::new(
-                Arc::new(Column::new("right_1", 0)),
+            expr: binary(
+                col("right_1", right_child_schema.as_ref())?,
                 Operator::Plus,
-                Arc::new(Column::new("right_2", 1)),
-            )),
+                col("right_2", right_child_schema.as_ref())?,
+                right_child_schema.as_ref(),
+            )?,
             options: SortOptions::default(),
         };
 
@@ -405,15 +401,26 @@ pub mod tests {
     }
 
     #[test]
-    fn test_column_collector() {
-        let filter_expr = complicated_filter();
+    fn test_column_collector() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("0", DataType::Int32, true),
+            Field::new("1", DataType::Int32, true),
+            Field::new("2", DataType::Int32, true),
+        ]));
+        let filter_expr = complicated_filter(schema.as_ref())?;
         let columns = collect_columns(&filter_expr);
-        assert_eq!(columns.len(), 3)
+        assert_eq!(columns.len(), 3);
+        Ok(())
     }
 
     #[test]
     fn find_expr_inside_expr() -> Result<()> {
-        let filter_expr = complicated_filter();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("0", DataType::Int32, true),
+            Field::new("1", DataType::Int32, true),
+            Field::new("2", DataType::Int32, true),
+        ]));
+        let filter_expr = complicated_filter(schema.as_ref())?;
 
         let expr_1: Arc<dyn PhysicalExpr> = Arc::new(Column::new("gnz", 0));
         assert!(!check_filter_expr_contains_sort_information(
@@ -421,22 +428,23 @@ pub mod tests {
             &expr_1
         ));
 
-        let expr_2: Arc<dyn PhysicalExpr> = Arc::new(Column::new("1", 1));
+        let expr_2: Arc<dyn PhysicalExpr> = col("1", schema.as_ref())?;
 
         assert!(check_filter_expr_contains_sort_information(
             &filter_expr,
             &expr_2
         ));
 
-        let expr_3: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
-            Arc::new(BinaryExpr::new(
-                Arc::new(Column::new("0", 0)),
+        let expr_3: Arc<dyn PhysicalExpr> = cast(
+            binary(
+                col("0", schema.as_ref())?,
                 Operator::Plus,
-                Arc::new(Column::new("1", 1)),
-            )),
+                col("1", schema.as_ref())?,
+                schema.as_ref(),
+            )?,
+            schema.as_ref(),
             DataType::Int64,
-            CastOptions { safe: false },
-        ));
+        )?;
 
         assert!(check_filter_expr_contains_sort_information(
             &filter_expr,
@@ -496,16 +504,17 @@ pub mod tests {
             Field::new(filter_col_2.name(), DataType::Int32, true),
         ]);
 
-        let filter_expr = complicated_filter();
+        let filter_expr = complicated_filter(&intermediate_schema)?;
 
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, intermediate_schema.clone());
 
         assert!(build_filter_input_order(
             JoinSide::Left,
             &filter,
             &left_schema,
             &PhysicalSortExpr {
-                expr: Arc::new(Column::new("la1", 0)),
+                expr: col("la1", left_schema.as_ref())?,
                 options: SortOptions::default(),
             }
         )
@@ -515,7 +524,7 @@ pub mod tests {
             &filter,
             &left_schema,
             &PhysicalSortExpr {
-                expr: Arc::new(Column::new("lt1", 3)),
+                expr: col("lt1", left_schema.as_ref())?,
                 options: SortOptions::default(),
             }
         )
@@ -525,7 +534,7 @@ pub mod tests {
             &filter,
             &right_schema,
             &PhysicalSortExpr {
-                expr: Arc::new(Column::new("ra1", 0)),
+                expr: col("ra1", right_schema.as_ref())?,
                 options: SortOptions::default(),
             }
         )
@@ -535,7 +544,7 @@ pub mod tests {
             &filter,
             &right_schema,
             &PhysicalSortExpr {
-                expr: Arc::new(Column::new("rb1", 1)),
+                expr: col("rb1", right_schema.as_ref())?,
                 options: SortOptions::default(),
             }
         )
@@ -564,25 +573,27 @@ pub mod tests {
             Field::new(filter_col_1.name(), DataType::Int32, true),
         ]);
 
-        let filter_expr = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("0", 0)),
+        let filter_expr = binary(
+            col("0", &intermediate_schema)?,
             Operator::Minus,
-            Arc::new(Column::new("1", 1)),
-        ));
+            col("1", &intermediate_schema)?,
+            &intermediate_schema,
+        )?;
 
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int64, false),
+            Field::new("b", DataType::Int32, false),
         ]));
 
         let sorted = PhysicalSortExpr {
-            expr: Arc::new(BinaryExpr::new(
-                Arc::new(Column::new("a", 0)),
+            expr: binary(
+                col("a", schema.as_ref())?,
                 Operator::Plus,
-                Arc::new(Column::new("b", 1)),
-            )),
+                col("b", schema.as_ref())?,
+                schema.as_ref(),
+            )?,
             options: SortOptions::default(),
         };
 
