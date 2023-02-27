@@ -64,6 +64,7 @@ use log::debug;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PartitionSearchMode {
     Linear,
+    PartiallySorted,
     Sorted,
 }
 
@@ -360,6 +361,77 @@ impl BoundedWindowAggStream {
                         )
                         .collect::<Result<Vec<_>>>()
                         .map(Some)
+                }
+            }
+            PartitionSearchMode::PartiallySorted => {
+                // TODO: change implementation of PartiallySorted
+                let partition_by_columns =
+                    self.evaluate_partition_by_column_values(&self.input_buffer)?;
+                let mut res_generated = vec![];
+                for window_agg_state in &self.window_agg_states {
+                    let mut map = IndexMap::new();
+                    for (key, value) in window_agg_state {
+                        map.insert(key, value.state.out_col.len());
+                    }
+                    res_generated.push(map);
+                }
+                let mut counter: IndexMap<Vec<ScalarValue>, Vec<usize>> = IndexMap::new();
+                let n_window_col = self.window_agg_states.len();
+                let mut rows_gen = vec![vec![]; n_window_col];
+                for idx in 0..self.input_buffer.num_rows() {
+                    let row = get_row_at_idx(&partition_by_columns, idx)?;
+                    let counts = if let Some(res) = counter.get_mut(&row) {
+                        res
+                    } else {
+                        let mut res: Vec<usize> = vec![0; n_window_col];
+                        counter.insert(row.clone(), res);
+                        counter.get_mut(&row).unwrap()
+                    };
+                    let mut row_res = vec![];
+                    for (window_idx, window_agg_state) in
+                        self.window_agg_states.iter().enumerate()
+                    {
+                        let partition = window_agg_state.get(&row).unwrap();
+                        if counts[window_idx] < partition.state.out_col.len() {
+                            let res = ScalarValue::try_from_array(
+                                &partition.state.out_col,
+                                counts[window_idx],
+                            )?;
+                            row_res.push(res);
+                            counts[window_idx] += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    if row_res.len() != n_window_col {
+                        break;
+                    }
+                    for (col_idx, elem) in row_res.into_iter().enumerate() {
+                        rows_gen[col_idx].push(elem)
+                    }
+                }
+                for (key, val) in counter.iter() {
+                    if let Some(partition_batch_state) =
+                        self.partition_buffers.get_mut(key)
+                    {
+                        partition_batch_state.n_out_row = *val.iter().min().unwrap();
+                    }
+                }
+                if rows_gen[0].len() > 0 {
+                    let n_out = rows_gen[0].len();
+                    self.input_buffer
+                        .columns()
+                        .iter()
+                        .map(|elem| Ok(elem.slice(0, n_out)))
+                        .chain(
+                            rows_gen
+                                .into_iter()
+                                .map(|col| ScalarValue::iter_to_array(col)),
+                        )
+                        .collect::<Result<Vec<_>>>()
+                        .map(Some)
+                } else {
+                    Ok(None)
                 }
             }
             PartitionSearchMode::Linear => {
@@ -747,6 +819,38 @@ impl BoundedWindowAggStream {
                     }
                 }
             }
+            PartitionSearchMode::PartiallySorted => {
+                // TODO: change implementation of PartiallySorted
+                // TODO: ADD pruning for indices field in PartitionBatchState
+                // We store generated columns for each window expression in the `out_col`
+                // field of `WindowAggState`. Given how many rows are emitted, we remove
+                // these sections from state.
+                for partition_window_agg_states in self.window_agg_states.iter_mut() {
+                    // Remove `n_out` entries from the `out_col` field of `WindowAggState`.
+                    // Preserve per partition ordering by iterating in the order of insertion.
+                    // Do not generate a result for a new partition without emitting all results
+                    // for the current partition.
+                    for (
+                        partition_key,
+                        WindowState {
+                            state: WindowAggState { out_col, .. },
+                            ..
+                        },
+                    ) in partition_window_agg_states
+                    {
+                        // TODO: we need to consider offset_pruned_rows in calculations also
+                        let partition_batch =
+                            self.partition_buffers.get_mut(partition_key).unwrap();
+                        assert_eq!(
+                            partition_batch.record_batch.num_rows(),
+                            partition_batch.indices.len()
+                        );
+                        let n_to_del = partition_batch.n_out_row;
+                        let n_to_keep = out_col.len() - n_to_del;
+                        *out_col = out_col.slice(n_to_del, n_to_keep);
+                    }
+                }
+            }
             PartitionSearchMode::Linear => {
                 // TODO: ADD pruning for indices field in PartitionBatchState
                 // We store generated columns for each window expression in the `out_col`
@@ -829,6 +933,21 @@ impl BoundedWindowAggStream {
                     let slice = record_batch.slice(range.start, len);
                     let indices = (range.start..range.end).collect();
                     res.insert(partition_row, (slice, indices));
+                }
+            }
+            PartitionSearchMode::PartiallySorted => {
+                let partition_bys =
+                    self.evaluate_partition_by_column_values(&record_batch)?;
+                let mut indices_map: HashMap<Vec<ScalarValue>, Vec<usize>> =
+                    HashMap::new();
+                for idx in 0..num_rows {
+                    let partition_row = get_row_at_idx(&partition_bys, idx)?;
+                    let indices = indices_map.entry(partition_row).or_default();
+                    indices.push(idx);
+                }
+                for (partition_row, indices) in indices_map {
+                    let partition_batch = get_at_indices(&record_batch, &indices)?;
+                    res.insert(partition_row, (partition_batch, indices));
                 }
             }
             PartitionSearchMode::Linear => {
