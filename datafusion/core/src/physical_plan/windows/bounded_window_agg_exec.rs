@@ -61,10 +61,10 @@ use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use indexmap::IndexMap;
 use log::debug;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PartitionSearchMode {
     Linear,
-    PartiallySorted,
+    PartiallySorted(Vec<PhysicalSortExpr>),
     Sorted,
 }
 
@@ -228,7 +228,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
             self.input_schema.clone(),
             self.partition_keys.clone(),
             self.sort_keys.clone(),
-            self.partition_search_mode,
+            self.partition_search_mode.clone(),
         )?))
     }
 
@@ -244,7 +244,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
             input,
             BaselineMetrics::new(&self.metrics, partition),
             self.partition_by_sort_keys()?,
-            self.partition_search_mode,
+            self.partition_search_mode.clone(),
         ));
         Ok(stream)
     }
@@ -363,7 +363,7 @@ impl BoundedWindowAggStream {
                         .map(Some)
                 }
             }
-            PartitionSearchMode::PartiallySorted => {
+            PartitionSearchMode::PartiallySorted(_) => {
                 // TODO: change implementation of PartiallySorted
                 let partition_by_columns =
                     self.evaluate_partition_by_column_values(&self.input_buffer)?;
@@ -819,7 +819,7 @@ impl BoundedWindowAggStream {
                     }
                 }
             }
-            PartitionSearchMode::PartiallySorted => {
+            PartitionSearchMode::PartiallySorted(_) => {
                 // TODO: change implementation of PartiallySorted
                 // TODO: ADD pruning for indices field in PartitionBatchState
                 // We store generated columns for each window expression in the `out_col`
@@ -935,7 +935,7 @@ impl BoundedWindowAggStream {
                     res.insert(partition_row, (slice, indices));
                 }
             }
-            PartitionSearchMode::PartiallySorted => {
+            PartitionSearchMode::PartiallySorted(_) => {
                 let partition_bys =
                     self.evaluate_partition_by_column_values(&record_batch)?;
                 let mut indices_map: HashMap<Vec<ScalarValue>, Vec<usize>> =

@@ -755,28 +755,24 @@ fn can_skip_ordering_fn(
                 .unwrap_or(true);
             let contains_all_partition_bys =
                 partitionby_indices.len() == partitionby_keys.len();
-            let (mode, ordered_partition_bys) = if is_first_partition_by
+            let mode = if is_first_partition_by
                 && partition_by_consecutive
                 && contains_all_partition_bys
             {
                 let first_n = calc_first_n(&partitionby_indices);
                 assert_eq!(first_n, partitionby_keys.len());
-                (
-                    PartitionSearchMode::Sorted,
-                    physical_ordering[0..first_n].to_vec(),
-                )
+                PartitionSearchMode::Sorted
             } else if is_first_partition_by {
                 println!("should have been Partially Sorted");
                 // TODO: Add partially sorted
                 let first_n = calc_first_n(&partitionby_indices);
                 assert!(first_n < partitionby_keys.len());
                 println!("first_n:{:?}", first_n);
-                (
-                    PartitionSearchMode::PartiallySorted,
+                PartitionSearchMode::PartiallySorted(
                     physical_ordering[0..first_n].to_vec(),
                 )
             } else {
-                (PartitionSearchMode::Linear, vec![])
+                PartitionSearchMode::Linear
             };
 
             // println!("physical_ordering: {:?}", physical_ordering);
@@ -800,8 +796,8 @@ fn can_skip_ordering_fn(
             if !streamable {
                 return Ok(None);
             }
-            if let Some((first_should_reverse, first_mode)) = res {
-                if first_should_reverse != should_reverse || first_mode != mode {
+            if let Some((first_should_reverse, first_mode)) = &res {
+                if *first_should_reverse != should_reverse || first_mode != &mode {
                     return Ok(None);
                 }
             } else {
