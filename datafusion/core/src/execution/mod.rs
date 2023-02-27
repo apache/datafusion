@@ -43,7 +43,8 @@
 pub mod context;
 pub mod disk_manager;
 pub mod memory_pool;
-pub mod options;
+// backwards compatibility
+pub use crate::datasource::file_format::options;
 pub mod registry;
 pub mod runtime_env;
 
