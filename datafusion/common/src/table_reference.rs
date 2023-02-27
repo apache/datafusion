@@ -69,7 +69,7 @@ pub enum TableReference<'a> {
 
 /// Represents a path to a table that may require further resolution
 /// that owns the underlying names
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum OwnedTableReference {
     /// An unqualified table reference, e.g. "table"
     Bare {
