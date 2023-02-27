@@ -274,6 +274,45 @@ impl TreeNodeRewriter<Arc<dyn PhysicalExpr>> for ColumnCollector {
     }
 }
 
+/// Re-assign column indices referenced in predicate according to given schema.
+///
+/// This may be helpful when dealing with projections.
+pub fn reassign_predicate_columns(
+    pred: Arc<dyn PhysicalExpr>,
+    schema: &SchemaRef,
+    ignore_not_found: bool,
+) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
+    let mut rewriter = ColumnAssigner {
+        schema: schema.clone(),
+        ignore_not_found,
+    };
+    pred.clone().transform_using(&mut rewriter)
+}
+
+#[derive(Debug)]
+struct ColumnAssigner {
+    schema: SchemaRef,
+    ignore_not_found: bool,
+}
+
+impl TreeNodeRewriter<Arc<dyn PhysicalExpr>> for ColumnAssigner {
+    fn mutate(
+        &mut self,
+        expr: Arc<dyn PhysicalExpr>,
+    ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
+        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            let index = match self.schema.index_of(column.name()) {
+                Ok(idx) => idx,
+                Err(_) if self.ignore_not_found => usize::MAX,
+                Err(e) => return Err(e.into()),
+            };
+            return Ok(Arc::new(Column::new(column.name(), index)));
+        }
+
+        Ok(expr)
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
