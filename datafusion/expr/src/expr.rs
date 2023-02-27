@@ -639,6 +639,31 @@ impl Expr {
         binary_expr(self, Operator::Or, other)
     }
 
+    /// Return `self & other`
+    pub fn bitwise_and(self, other: Expr) -> Expr {
+        binary_expr(self, Operator::BitwiseAnd, other)
+    }
+
+    /// Return `self | other`
+    pub fn bitwise_or(self, other: Expr) -> Expr {
+        binary_expr(self, Operator::BitwiseOr, other)
+    }
+
+    /// Return `self ^ other`
+    pub fn bitwise_xor(self, other: Expr) -> Expr {
+        binary_expr(self, Operator::BitwiseXor, other)
+    }
+
+    /// Return `self >> other`
+    pub fn bitwise_shift_right(self, other: Expr) -> Expr {
+        binary_expr(self, Operator::BitwiseShiftRight, other)
+    }
+
+    /// Return `self << other`
+    pub fn bitwise_shift_left(self, other: Expr) -> Expr {
+        binary_expr(self, Operator::BitwiseShiftLeft, other)
+    }
+
     /// Return `!self`
     #[allow(clippy::should_implement_trait)]
     pub fn not(self) -> Expr {

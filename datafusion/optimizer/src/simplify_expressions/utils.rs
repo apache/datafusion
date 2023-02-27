@@ -23,6 +23,7 @@ use datafusion_expr::{
     expr_fn::{and, concat_ws, or},
     lit, BuiltinScalarFunction, Expr, Like, Operator,
 };
+use std::collections::VecDeque;
 
 pub static POWS_OF_TEN: [i128; 38] = [
     1,
@@ -75,6 +76,73 @@ pub fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
         }
         _ => expr == needle,
     }
+}
+
+/// This enum is needed for the function "delete_expressions_in_complex_expr" for
+/// creating a postfix notation vector
+#[derive(PartialEq)]
+enum SyntaxTreeItem {
+    Operator(Operator),
+    Expr(Expr),
+}
+
+/// Deletes all 'needles' or remain one 'needle' that are found in a chain of search_op
+/// expressions for XOR optimization. Such as: A ^ (A ^ (B ^ A))
+pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr) -> Expr {
+    let mut postfix_notation: VecDeque<SyntaxTreeItem> = VecDeque::new();
+    /// Creates postfix notation
+    fn create_postfix_notation(postfix_notation: &mut VecDeque<SyntaxTreeItem>, expr: &Expr) {
+        match expr {
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == Operator::BitwiseXor => {
+                postfix_notation.push_back(SyntaxTreeItem::Operator(*op));
+                create_postfix_notation(postfix_notation, left);
+                create_postfix_notation(postfix_notation, right);
+            }
+            _ => {
+                postfix_notation.push_back(SyntaxTreeItem::Expr(expr.clone()))
+            }
+        }
+    }
+    let mut xor_counter: i32 = 0;
+    create_postfix_notation(&mut postfix_notation, expr);
+
+    /// Restores expression from postfix notation
+    fn restore_expr(postfix_notation: &mut VecDeque<SyntaxTreeItem>, xor_counter: &mut i32, needle: &Expr) -> Expr {
+        let item = postfix_notation.pop_front().unwrap();
+
+        match item {
+            SyntaxTreeItem::Operator(operator) => {
+                let left = restore_expr(postfix_notation, xor_counter, needle);
+                let right = restore_expr(postfix_notation, xor_counter, needle);
+                if left == *needle {
+                    *xor_counter += 1;
+                    return right;
+                } else if right == *needle {
+                    *xor_counter += 1;
+                    return left;
+                }
+
+                Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(left),
+                    operator,
+                    Box::new(right),
+                ))
+            }
+            SyntaxTreeItem::Expr(expr) => expr
+        }
+    }
+
+    let result_expr = restore_expr(&mut postfix_notation, &mut xor_counter, needle);
+    if result_expr == *needle {
+        return Expr::Literal(ScalarValue::Int32(Some(0)))
+    } else if xor_counter % 2 == 0 {
+        return Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(needle.clone()),
+            Operator::BitwiseXor,
+            Box::new(result_expr),
+        ));
+    }
+    result_expr
 }
 
 pub fn is_zero(s: &Expr) -> bool {
@@ -154,9 +222,14 @@ pub fn is_op_with(target_op: Operator, haystack: &Expr, needle: &Expr) -> bool {
     matches!(haystack, Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()))
 }
 
-/// returns true if `not_expr` is !`expr`
+/// returns true if `not_expr` is !`expr` (not)
 pub fn is_not_of(not_expr: &Expr, expr: &Expr) -> bool {
     matches!(not_expr, Expr::Not(inner) if expr == inner.as_ref())
+}
+
+/// returns true if `not_expr` is !`expr` (bitwise not)
+pub fn is_negative_of(not_expr: &Expr, expr: &Expr) -> bool {
+    matches!(not_expr, Expr::Negative(inner) if expr == inner.as_ref())
 }
 
 /// returns the contained boolean value in `expr` as
