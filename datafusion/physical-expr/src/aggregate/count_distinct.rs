@@ -150,9 +150,9 @@ impl DistinctCountAccumulator {
         })
     }
 
-    // calculating the size approximately, taking first batch size * number of batches
-    // approx_size has some inaccuracy for variable length values, like strings.
-    fn approx_size(&self) -> usize {
+    // calculating the size for fixed length values, taking first batch size * number of batches
+    // This method is faster than .size, however it is not suitable for variable length values like strings or complex types
+    fn fixed_size(&self) -> usize {
         std::mem::size_of_val(self)
             + (std::mem::size_of::<DistinctScalarValues>() * self.values.capacity())
             + self
@@ -271,7 +271,7 @@ impl Accumulator for DistinctCountAccumulator {
             | DataType::UInt16
             | DataType::UInt32
             | DataType::UInt64
-            | DataType::UInt8 => self.approx_size(),
+            | DataType::UInt8 => self.fixed_size(),
             _ => self.full_size(),
         }
     }
