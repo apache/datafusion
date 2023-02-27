@@ -575,6 +575,21 @@ pub fn get_partition_by_indices(
     Ok(result)
 }
 
+pub fn get_partition_by_mapping_indices(
+    to_search: &[Arc<dyn PhysicalExpr>],
+    searched: &[Arc<dyn PhysicalExpr>],
+) -> Result<Vec<usize>> {
+    let mut result = vec![];
+    for item in to_search {
+        if let Some((idx, _elem)) =
+            searched.iter().enumerate().find(|(idx, e)| e.eq(item))
+        {
+            result.push(idx);
+        }
+    }
+    Ok(result)
+}
+
 pub fn get_order_by_indices(
     to_search: &[PhysicalSortExpr],
     searched: &[PhysicalSortExpr],
@@ -762,15 +777,27 @@ fn can_skip_ordering_fn(
                 let first_n = calc_first_n(&partitionby_indices);
                 assert_eq!(first_n, partitionby_keys.len());
                 PartitionSearchMode::Sorted
-            } else if is_first_partition_by && !partitionby_indices.is_empty(){
+            } else if is_first_partition_by && !partitionby_indices.is_empty() {
                 println!("should have been Partially Sorted");
                 // TODO: Add partially sorted
                 let first_n = calc_first_n(&partitionby_indices);
                 assert!(first_n < partitionby_keys.len());
                 println!("first_n:{:?}", first_n);
                 println!("partitionby_indices: {:?}", partitionby_indices);
+                let partitionby_mapping_indices = get_partition_by_mapping_indices(
+                    &physical_ordering[0..first_n]
+                        .iter()
+                        .map(|elem| elem.expr.clone())
+                        .collect::<Vec<_>>(),
+                    &partitionby_keys,
+                )?;
+                println!(
+                    "partitionby_mapping_indices: {:?}",
+                    partitionby_mapping_indices
+                );
                 PartitionSearchMode::PartiallySorted(
-                    physical_ordering[0..first_n].to_vec(),
+                    // physical_ordering[0..first_n].to_vec(),
+                    partitionby_mapping_indices,
                 )
             } else {
                 PartitionSearchMode::Linear

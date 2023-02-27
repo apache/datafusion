@@ -64,7 +64,7 @@ use log::debug;
 #[derive(Debug, Clone, PartialEq)]
 pub enum PartitionSearchMode {
     Linear,
-    PartiallySorted(Vec<PhysicalSortExpr>),
+    PartiallySorted(Vec<usize>),
     Sorted,
 }
 
@@ -494,33 +494,29 @@ impl BoundedWindowAggStream {
                     partition_batch_state.is_end |= idx < n_partitions - 1;
                 }
             }
-            PartitionSearchMode::PartiallySorted(ordered_partition_bys) => {
+            PartitionSearchMode::PartiallySorted(ordered_partition_by_indices) => {
                 if let Some((last_row, _)) = self.partition_buffers.last() {
                     println!("last_row:{:?}", last_row);
                     println!("partition keys:{:?}", self.partition_by_sort_keys);
                     println!("partition bys:{:?}", self.window_expr[0].partition_by());
-                    println!("ordered_partition_bys:{:?}", ordered_partition_bys);
+                    println!("ordered_partition_bys:{:?}", ordered_partition_by_indices);
                     // TODO: Get ordered_partition_bys indices to partition by mapping
-                    let indices = (0..ordered_partition_bys.len()).collect::<Vec<_>>();
-                    println!("indices: {:?}", indices);
-                    let last_sorted_cols = indices
+                    // let indices = (0..ordered_partition_by_indices.len()).collect::<Vec<_>>();
+                    // println!("indices: {:?}", indices);
+                    let last_sorted_cols = ordered_partition_by_indices
                         .iter()
                         .map(|idx| last_row[*idx].clone())
                         .collect::<Vec<_>>();
-                    println!(
-                        "last_sorted_cols:{:?}", last_sorted_cols
-                    );
+                    println!("last_sorted_cols:{:?}", last_sorted_cols);
                     for (partition_row, partition_batch_state) in
                         self.partition_buffers.iter_mut()
                     {
                         println!("partition_row:{:?}", partition_row);
-                        let sorted_cols = indices
+                        let sorted_cols = ordered_partition_by_indices
                             .iter()
                             .map(|idx| partition_row[*idx].clone())
                             .collect::<Vec<_>>();
-                        println!(
-                            "sorted_cols:{:?}", sorted_cols
-                        );
+                        println!("sorted_cols:{:?}", sorted_cols);
                         if sorted_cols != last_sorted_cols {
                             // It is guaranteed that we will no longer receive value for these partitions
                             println!("marking as end");
