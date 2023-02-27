@@ -727,24 +727,6 @@ fn can_skip_ordering_fn(
                 PartitionSearchMode::Linear
             };
 
-            // println!("physical_ordering: {:?}", physical_ordering);
-            // println!("partition_keys: {:?}", partitionby_keys);
-            // println!("orderby_keys: {:?}", orderby_keys);
-            // println!("partitionby_indices:{:?}", partitionby_indices);
-            // println!("orderby_indices:{:?}", orderby_indices);
-            // println!("merged_indices: {:?}", merged_indices);
-            // println!("input_orderby_columns   :{:?}", input_orderby_columns);
-            // println!("expected_orderby_columns:{:?}", expected_orderby_columns);
-            // println!(
-            //     "is_same_ordering: {:?}, is_reversed_ordering: {:?}, is_aligned: {:?}",
-            //     is_same_ordering, should_reverse, is_aligned
-            // );
-            // println!(
-            //     "contains_all_partition_bys:{:?}, contains_all_orderbys:{:?}",
-            //     contains_all_partition_bys, contains_all_orderbys
-            // );
-            // println!("is_consecutive:{:?}, all_partition: {:?}, streamable: {:?}, partition_by_consecutive:{:?}, is_first_partition_by:{:?}, mode:{:?}", is_merge_consecutive, all_partition, streamable, partition_by_consecutive, is_first_partition_by, mode);
-
             if !streamable {
                 return Ok(None);
             }
@@ -801,7 +783,7 @@ fn analyze_window_sort_removal(
         // cannot skip sort
         return Ok(None);
     };
-    println!("partition_search mode:{:?}", partition_search_mode);
+
     let new_window_expr = if should_reverse {
         window_expr
             .iter()

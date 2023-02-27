@@ -371,16 +371,19 @@ impl BoundedWindowAggStream {
             PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted(_) => {
                 let partition_by_columns =
                     self.evaluate_partition_by_column_values(&self.input_buffer)?;
-                let mut res_generated = vec![];
-                for window_agg_state in &self.window_agg_states {
+                let n_window_col = self.window_agg_states.len();
+                // Store for each window expression, number of columns generated for each partition.
+                let mut res_generated = vec![IndexMap::new(); n_window_col];
+                for (idx, window_agg_state) in self.window_agg_states.iter().enumerate() {
                     let mut map = IndexMap::new();
                     for (key, value) in window_agg_state {
                         map.insert(key, value.state.out_col.len());
                     }
-                    res_generated.push(map);
+                    res_generated[idx] = map;
                 }
+
+                // Calculate the number of columns that can be emitted for each window expression for each partition.
                 let mut counter: IndexMap<Vec<ScalarValue>, Vec<usize>> = IndexMap::new();
-                let n_window_col = self.window_agg_states.len();
                 let mut rows_gen = vec![vec![]; n_window_col];
                 for idx in 0..self.input_buffer.num_rows() {
                     let row = get_row_at_idx(&partition_by_columns, idx)?;
@@ -407,6 +410,7 @@ impl BoundedWindowAggStream {
                             break;
                         }
                     }
+                    // If we cannot produce result for each window expression stop iteration
                     if row_res.len() != n_window_col {
                         break;
                     }
@@ -414,11 +418,13 @@ impl BoundedWindowAggStream {
                         rows_gen[col_idx].push(elem)
                     }
                 }
-                for (key, val) in counter.iter() {
+                for (partition_row, val) in counter.iter() {
                     if let Some(partition_batch_state) =
-                        self.partition_buffers.get_mut(key)
+                        self.partition_buffers.get_mut(partition_row)
                     {
+                        // Store how many rows are generated for each partition
                         partition_batch_state.n_out_row = *val.iter().min().unwrap();
+                        println!("partition_batch_state.n_out_row: {:?}", partition_batch_state.n_out_row);
                     }
                 }
                 if !rows_gen[0].is_empty() {
@@ -680,11 +686,12 @@ impl BoundedWindowAggStream {
                 .partition_buffers
                 .get_mut(partition_row)
                 .ok_or_else(err)?;
-            // TODO: do not ues below value for each window state take minimum beginning
+
             let batch = &partition_batch_state.record_batch;
             partition_batch_state.record_batch =
                 batch.slice(*n_prune, batch.num_rows() - n_prune);
 
+            // Remove first n_prune elements from the indices. Since they are pruned.
             partition_batch_state.indices.drain(0..*n_prune);
             partition_batch_state.n_out_row = 0;
 
@@ -709,7 +716,6 @@ impl BoundedWindowAggStream {
     /// are calculated and emitted.
     fn prune_input_batch(&mut self, n_out: usize) -> Result<()> {
         // Implementation is same for both Linear and Sorted version
-        // TODO: ADD pruning for indices field in PartitionBatchState
         let n_to_keep = self.input_buffer.num_rows() - n_out;
         let batch_to_keep = self
             .input_buffer
@@ -753,7 +759,6 @@ impl BoundedWindowAggStream {
                 }
             }
             PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted(_) => {
-                // TODO: ADD pruning for indices field in PartitionBatchState
                 // We store generated columns for each window expression in the `out_col`
                 // field of `WindowAggState`. Given how many rows are emitted, we remove
                 // these sections from state.
@@ -770,7 +775,6 @@ impl BoundedWindowAggStream {
                         },
                     ) in partition_window_agg_states
                     {
-                        // TODO: we need to consider offset_pruned_rows in calculations also
                         let partition_batch =
                             self.partition_buffers.get_mut(partition_key).unwrap();
                         assert_eq!(
