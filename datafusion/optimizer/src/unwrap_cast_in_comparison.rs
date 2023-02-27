@@ -51,7 +51,7 @@ use std::sync::Arc;
 /// 4. `literal_expr IN (cast(expr1) , cast(expr2), ...)`
 ///
 /// If the expression matches one of the forms above, the rule will
-/// ensure the value of `literal` is in within range(min, max) of the
+/// ensure the value of `literal` is in range(min, max) of the
 /// expr's data_type, and if the scalar is within range, the literal
 /// will be casted to the data type of expr on the other side, and the
 /// cast will be removed from the other side.

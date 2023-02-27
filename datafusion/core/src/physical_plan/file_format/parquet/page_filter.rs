@@ -110,14 +110,16 @@ impl PagePruningPredicate {
     pub fn try_new(expr: &Expr, schema: SchemaRef) -> Result<Self> {
         let predicates = split_conjunction(expr)
             .into_iter()
-            .filter_map(|predicate| match predicate.to_columns() {
-                Ok(columns) if columns.len() == 1 => {
-                    match PruningPredicate::try_new(predicate.clone(), schema.clone()) {
-                        Ok(p) if !p.allways_true() => Some(Ok(p)),
-                        _ => None,
+            .filter_map(|predicate| {
+                match PruningPredicate::try_new(predicate.clone(), schema.clone()) {
+                    Ok(p)
+                        if (!p.allways_true())
+                            && (p.required_columns().n_columns() < 2) =>
+                    {
+                        Some(Ok(p))
                     }
+                    _ => None,
                 }
-                _ => None,
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self { predicates })
