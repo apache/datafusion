@@ -23,20 +23,19 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
-use arrow::util::pretty::print_batches;
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
 use parquet::file::properties::WriterProperties;
 
 use datafusion_common::from_slice::FromSlice;
 use datafusion_common::{Column, DFSchema, ScalarValue};
-use datafusion_expr::TableProviderFilterPushDown;
+use datafusion_expr::{TableProviderFilterPushDown, UNNAMED_TABLE};
 
 use crate::arrow::datatypes::Schema;
 use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
-use crate::datasource::{MemTable, TableProvider};
+use crate::datasource::{provider_as_source, MemTable, TableProvider};
 use crate::error::Result;
 use crate::execution::{
     context::{SessionState, TaskContext},
@@ -317,36 +316,14 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/tpch-csv/customer.csv", CsvReadOptions::new()).await?;    
-    /// df.describe().await?;
+    /// df.describe().await.unwrap();
     ///
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn describe(self) -> Result<()> {
-        Ok(print_batches(
-            &self.clone().collect_describe().await.unwrap(),
-        )?)
-    }
-
-    /// Summary statistics for a DataFrame. Only summarizes numeric datatypes at the moment and
-    /// returns nulls for non numeric datatypes. Try in keep output similar to pandas
-    ///
-    /// ```
-    /// # use datafusion::prelude::*;
-    /// # use datafusion::error::Result;
-    /// # use arrow::util::pretty;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<()> {
-    /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/tpch-csv/customer.csv", CsvReadOptions::new()).await?;    
-    /// df.collect_describe().await.unwrap();
-    ///
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn collect_describe(self) -> Result<Vec<RecordBatch>> {
+    pub async fn describe(self) -> Result<Self> {
         //the functions now supported
-        let supported_describe_functions = vec!["count", "null_count", "max", "min"]; //"count",  "max", "min",
+        let supported_describe_functions = vec!["count", "null_count", "max", "min"];
 
         let fields_iter = self.schema().fields().iter();
 
@@ -371,12 +348,7 @@ impl DataFrame {
                     vec![],
                     fields_iter
                         .clone()
-                        .map(|f| {
-                            Expr::Alias(
-                                Box::new(datafusion_expr::count(col(f.name()))),
-                                f.name().to_string(),
-                            )
-                        })
+                        .map(|f| datafusion_expr::count(col(f.name())).alias(f.name()))
                         .collect::<Vec<_>>(),
                 )?
                 .collect()
@@ -388,12 +360,10 @@ impl DataFrame {
                     fields_iter
                         .clone()
                         .map(|f| {
-                            Expr::Alias(
-                                Box::new(datafusion_expr::count(
-                                    datafusion_expr::is_null(col(f.name())),
-                                )),
-                                f.name().to_string(),
-                            )
+                            datafusion_expr::count(datafusion_expr::is_null(
+                                col(f.name()),
+                            ))
+                            .alias(f.name())
                         })
                         .collect::<Vec<_>>(),
                 )?
@@ -405,13 +375,10 @@ impl DataFrame {
                     vec![],
                     fields_iter
                         .clone()
-                        .filter(|f| matches!(f.data_type().is_numeric(), true))
-                        .map(|f| {
-                            Expr::Alias(
-                                Box::new(datafusion_expr::max(col(f.name()))),
-                                f.name().to_string(),
-                            )
+                        .filter(|f| {
+                            !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
                         })
+                        .map(|f| datafusion_expr::max(col(f.name())).alias(f.name()))
                         .collect::<Vec<_>>(),
                 )?
                 .collect()
@@ -422,13 +389,10 @@ impl DataFrame {
                     vec![],
                     fields_iter
                         .clone()
-                        .filter(|f| matches!(f.data_type().is_numeric(), true))
-                        .map(|f| {
-                            Expr::Alias(
-                                Box::new(datafusion_expr::min(col(f.name()))),
-                                f.name().to_string(),
-                            )
+                        .filter(|f| {
+                            !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
                         })
+                        .map(|f| datafusion_expr::min(col(f.name())).alias(f.name()))
                         .collect::<Vec<_>>(),
                 )?
                 .collect()
@@ -436,7 +400,7 @@ impl DataFrame {
         ];
 
         let mut array_ref_vec: Vec<ArrayRef> = vec![];
-        for field in self.schema().fields().iter() {
+        for field in fields_iter {
             let mut array_datas = vec![];
             for record_batch in describe_record_batch.iter() {
                 let column = record_batch.get(0).unwrap().column_by_name(field.name());
@@ -474,7 +438,22 @@ impl DataFrame {
 
         let describe_record_batch =
             RecordBatch::try_new(Arc::new(Schema::new(describe_schemas)), array_ref_vec)?;
-        Ok(vec![describe_record_batch])
+
+        let provider = MemTable::try_new(
+            describe_record_batch.schema(),
+            vec![vec![describe_record_batch]],
+        )?;
+        Ok(DataFrame::new(
+            self.session_state,
+            LogicalPlanBuilder::scan(
+                UNNAMED_TABLE,
+                provider_as_source(Arc::new(provider)),
+                None,
+            )?
+            .build()?,
+        ))
+
+        // Ok(vec![describe_record_batch])
     }
 
     /// Sort the DataFrame by the specified sorting expressions. Any expression can be turned into

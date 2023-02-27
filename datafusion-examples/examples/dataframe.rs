@@ -56,7 +56,8 @@ async fn main() -> Result<()> {
             ParquetReadOptions::default(),
         )
         .await?;
-    parquet_df.describe().await?;
+    parquet_df.clone().show().await?;
+    parquet_df.describe().await.unwrap().show().await?;
 
     Ok(())
 }
