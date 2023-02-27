@@ -21,1041 +21,8 @@ use ::parquet::file::properties::WriterProperties;
 use datafusion::execution::options::ReadOptions;
 
 #[tokio::test]
-async fn window_in_expression() -> Result<()> {
-    let ctx = SessionContext::new();
-    let sql = "select 1 - lag(amount, 1) over (order by idx) as column1 from (values ('a', 1, 100), ('a', 2, 150)) as t (col1, idx, amount)";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------+",
-        "| column1 |",
-        "+---------+",
-        "|         |",
-        "| -99     |",
-        "+---------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_with_agg_in_expression() -> Result<()> {
-    let ctx = SessionContext::new();
-    let sql = "select col1, idx, count(*), sum(amount), lag(sum(amount), 1) over (order by idx) as prev_amount,
-        sum(amount) - lag(sum(amount), 1) over (order by idx) as difference from (
-        select * from (values ('a', 1, 100), ('a', 2, 150)) as t (col1, idx, amount)
-        ) a
-        group by col1, idx;";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+------+-----+-----------------+---------------+-------------+------------+",
-        "| col1 | idx | COUNT(UInt8(1)) | SUM(a.amount) | prev_amount | difference |",
-        "+------+-----+-----------------+---------------+-------------+------------+",
-        "| a    | 1   | 1               | 100           |             |            |",
-        "| a    | 2   | 1               | 150           | 100         | 50         |",
-        "+------+-----+-----------------+---------------+-------------+------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_empty() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT \
-               SUM(c3) OVER() as sum1, \
-               COUNT(*) OVER () as count1 \
-               FROM aggregate_test_100 \
-               ORDER BY c9 \
-               LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+------+--------+",
-        "| sum1 | count1 |",
-        "+------+--------+",
-        "| 781  | 100    |",
-        "| 781  | 100    |",
-        "| 781  | 100    |",
-        "| 781  | 100    |",
-        "| 781  | 100    |",
-        "+------+--------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_rows_preceding() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT \
-               SUM(c4) OVER(ORDER BY c4 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
-               AVG(c4) OVER(ORDER BY c4 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
-               COUNT(*) OVER(ORDER BY c4 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)\
-               FROM aggregate_test_100 \
-               ORDER BY c9 \
-               LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------+----------------------------+-----------------+",
-        "| SUM(aggregate_test_100.c4) | AVG(aggregate_test_100.c4) | COUNT(UInt8(1)) |",
-        "+----------------------------+----------------------------+-----------------+",
-        "| -48302                     | -16100.666666666666        | 3               |",
-        "| 11243                      | 3747.6666666666665         | 3               |",
-        "| -51311                     | -17103.666666666668        | 3               |",
-        "| -2391                      | -797                       | 3               |",
-        "| 46756                      | 15585.333333333334         | 3               |",
-        "+----------------------------+----------------------------+-----------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_rows_preceding_stddev_variance() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT \
-               VAR(c4) OVER(ORDER BY c4 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
-               VAR_POP(c4) OVER(ORDER BY c4 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
-               STDDEV(c4) OVER(ORDER BY c4 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
-               STDDEV_POP(c4) OVER(ORDER BY c4 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)\
-               FROM aggregate_test_100 \
-               ORDER BY c9 \
-               LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------------------+------------------------------------+-------------------------------+----------------------------------+",
-        "| VARIANCE(aggregate_test_100.c4) | VARIANCEPOP(aggregate_test_100.c4) | STDDEV(aggregate_test_100.c4) | STDDEVPOP(aggregate_test_100.c4) |",
-        "+---------------------------------+------------------------------------+-------------------------------+----------------------------------+",
-        "| 46721.33333333174               | 31147.555555554496                 | 216.15118166073427            | 176.4867007894773                |",
-        "| 2639429.333333332               | 1759619.5555555548                 | 1624.6320609089714            | 1326.5065229977404               |",
-        "| 746202.3333333324               | 497468.2222222216                  | 863.8300372951455             | 705.3142719541563                |",
-        "| 768422.9999999981               | 512281.9999999988                  | 876.5973990378925             | 715.7387791645767                |",
-        "| 66526.3333333288                | 44350.88888888587                  | 257.9269922542594             | 210.5965073045749                |",
-        "+---------------------------------+------------------------------------+-------------------------------+----------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_rows_preceding_with_partition_unique_order_by() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT \
-               SUM(c4) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
-               AVG(c4) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
-               COUNT(*) OVER(PARTITION BY c2 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)\
-               FROM aggregate_test_100 \
-               ORDER BY c9 \
-               LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------+----------------------------+-----------------+",
-        "| SUM(aggregate_test_100.c4) | AVG(aggregate_test_100.c4) | COUNT(UInt8(1)) |",
-        "+----------------------------+----------------------------+-----------------+",
-        "| -38611                     | -19305.5                   | 2               |",
-        "| 17547                      | 8773.5                     | 2               |",
-        "| -1301                      | -650.5                     | 2               |",
-        "| 26638                      | 13319                      | 3               |",
-        "| 26861                      | 8953.666666666666          | 3               |",
-        "+----------------------------+----------------------------+-----------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-/// The partition by clause conducts sorting according to given partition column by default. If the
-/// sorting columns have non unique values, the unstable sorting may produce indeterminate results.
-/// Therefore, we are commenting out the following test for now.
-
-// #[tokio::test]
-// async fn window_frame_rows_preceding_with_non_unique_partition() -> Result<()> {
-//     let ctx = SessionContext::new();
-//     register_aggregate_csv(&ctx).await?;
-//     let sql = "SELECT \
-//                SUM(c4) OVER(PARTITION BY c1 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
-//                COUNT(*) OVER(PARTITION BY c2 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)\
-//                FROM aggregate_test_100 \
-//                ORDER BY c9 \
-//                LIMIT 5";
-//     let actual = execute_to_batches(&ctx, sql).await;
-//     let expected = vec![
-//         "+----------------------------+-----------------+",
-//         "| SUM(aggregate_test_100.c4) | COUNT(UInt8(1)) |",
-//         "+----------------------------+-----------------+",
-//         "| -33822                     | 3               |",
-//         "| 20808                      | 3               |",
-//         "| -29881                     | 3               |",
-//         "| -47613                     | 3               |",
-//         "| -13474                     | 3               |",
-//         "+----------------------------+-----------------+",
-//     ];
-//     assert_batches_eq!(expected, &actual);
-//     Ok(())
-// }
-
-#[tokio::test]
-async fn window_frame_ranges_preceding_following_desc() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT \
-               SUM(c4) OVER(ORDER BY c2 DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
-               SUM(c3) OVER(ORDER BY c2 DESC RANGE BETWEEN 10000 PRECEDING AND 10000 FOLLOWING),\
-               COUNT(*) OVER(ORDER BY c2 DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING) \
-               FROM aggregate_test_100 \
-               ORDER BY c9 \
-               LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------+----------------------------+-----------------+",
-        "| SUM(aggregate_test_100.c4) | SUM(aggregate_test_100.c3) | COUNT(UInt8(1)) |",
-        "+----------------------------+----------------------------+-----------------+",
-        "| 52276                      | 781                        | 56              |",
-        "| 260620                     | 781                        | 63              |",
-        "| -28623                     | 781                        | 37              |",
-        "| 260620                     | 781                        | 63              |",
-        "| 260620                     | 781                        | 63              |",
-        "+----------------------------+----------------------------+-----------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_order_by_asc_desc_large() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT
-                SUM(c5) OVER (ORDER BY c2 ASC, c6 DESC) as sum1
-                FROM aggregate_test_100
-                LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------------+",
-        "| sum1        |",
-        "+-------------+",
-        "| -1383162419 |",
-        "| -3265456275 |",
-        "| -3909681744 |",
-        "| -5241214934 |",
-        "| -4246910946 |",
-        "+-------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_order_by_desc_large() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT
-                SUM(c5) OVER (ORDER BY c2 DESC, c6 ASC) as sum1
-                FROM aggregate_test_100
-                ORDER BY c9
-                LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------------+",
-        "| sum1        |",
-        "+-------------+",
-        "| 11212193439 |",
-        "| 22799733943 |",
-        "| 2935356871  |",
-        "| 15810962683 |",
-        "| 18035025006 |",
-        "+-------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_order_by_null_timestamp_order_by() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_null_cases_csv(&ctx).await?;
-    let sql = "SELECT
-                SUM(c1) OVER (ORDER BY c2 DESC) as summation1
-                FROM null_cases
-                LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+------------+",
-        "| summation1 |",
-        "+------------+",
-        "| 962        |",
-        "| 962        |",
-        "| 962        |",
-        "| 962        |",
-        "| 962        |",
-        "+------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_order_by_null_desc() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_null_cases_csv(&ctx).await?;
-    let sql = "SELECT
-                COUNT(c2) OVER (ORDER BY c1 DESC RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING)
-                FROM null_cases
-                LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------+",
-        "| COUNT(null_cases.c2) |",
-        "+----------------------+",
-        "| 9                    |",
-        "| 9                    |",
-        "| 9                    |",
-        "| 9                    |",
-        "| 9                    |",
-        "+----------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_order_by_null_asc() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_null_cases_csv(&ctx).await?;
-    let sql = "SELECT
-                COUNT(c2) OVER (ORDER BY c1 RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING)
-                FROM null_cases
-                ORDER BY c1
-                LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------+",
-        "| COUNT(null_cases.c2) |",
-        "+----------------------+",
-        "| 2                    |",
-        "| 2                    |",
-        "| 2                    |",
-        "| 2                    |",
-        "| 5                    |",
-        "+----------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_order_by_null_asc_null_first() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_null_cases_csv(&ctx).await?;
-    let sql = "SELECT
-                COUNT(c2) OVER (ORDER BY c1 NULLS FIRST RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING)
-                FROM null_cases
-                LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------+",
-        "| COUNT(null_cases.c2) |",
-        "+----------------------+",
-        "| 9                    |",
-        "| 9                    |",
-        "| 9                    |",
-        "| 9                    |",
-        "| 9                    |",
-        "+----------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_order_by_null_desc_null_last() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_null_cases_csv(&ctx).await?;
-    let sql = "SELECT
-                COUNT(c2) OVER (ORDER BY c1 DESC NULLS LAST RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING)
-                FROM null_cases
-                LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------+",
-        "| COUNT(null_cases.c2) |",
-        "+----------------------+",
-        "| 5                    |",
-        "| 5                    |",
-        "| 5                    |",
-        "| 6                    |",
-        "| 6                    |",
-        "+----------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_rows_order_by_null() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_null_cases_csv(&ctx).await?;
-    let sql = "SELECT
-        SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as a,
-        SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as b,
-        SUM(c1) OVER (ORDER BY c3 DESC RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as c,
-        SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as d,
-        SUM(c1) OVER (ORDER BY c3 DESC NULLS last RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as e,
-        SUM(c1) OVER (ORDER BY c3 DESC NULLS first RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as f,
-        SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as g,
-        SUM(c1) OVER (ORDER BY c3) as h,
-        SUM(c1) OVER (ORDER BY c3 DESC) as i,
-        SUM(c1) OVER (ORDER BY c3 NULLS first) as j,
-        SUM(c1) OVER (ORDER BY c3 DESC NULLS first) as k,
-        SUM(c1) OVER (ORDER BY c3 DESC NULLS last) as l,
-        SUM(c1) OVER (ORDER BY c3, c2) as m,
-        SUM(c1) OVER (ORDER BY c3, c1 DESC) as n,
-        SUM(c1) OVER (ORDER BY c3 DESC, c1) as o,
-        SUM(c1) OVER (ORDER BY c3, c1 NULLs first) as p,
-        SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as a1,
-        SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as b1,
-        SUM(c1) OVER (ORDER BY c3 DESC RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as c1,
-        SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as d1,
-        SUM(c1) OVER (ORDER BY c3 DESC NULLS last RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as e1,
-        SUM(c1) OVER (ORDER BY c3 DESC NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as f1,
-        SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as g1,
-        SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as h1,
-        SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as j1,
-        SUM(c1) OVER (ORDER BY c3 DESC RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as k1,
-        SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as l1,
-        SUM(c1) OVER (ORDER BY c3 DESC NULLS last RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as m1,
-        SUM(c1) OVER (ORDER BY c3 DESC NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as n1,
-        SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as o1,
-        SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as h11,
-        SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as j11,
-        SUM(c1) OVER (ORDER BY c3 DESC RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as k11,
-        SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as l11,
-        SUM(c1) OVER (ORDER BY c3 DESC NULLS last RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as m11,
-        SUM(c1) OVER (ORDER BY c3 DESC NULLS first RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as n11,
-        SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as o11
-        FROM null_cases
-        ORDER BY c3
-        LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----+-----+-----+-----+-----+-----+-----+-----+------+-----+------+------+-----+-----+------+-----+-----+-----+------+-----+------+------+-----+-----+-----+------+-----+------+------+-----+------+------+-----+------+-----+-----+------+",
-        "| a   | b   | c   | d   | e   | f   | g   | h   | i    | j   | k    | l    | m   | n   | o    | p   | a1  | b1  | c1   | d1  | e1   | f1   | g1  | h1  | j1  | k1   | l1  | m1   | n1   | o1  | h11  | j11  | k11 | l11  | m11 | n11 | o11  |",
-        "+-----+-----+-----+-----+-----+-----+-----+-----+------+-----+------+------+-----+-----+------+-----+-----+-----+------+-----+------+------+-----+-----+-----+------+-----+------+------+-----+------+------+-----+------+-----+-----+------+",
-        "| 412 | 412 | 339 | 412 | 339 | 339 | 412 |     | 4627 |     | 4627 | 4627 |     |     | 4627 |     | 412 | 412 | 4627 | 412 | 4627 | 4627 | 412 |     |     | 4627 |     | 4627 | 4627 |     | 4627 | 4627 |     | 4627 |     |     | 4627 |",
-        "| 488 | 488 | 412 | 488 | 412 | 412 | 488 | 72  | 4627 | 72  | 4627 | 4627 | 72  | 72  | 4627 | 72  | 488 | 488 | 4627 | 488 | 4627 | 4627 | 488 | 72  | 72  | 4627 | 72  | 4627 | 4627 | 72  | 4627 | 4627 | 72  | 4627 | 72  | 72  | 4627 |",
-        "| 543 | 543 | 488 | 543 | 488 | 488 | 543 | 96  | 4555 | 96  | 4555 | 4555 | 96  | 96  | 4555 | 96  | 543 | 543 | 4627 | 543 | 4627 | 4627 | 543 | 96  | 96  | 4555 | 96  | 4555 | 4555 | 96  | 4555 | 4555 | 96  | 4555 | 96  | 96  | 4555 |",
-        "| 553 | 553 | 543 | 553 | 543 | 543 | 553 | 115 | 4531 | 115 | 4531 | 4531 | 115 | 115 | 4531 | 115 | 553 | 553 | 4627 | 553 | 4627 | 4627 | 553 | 115 | 115 | 4531 | 115 | 4531 | 4531 | 115 | 4531 | 4531 | 115 | 4531 | 115 | 115 | 4531 |",
-        "| 553 | 553 | 553 | 553 | 553 | 553 | 553 | 140 | 4512 | 140 | 4512 | 4512 | 140 | 140 | 4512 | 140 | 553 | 553 | 4627 | 553 | 4627 | 4627 | 553 | 140 | 140 | 4512 | 140 | 4512 | 4512 | 140 | 4512 | 4512 | 140 | 4512 | 140 | 140 | 4512 |",
-        "+-----+-----+-----+-----+-----+-----+-----+-----+------+-----+------+------+-----+-----+------+-----+-----+-----+------+-----+------+------+-----+-----+-----+------+-----+------+------+-----+------+------+-----+------+-----+-----+------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_rows_preceding_with_unique_partition() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT \
-               SUM(c4) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
-               COUNT(*) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)\
-               FROM aggregate_test_100 \
-               ORDER BY c9 \
-               LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------+-----------------+",
-        "| SUM(aggregate_test_100.c4) | COUNT(UInt8(1)) |",
-        "+----------------------------+-----------------+",
-        "| -38611                     | 2               |",
-        "| 17547                      | 2               |",
-        "| -1301                      | 2               |",
-        "| 26638                      | 2               |",
-        "| 26861                      | 3               |",
-        "+----------------------------+-----------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_ranges_preceding_following() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT \
-               SUM(c4) OVER(ORDER BY c2 RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
-               SUM(c3) OVER(ORDER BY c2 RANGE BETWEEN 10000 PRECEDING AND 10000 FOLLOWING),\
-               COUNT(*) OVER(ORDER BY c2 RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING) \
-               FROM aggregate_test_100 \
-               ORDER BY c9 \
-               LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------+----------------------------+-----------------+",
-        "| SUM(aggregate_test_100.c4) | SUM(aggregate_test_100.c3) | COUNT(UInt8(1)) |",
-        "+----------------------------+----------------------------+-----------------+",
-        "| 52276                      | 781                        | 56              |",
-        "| 260620                     | 781                        | 63              |",
-        "| -28623                     | 781                        | 37              |",
-        "| 260620                     | 781                        | 63              |",
-        "| 260620                     | 781                        | 63              |",
-        "+----------------------------+----------------------------+-----------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_ranges_ntile() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT \
-               NTILE(8) OVER (ORDER BY C4) as ntile1,\
-               NTILE(12) OVER (ORDER BY C12 DESC) as ntile2 \
-               FROM aggregate_test_100 \
-               ORDER BY c7 \
-               LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+--------+--------+",
-        "| ntile1 | ntile2 |",
-        "+--------+--------+",
-        "| 8      | 12     |",
-        "| 5      | 11     |",
-        "| 3      | 11     |",
-        "| 2      | 7      |",
-        "| 7      | 12     |",
-        "+--------+--------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_ranges_string_check() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT \
-               SUM(LENGTH(c13)) OVER(ORDER BY c13), \
-               SUM(LENGTH(c1)) OVER(ORDER BY c1) \
-               FROM aggregate_test_100 \
-               ORDER BY c9 \
-               LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------------------------+---------------------------------------------+",
-        "| SUM(characterlength(aggregate_test_100.c13)) | SUM(characterlength(aggregate_test_100.c1)) |",
-        "+----------------------------------------------+---------------------------------------------+",
-        "| 2100                                         | 100                                         |",
-        "| 510                                          | 79                                          |",
-        "| 1440                                         | 21                                          |",
-        "| 1830                                         | 61                                          |",
-        "| 2010                                         | 21                                          |",
-        "+----------------------------------------------+---------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_order_by_unique() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT \
-               SUM(c5) OVER (ORDER BY c5) as sum1, \
-               COUNT(*) OVER (ORDER BY c9) as count1 \
-               FROM aggregate_test_100 \
-               ORDER BY c9 \
-               LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+--------------+--------+",
-        "| sum1         | count1 |",
-        "+--------------+--------+",
-        "| -49877765574 | 1      |",
-        "| -50025861694 | 2      |",
-        "| -45402230071 | 3      |",
-        "| -14557735645 | 4      |",
-        "| -18365391649 | 5      |",
-        "+--------------+--------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-/// If the sorting columns have non unique values, the unstable sorting may produce
-/// indeterminate results. Therefore, we are commenting out the following test for now.
-///
-// #[tokio::test]
-// async fn window_frame_order_by_non_unique() -> Result<()> {
-//     let ctx = SessionContext::new();
-//     register_aggregate_csv(&ctx).await?;
-//     let sql = "SELECT \
-//                c2, \
-//                c9, \
-//                SUM(c5) OVER (ORDER BY c2), \
-//                COUNT(*) OVER (ORDER BY c2) \
-//                FROM aggregate_test_100 \
-//                ORDER BY c2 \
-//                LIMIT 5";
-//     let actual = execute_to_batches(&ctx, sql).await;
-//     let expected = vec![
-//         "+----+------------+----------------------------+-----------------+",
-//         "| c2 | c9         | SUM(aggregate_test_100.c5) | COUNT(UInt8(1)) |",
-//         "+----+------------+----------------------------+-----------------+",
-//         "| 1  | 879082834  | -438598674                 | 22              |",
-//         "| 1  | 3542840110 | -438598674                 | 22              |",
-//         "| 1  | 3275293996 | -438598674                 | 22              |",
-//         "| 1  | 774637006  | -438598674                 | 22              |",
-//         "| 1  | 4015442341 | -438598674                 | 22              |",
-//         "+----+------------+----------------------------+-----------------+",
-//     ];
-//     assert_batches_eq!(expected, &actual);
-//     Ok(())
-// }
-
-#[tokio::test]
-async fn window_frame_ranges_unbounded_preceding_following() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT \
-               SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as sum1, \
-               COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as cnt1 \
-               FROM aggregate_test_100 \
-               ORDER BY c9 \
-               LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+------+------+",
-        "| sum1 | cnt1 |",
-        "+------+------+",
-        "| 285  | 100  |",
-        "| 123  | 63   |",
-        "| 285  | 100  |",
-        "| 123  | 63   |",
-        "| 123  | 63   |",
-        "+------+------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_ranges_preceding_and_preceding() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT \
-               SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN 3 PRECEDING AND 1 PRECEDING), \
-               COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN 3 PRECEDING AND 1 PRECEDING) \
-               FROM aggregate_test_100 \
-               ORDER BY c9 \
-               LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------+-----------------+",
-        "| SUM(aggregate_test_100.c2) | COUNT(UInt8(1)) |",
-        "+----------------------------+-----------------+",
-        "| 123                        | 63              |",
-        "| 22                         | 22              |",
-        "| 193                        | 64              |",
-        "| 22                         | 22              |",
-        "| 22                         | 22              |",
-        "+----------------------------+-----------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_ranges_unbounded_preceding_following_diff_col() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT \
-               SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING), \
-               COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING) \
-               FROM aggregate_test_100 \
-               ORDER BY c9 \
-               LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------+-----------------+",
-        "| SUM(aggregate_test_100.c2) | COUNT(UInt8(1)) |",
-        "+----------------------------+-----------------+",
-        "| 162                        | 37              |",
-        "| 101                        | 41              |",
-        "| 70                         | 14              |",
-        "| 101                        | 41              |",
-        "| 101                        | 41              |",
-        "+----------------------------+-----------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_partition_by_order_by_desc() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT
-               SUM(c4) OVER(PARTITION BY c1 ORDER BY c2 DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
-               FROM aggregate_test_100
-               ORDER BY c9
-               LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------+",
-        "| SUM(aggregate_test_100.c4) |",
-        "+----------------------------+",
-        "| -124618                    |",
-        "| 205080                     |",
-        "| -40819                     |",
-        "| -19517                     |",
-        "| 47246                      |",
-        "+----------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_range_float() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT
-                SUM(c12) OVER (ORDER BY C12 RANGE BETWEEN 0.2 PRECEDING AND 0.2 FOLLOWING)
-                FROM aggregate_test_100
-                ORDER BY C9
-                LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----------------------------+",
-        "| SUM(aggregate_test_100.c12) |",
-        "+-----------------------------+",
-        "| 2.5476701803634296          |",
-        "| 10.6299412548214            |",
-        "| 2.5476701803634296          |",
-        "| 20.349518503437288          |",
-        "| 21.408674363507753          |",
-        "+-----------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_ranges_timestamp() -> Result<()> {
-    // define a schema.
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "ts",
-        DataType::Timestamp(TimeUnit::Nanosecond, None),
-        false,
-    )]));
-
-    // define data in two partitions
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(TimestampNanosecondArray::from_slice([
-            1664264591000000000,
-            1664264592000000000,
-            1664264592000000000,
-            1664264593000000000,
-            1664264594000000000,
-            1664364594000000000,
-            1664464594000000000,
-            1664564594000000000,
-        ]))],
-    )
-    .unwrap();
-
-    let ctx = SessionContext::new();
-    // declare a new context. In spark API, this corresponds to a new spark SQLsession
-    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    let provider = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
-    // Register table
-    ctx.register_table("t", Arc::new(provider)).unwrap();
-
-    // execute the query
-    let df = ctx
-        .sql(
-            "SELECT
-                ts,
-                COUNT(*) OVER (ORDER BY ts RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND INTERVAL '2 DAY' FOLLOWING) AS cnt1,
-                COUNT(*) OVER (ORDER BY ts RANGE BETWEEN '0 DAY' PRECEDING AND '0' DAY FOLLOWING) as cnt2,
-                COUNT(*) OVER (ORDER BY ts RANGE BETWEEN '5' SECOND PRECEDING AND CURRENT ROW) as cnt3
-                FROM t
-                ORDER BY ts"
-        )
-        .await?;
-
-    let actual = df.collect().await?;
-    let expected = vec![
-        "+---------------------+------+------+------+",
-        "| ts                  | cnt1 | cnt2 | cnt3 |",
-        "+---------------------+------+------+------+",
-        "| 2022-09-27T07:43:11 | 6    | 1    | 1    |",
-        "| 2022-09-27T07:43:12 | 6    | 2    | 3    |",
-        "| 2022-09-27T07:43:12 | 6    | 2    | 3    |",
-        "| 2022-09-27T07:43:13 | 6    | 1    | 4    |",
-        "| 2022-09-27T07:43:14 | 6    | 1    | 5    |",
-        "| 2022-09-28T11:29:54 | 2    | 1    | 1    |",
-        "| 2022-09-29T15:16:34 | 2    | 1    | 1    |",
-        "| 2022-09-30T19:03:14 | 1    | 1    | 1    |",
-        "+---------------------+------+------+------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_ranges_unbounded_preceding_err() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    // execute the query
-    let df = ctx
-        .sql(
-            "SELECT \
-               SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED PRECEDING), \
-               COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED PRECEDING) \
-               FROM aggregate_test_100 \
-               ORDER BY c9 \
-               LIMIT 5",
-        )
-        .await;
-    assert_eq!(
-        df.err().unwrap().to_string(),
-        "Execution error: Invalid window frame: end bound cannot be unbounded preceding"
-            .to_owned()
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_groups_preceding_following_desc() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT
-        SUM(c4) OVER(ORDER BY c2 DESC GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
-        SUM(c3) OVER(ORDER BY c2 DESC GROUPS BETWEEN 10000 PRECEDING AND 10000 FOLLOWING),
-        COUNT(*) OVER(ORDER BY c2 DESC GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
-        FROM aggregate_test_100
-        ORDER BY c9
-        LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------+----------------------------+-----------------+",
-        "| SUM(aggregate_test_100.c4) | SUM(aggregate_test_100.c3) | COUNT(UInt8(1)) |",
-        "+----------------------------+----------------------------+-----------------+",
-        "| 52276                      | 781                        | 56              |",
-        "| 260620                     | 781                        | 63              |",
-        "| -28623                     | 781                        | 37              |",
-        "| 260620                     | 781                        | 63              |",
-        "| 260620                     | 781                        | 63              |",
-        "+----------------------------+----------------------------+-----------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_groups_order_by_null_desc() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_null_cases_csv(&ctx).await?;
-    let sql = "SELECT
-        COUNT(c2) OVER (ORDER BY c1 DESC GROUPS BETWEEN 5 PRECEDING AND 3 FOLLOWING)
-        FROM null_cases
-        LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------+",
-        "| COUNT(null_cases.c2) |",
-        "+----------------------+",
-        "| 12                   |",
-        "| 12                   |",
-        "| 12                   |",
-        "| 12                   |",
-        "| 12                   |",
-        "+----------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_groups() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_null_cases_csv(&ctx).await?;
-    let sql = "SELECT
-        SUM(c1) OVER (ORDER BY c3 GROUPS BETWEEN 9 PRECEDING AND 11 FOLLOWING) as a,
-        SUM(c1) OVER (ORDER BY c3 DESC GROUPS BETWEEN 9 PRECEDING AND 11 FOLLOWING) as b,
-        SUM(c1) OVER (ORDER BY c3 NULLS first GROUPS BETWEEN 9 PRECEDING AND 11 FOLLOWING) as c,
-        SUM(c1) OVER (ORDER BY c3 DESC NULLS last GROUPS BETWEEN 9 PRECEDING AND 11 FOLLOWING) as d,
-        SUM(c1) OVER (ORDER BY c3 DESC NULLS first GROUPS BETWEEN 9 PRECEDING AND 11 FOLLOWING) as e,
-        SUM(c1) OVER (ORDER BY c3 NULLS first GROUPS BETWEEN 9 PRECEDING AND 11 FOLLOWING) as f,
-        SUM(c1) OVER (ORDER BY c3 GROUPS current row) as a1,
-        SUM(c1) OVER (ORDER BY c3 GROUPS BETWEEN 9 PRECEDING AND 5 PRECEDING) as a2,
-        SUM(c1) OVER (ORDER BY c3 GROUPS BETWEEN UNBOUNDED PRECEDING AND 5 PRECEDING) as a3,
-        SUM(c1) OVER (ORDER BY c3 GROUPS BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as a4,
-        SUM(c1) OVER (ORDER BY c3 GROUPS BETWEEN UNBOUNDED PRECEDING AND current row) as a5,
-        SUM(c1) OVER (ORDER BY c3 GROUPS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as a6,
-        SUM(c1) OVER (ORDER BY c3 GROUPS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as a7,
-        SUM(c1) OVER (ORDER BY c3 GROUPS BETWEEN 3 FOLLOWING AND UNBOUNDED FOLLOWING) as a8,
-        SUM(c1) OVER (ORDER BY c3 GROUPS BETWEEN current row AND UNBOUNDED FOLLOWING) as a9,
-        SUM(c1) OVER (ORDER BY c3 GROUPS BETWEEN current row AND 3 FOLLOWING) as a10,
-        SUM(c1) OVER (ORDER BY c3 GROUPS BETWEEN 5 FOLLOWING AND 7 FOLLOWING) as a11,
-        SUM(c1) OVER (ORDER BY c3 DESC GROUPS current row) as a21,
-        SUM(c1) OVER (ORDER BY c3 NULLS first GROUPS BETWEEN 9 PRECEDING AND 5 PRECEDING) as a22,
-        SUM(c1) OVER (ORDER BY c3 DESC NULLS last GROUPS BETWEEN UNBOUNDED PRECEDING AND 5 PRECEDING) as a23,
-        SUM(c1) OVER (ORDER BY c3 NULLS last GROUPS BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as a24,
-        SUM(c1) OVER (ORDER BY c3 DESC NULLS first GROUPS BETWEEN UNBOUNDED PRECEDING AND current row) as a25
-        FROM null_cases
-        ORDER BY c3
-        LIMIT 10";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----+-----+-----+-----+-----+-----+----+-----+-----+-----+-----+------+------+------+------+-----+-----+-----+-----+------+-----+------+",
-        "| a   | b   | c   | d   | e   | f   | a1 | a2  | a3  | a4  | a5  | a6   | a7   | a8   | a9   | a10 | a11 | a21 | a22 | a23  | a24 | a25  |",
-        "+-----+-----+-----+-----+-----+-----+----+-----+-----+-----+-----+------+------+------+------+-----+-----+-----+-----+------+-----+------+",
-        "| 412 | 307 | 412 | 307 | 307 | 412 |    |     |     | 412 |     | 4627 | 4627 | 4531 | 4627 | 115 | 85  |     |     | 4487 | 412 | 4627 |",
-        "| 488 | 339 | 488 | 339 | 339 | 488 | 72 |     |     | 488 | 72  | 4627 | 4627 | 4512 | 4627 | 140 | 153 | 72  |     | 4473 | 488 | 4627 |",
-        "| 543 | 412 | 543 | 412 | 412 | 543 | 24 |     |     | 543 | 96  | 4627 | 4627 | 4487 | 4555 | 82  | 122 | 24  |     | 4442 | 543 | 4555 |",
-        "| 553 | 488 | 553 | 488 | 488 | 553 | 19 |     |     | 553 | 115 | 4627 | 4555 | 4473 | 4531 | 89  | 114 | 19  |     | 4402 | 553 | 4531 |",
-        "| 553 | 543 | 553 | 543 | 543 | 553 | 25 |     |     | 553 | 140 | 4627 | 4531 | 4442 | 4512 | 110 | 105 | 25  |     | 4320 | 553 | 4512 |",
-        "| 591 | 553 | 591 | 553 | 553 | 591 | 14 |     |     | 591 | 154 | 4627 | 4512 | 4402 | 4487 | 167 | 181 | 14  |     | 4320 | 591 | 4487 |",
-        "| 651 | 553 | 651 | 553 | 553 | 651 | 31 | 72  | 72  | 651 | 185 | 4627 | 4487 | 4320 | 4473 | 153 | 204 | 31  | 72  | 4288 | 651 | 4473 |",
-        "| 662 | 591 | 662 | 591 | 591 | 662 | 40 | 96  | 96  | 662 | 225 | 4627 | 4473 | 4320 | 4442 | 154 | 141 | 40  | 96  | 4215 | 662 | 4442 |",
-        "| 697 | 651 | 697 | 651 | 651 | 697 | 82 | 115 | 115 | 697 | 307 | 4627 | 4442 | 4288 | 4402 | 187 | 65  | 82  | 115 | 4139 | 697 | 4402 |",
-        "| 758 | 662 | 758 | 662 | 662 | 758 |    | 140 | 140 | 758 | 307 | 4627 | 4402 | 4215 | 4320 | 181 | 48  |     | 140 | 4084 | 758 | 4320 |",
-        "+-----+-----+-----+-----+-----+-----+----+-----+-----+-----+-----+------+------+------+------+-----+-----+-----+-----+------+-----+------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_groups_multiple_order_columns() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_null_cases_csv(&ctx).await?;
-    let sql = "SELECT
-        SUM(c1) OVER (ORDER BY c2, c3 GROUPS BETWEEN 9 PRECEDING AND 11 FOLLOWING) as a,
-        SUM(c1) OVER (ORDER BY c2, c3 DESC GROUPS BETWEEN 9 PRECEDING AND 11 FOLLOWING) as b,
-        SUM(c1) OVER (ORDER BY c2, c3 NULLS first GROUPS BETWEEN 9 PRECEDING AND 11 FOLLOWING) as c,
-        SUM(c1) OVER (ORDER BY c2, c3 DESC NULLS last GROUPS BETWEEN 9 PRECEDING AND 11 FOLLOWING) as d,
-        SUM(c1) OVER (ORDER BY c2, c3 DESC NULLS first GROUPS BETWEEN 9 PRECEDING AND 11 FOLLOWING) as e,
-        SUM(c1) OVER (ORDER BY c2, c3 NULLS first GROUPS BETWEEN 9 PRECEDING AND 11 FOLLOWING) as f,
-        SUM(c1) OVER (ORDER BY c2, c3 GROUPS current row) as a1,
-        SUM(c1) OVER (ORDER BY c2, c3 GROUPS BETWEEN 9 PRECEDING AND 5 PRECEDING) as a2,
-        SUM(c1) OVER (ORDER BY c2, c3 GROUPS BETWEEN UNBOUNDED PRECEDING AND 5 PRECEDING) as a3,
-        SUM(c1) OVER (ORDER BY c2, c3 GROUPS BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as a4,
-        SUM(c1) OVER (ORDER BY c2, c3 GROUPS BETWEEN UNBOUNDED PRECEDING AND current row) as a5,
-        SUM(c1) OVER (ORDER BY c2, c3 GROUPS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as a6,
-        SUM(c1) OVER (ORDER BY c2, c3 GROUPS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as a7,
-        SUM(c1) OVER (ORDER BY c2, c3 GROUPS BETWEEN 3 FOLLOWING AND UNBOUNDED FOLLOWING) as a8,
-        SUM(c1) OVER (ORDER BY c2, c3 GROUPS BETWEEN current row AND UNBOUNDED FOLLOWING) as a9,
-        SUM(c1) OVER (ORDER BY c2, c3 GROUPS BETWEEN current row AND 3 FOLLOWING) as a10,
-        SUM(c1) OVER (ORDER BY c2, c3 GROUPS BETWEEN 5 FOLLOWING AND 7 FOLLOWING) as a11
-        FROM null_cases
-        ORDER BY c3
-        LIMIT 10";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+------+-----+------+-----+-----+------+----+-----+------+------+------+------+------+------+------+-----+-----+",
-        "| a    | b   | c    | d   | e   | f    | a1 | a2  | a3   | a4   | a5   | a6   | a7   | a8   | a9   | a10 | a11 |",
-        "+------+-----+------+-----+-----+------+----+-----+------+------+------+------+------+------+------+-----+-----+",
-        "| 818  | 910 | 818  | 910 | 910 | 818  |    | 249 | 249  | 818  | 432  | 4627 | 4234 | 4157 | 4195 | 98  | 82  |",
-        "| 537  | 979 | 537  | 979 | 979 | 537  | 72 |     |      | 537  | 210  | 4627 | 4569 | 4378 | 4489 | 169 | 55  |",
-        "| 811  | 838 | 811  | 838 | 838 | 811  | 24 | 221 | 3075 | 3665 | 3311 | 4627 | 1390 | 1276 | 1340 | 117 | 144 |",
-        "| 763  | 464 | 763  | 464 | 464 | 763  | 19 | 168 | 3572 | 4167 | 3684 | 4627 | 962  | 829  | 962  | 194 | 80  |",
-        "| 552  | 964 | 552  | 964 | 964 | 552  | 25 |     |      | 552  | 235  | 4627 | 4489 | 4320 | 4417 | 167 | 39  |",
-        "| 963  | 930 | 963  | 930 | 930 | 963  | 14 | 201 | 818  | 1580 | 1098 | 4627 | 3638 | 3455 | 3543 | 177 | 224 |",
-        "| 1113 | 814 | 1113 | 814 | 814 | 1113 | 31 | 415 | 2653 | 3351 | 2885 | 4627 | 1798 | 1694 | 1773 | 165 | 162 |",
-        "| 780  | 868 | 780  | 868 | 868 | 780  | 40 | 258 | 3143 | 3665 | 3351 | 4627 | 1340 | 1223 | 1316 | 117 | 102 |",
-        "| 740  | 466 | 740  | 466 | 466 | 740  | 82 | 164 | 3592 | 4168 | 3766 | 4627 | 962  | 768  | 943  | 244 | 122 |",
-        "| 772  | 832 | 772  | 832 | 832 | 772  |    | 277 | 3189 | 3684 | 3351 | 4627 | 1316 | 1199 | 1276 | 119 | 64  |",
-        "+------+-----+------+-----+-----+------+----+-----+------+------+------+------+------+------+------+-----+-----+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_groups_without_order_by() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    // execute the query
-    let df = ctx
-        .sql(
-            "SELECT
-            SUM(c4) OVER(PARTITION BY c2 GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
-            FROM aggregate_test_100
-            ORDER BY c9;",
-        )
-        .await?;
-    let err = df.collect().await.unwrap_err();
-    assert_contains!(
-        err.to_string(),
-        "Execution error: GROUPS mode requires an ORDER BY clause".to_owned()
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_lag() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    // execute the query
-    let df = ctx
-        .sql(
-            "SELECT c2,
-                lag(c2, c2, c2) OVER () as lag1
-                FROM aggregate_test_100;",
-        )
-        .await?;
-    let err = df.collect().await.unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "This feature is not implemented: There is only support Literal types for field at idx: 1 in Window Function".to_owned()
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn window_frame_creation() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    // execute the query
-    let df = ctx
-        .sql(
-            "SELECT
-                COUNT(c1) OVER (ORDER BY c2 RANGE BETWEEN 1 PRECEDING AND 2 PRECEDING)
-                FROM aggregate_test_100;",
-        )
-        .await?;
-    let results = df.collect().await;
-    assert_eq!(
-        results.err().unwrap().to_string(),
-        "Execution error: Invalid window frame: start bound (1 PRECEDING) cannot be larger than end bound (2 PRECEDING)"
-    );
-
-    let df = ctx
-        .sql(
-            "SELECT
-                COUNT(c1) OVER (ORDER BY c2 RANGE BETWEEN 2 FOLLOWING AND 1 FOLLOWING)
-                FROM aggregate_test_100;",
-        )
-        .await?;
-    let results = df.collect().await;
-    assert_eq!(
-        results.err().unwrap().to_string(),
-        "Execution error: Invalid window frame: start bound (2 FOLLOWING) cannot be larger than end bound (1 FOLLOWING)"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn window_frame_creation_type_checking() -> Result<()> {
-    // The following query has type error. We should test the error could be detected
+    // The following qcargo fmtuery has type error. We should test the error could be detected
     // from either the logical plan (when `skip_failed_rules` is set to `false`) or
     // the physical plan (when `skip_failed_rules` is set to `true`).
 
@@ -1090,190 +57,8 @@ async fn window_frame_creation_type_checking() -> Result<()> {
     // Error is returned from the logical plan.
     check_query(
         false,
-        "Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: Arrow error: Cast error: Cannot cast string '1 DAY' to value of UInt32 type"
+        "Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: Execution error: Cannot cast Utf8(\"1 DAY\") to UInt32."
     ).await
-}
-
-#[tokio::test]
-async fn test_window_row_number_aggregate() -> Result<()> {
-    let config = SessionConfig::new();
-    let ctx = SessionContext::with_config(config);
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT
-          c8,
-          ROW_NUMBER() OVER(ORDER BY c9) AS rn1,
-          ROW_NUMBER() OVER(ORDER BY c9 ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as rn2
-          FROM aggregate_test_100
-          ORDER BY c8
-          LIMIT 5";
-
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----+-----+-----+",
-        "| c8  | rn1 | rn2 |",
-        "+-----+-----+-----+",
-        "| 102 | 73  | 73  |",
-        "| 299 | 1   | 1   |",
-        "| 363 | 41  | 41  |",
-        "| 417 | 14  | 14  |",
-        "| 794 | 95  | 95  |",
-        "+-----+-----+-----+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_window_cume_dist() -> Result<()> {
-    let config = SessionConfig::new();
-    let ctx = SessionContext::with_config(config);
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT
-          c8,
-          CUME_DIST() OVER(ORDER BY c9) as cd1,
-          CUME_DIST() OVER(ORDER BY c9 ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as cd2
-          FROM aggregate_test_100
-          ORDER BY c8
-          LIMIT 5";
-
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----+------+------+",
-        "| c8  | cd1  | cd2  |",
-        "+-----+------+------+",
-        "| 102 | 0.73 | 0.73 |",
-        "| 299 | 0.01 | 0.01 |",
-        "| 363 | 0.41 | 0.41 |",
-        "| 417 | 0.14 | 0.14 |",
-        "| 794 | 0.95 | 0.95 |",
-        "+-----+------+------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_window_rank() -> Result<()> {
-    let config = SessionConfig::new();
-    let ctx = SessionContext::with_config(config);
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT
-          c9,
-          RANK() OVER(ORDER BY c1) AS rank1,
-          RANK() OVER(ORDER BY c1 ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as rank2,
-          DENSE_RANK() OVER(ORDER BY c1) as dense_rank1,
-          DENSE_RANK() OVER(ORDER BY c1 ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as dense_rank2,
-          PERCENT_RANK() OVER(ORDER BY c1) as percent_rank1,
-          PERCENT_RANK() OVER(ORDER BY c1 ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as percent_rank2
-          FROM aggregate_test_100
-          ORDER BY c9
-          LIMIT 5";
-
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----------+-------+-------+-------------+-------------+---------------------+---------------------+",
-        "| c9        | rank1 | rank2 | dense_rank1 | dense_rank2 | percent_rank1       | percent_rank2       |",
-        "+-----------+-------+-------+-------------+-------------+---------------------+---------------------+",
-        "| 28774375  | 80    | 80    | 5           | 5           | 0.797979797979798   | 0.797979797979798   |",
-        "| 63044568  | 62    | 62    | 4           | 4           | 0.6161616161616161  | 0.6161616161616161  |",
-        "| 141047417 | 1     | 1     | 1           | 1           | 0                   | 0                   |",
-        "| 141680161 | 41    | 41    | 3           | 3           | 0.40404040404040403 | 0.40404040404040403 |",
-        "| 145294611 | 1     | 1     | 1           | 1           | 0                   | 0                   |",
-        "+-----------+-------+-------+-------------+-------------+---------------------+---------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_lag_lead() -> Result<()> {
-    let config = SessionConfig::new();
-    let ctx = SessionContext::with_config(config);
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT
-          c9,
-          LAG(c9, 2, 10101) OVER(ORDER BY c9) as lag1,
-          LAG(c9, 2, 10101) OVER(ORDER BY c9 ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as lag2,
-          LEAD(c9, 2, 10101) OVER(ORDER BY c9) as lead1,
-          LEAD(c9, 2, 10101) OVER(ORDER BY c9 ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as lead2
-          FROM aggregate_test_100
-          ORDER BY c9
-          LIMIT 5";
-
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----------+-----------+-----------+-----------+-----------+",
-        "| c9        | lag1      | lag2      | lead1     | lead2     |",
-        "+-----------+-----------+-----------+-----------+-----------+",
-        "| 28774375  | 10101     | 10101     | 141047417 | 141047417 |",
-        "| 63044568  | 10101     | 10101     | 141680161 | 141680161 |",
-        "| 141047417 | 28774375  | 28774375  | 145294611 | 145294611 |",
-        "| 141680161 | 63044568  | 63044568  | 225513085 | 225513085 |",
-        "| 145294611 | 141047417 | 141047417 | 243203849 | 243203849 |",
-        "+-----------+-----------+-----------+-----------+-----------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_window_frame_first_value_last_value_aggregate() -> Result<()> {
-    let config = SessionConfig::new();
-    let ctx = SessionContext::with_config(config);
-    register_aggregate_csv(&ctx).await?;
-
-    let sql = "SELECT
-           FIRST_VALUE(c4) OVER(ORDER BY c9 ASC ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING) as first_value1,
-           FIRST_VALUE(c4) OVER(ORDER BY c9 ASC ROWS BETWEEN 2 PRECEDING AND 3 FOLLOWING) as first_value2,
-           LAST_VALUE(c4) OVER(ORDER BY c9 ASC ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING) as last_value1,
-           LAST_VALUE(c4) OVER(ORDER BY c9 ASC ROWS BETWEEN 2 PRECEDING AND 3 FOLLOWING) as last_value2
-           FROM aggregate_test_100
-           ORDER BY c9
-           LIMIT 5";
-
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+--------------+--------------+-------------+-------------+",
-        "| first_value1 | first_value2 | last_value1 | last_value2 |",
-        "+--------------+--------------+-------------+-------------+",
-        "| -16110       | -16110       | 3917        | -1114       |",
-        "| -16110       | -16110       | -16974      | 15673       |",
-        "| -16110       | -16110       | -1114       | 13630       |",
-        "| -16110       | 3917         | 15673       | -13217      |",
-        "| -16110       | -16974       | 13630       | 20690       |",
-        "+--------------+--------------+-------------+-------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_window_frame_nth_value_aggregate() -> Result<()> {
-    let config = SessionConfig::new();
-    let ctx = SessionContext::with_config(config);
-    register_aggregate_csv(&ctx).await?;
-
-    let sql = "SELECT
-           NTH_VALUE(c4, 3) OVER(ORDER BY c9 ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as nth_value1,
-           NTH_VALUE(c4, 2) OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 3 FOLLOWING) as nth_value2
-           FROM aggregate_test_100
-           ORDER BY c9
-           LIMIT 5";
-
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+------------+------------+",
-        "| nth_value1 | nth_value2 |",
-        "+------------+------------+",
-        "|            | 3917       |",
-        "| -16974     | 3917       |",
-        "| -16974     | -16974     |",
-        "| -1114      | -1114      |",
-        "| 15673      | 15673      |",
-        "+------------+------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
 }
 
 #[tokio::test]
@@ -1299,7 +84,7 @@ async fn test_window_agg_sort() -> Result<()> {
             "ProjectionExec: expr=[c9@1 as c9, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as sum1, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c8 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as sum2]",
             "  BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt32(NULL)), end_bound: CurrentRow }]",
             "    BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt32(NULL)), end_bound: CurrentRow }]",
-            "      SortExec: [c9@1 ASC NULLS LAST,c8@0 ASC NULLS LAST]",
+            "      SortExec: expr=[c9@1 ASC NULLS LAST,c8@0 ASC NULLS LAST]",
         ]
     };
 
@@ -1331,7 +116,7 @@ async fn over_order_by_sort_keys_sorting_prefix_compacting() -> Result<()> {
             "  WindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }]",
             "    BoundedWindowAggExec: wdw=[MAX(aggregate_test_100.c9): Ok(Field { name: \"MAX(aggregate_test_100.c9)\", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt32(NULL)), end_bound: CurrentRow }]",
             "      BoundedWindowAggExec: wdw=[MIN(aggregate_test_100.c9): Ok(Field { name: \"MIN(aggregate_test_100.c9)\", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt32(NULL)), end_bound: CurrentRow }]",
-            "        SortExec: [c2@0 ASC NULLS LAST,c9@1 ASC NULLS LAST]",
+            "        SortExec: expr=[c2@0 ASC NULLS LAST,c9@1 ASC NULLS LAST]",
         ]
     };
 
@@ -1359,13 +144,13 @@ async fn over_order_by_sort_keys_sorting_global_order_compacting() -> Result<()>
     // 3 SortExec are added
     let expected = {
         vec![
-            "SortExec: [c2@0 ASC NULLS LAST]",
+            "SortExec: expr=[c2@0 ASC NULLS LAST]",
             "  ProjectionExec: expr=[c2@0 as c2, MAX(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as MAX(aggregate_test_100.c9), SUM(aggregate_test_100.c9) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@4 as SUM(aggregate_test_100.c9), MIN(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c2 ASC NULLS LAST, aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as MIN(aggregate_test_100.c9)]",
             "    WindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }]",
             "      BoundedWindowAggExec: wdw=[MAX(aggregate_test_100.c9): Ok(Field { name: \"MAX(aggregate_test_100.c9)\", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt32(NULL)), end_bound: CurrentRow }]",
-            "        SortExec: [c9@1 ASC NULLS LAST,c2@0 ASC NULLS LAST]",
+            "        SortExec: expr=[c9@1 ASC NULLS LAST,c2@0 ASC NULLS LAST]",
             "          BoundedWindowAggExec: wdw=[MIN(aggregate_test_100.c9): Ok(Field { name: \"MIN(aggregate_test_100.c9)\", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt32(NULL)), end_bound: CurrentRow }]",
-            "            SortExec: [c2@0 ASC NULLS LAST,c9@1 ASC NULLS LAST]",
+            "            SortExec: expr=[c2@0 ASC NULLS LAST,c9@1 ASC NULLS LAST]",
         ]
     };
 
@@ -1401,11 +186,11 @@ async fn test_window_partition_by_order_by() -> Result<()> {
         vec![
             "ProjectionExec: expr=[SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as SUM(aggregate_test_100.c4), COUNT(UInt8(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@4 as COUNT(UInt8(1))]",
             "  BoundedWindowAggExec: wdw=[COUNT(UInt8(1)): Ok(Field { name: \"COUNT(UInt8(1))\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }]",
-            "    SortExec: [c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST]",
+            "    SortExec: expr=[c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST]",
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2), input_partitions=2",
             "          BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c4): Ok(Field { name: \"SUM(aggregate_test_100.c4)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }]",
-            "            SortExec: [c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST]",
+            "            SortExec: expr=[c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST]",
             "              CoalesceBatchesExec: target_batch_size=4096",
             "                RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }, Column { name: \"c2\", index: 1 }], 2), input_partitions=2",
             "                  RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
@@ -1444,7 +229,7 @@ async fn test_window_agg_sort_reversed_plan() -> Result<()> {
             "  GlobalLimitExec: skip=0, fetch=5",
             "    BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(5)), end_bound: Following(UInt64(1)) }]",
             "      BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
-            "        SortExec: [c9@0 DESC]",
+            "        SortExec: expr=[c9@0 DESC]",
         ]
     };
 
@@ -1499,7 +284,7 @@ async fn test_window_agg_sort_reversed_plan_builtin() -> Result<()> {
             "  GlobalLimitExec: skip=0, fetch=5",
             "    BoundedWindowAggExec: wdw=[FIRST_VALUE(aggregate_test_100.c9): Ok(Field { name: \"FIRST_VALUE(aggregate_test_100.c9)\", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(5)), end_bound: Following(UInt64(1)) }, LAG(aggregate_test_100.c9,Int64(2),Int64(10101)): Ok(Field { name: \"LAG(aggregate_test_100.c9,Int64(2),Int64(10101))\", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(UInt32(NULL)) }, LEAD(aggregate_test_100.c9,Int64(2),Int64(10101)): Ok(Field { name: \"LEAD(aggregate_test_100.c9,Int64(2),Int64(10101))\", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(UInt32(NULL)) }]",
             "      BoundedWindowAggExec: wdw=[FIRST_VALUE(aggregate_test_100.c9): Ok(Field { name: \"FIRST_VALUE(aggregate_test_100.c9)\", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }, LAG(aggregate_test_100.c9,Int64(2),Int64(10101)): Ok(Field { name: \"LAG(aggregate_test_100.c9,Int64(2),Int64(10101))\", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(10)), end_bound: Following(UInt64(1)) }, LEAD(aggregate_test_100.c9,Int64(2),Int64(10101)): Ok(Field { name: \"LEAD(aggregate_test_100.c9,Int64(2),Int64(10101))\", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(10)), end_bound: Following(UInt64(1)) }]",
-            "        SortExec: [c9@0 DESC]",
+            "        SortExec: expr=[c9@0 DESC]",
         ]
     };
 
@@ -1549,9 +334,9 @@ async fn test_window_agg_sort_non_reversed_plan() -> Result<()> {
             "ProjectionExec: expr=[c9@0 as c9, ROW_NUMBER() ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@2 as rn1, ROW_NUMBER() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@1 as rn2]",
             "  GlobalLimitExec: skip=0, fetch=5",
             "    BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: \"ROW_NUMBER()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
-            "      SortExec: [c9@0 ASC NULLS LAST]",
+            "      SortExec: expr=[c9@0 ASC NULLS LAST]",
             "        BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: \"ROW_NUMBER()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
-            "          SortExec: [c9@0 DESC]"
+            "          SortExec: expr=[c9@0 DESC]"
         ]
     };
 
@@ -1602,10 +387,10 @@ async fn test_window_agg_sort_multi_layer_non_reversed_plan() -> Result<()> {
             "ProjectionExec: expr=[c9@2 as c9, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@5 as sum1, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c1 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@3 as sum2, ROW_NUMBER() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@4 as rn2]",
             "  GlobalLimitExec: skip=0, fetch=5",
             "    BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
-            "      SortExec: [c9@2 ASC NULLS LAST,c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST]",
+            "      SortExec: expr=[c9@2 ASC NULLS LAST,c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST]",
             "        BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: \"ROW_NUMBER()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
             "          BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
-            "            SortExec: [c9@2 DESC,c1@0 DESC]",
+            "            SortExec: expr=[c9@2 DESC,c1@0 DESC]",
         ]
     };
 
@@ -1690,15 +475,15 @@ async fn test_window_agg_complex_plan() -> Result<()> {
             "  GlobalLimitExec: skip=0, fetch=5",
             "    WindowAggExec: wdw=[SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(10)), end_bound: Following(Int64(11)) }, SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow }, SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: Following(Int64(11)) }, SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(Int64(NULL)) }]",
             "      BoundedWindowAggExec: wdw=[SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow }]",
-            "        SortExec: [c3@2 ASC NULLS LAST,c2@1 ASC NULLS LAST]",
+            "        SortExec: expr=[c3@2 ASC NULLS LAST,c2@1 ASC NULLS LAST]",
             "          BoundedWindowAggExec: wdw=[SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow }]",
-            "            SortExec: [c3@2 ASC NULLS LAST,c1@0 ASC]",
+            "            SortExec: expr=[c3@2 ASC NULLS LAST,c1@0 ASC]",
             "              WindowAggExec: wdw=[SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(Int64(NULL)) }]",
             "                WindowAggExec: wdw=[SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(11)), end_bound: Following(Int64(10)) }, SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(Int64(NULL)) }, SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(11)), end_bound: Following(Int64(NULL)) }, SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow }]",
             "                  WindowAggExec: wdw=[SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(10)), end_bound: Following(Int64(11)) }, SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow }, SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: Following(Int64(11)) }, SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(Int64(NULL)) }]",
             "                    WindowAggExec: wdw=[SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(10)), end_bound: Following(Int64(11)) }, SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow }, SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: Following(Int64(11)) }, SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(Int64(NULL)) }]",
             "                      BoundedWindowAggExec: wdw=[SUM(null_cases.c1): Ok(Field { name: \"SUM(null_cases.c1)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow }]",
-            "                        SortExec: [c3@2 DESC,c1@0 ASC NULLS LAST]",
+            "                        SortExec: expr=[c3@2 DESC,c1@0 ASC NULLS LAST]",
         ]
     };
 
@@ -1738,7 +523,7 @@ async fn test_window_agg_sort_orderby_reversed_partitionby_plan() -> Result<()> 
             "  GlobalLimitExec: skip=0, fetch=5",
             "    BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
             "      BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
-            "        SortExec: [c1@0 ASC NULLS LAST,c9@1 DESC]",
+            "        SortExec: expr=[c1@0 ASC NULLS LAST,c9@1 DESC]",
         ]
     };
 
@@ -1792,7 +577,7 @@ async fn test_window_agg_sort_partitionby_reversed_plan() -> Result<()> {
             "  GlobalLimitExec: skip=0, fetch=5",
             "    BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(5)), end_bound: Following(UInt64(1)) }]",
             "      BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
-            "        SortExec: [c1@0 ASC NULLS LAST,c9@1 DESC]",
+            "        SortExec: expr=[c1@0 ASC NULLS LAST,c9@1 DESC]",
         ]
     };
 
@@ -1845,7 +630,7 @@ async fn test_window_agg_sort_orderby_reversed_binary_expr() -> Result<()> {
             "  GlobalLimitExec: skip=0, fetch=5",
             "    WindowAggExec: wdw=[SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 ASC NULLS LAST, aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: \"SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 ASC NULLS LAST, aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(Int16(NULL)) }]",
             "      BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: \"SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int16(NULL)), end_bound: CurrentRow }]",
-            "        SortExec: [CAST(c3@1 AS Int16) + c4@2 DESC,c9@3 DESC,c2@0 ASC NULLS LAST]",
+            "        SortExec: expr=[CAST(c3@1 AS Int16) + c4@2 DESC,c9@3 DESC,c2@0 ASC NULLS LAST]",
         ]
     };
 
@@ -1956,7 +741,7 @@ async fn test_window_agg_sort_orderby_reversed_partitionby_reversed_plan() -> Re
             "  GlobalLimitExec: skip=0, fetch=5",
             "    BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt32(NULL)), end_bound: CurrentRow }]",
             "      BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int8(NULL)), end_bound: CurrentRow }]",
-            "        SortExec: [c3@1 DESC,c9@2 DESC,c2@0 ASC NULLS LAST]",
+            "        SortExec: expr=[c3@1 DESC,c9@2 DESC,c2@0 ASC NULLS LAST]",
         ]
     };
 
@@ -2005,7 +790,7 @@ async fn test_window_agg_global_sort() -> Result<()> {
             "SortPreservingMergeExec: [c1@0 ASC NULLS LAST]",
             "  ProjectionExec: expr=[c1@0 as c1, ROW_NUMBER() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as rn1]",
             "    BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: \"ROW_NUMBER()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }]",
-            "      SortExec: [c1@0 ASC NULLS LAST]",
+            "      SortExec: expr=[c1@0 ASC NULLS LAST]",
             "        CoalesceBatchesExec: target_batch_size=8192",
             "          RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2), input_partitions=2",
             "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
@@ -2040,11 +825,11 @@ async fn test_window_agg_global_sort_parallelize_sort_disabled() -> Result<()> {
     // Only 1 SortExec was added
     let expected = {
         vec![
-            "SortExec: [c1@0 ASC NULLS LAST]",
+            "SortExec: expr=[c1@0 ASC NULLS LAST]",
             "  CoalescePartitionsExec",
             "    ProjectionExec: expr=[c1@0 as c1, ROW_NUMBER() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as rn1]",
             "      BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: \"ROW_NUMBER()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }]",
-            "        SortExec: [c1@0 ASC NULLS LAST]",
+            "        SortExec: expr=[c1@0 ASC NULLS LAST]",
             "          CoalesceBatchesExec: target_batch_size=8192",
             "            RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2), input_partitions=2",
             "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
@@ -2082,13 +867,13 @@ async fn test_window_agg_global_sort_intermediate_parallel_sort() -> Result<()> 
     // Only 1 SortExec was added
     let expected = {
         vec![
-            "SortExec: [c1@0 ASC NULLS LAST]",
+            "SortExec: expr=[c1@0 ASC NULLS LAST]",
             "  ProjectionExec: expr=[c1@0 as c1, SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 3 FOLLOWING@2 as sum1, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@3 as sum2]",
             "    BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
             "      SortPreservingMergeExec: [c9@1 ASC NULLS LAST]",
-            "        SortExec: [c9@1 ASC NULLS LAST]",
+            "        SortExec: expr=[c9@1 ASC NULLS LAST]",
             "          BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(3)) }]",
-            "            SortExec: [c1@0 ASC NULLS LAST,c9@1 ASC NULLS LAST]",
+            "            SortExec: expr=[c1@0 ASC NULLS LAST,c9@1 ASC NULLS LAST]",
             "              CoalesceBatchesExec: target_batch_size=8192",
             "                RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2), input_partitions=2",
             "                  RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
@@ -2126,8 +911,7 @@ async fn test_window_agg_with_global_limit() -> Result<()> {
             "  AggregateExec: mode=Final, gby=[], aggr=[ARRAYAGG(aggregate_test_100.c13)]",
             "    AggregateExec: mode=Partial, gby=[], aggr=[ARRAYAGG(aggregate_test_100.c13)]",
             "      GlobalLimitExec: skip=0, fetch=1",
-            "        SortExec: [c13@0 ASC NULLS LAST]",
-            "          ProjectionExec: expr=[c13@0 as c13]",
+            "        SortExec: fetch=1, expr=[c13@0 ASC NULLS LAST]",
         ]
     };
 
@@ -2201,11 +985,12 @@ async fn test_source_linear_partition_by() -> Result<()> {
         vec![
             "ProjectionExec: expr=[summation1@0 as summation1, summation2@1 as summation2]",
             "  GlobalLimitExec: skip=0, fetch=5",
-            "    SortExec: [c9@2 ASC NULLS LAST]",
+            "    SortExec: fetch=5, expr=[c9@2 ASC NULLS LAST]",
             "      ProjectionExec: expr=[SUM(aggregate_test_100.c5) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST, aggregate_test_100.c5 ASC NULLS LAST] ROWS BETWEEN 4 PRECEDING AND 1 FOLLOWING@5 as summation1, SUM(aggregate_test_100.c5) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c3] ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING@6 as summation2, c9@4 as c9]",
             "        BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c5): Ok(Field { name: \"SUM(aggregate_test_100.c5)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(3)), end_bound: Following(UInt64(1)) }]",
             "          BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c5): Ok(Field { name: \"SUM(aggregate_test_100.c5)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(4)), end_bound: Following(UInt64(1)) }]",
-            "            SortExec: [c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST,c5@3 ASC NULLS LAST]",        ]
+            "            SortExec: expr=[c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST,c5@3 ASC NULLS LAST]",
+        ]
     };
 
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -2493,7 +1278,7 @@ mod tests {
             vec![
                 "ProjectionExec: expr=[sum1@0 as sum1, sum2@1 as sum2, sum3@2 as sum3, min1@3 as min1, min2@4 as min2, min3@5 as min3, max1@6 as max1, max2@7 as max2, max3@8 as max3, cnt1@9 as cnt1, cnt2@10 as cnt2, sumr1@11 as sumr1, sumr2@12 as sumr2, sumr3@13 as sumr3, minr1@14 as minr1, minr2@15 as minr2, minr3@16 as minr3, maxr1@17 as maxr1, maxr2@18 as maxr2, maxr3@19 as maxr3, cntr1@20 as cntr1, cntr2@21 as cntr2, sum4@22 as sum4, cnt3@23 as cnt3]",
                 "  GlobalLimitExec: skip=0, fetch=5",
-                "    SortExec: [inc_col@24 DESC]",
+                "    SortExec: fetch=5, expr=[inc_col@24 DESC]",
                 "      ProjectionExec: expr=[SUM(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING@14 as sum1, SUM(annotated_data.desc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 5 PRECEDING AND 1 FOLLOWING@15 as sum2, SUM(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 10 FOLLOWING@16 as sum3, MIN(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING@17 as min1, MIN(annotated_data.desc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 5 PRECEDING AND 1 FOLLOWING@18 as min2, MIN(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 10 FOLLOWING@19 as min3, MAX(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING@20 as max1, MAX(annotated_data.desc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 5 PRECEDING AND 1 FOLLOWING@21 as max2, MAX(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 10 FOLLOWING@22 as max3, COUNT(UInt8(1)) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 4 PRECEDING AND 8 FOLLOWING@23 as cnt1, COUNT(UInt8(1)) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 8 PRECEDING AND 1 FOLLOWING@24 as cnt2, SUM(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 1 PRECEDING AND 4 FOLLOWING@3 as sumr1, SUM(annotated_data.desc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 1 PRECEDING AND 8 FOLLOWING@4 as sumr2, SUM(annotated_data.desc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@5 as sumr3, MIN(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING@6 as minr1, MIN(annotated_data.desc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 5 PRECEDING AND 1 FOLLOWING@7 as minr2, MIN(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 10 FOLLOWING@8 as minr3, MAX(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING@9 as maxr1, MAX(annotated_data.desc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 5 PRECEDING AND 1 FOLLOWING@10 as maxr2, MAX(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 10 FOLLOWING@11 as maxr3, COUNT(UInt8(1)) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING@12 as cntr1, COUNT(UInt8(1)) ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN 8 PRECEDING AND 1 FOLLOWING@13 as cntr2, SUM(annotated_data.desc_col) ROWS BETWEEN 8 PRECEDING AND 1 FOLLOWING@25 as sum4, COUNT(UInt8(1)) ROWS BETWEEN 8 PRECEDING AND 1 FOLLOWING@26 as cnt3, inc_col@1 as inc_col]",
                 "        BoundedWindowAggExec: wdw=[SUM(annotated_data.desc_col): Ok(Field { name: \"SUM(annotated_data.desc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(8)), end_bound: Following(UInt64(1)) }, COUNT(UInt8(1)): Ok(Field { name: \"COUNT(UInt8(1))\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(8)), end_bound: Following(UInt64(1)) }]",
                 "          BoundedWindowAggExec: wdw=[SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(10)), end_bound: Following(Int32(1)) }, SUM(annotated_data.desc_col): Ok(Field { name: \"SUM(annotated_data.desc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(5)), end_bound: Following(Int32(1)) }, SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(10)) }, MIN(annotated_data.inc_col): Ok(Field { name: \"MIN(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(10)), end_bound: Following(Int32(1)) }, MIN(annotated_data.desc_col): Ok(Field { name: \"MIN(annotated_data.desc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(5)), end_bound: Following(Int32(1)) }, MIN(annotated_data.inc_col): Ok(Field { name: \"MIN(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(10)) }, MAX(annotated_data.inc_col): Ok(Field { name: \"MAX(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(10)), end_bound: Following(Int32(1)) }, MAX(annotated_data.desc_col): Ok(Field { name: \"MAX(annotated_data.desc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(5)), end_bound: Following(Int32(1)) }, MAX(annotated_data.inc_col): Ok(Field { name: \"MAX(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(10)) }, COUNT(UInt8(1)): Ok(Field { name: \"COUNT(UInt8(1))\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(4)), end_bound: Following(Int32(8)) }, COUNT(UInt8(1)): Ok(Field { name: \"COUNT(UInt8(1))\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(8)), end_bound: Following(UInt64(1)) }]",
@@ -2568,7 +1353,7 @@ mod tests {
             vec![
                 "ProjectionExec: expr=[fv1@0 as fv1, fv2@1 as fv2, lv1@2 as lv1, lv2@3 as lv2, nv1@4 as nv1, nv2@5 as nv2, rn1@6 as rn1, rn2@7 as rn2, rank1@8 as rank1, rank2@9 as rank2, dense_rank1@10 as dense_rank1, dense_rank2@11 as dense_rank2, lag1@12 as lag1, lag2@13 as lag2, lead1@14 as lead1, lead2@15 as lead2, fvr1@16 as fvr1, fvr2@17 as fvr2, lvr1@18 as lvr1, lvr2@19 as lvr2, lagr1@20 as lagr1, lagr2@21 as lagr2, leadr1@22 as leadr1, leadr2@23 as leadr2]",
                 "  GlobalLimitExec: skip=0, fetch=5",
-                "    SortExec: [ts@24 DESC]",
+                "    SortExec: fetch=5, expr=[ts@24 DESC]",
                 "      ProjectionExec: expr=[FIRST_VALUE(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING@10 as fv1, FIRST_VALUE(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING@11 as fv2, LAST_VALUE(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING@12 as lv1, LAST_VALUE(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING@13 as lv2, NTH_VALUE(annotated_data.inc_col,Int64(5)) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING@14 as nv1, NTH_VALUE(annotated_data.inc_col,Int64(5)) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING@15 as nv2, ROW_NUMBER() ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 1 PRECEDING AND 10 FOLLOWING@16 as rn1, ROW_NUMBER() ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING@17 as rn2, RANK() ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 1 PRECEDING AND 10 FOLLOWING@18 as rank1, RANK() ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING@19 as rank2, DENSE_RANK() ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 1 PRECEDING AND 10 FOLLOWING@20 as dense_rank1, DENSE_RANK() ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING@21 as dense_rank2, LAG(annotated_data.inc_col,Int64(1),Int64(1001)) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 1 PRECEDING AND 10 FOLLOWING@22 as lag1, LAG(annotated_data.inc_col,Int64(2),Int64(1002)) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING@23 as lag2, LEAD(annotated_data.inc_col,Int64(-1),Int64(1001)) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 1 PRECEDING AND 10 FOLLOWING@24 as lead1, LEAD(annotated_data.inc_col,Int64(4),Int64(1004)) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING@25 as lead2, FIRST_VALUE(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING@2 as fvr1, FIRST_VALUE(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING@3 as fvr2, LAST_VALUE(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING@4 as lvr1, LAST_VALUE(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING@5 as lvr2, LAG(annotated_data.inc_col,Int64(1),Int64(1001)) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 1 PRECEDING AND 10 FOLLOWING@6 as lagr1, LAG(annotated_data.inc_col,Int64(2),Int64(1002)) ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING@7 as lagr2, LEAD(annotated_data.inc_col,Int64(-1),Int64(1001)) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 1 PRECEDING AND 10 FOLLOWING@8 as leadr1, LEAD(annotated_data.inc_col,Int64(4),Int64(1004)) ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING@9 as leadr2, ts@0 as ts]",
                 "        BoundedWindowAggExec: wdw=[FIRST_VALUE(annotated_data.inc_col): Ok(Field { name: \"FIRST_VALUE(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(10)), end_bound: Following(Int32(1)) }, FIRST_VALUE(annotated_data.inc_col): Ok(Field { name: \"FIRST_VALUE(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(10)), end_bound: Following(UInt64(1)) }, LAST_VALUE(annotated_data.inc_col): Ok(Field { name: \"LAST_VALUE(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(10)), end_bound: Following(Int32(1)) }, LAST_VALUE(annotated_data.inc_col): Ok(Field { name: \"LAST_VALUE(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(10)), end_bound: Following(UInt64(1)) }, NTH_VALUE(annotated_data.inc_col,Int64(5)): Ok(Field { name: \"NTH_VALUE(annotated_data.inc_col,Int64(5))\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(10)), end_bound: Following(Int32(1)) }, NTH_VALUE(annotated_data.inc_col,Int64(5)): Ok(Field { name: \"NTH_VALUE(annotated_data.inc_col,Int64(5))\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(10)), end_bound: Following(UInt64(1)) }, ROW_NUMBER(): Ok(Field { name: \"ROW_NUMBER()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(1)), end_bound: Following(Int32(10)) }, ROW_NUMBER(): Ok(Field { name: \"ROW_NUMBER()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(10)), end_bound: Following(UInt64(1)) }, RANK(): Ok(Field { name: \"RANK()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(1)), end_bound: Following(Int32(10)) }, RANK(): Ok(Field { name: \"RANK()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(10)), end_bound: Following(UInt64(1)) }, DENSE_RANK(): Ok(Field { name: \"DENSE_RANK()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(1)), end_bound: Following(Int32(10)) }, DENSE_RANK(): Ok(Field { name: \"DENSE_RANK()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(10)), end_bound: Following(UInt64(1)) }, LAG(annotated_data.inc_col,Int64(1),Int64(1001)): Ok(Field { name: \"LAG(annotated_data.inc_col,Int64(1),Int64(1001))\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(1)), end_bound: Following(Int32(10)) }, LAG(annotated_data.inc_col,Int64(2),Int64(1002)): Ok(Field { name: \"LAG(annotated_data.inc_col,Int64(2),Int64(1002))\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(10)), end_bound: Following(UInt64(1)) }, LEAD(annotated_data.inc_col,Int64(-1),Int64(1001)): Ok(Field { name: \"LEAD(annotated_data.inc_col,Int64(-1),Int64(1001))\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(1)), end_bound: Following(Int32(10)) }, LEAD(annotated_data.inc_col,Int64(4),Int64(1004)): Ok(Field { name: \"LEAD(annotated_data.inc_col,Int64(4),Int64(1004))\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(10)), end_bound: Following(UInt64(1)) }]",
                 "          BoundedWindowAggExec: wdw=[FIRST_VALUE(annotated_data.inc_col): Ok(Field { name: \"FIRST_VALUE(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(1)), end_bound: Following(Int32(10)) }, FIRST_VALUE(annotated_data.inc_col): Ok(Field { name: \"FIRST_VALUE(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(10)) }, LAST_VALUE(annotated_data.inc_col): Ok(Field { name: \"LAST_VALUE(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(1)), end_bound: Following(Int32(10)) }, LAST_VALUE(annotated_data.inc_col): Ok(Field { name: \"LAST_VALUE(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(10)) }, LAG(annotated_data.inc_col,Int64(1),Int64(1001)): Ok(Field { name: \"LAG(annotated_data.inc_col,Int64(1),Int64(1001))\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(10)), end_bound: Following(Int32(1)) }, LAG(annotated_data.inc_col,Int64(2),Int64(1002)): Ok(Field { name: \"LAG(annotated_data.inc_col,Int64(2),Int64(1002))\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(10)) }, LEAD(annotated_data.inc_col,Int64(-1),Int64(1001)): Ok(Field { name: \"LEAD(annotated_data.inc_col,Int64(-1),Int64(1001))\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(10)), end_bound: Following(Int32(1)) }, LEAD(annotated_data.inc_col,Int64(4),Int64(1004)): Ok(Field { name: \"LEAD(annotated_data.inc_col,Int64(4),Int64(1004))\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(10)) }]",
@@ -2627,7 +1412,7 @@ mod tests {
             vec![
                 "ProjectionExec: expr=[sum1@0 as sum1, sum2@1 as sum2, min1@2 as min1, min2@3 as min2, max1@4 as max1, max2@5 as max2, count1@6 as count1, count2@7 as count2, avg1@8 as avg1, avg2@9 as avg2]",
                 "  GlobalLimitExec: skip=0, fetch=5",
-                "    SortExec: [inc_col@10 ASC NULLS LAST]",
+                "    SortExec: fetch=5, expr=[inc_col@10 ASC NULLS LAST]",
                 "      ProjectionExec: expr=[SUM(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND 5 FOLLOWING@7 as sum1, SUM(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 3 PRECEDING AND UNBOUNDED FOLLOWING@2 as sum2, MIN(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND 5 FOLLOWING@8 as min1, MIN(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 3 PRECEDING AND UNBOUNDED FOLLOWING@3 as min2, MAX(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND 5 FOLLOWING@9 as max1, MAX(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 3 PRECEDING AND UNBOUNDED FOLLOWING@4 as max2, COUNT(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND 5 FOLLOWING@10 as count1, COUNT(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 3 PRECEDING AND UNBOUNDED FOLLOWING@5 as count2, AVG(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND 5 FOLLOWING@11 as avg1, AVG(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 3 PRECEDING AND UNBOUNDED FOLLOWING@6 as avg2, inc_col@1 as inc_col]",
                 "        BoundedWindowAggExec: wdw=[SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: Following(Int32(5)) }, MIN(annotated_data.inc_col): Ok(Field { name: \"MIN(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: Following(Int32(5)) }, MAX(annotated_data.inc_col): Ok(Field { name: \"MAX(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: Following(Int32(5)) }, COUNT(annotated_data.inc_col): Ok(Field { name: \"COUNT(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: Following(Int32(5)) }, AVG(annotated_data.inc_col): Ok(Field { name: \"AVG(annotated_data.inc_col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: Following(Int32(5)) }]",
                 "          BoundedWindowAggExec: wdw=[SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: Following(Int32(3)) }, MIN(annotated_data.inc_col): Ok(Field { name: \"MIN(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: Following(Int32(3)) }, MAX(annotated_data.inc_col): Ok(Field { name: \"MAX(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: Following(Int32(3)) }, COUNT(annotated_data.inc_col): Ok(Field { name: \"COUNT(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: Following(Int32(3)) }, AVG(annotated_data.inc_col): Ok(Field { name: \"AVG(annotated_data.inc_col)\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: Following(Int32(3)) }]",
@@ -2647,11 +1432,11 @@ mod tests {
             "+------+------+------+------+------+------+--------+--------+-------------------+-------------------+",
             "| sum1 | sum2 | min1 | min2 | max1 | max2 | count1 | count2 | avg1              | avg2              |",
             "+------+------+------+------+------+------+--------+--------+-------------------+-------------------+",
-            "| 16   | 6    | 1    | 1    | 10   | 5    | 3      | 2      | 5.333333333333333 | 3                 |",
-            "| 16   | 6    | 1    | 1    | 10   | 5    | 3      | 2      | 5.333333333333333 | 3                 |",
+            "| 16   | 6    | 1    | 1    | 10   | 5    | 3      | 2      | 5.333333333333333 | 3.0               |",
+            "| 16   | 6    | 1    | 1    | 10   | 5    | 3      | 2      | 5.333333333333333 | 3.0               |",
             "| 51   | 16   | 1    | 1    | 20   | 10   | 5      | 3      | 10.2              | 5.333333333333333 |",
-            "| 72   | 72   | 1    | 1    | 21   | 21   | 6      | 6      | 12                | 12                |",
-            "| 72   | 72   | 1    | 1    | 21   | 21   | 6      | 6      | 12                | 12                |",
+            "| 72   | 72   | 1    | 1    | 21   | 21   | 6      | 6      | 12.0              | 12.0              |",
+            "| 72   | 72   | 1    | 1    | 21   | 21   | 6      | 6      | 12.0              | 12.0              |",
             "+------+------+------+------+------+------+--------+--------+-------------------+-------------------+",
         ];
         assert_batches_eq!(expected, &actual);
@@ -2681,7 +1466,7 @@ mod tests {
             vec![
                 "ProjectionExec: expr=[first_value1@0 as first_value1, first_value2@1 as first_value2, last_value1@2 as last_value1, last_value2@3 as last_value2, nth_value1@4 as nth_value1]",
                 "  GlobalLimitExec: skip=0, fetch=5",
-                "    SortExec: [inc_col@5 ASC NULLS LAST]",
+                "    SortExec: fetch=5, expr=[inc_col@5 ASC NULLS LAST]",
                 "      ProjectionExec: expr=[FIRST_VALUE(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING@4 as first_value1, FIRST_VALUE(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN 3 PRECEDING AND UNBOUNDED FOLLOWING@2 as first_value2, LAST_VALUE(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING@5 as last_value1, LAST_VALUE(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN 3 PRECEDING AND UNBOUNDED FOLLOWING@3 as last_value2, NTH_VALUE(annotated_data.inc_col,Int64(2)) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING@6 as nth_value1, inc_col@1 as inc_col]",
                 "        BoundedWindowAggExec: wdw=[FIRST_VALUE(annotated_data.inc_col): Ok(Field { name: \"FIRST_VALUE(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(1)) }, LAST_VALUE(annotated_data.inc_col): Ok(Field { name: \"LAST_VALUE(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(1)) }, NTH_VALUE(annotated_data.inc_col,Int64(2)): Ok(Field { name: \"NTH_VALUE(annotated_data.inc_col,Int64(2))\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(1)) }]",
                 "          BoundedWindowAggExec: wdw=[FIRST_VALUE(annotated_data.inc_col): Ok(Field { name: \"FIRST_VALUE(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(3)) }, LAST_VALUE(annotated_data.inc_col): Ok(Field { name: \"LAST_VALUE(annotated_data.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(3)) }]",
@@ -2729,7 +1514,7 @@ mod tests {
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
         let expected = {
             vec![
-                "SortExec: [inc_col@0 ASC NULLS LAST]",
+                "SortExec: expr=[inc_col@0 ASC NULLS LAST]",
                 "  ProjectionExec: expr=[inc_col@1 as inc_col, low_card_col@2 as low_card_col, SUM(annotated_data.inc_col) PARTITION BY [annotated_data.low_card_col] ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@3 as sum1, SUM(annotated_data.inc_col) PARTITION BY [annotated_data.low_card_col] ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING@4 as sum2]",
                 "    BoundedWindowAggExec: wdw=[SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(3)), end_bound: Following(UInt64(1)) }]",
             ]
@@ -2862,7 +1647,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_source_partially_sorted_partition_by() -> Result<()> {
         let tmpdir = TempDir::new().unwrap();
         let ctx = get_test_context2(&tmpdir).await?;
@@ -2889,7 +1673,7 @@ mod tests {
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
         let expected = {
             vec![
-                "SortExec: [inc_col@2 ASC NULLS LAST]",
+                "SortExec: expr=[inc_col@2 ASC NULLS LAST]",
                 "  ProjectionExec: expr=[low_card_col1@0 as low_card_col1, low_card_col2@1 as low_card_col2, inc_col@2 as inc_col, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col1, annotated_data2.unsorted_col] ORDER BY [annotated_data2.low_card_col2 ASC NULLS LAST, annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@6 as sum1, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.unsorted_col] ORDER BY [annotated_data2.low_card_col1 ASC NULLS LAST, annotated_data2.low_card_col2 ASC NULLS LAST, annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@9 as sum2, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col1, annotated_data2.low_card_col2] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@4 as sum3, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col2, annotated_data2.low_card_col1] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@7 as sum4, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col1, annotated_data2.low_card_col2, annotated_data2.unsorted_col] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@5 as sum5, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col2, annotated_data2.low_card_col1, annotated_data2.unsorted_col] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@8 as sum6]",
                 "    BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }]",
                 "      BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }]",

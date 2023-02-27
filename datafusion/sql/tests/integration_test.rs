@@ -2102,27 +2102,6 @@ fn over_order_by_with_window_frame_single_end() {
 }
 
 #[test]
-fn over_order_by_with_window_frame_range_order_by_check() {
-    let sql = "SELECT order_id, MAX(qty) OVER (RANGE UNBOUNDED PRECEDING) from orders";
-    let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-            "Plan(\"With window frame of type RANGE, the order by expression must be of length 1, got 0\")",
-            format!("{err:?}")
-        );
-}
-
-#[test]
-fn over_order_by_with_window_frame_range_order_by_check_2() {
-    let sql =
-            "SELECT order_id, MAX(qty) OVER (ORDER BY order_id, qty RANGE UNBOUNDED PRECEDING) from orders";
-    let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-            "Plan(\"With window frame of type RANGE, the order by expression must be of length 1, got 2\")",
-            format!("{err:?}")
-        );
-}
-
-#[test]
 fn over_order_by_with_window_frame_single_end_groups() {
     let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id GROUPS 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
     let expected = "\

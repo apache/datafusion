@@ -931,6 +931,14 @@ pub struct Struct {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Map {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub field_type: ::core::option::Option<::prost::alloc::boxed::Box<Field>>,
+    #[prost(bool, tag = "2")]
+    pub keys_sorted: bool,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Union {
     #[prost(message, repeated, tag = "1")]
     pub union_types: ::prost::alloc::vec::Vec<Field>,
@@ -1139,7 +1147,7 @@ pub struct Decimal128 {
 pub struct ArrowType {
     #[prost(
         oneof = "arrow_type::ArrowTypeEnum",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 32, 15, 16, 31, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 32, 15, 16, 31, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 33"
     )]
     pub arrow_type_enum: ::core::option::Option<arrow_type::ArrowTypeEnum>,
 }
@@ -1217,6 +1225,8 @@ pub mod arrow_type {
         Union(super::Union),
         #[prost(message, tag = "30")]
         Dictionary(::prost::alloc::boxed::Box<super::Dictionary>),
+        #[prost(message, tag = "33")]
+        Map(::prost::alloc::boxed::Box<super::Map>),
     }
 }
 /// Useful for representing an empty enum variant in rust
@@ -1394,7 +1404,7 @@ pub struct PhysicalExtensionNode {
 pub struct PhysicalExprNode {
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1446,6 +1456,10 @@ pub mod physical_expr_node {
         ),
         #[prost(message, tag = "18")]
         LikeExpr(::prost::alloc::boxed::Box<super::PhysicalLikeExprNode>),
+        #[prost(message, tag = "19")]
+        GetIndexedFieldExpr(
+            ::prost::alloc::boxed::Box<super::PhysicalGetIndexedFieldExprNode>,
+        ),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1826,6 +1840,8 @@ pub struct SortExecNode {
     /// Maximum number of highest/lowest rows to fetch; negative means no limit
     #[prost(int64, tag = "3")]
     pub fetch: i64,
+    #[prost(bool, tag = "4")]
+    pub preserve_partitioning: bool,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1953,6 +1969,14 @@ pub struct ColumnStats {
     pub null_count: u32,
     #[prost(uint32, tag = "4")]
     pub distinct_count: u32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalGetIndexedFieldExprNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub arg: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, tag = "2")]
+    pub key: ::core::option::Option<ScalarValue>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

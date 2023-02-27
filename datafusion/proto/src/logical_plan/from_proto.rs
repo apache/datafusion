@@ -43,9 +43,10 @@ use datafusion_expr::{
     regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
     sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr,
     substring, tan, to_hex, to_timestamp_micros, to_timestamp_millis,
-    to_timestamp_seconds, translate, trim, trunc, upper, uuid, AggregateFunction,
-    Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr,
-    GetIndexedField, GroupingSet,
+    to_timestamp_seconds, translate, trim, trunc, upper, uuid,
+    window_frame::regularize,
+    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
+    Case, Cast, Expr, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -349,6 +350,12 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 let key_datatype = dict.as_ref().key.as_deref().required("key")?;
                 let value_datatype = dict.as_ref().value.as_deref().required("value")?;
                 DataType::Dictionary(Box::new(key_datatype), Box::new(value_datatype))
+            }
+            arrow_type::ArrowTypeEnum::Map(map) => {
+                let field: Field =
+                    map.as_ref().field_type.as_deref().required("field_type")?;
+                let keys_sorted = map.keys_sorted;
+                DataType::Map(Box::new(field), keys_sorted)
             }
         })
     }
@@ -907,16 +914,15 @@ pub fn parse_expr(
                 .window_frame
                 .as_ref()
                 .map::<Result<WindowFrame, _>, _>(|window_frame| {
-                    let window_frame: WindowFrame = window_frame.clone().try_into()?;
-                    if WindowFrameUnits::Range == window_frame.units
-                        && order_by.len() != 1
-                    {
-                        Err(proto_error("With window frame of type RANGE, the order by expression must be of length 1"))
-                    } else {
-                        Ok(window_frame)
-                    }
+                    let window_frame = window_frame.clone().try_into()?;
+                    regularize(window_frame, order_by.len())
                 })
-                .transpose()?.ok_or_else(||{DataFusionError::Execution("expects somothing".to_string())})?;
+                .transpose()?
+                .ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "missing window frame during deserialization".to_string(),
+                    )
+                })?;
 
             match window_function {
                 window_expr_node::WindowFunction::AggrFunction(i) => {

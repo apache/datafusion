@@ -24,6 +24,7 @@ pub mod avro;
 pub mod csv;
 pub mod file_type;
 pub mod json;
+pub mod options;
 pub mod parquet;
 
 use std::any::Any;

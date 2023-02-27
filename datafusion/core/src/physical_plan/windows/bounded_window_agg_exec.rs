@@ -30,8 +30,10 @@ use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
-use arrow::array::{Array, UInt64Builder};
-use arrow::compute::{concat, lexicographical_partition_ranges, SortColumn};
+use arrow::array::Array;
+use arrow::compute::{
+    concat, concat_batches, lexicographical_partition_ranges, SortColumn,
+};
 use arrow::{
     array::ArrayRef,
     compute,
@@ -49,7 +51,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::physical_plan::common::merge_batches;
+use arrow::array::UInt64Builder;
 use datafusion_common::utils::get_row_at_idx;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::window::{
@@ -460,10 +462,9 @@ impl BoundedWindowAggStream {
                 if let Some(partition_batch_state) =
                     self.partition_buffers.get_mut(&partition_row)
                 {
-                    partition_batch_state.record_batch = merge_batches(
-                        &partition_batch_state.record_batch,
-                        &partition_batch,
-                        self.input.schema(),
+                    partition_batch_state.record_batch = concat_batches(
+                        &self.input.schema(),
+                        [&partition_batch_state.record_batch, &partition_batch],
                     )?;
                     partition_batch_state.indices.extend(indices);
                 } else {
@@ -513,7 +514,7 @@ impl BoundedWindowAggStream {
         self.input_buffer = if self.input_buffer.num_rows() == 0 {
             record_batch
         } else {
-            merge_batches(&self.input_buffer, &record_batch, self.input.schema())?
+            concat_batches(&self.input.schema(), [&self.input_buffer, &record_batch])?
         };
 
         Ok(())
