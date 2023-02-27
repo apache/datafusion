@@ -30,9 +30,8 @@ use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
-use arrow::array::{Array, UInt32Builder, UInt64Builder};
+use arrow::array::{Array, UInt64Builder};
 use arrow::compute::{concat, lexicographical_partition_ranges, SortColumn};
-use arrow::util::pretty::print_batches;
 use arrow::{
     array::ArrayRef,
     compute,
@@ -62,9 +61,13 @@ use indexmap::IndexMap;
 use log::debug;
 
 #[derive(Debug, Clone, PartialEq)]
+/// Specifies partition column propoerties in terms of input ordering
 pub enum PartitionSearchMode {
+    /// None of the columns of the partition columns is ordered.
     Linear,
+    /// Some columns of the partition columns are ordered but not all
     PartiallySorted(Vec<usize>),
+    /// Al; Partition columns are ordered
     Sorted,
 }
 
@@ -382,7 +385,7 @@ impl BoundedWindowAggStream {
                     let counts = if let Some(res) = counter.get_mut(&row) {
                         res
                     } else {
-                        let mut res: Vec<usize> = vec![0; n_window_col];
+                        let res: Vec<usize> = vec![0; n_window_col];
                         counter.insert(row.clone(), res);
                         counter.get_mut(&row).unwrap()
                     };
@@ -416,17 +419,13 @@ impl BoundedWindowAggStream {
                         partition_batch_state.n_out_row = *val.iter().min().unwrap();
                     }
                 }
-                if rows_gen[0].len() > 0 {
+                if !rows_gen[0].is_empty() {
                     let n_out = rows_gen[0].len();
                     self.input_buffer
                         .columns()
                         .iter()
                         .map(|elem| Ok(elem.slice(0, n_out)))
-                        .chain(
-                            rows_gen
-                                .into_iter()
-                                .map(|col| ScalarValue::iter_to_array(col)),
-                        )
+                        .chain(rows_gen.into_iter().map(ScalarValue::iter_to_array))
                         .collect::<Result<Vec<_>>>()
                         .map(Some)
                 } else {
@@ -519,25 +518,9 @@ impl BoundedWindowAggStream {
 
         Ok(())
     }
-
-    fn print_partition_batches(&self) -> Result<()> {
-        println!("n_partition:{:?}", self.partition_buffers.len());
-        for (partition_key, partition_batch) in &self.partition_buffers {
-            println!(
-                "partition_key:{:?}, n_row: {:?}",
-                partition_key,
-                partition_batch.record_batch.num_rows()
-            );
-            println!(
-                "n_out_row: {:?}, len indices: {:?}",
-                partition_batch.n_out_row,
-                partition_batch.indices.len()
-            );
-            // print_batches(&vec![partition_batch.record_batch.clone()])?;
-        }
-        Ok(())
-    }
 }
+
+type PartitionRecordBatchIndices = IndexMap<PartitionKey, (RecordBatch, Vec<usize>)>;
 
 impl Stream for BoundedWindowAggStream {
     type Item = Result<RecordBatch>;
@@ -831,13 +814,13 @@ impl BoundedWindowAggStream {
     fn evaluate_partition_batches(
         &self,
         record_batch: &RecordBatch,
-    ) -> Result<IndexMap<Vec<ScalarValue>, (RecordBatch, Vec<usize>)>> {
+    ) -> Result<PartitionRecordBatchIndices> {
         let mut res: IndexMap<Vec<ScalarValue>, (RecordBatch, Vec<usize>)> =
             IndexMap::new();
         let num_rows = record_batch.num_rows();
         match self.search_mode {
             PartitionSearchMode::Sorted => {
-                let partition_columns = self.partition_columns(&record_batch)?;
+                let partition_columns = self.partition_columns(record_batch)?;
                 let partition_points =
                     self.evaluate_partition_points(num_rows, &partition_columns)?;
                 let partition_bys = partition_columns
@@ -854,7 +837,7 @@ impl BoundedWindowAggStream {
             }
             PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted(_) => {
                 let partition_bys =
-                    self.evaluate_partition_by_column_values(&record_batch)?;
+                    self.evaluate_partition_by_column_values(record_batch)?;
                 // In PartiallySorted implementation we expect indices_map to remember insertion order
                 // hence we use IndexMap.
                 let mut indices_map: IndexMap<Vec<ScalarValue>, Vec<usize>> =
@@ -865,45 +848,12 @@ impl BoundedWindowAggStream {
                     indices.push(idx);
                 }
                 for (partition_row, indices) in indices_map {
-                    let partition_batch = get_at_indices(&record_batch, &indices)?;
+                    let partition_batch = get_at_indices(record_batch, &indices)?;
                     res.insert(partition_row, (partition_batch, indices));
                 }
             }
         }
         Ok(res)
-    }
-
-    /// evaluate the partition points given the sort columns; if the sort columns are
-    /// empty then the result will be a single element vec of the whole column rows.
-    fn evaluate_partition_points_linear(
-        &self,
-        num_rows: usize,
-        columns: &[ArrayRef],
-    ) -> Result<Vec<Range<usize>>> {
-        Ok(if columns.is_empty() {
-            vec![Range {
-                start: 0,
-                end: num_rows,
-            }]
-        } else {
-            // Do linear search
-            let mut res = vec![];
-            let mut last_row = get_row_at_idx(&columns, 0)?;
-            let mut start = 0;
-            for idx in 0..num_rows {
-                let cur_row = get_row_at_idx(&columns, idx)?;
-                if !last_row.eq(&cur_row) {
-                    res.push(Range { start, end: idx });
-                    start = idx;
-                    last_row = cur_row;
-                }
-            }
-            res.push(Range {
-                start,
-                end: num_rows,
-            });
-            res
-        })
     }
 
     fn evaluate_partition_by_column_values(

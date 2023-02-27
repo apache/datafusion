@@ -51,9 +51,8 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::{reverse_sort_options, DataFusionError};
 use datafusion_physical_expr::utils::{ordering_satisfy, ordering_satisfy_concrete};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use futures::StreamExt;
 use hashbrown::HashSet;
-use itertools::{concat, izip};
+use itertools::{concat, izip, Itertools};
 use std::iter::zip;
 use std::sync::Arc;
 
@@ -545,69 +544,61 @@ fn analyze_immediate_sort_removal(
     None
 }
 
-pub fn find_match_indices<T: PartialEq>(
-    to_search: &[T],
-    searched: &[T],
-) -> Result<Vec<usize>> {
+// Find the indices of each element if the to_search vector inside the searched vector
+fn find_match_indices<T: PartialEq>(to_search: &[T], searched: &[T]) -> Vec<usize> {
     let mut result = vec![];
     for item in to_search {
-        if let Some((idx, _elem)) =
-            searched.iter().enumerate().find(|(idx, e)| e.eq(&item))
-        {
+        if let Some(idx) = searched.iter().position(|e| e.eq(item)) {
             result.push(idx);
         }
     }
-    Ok(result)
+    result
 }
 
-pub fn get_partition_by_indices(
+// Find indices of matching physical expression inside `searched` for each entry in the `to_search`.
+fn get_partition_by_indices(
     to_search: &[Arc<dyn PhysicalExpr>],
     searched: &[PhysicalSortExpr],
 ) -> Result<Vec<usize>> {
     let mut result = vec![];
     for item in to_search {
-        if let Some((idx, _elem)) =
-            searched.iter().enumerate().find(|(idx, e)| e.expr.eq(item))
-        {
+        if let Some(idx) = searched.iter().position(|e| e.expr.eq(item)) {
             result.push(idx);
         }
     }
     Ok(result)
 }
 
-pub fn get_partition_by_mapping_indices(
+// Find the indices of matching entries inside the `searched` vector for each element if the `to_search` vector
+fn get_partition_by_mapping_indices(
     to_search: &[Arc<dyn PhysicalExpr>],
     searched: &[Arc<dyn PhysicalExpr>],
 ) -> Result<Vec<usize>> {
     let mut result = vec![];
     for item in to_search {
-        if let Some((idx, _elem)) =
-            searched.iter().enumerate().find(|(idx, e)| e.eq(item))
-        {
+        if let Some(idx) = searched.iter().position(|e| e.eq(item)) {
             result.push(idx);
         }
     }
     Ok(result)
 }
 
-pub fn get_order_by_indices(
+// Find the indices of matching entries inside the `searched` vector for each element if the `to_search` vector
+fn get_order_by_indices(
     to_search: &[PhysicalSortExpr],
     searched: &[PhysicalSortExpr],
 ) -> Result<Vec<usize>> {
     let mut result = vec![];
     for item in to_search {
-        if let Some((idx, _elem)) = searched
-            .iter()
-            .enumerate()
-            .find(|(idx, e)| e.expr.eq(&item.expr))
-        {
+        if let Some(idx) = searched.iter().position(|e| e.expr.eq(&item.expr)) {
             result.push(idx);
         }
     }
     Ok(result)
 }
 
-pub fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec<T>> {
+// Create a new vector from the elements at the `indices` of `searched` vector
+fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec<T>> {
     let mut result = vec![];
     for idx in indices {
         result.push(searched[*idx].clone());
@@ -616,14 +607,14 @@ pub fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec
 }
 
 fn get_sorted_merged_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
-    let set: HashSet<_> = in1.iter().chain(in2.iter()).map(|elem| *elem).collect();
+    let set: HashSet<_> = in1.iter().chain(in2.iter()).copied().collect();
     let mut res: Vec<_> = set.into_iter().collect();
     res.sort();
     res
 }
 
 fn is_consecutive_from_zero(in1: &[usize]) -> bool {
-    in1.iter().zip(0..in1.len()).all(|(lhs, rhs)| *lhs == rhs)
+    in1.iter().enumerate().all(|(idx, elem)| idx == *elem)
 }
 
 fn is_consecutive(in1: &[usize]) -> bool {
@@ -639,15 +630,10 @@ fn is_consecutive(in1: &[usize]) -> bool {
 fn get_set_diff_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
     let mut res = vec![];
     for lhs in in1 {
-        if in2.iter().position(|&rhs| *lhs == rhs).is_none() {
+        if !in2.iter().contains(lhs) {
             res.push(*lhs);
         }
     }
-    // let set1: HashSet<_> = in1.iter().cloned().collect();
-    // let set2: HashSet<_> = in2.iter().cloned().collect();
-    // let diff = &set1 - &set2;
-    // let mut res: Vec<_> = diff.into_iter().collect();
-    // res.sort();
     res
 }
 
@@ -681,11 +667,9 @@ fn can_skip_ordering_fn(
         //       This will enable us to handle cases such as (a,b) -> Sort -> (a,b,c) -> Required(a,b).
         //       Currently, we can not remove such sorts.
         if let Some(physical_ordering) = physical_ordering {
-            let schema = sort_any.schema();
-            let orderby_indices =
-                get_order_by_indices(&orderby_keys, &physical_ordering)?;
+            let orderby_indices = get_order_by_indices(orderby_keys, physical_ordering)?;
             let mut partitionby_indices =
-                get_partition_by_indices(&partitionby_keys, &physical_ordering)?;
+                get_partition_by_indices(partitionby_keys, physical_ordering)?;
             partitionby_indices.sort();
             let merged_indices =
                 get_sorted_merged_indices(&partitionby_indices, &orderby_indices);
@@ -699,19 +683,15 @@ fn can_skip_ordering_fn(
                 get_at_indices(physical_ordering, &only_orderby_indices)?;
             let expected_orderby_columns = get_at_indices(
                 orderby_keys,
-                &find_match_indices(&only_orderby_indices, &orderby_indices)?,
+                &find_match_indices(&only_orderby_indices, &orderby_indices),
             )?;
 
             let (is_aligned, should_reverse) = can_skip_sort(
-                &vec![],
+                &[],
                 &expected_orderby_columns,
                 &sort_input.schema(),
                 &input_orderby_columns,
             )?;
-            let mut is_same_ordering = false;
-            if is_aligned && !should_reverse {
-                is_same_ordering = true;
-            }
 
             let streamable = (is_merge_consecutive
                 || (all_partition && merged_indices[0] == 0))
@@ -719,8 +699,8 @@ fn can_skip_ordering_fn(
                 && is_aligned
                 && is_orderby_diff_consecutive;
             let partition_by_consecutive = is_consecutive_from_zero(&partitionby_indices);
-            let mut is_first_partition_by = partitionby_indices
-                .get(0)
+            let is_first_partition_by = partitionby_indices
+                .first()
                 .map(|elem| *elem == 0)
                 .unwrap_or(true);
             let contains_all_partition_bys =
@@ -740,7 +720,7 @@ fn can_skip_ordering_fn(
                         .iter()
                         .map(|elem| elem.expr.clone())
                         .collect::<Vec<_>>(),
-                    &partitionby_keys,
+                    partitionby_keys,
                 )?;
                 PartitionSearchMode::PartiallySorted(partitionby_mapping_indices)
             } else {
@@ -1198,43 +1178,43 @@ mod tests {
 
     #[tokio::test]
     async fn test_sorted_merged_indices() -> Result<()> {
-        let res = get_sorted_merged_indices(&vec![0, 3, 4], &[1, 3, 5]);
+        let res = get_sorted_merged_indices(&[0, 3, 4], &[1, 3, 5]);
         assert_eq!(res, vec![0, 1, 3, 4, 5]);
         Ok(())
     }
 
     #[tokio::test]
     async fn test_is_consecutive_from_zero() -> Result<()> {
-        assert!(!is_consecutive_from_zero(&vec![0, 3, 4]));
-        assert!(is_consecutive_from_zero(&vec![0, 1, 2]));
-        assert!(is_consecutive_from_zero(&vec![]));
+        assert!(!is_consecutive_from_zero(&[0, 3, 4]));
+        assert!(is_consecutive_from_zero(&[0, 1, 2]));
+        assert!(is_consecutive_from_zero(&[]));
         Ok(())
     }
 
     #[tokio::test]
     async fn test_get_set_diff_indices() -> Result<()> {
-        assert_eq!(
-            get_set_diff_indices(&vec![0, 3, 4], &vec![1, 2]),
-            vec![0, 3, 4]
-        );
-        assert_eq!(
-            get_set_diff_indices(&vec![0, 3, 4], &vec![1, 2, 4]),
-            vec![0, 3]
-        );
+        assert_eq!(get_set_diff_indices(&[0, 3, 4], &[1, 2]), vec![0, 3, 4]);
+        assert_eq!(get_set_diff_indices(&[0, 3, 4], &[1, 2, 4]), vec![0, 3]);
         // return value should have same ordering with the in1
-        assert_eq!(
-            get_set_diff_indices(&vec![3, 4, 0], &vec![1, 2, 4]),
-            vec![3, 0]
-        );
+        assert_eq!(get_set_diff_indices(&[3, 4, 0], &[1, 2, 4]), vec![3, 0]);
         Ok(())
     }
 
     #[tokio::test]
     async fn test_calc_first_n() -> Result<()> {
-        assert_eq!(calc_first_n(&vec![0, 3, 4]), 1);
-        assert_eq!(calc_first_n(&vec![0, 1, 3, 4]), 2);
+        assert_eq!(calc_first_n(&[0, 3, 4]), 1);
+        assert_eq!(calc_first_n(&[0, 1, 3, 4]), 2);
         // return value should have same ordering with the in1
-        assert_eq!(calc_first_n(&vec![0, 1, 2, 3, 4]), 5);
+        assert_eq!(calc_first_n(&[0, 1, 2, 3, 4]), 5);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_match_indices() -> Result<()> {
+        assert_eq!(find_match_indices(&[0, 3, 4], &[0, 3, 4]), vec![0, 1, 2]);
+        assert_eq!(find_match_indices(&[0, 4, 3], &[0, 3, 4]), vec![0, 2, 1]);
+        // return value should have same ordering with the in1
+        assert_eq!(find_match_indices(&[0, 4, 3, 5], &[0, 3, 4]), vec![0, 2, 1]);
         Ok(())
     }
 
