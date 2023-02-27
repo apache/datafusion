@@ -452,8 +452,6 @@ impl DataFrame {
             )?
             .build()?,
         ))
-
-        // Ok(vec![describe_record_batch])
     }
 
     /// Sort the DataFrame by the specified sorting expressions. Any expression can be turned into
