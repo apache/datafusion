@@ -36,6 +36,7 @@ use arrow::record_batch::RecordBatch;
 use bzip2::write::BzEncoder;
 #[cfg(feature = "compression")]
 use bzip2::Compression as BzCompression;
+use datafusion_common::DataFusionError;
 #[cfg(feature = "compression")]
 use flate2::write::GzEncoder;
 #[cfg(feature = "compression")]
@@ -49,6 +50,8 @@ use std::sync::Arc;
 use tempfile::TempDir;
 #[cfg(feature = "compression")]
 use xz2::write::XzEncoder;
+#[cfg(feature = "compression")]
+use zstd::Encoder as ZstdEncoder;
 
 pub fn create_table_dual() -> Arc<dyn TableProvider> {
     let dual_schema = Arc::new(Schema::new(vec![
@@ -124,14 +127,22 @@ pub fn partitioned_file_groups(
             #[cfg(feature = "compression")]
             FileCompressionType::XZ => Box::new(XzEncoder::new(file, 9)),
             #[cfg(feature = "compression")]
+            FileCompressionType::ZSTD => {
+                let encoder = ZstdEncoder::new(file, 0)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .auto_finish();
+                Box::new(encoder)
+            }
+            #[cfg(feature = "compression")]
             FileCompressionType::BZIP2 => {
                 Box::new(BzEncoder::new(file, BzCompression::default()))
             }
             #[cfg(not(feature = "compression"))]
             FileCompressionType::GZIP
             | FileCompressionType::BZIP2
-            | FileCompressionType::XZ => {
-                panic!("GZIP compression is not supported in this build")
+            | FileCompressionType::XZ
+            | FileCompressionType::ZSTD => {
+                panic!("Compression is not supported in this build")
             }
         };
 

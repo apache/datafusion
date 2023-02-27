@@ -23,7 +23,6 @@ use arrow::datatypes::{DataType, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
 
-use super::context::{SessionConfig, SessionState};
 use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
 use crate::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use crate::datasource::file_format::file_type::FileCompressionType;
@@ -38,6 +37,7 @@ use crate::datasource::{
     listing::ListingOptions,
 };
 use crate::error::Result;
+use crate::execution::context::{SessionConfig, SessionState};
 
 /// Options that control the reading of CSV files.
 ///
