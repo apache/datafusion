@@ -695,69 +695,24 @@ fn can_skip_ordering_fn(
             let only_orderby_indices =
                 get_set_diff_indices(&orderby_indices, &partitionby_indices);
             let is_orderby_diff_consecutive = is_consecutive(&only_orderby_indices);
-            // println!(
-            //     "only_orderby_indices:{:?}, is_orderby_diff_consecutive:{:?}",
-            //     only_orderby_indices, is_orderby_diff_consecutive
-            // );
             let input_orderby_columns =
                 get_at_indices(physical_ordering, &only_orderby_indices)?;
             let expected_orderby_columns = get_at_indices(
                 orderby_keys,
                 &find_match_indices(&only_orderby_indices, &orderby_indices)?,
             )?;
-            let nullables = input_orderby_columns
-                .iter()
-                .map(|elem| elem.expr.nullable(&schema))
-                .collect::<Result<Vec<_>>>()?;
-            // println!("nullables:{:?}", nullables);
-            let is_same_ordering = izip!(
-                &input_orderby_columns,
+
+            let (is_aligned, should_reverse) = can_skip_sort(
+                &vec![],
                 &expected_orderby_columns,
-                &nullables
-            )
-            .all(|(input, expected, is_nullable)| {
-                if *is_nullable {
-                    input.options == expected.options
-                } else {
-                    input.options.descending == expected.options.descending
-                }
-            });
-            let should_reverse = izip!(
+                &sort_input.schema(),
                 &input_orderby_columns,
-                &expected_orderby_columns,
-                &nullables
-            )
-            .all(|(input, expected, is_nullable)| {
-                if *is_nullable {
-                    input.options == reverse_sort_options(expected.options)
-                } else {
-                    input.options.descending == !expected.options.descending
-                }
-            });
-            let is_aligned = is_same_ordering || should_reverse;
+            )?;
+            let mut is_same_ordering = false;
+            if is_aligned && !should_reverse {
+                is_same_ordering = true;
+            }
 
-            // let is_same_ordering = input_orderby_columns
-            //     .iter()
-            //     .zip(&expected_orderby_columns)
-            //     .all(|(lhs, rhs)| lhs.options == rhs.options);
-            // let should_reverse = input_orderby_columns
-            //     .iter()
-            //     .zip(&expected_orderby_columns)
-            //     .all(|(lhs, rhs)| lhs.options == reverse_sort_options(rhs.options));
-            // let is_aligned = is_same_ordering || should_reverse;
-
-            // let (is_aligned, should_reverse) = can_skip_sort(
-            //     &vec![],
-            //     &expected_orderby_columns,
-            //     &sort_input.schema(),
-            //     &input_orderby_columns,
-            // )?;
-            // let mut is_same_ordering = false;
-            // if is_aligned && !should_reverse{
-            //     is_same_ordering = true;
-            // }
-
-            // let res = can_skip_sort(&vec![], &expected_orderby_columns, &input_orderby_columns)
             let streamable = (is_merge_consecutive
                 || (all_partition && merged_indices[0] == 0))
                 && contains_all_orderbys
@@ -778,12 +733,8 @@ fn can_skip_ordering_fn(
                 assert_eq!(first_n, partitionby_keys.len());
                 PartitionSearchMode::Sorted
             } else if is_first_partition_by && !partitionby_indices.is_empty() {
-                println!("should have been Partially Sorted");
-                // TODO: Add partially sorted
                 let first_n = calc_first_n(&partitionby_indices);
                 assert!(first_n < partitionby_keys.len());
-                println!("first_n:{:?}", first_n);
-                println!("partitionby_indices: {:?}", partitionby_indices);
                 let partitionby_mapping_indices = get_partition_by_mapping_indices(
                     &physical_ordering[0..first_n]
                         .iter()
@@ -791,14 +742,7 @@ fn can_skip_ordering_fn(
                         .collect::<Vec<_>>(),
                     &partitionby_keys,
                 )?;
-                println!(
-                    "partitionby_mapping_indices: {:?}",
-                    partitionby_mapping_indices
-                );
-                PartitionSearchMode::PartiallySorted(
-                    // physical_ordering[0..first_n].to_vec(),
-                    partitionby_mapping_indices,
-                )
+                PartitionSearchMode::PartiallySorted(partitionby_mapping_indices)
             } else {
                 PartitionSearchMode::Linear
             };

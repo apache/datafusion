@@ -101,10 +101,6 @@ impl BoundedWindowAggExec {
     ) -> Result<Self> {
         let schema = create_schema(&input_schema, &window_expr)?;
         let schema = Arc::new(schema);
-        println!("input output ordering: {:?}", input.output_ordering());
-        println!("partition_search_mode: {:?}", partition_search_mode);
-        println!("partition_keys:{:?}", partition_keys);
-        println!("partition_bys:{:?}", window_expr[0].partition_by());
         Ok(Self {
             input,
             window_expr,
@@ -459,7 +455,6 @@ impl BoundedWindowAggStream {
 
     fn update_partition_batch(&mut self, record_batch: RecordBatch) -> Result<()> {
         let num_rows = record_batch.num_rows();
-        println!("num rows: {:?}", num_rows);
         if num_rows > 0 {
             let partition_batches = self.evaluate_partition_batches(&record_batch)?;
             for (partition_row, (partition_batch, indices)) in partition_batches {
@@ -484,7 +479,6 @@ impl BoundedWindowAggStream {
                 };
             }
         }
-        println!("self.search_mode: {:?}", self.search_mode);
         match &self.search_mode {
             PartitionSearchMode::Sorted => {
                 let n_partitions = self.partition_buffers.len();
@@ -496,30 +490,19 @@ impl BoundedWindowAggStream {
             }
             PartitionSearchMode::PartiallySorted(ordered_partition_by_indices) => {
                 if let Some((last_row, _)) = self.partition_buffers.last() {
-                    println!("last_row:{:?}", last_row);
-                    println!("partition keys:{:?}", self.partition_by_sort_keys);
-                    println!("partition bys:{:?}", self.window_expr[0].partition_by());
-                    println!("ordered_partition_bys:{:?}", ordered_partition_by_indices);
-                    // TODO: Get ordered_partition_bys indices to partition by mapping
-                    // let indices = (0..ordered_partition_by_indices.len()).collect::<Vec<_>>();
-                    // println!("indices: {:?}", indices);
                     let last_sorted_cols = ordered_partition_by_indices
                         .iter()
                         .map(|idx| last_row[*idx].clone())
                         .collect::<Vec<_>>();
-                    println!("last_sorted_cols:{:?}", last_sorted_cols);
                     for (partition_row, partition_batch_state) in
                         self.partition_buffers.iter_mut()
                     {
-                        println!("partition_row:{:?}", partition_row);
                         let sorted_cols = ordered_partition_by_indices
                             .iter()
                             .map(|idx| partition_row[*idx].clone())
                             .collect::<Vec<_>>();
-                        println!("sorted_cols:{:?}", sorted_cols);
                         if sorted_cols != last_sorted_cols {
                             // It is guaranteed that we will no longer receive value for these partitions
-                            println!("marking as end");
                             partition_batch_state.is_end = true;
                         }
                     }
