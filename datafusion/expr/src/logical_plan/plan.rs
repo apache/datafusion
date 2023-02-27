@@ -24,7 +24,7 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::plan;
 use crate::utils::{
-    self, exprlist_to_fields, from_plan, grouping_set_expr_count,
+    self, expand_wildcard, exprlist_to_fields, from_plan, grouping_set_expr_count,
     grouping_set_to_exprlist,
 };
 use crate::{
@@ -1775,6 +1775,40 @@ impl Aggregate {
             LogicalPlan::Aggregate(it) => Ok(it),
             _ => plan_err!("Could not coerce into Aggregate!"),
         }
+    }
+
+    /// Check whether it is a Distinct.
+    /// A Distinct means all fields of the schema are the expressions of group by.
+    pub fn is_distinct(&self) -> datafusion_common::Result<bool> {
+        let group_expr_size = self.group_expr.len();
+        if !self.aggr_expr.is_empty() || group_expr_size != self.schema.fields().len() {
+            return Ok(false);
+        }
+
+        let expected_group_exprs = expand_wildcard(&self.schema, self.input.as_ref())?;
+        let expected_expr_set = expected_group_exprs.iter().collect::<HashSet<&Expr>>();
+
+        // Literals are allowed in group by.
+        let mut group_expr_set: HashSet<&Expr> = HashSet::default();
+        let mut literal_expr_set: HashSet<Expr> = HashSet::default();
+        for group_expr in self.group_expr.iter() {
+            if let Expr::Literal(_) = group_expr {
+                let lit_column = Expr::Column(Column::from_name(format!("{group_expr}")));
+                literal_expr_set.insert(lit_column);
+            } else {
+                group_expr_set.insert(group_expr);
+            }
+        }
+
+        literal_expr_set.iter().for_each(|expr| {
+            group_expr_set.insert(expr);
+        });
+
+        Ok(group_expr_set
+            .intersection(&expected_expr_set)
+            .collect::<HashSet<_>>()
+            .len()
+            == group_expr_size)
     }
 }
 
