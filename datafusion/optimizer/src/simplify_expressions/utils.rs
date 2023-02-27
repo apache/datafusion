@@ -91,23 +91,30 @@ enum SyntaxTreeItem {
 pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr) -> Expr {
     let mut postfix_notation: VecDeque<SyntaxTreeItem> = VecDeque::new();
     /// Creates postfix notation
-    fn create_postfix_notation(postfix_notation: &mut VecDeque<SyntaxTreeItem>, expr: &Expr) {
+    fn create_postfix_notation(
+        postfix_notation: &mut VecDeque<SyntaxTreeItem>,
+        expr: &Expr,
+    ) {
         match expr {
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == Operator::BitwiseXor => {
+            Expr::BinaryExpr(BinaryExpr { left, op, right })
+                if *op == Operator::BitwiseXor =>
+            {
                 postfix_notation.push_back(SyntaxTreeItem::Operator(*op));
                 create_postfix_notation(postfix_notation, left);
                 create_postfix_notation(postfix_notation, right);
             }
-            _ => {
-                postfix_notation.push_back(SyntaxTreeItem::Expr(expr.clone()))
-            }
+            _ => postfix_notation.push_back(SyntaxTreeItem::Expr(expr.clone())),
         }
     }
     let mut xor_counter: i32 = 0;
     create_postfix_notation(&mut postfix_notation, expr);
 
     /// Restores expression from postfix notation
-    fn restore_expr(postfix_notation: &mut VecDeque<SyntaxTreeItem>, xor_counter: &mut i32, needle: &Expr) -> Expr {
+    fn restore_expr(
+        postfix_notation: &mut VecDeque<SyntaxTreeItem>,
+        xor_counter: &mut i32,
+        needle: &Expr,
+    ) -> Expr {
         let item = postfix_notation.pop_front().unwrap();
 
         match item {
@@ -128,13 +135,13 @@ pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr) -> Expr {
                     Box::new(right),
                 ))
             }
-            SyntaxTreeItem::Expr(expr) => expr
+            SyntaxTreeItem::Expr(expr) => expr,
         }
     }
 
     let result_expr = restore_expr(&mut postfix_notation, &mut xor_counter, needle);
     if result_expr == *needle {
-        return Expr::Literal(ScalarValue::Int32(Some(0)))
+        return Expr::Literal(ScalarValue::Int32(Some(0)));
     } else if xor_counter % 2 == 0 {
         return Expr::BinaryExpr(BinaryExpr::new(
             Box::new(needle.clone()),
