@@ -22,7 +22,7 @@ use datafusion::execution::options::ReadOptions;
 
 #[tokio::test]
 async fn window_frame_creation_type_checking() -> Result<()> {
-    // The following qcargo fmtuery has type error. We should test the error could be detected
+    // The following query has type error. We should test the error could be detected
     // from either the logical plan (when `skip_failed_rules` is set to `false`) or
     // the physical plan (when `skip_failed_rules` is set to `true`).
 
