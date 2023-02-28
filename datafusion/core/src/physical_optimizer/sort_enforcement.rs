@@ -47,14 +47,12 @@ use crate::physical_plan::windows::{
     BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
 };
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
-use arrow::datatypes::SchemaRef;
 use datafusion_common::{reverse_sort_options, DataFusionError};
 use datafusion_physical_expr::utils::{ordering_satisfy, ordering_satisfy_concrete};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use hashbrown::HashSet;
 use itertools::{concat, izip, Itertools};
 use std::hash::Hash;
-use std::iter::zip;
 use std::sync::Arc;
 
 /// This rule inspects `SortExec`'s in the given physical plan and removes the
@@ -714,23 +712,20 @@ fn can_skip_ordering_fn(
                 if *is_nullable {
                     input.options == reverse_sort_options(expected.options)
                 } else {
-                    input.options.descending == !expected.options.descending
+                    // have reversed direction
+                    input.options.descending != expected.options.descending
                 }
             });
             let is_aligned = is_same_ordering || should_reverse;
-
-            // let (is_aligned, should_reverse) = can_skip_sort(
-            //     &[],
-            //     &expected_orderby_columns,
-            //     &sort_input.schema(),
-            //     &input_orderby_columns,
-            // )?;
 
             let streamable = (is_merge_consecutive
                 || (all_partition && merged_indices[0] == 0))
                 && contains_all_orderbys
                 && is_aligned
                 && is_orderby_diff_consecutive;
+            if !streamable {
+                return Ok(None);
+            }
             let partition_by_consecutive = is_consecutive_from_zero(&partitionby_indices);
             let is_first_partition_by = partitionby_indices
                 .first()
@@ -757,9 +752,6 @@ fn can_skip_ordering_fn(
                 PartitionSearchMode::Linear
             };
 
-            if !streamable {
-                return Ok(None);
-            }
             if let Some((first_should_reverse, first_mode)) = &res {
                 if *first_should_reverse != should_reverse || first_mode != &mode {
                     return Ok(None);
@@ -924,94 +916,6 @@ fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExp
     }
 }
 
-#[derive(Debug)]
-/// This structure stores extra column information required to remove unnecessary sorts.
-pub struct ColumnInfo {
-    is_aligned: bool,
-    reverse: bool,
-    is_partition: bool,
-}
-
-/// Compares physical ordering and required ordering of all `PhysicalSortExpr`s and returns a tuple.
-/// The first element indicates whether these `PhysicalSortExpr`s can be removed from the physical plan.
-/// The second element is a flag indicating whether we should reverse the sort direction in order to
-/// remove physical sort expressions from the plan.
-pub fn can_skip_sort(
-    partition_keys: &[Arc<dyn PhysicalExpr>],
-    required: &[PhysicalSortExpr],
-    input_schema: &SchemaRef,
-    physical_ordering: &[PhysicalSortExpr],
-) -> Result<(bool, bool)> {
-    if required.len() > physical_ordering.len() {
-        return Ok((false, false));
-    }
-    let mut col_infos = vec![];
-    for (sort_expr, physical_expr) in zip(required, physical_ordering) {
-        let column = sort_expr.expr.clone();
-        let is_partition = partition_keys.iter().any(|e| e.eq(&column));
-        let (is_aligned, reverse) =
-            check_alignment(input_schema, physical_expr, sort_expr);
-        col_infos.push(ColumnInfo {
-            is_aligned,
-            reverse,
-            is_partition,
-        });
-    }
-    let partition_by_sections = col_infos
-        .iter()
-        .filter(|elem| elem.is_partition)
-        .collect::<Vec<_>>();
-    let can_skip_partition_bys = if partition_by_sections.is_empty() {
-        true
-    } else {
-        let first_reverse = partition_by_sections[0].reverse;
-        let can_skip_partition_bys = partition_by_sections
-            .iter()
-            .all(|c| c.is_aligned && c.reverse == first_reverse);
-        can_skip_partition_bys
-    };
-    let order_by_sections = col_infos
-        .iter()
-        .filter(|elem| !elem.is_partition)
-        .collect::<Vec<_>>();
-    let (can_skip_order_bys, should_reverse_order_bys) = if order_by_sections.is_empty() {
-        (true, false)
-    } else {
-        let first_reverse = order_by_sections[0].reverse;
-        let can_skip_order_bys = order_by_sections
-            .iter()
-            .all(|c| c.is_aligned && c.reverse == first_reverse);
-        (can_skip_order_bys, first_reverse)
-    };
-    let can_skip = can_skip_order_bys && can_skip_partition_bys;
-    Ok((can_skip, should_reverse_order_bys))
-}
-
-/// Compares `physical_ordering` and `required` ordering, returns a tuple
-/// indicating (1) whether this column requires sorting, and (2) whether we
-/// should reverse the window expression in order to avoid sorting.
-fn check_alignment(
-    input_schema: &SchemaRef,
-    physical_ordering: &PhysicalSortExpr,
-    required: &PhysicalSortExpr,
-) -> (bool, bool) {
-    if required.expr.eq(&physical_ordering.expr) {
-        let nullable = required.expr.nullable(input_schema).unwrap();
-        let physical_opts = physical_ordering.options;
-        let required_opts = required.options;
-        let is_reversed = if nullable {
-            physical_opts == reverse_sort_options(required_opts)
-        } else {
-            // If the column is not nullable, NULLS FIRST/LAST is not important.
-            physical_opts.descending != required_opts.descending
-        };
-        let can_skip = !nullable || is_reversed || (physical_opts == required_opts);
-        (can_skip, is_reversed)
-    } else {
-        (false, false)
-    }
-}
-
 // Find the indices of each element if the to_search vector inside the searched vector
 fn find_match_indices<T: PartialEq>(to_search: &[T], searched: &[T]) -> Vec<usize> {
     let mut result = vec![];
@@ -1023,30 +927,14 @@ fn find_match_indices<T: PartialEq>(to_search: &[T], searched: &[T]) -> Vec<usiz
     result
 }
 
-// Find indices of matching physical expression inside `searched` for each entry in the `to_search`.
-fn get_partition_by_indices(
-    to_search: &[Arc<dyn PhysicalExpr>],
-    searched: &[PhysicalSortExpr],
-) -> Result<Vec<usize>> {
-    let mut result = vec![];
-    for item in to_search {
-        if let Some(idx) = searched.iter().position(|e| e.expr.eq(item)) {
-            result.push(idx);
-        }
-    }
-    Ok(result)
-}
-
 // Find the indices of matching entries inside the `searched` vector for each element if the `to_search` vector
-fn get_indices_of_matching_exprs<'a>(
+fn get_indices_of_matching_exprs(
     to_search: &[Arc<dyn PhysicalExpr>],
     searched: &[Arc<dyn PhysicalExpr>],
-    // to_search: impl IntoIterator<Item = &'a Arc<dyn PhysicalExpr>>,
-    // searched: impl IntoIterator<Item = &'a Arc<dyn PhysicalExpr>>,
 ) -> Result<Vec<usize>> {
     let mut result = vec![];
     for item in to_search {
-        if let Some(idx) = searched.into_iter().position(|e| e.eq(item)) {
+        if let Some(idx) = searched.iter().position(|e| e.eq(item)) {
             result.push(idx);
         }
     }
@@ -1055,9 +943,7 @@ fn get_indices_of_matching_exprs<'a>(
 
 // Find the indices of matching entries inside the `searched` vector for each element if the `to_search` vector
 fn convert_to_expr(in1: &[PhysicalSortExpr]) -> Vec<Arc<dyn PhysicalExpr>> {
-    in1.into_iter()
-        .map(|elem| elem.expr.clone())
-        .collect::<Vec<_>>()
+    in1.iter().map(|elem| elem.expr.clone()).collect::<Vec<_>>()
 }
 
 // Compares the equality of two vectors independent of the ordering and duplicates
@@ -1067,22 +953,7 @@ where
 {
     let a: HashSet<_> = a.iter().collect();
     let b: HashSet<_> = b.iter().collect();
-
     a == b
-}
-
-// Find the indices of matching entries inside the `searched` vector for each element if the `to_search` vector
-fn get_order_by_indices(
-    to_search: &[PhysicalSortExpr],
-    searched: &[PhysicalSortExpr],
-) -> Result<Vec<usize>> {
-    let mut result = vec![];
-    for item in to_search {
-        if let Some(idx) = searched.iter().position(|e| e.expr.eq(&item.expr)) {
-            result.push(idx);
-        }
-    }
-    Ok(result)
 }
 
 // Create a new vector from the elements at the `indices` of `searched` vector
@@ -1178,46 +1049,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_is_column_aligned_nullable() -> Result<()> {
-        let schema = create_test_schema()?;
-        let params = vec![
-            ((true, true), (false, false), (true, true)),
-            ((true, true), (false, true), (false, false)),
-            ((true, true), (true, false), (false, false)),
-            ((true, false), (false, true), (true, true)),
-            ((true, false), (false, false), (false, false)),
-            ((true, false), (true, true), (false, false)),
-        ];
-        for (
-            (physical_desc, physical_nulls_first),
-            (req_desc, req_nulls_first),
-            (is_aligned_expected, reverse_expected),
-        ) in params
-        {
-            let physical_ordering = PhysicalSortExpr {
-                expr: col("nullable_col", &schema)?,
-                options: SortOptions {
-                    descending: physical_desc,
-                    nulls_first: physical_nulls_first,
-                },
-            };
-            let required_ordering = PhysicalSortExpr {
-                expr: col("nullable_col", &schema)?,
-                options: SortOptions {
-                    descending: req_desc,
-                    nulls_first: req_nulls_first,
-                },
-            };
-            let (is_aligned, reverse) =
-                check_alignment(&schema, &physical_ordering, &required_ordering);
-            assert_eq!(is_aligned, is_aligned_expected);
-            assert_eq!(reverse, reverse_expected);
-        }
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_sorted_merged_indices() -> Result<()> {
         let res = get_sorted_merged_indices(&[0, 3, 4], &[1, 3, 5]);
         assert_eq!(res, vec![0, 1, 3, 4, 5]);
@@ -1274,47 +1105,6 @@ mod tests {
     async fn test_compare_set_equality() -> Result<()> {
         assert!(compare_set_equality(&[4, 3, 2], &[3, 2, 4]));
         assert!(!compare_set_equality(&[4, 3, 2, 1], &[3, 2, 4]));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_is_column_aligned_non_nullable() -> Result<()> {
-        let schema = create_test_schema()?;
-
-        let params = vec![
-            ((true, true), (false, false), (true, true)),
-            ((true, true), (false, true), (true, true)),
-            ((true, true), (true, false), (true, false)),
-            ((true, false), (false, true), (true, true)),
-            ((true, false), (false, false), (true, true)),
-            ((true, false), (true, true), (true, false)),
-        ];
-        for (
-            (physical_desc, physical_nulls_first),
-            (req_desc, req_nulls_first),
-            (is_aligned_expected, reverse_expected),
-        ) in params
-        {
-            let physical_ordering = PhysicalSortExpr {
-                expr: col("non_nullable_col", &schema)?,
-                options: SortOptions {
-                    descending: physical_desc,
-                    nulls_first: physical_nulls_first,
-                },
-            };
-            let required_ordering = PhysicalSortExpr {
-                expr: col("non_nullable_col", &schema)?,
-                options: SortOptions {
-                    descending: req_desc,
-                    nulls_first: req_nulls_first,
-                },
-            };
-            let (is_aligned, reverse) =
-                check_alignment(&schema, &physical_ordering, &required_ordering);
-            assert_eq!(is_aligned, is_aligned_expected);
-            assert_eq!(reverse, reverse_expected);
-        }
-
         Ok(())
     }
 
