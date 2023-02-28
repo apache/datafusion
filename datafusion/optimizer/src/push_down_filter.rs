@@ -766,8 +766,8 @@ impl OptimizerRule for PushDownFilter {
                         .collect::<Result<Vec<_>>>()?,
                     None => extension_plan.node.inputs().into_iter().cloned().collect(),
                 };
-                let new_extension =
-                    from_plan(&filter.input, &filter.input.expressions(), &new_children)?;
+                // extension with new inputs.
+                let new_extension = child_plan.with_new_inputs(&new_children)?;
 
                 match conjunction(keep_predicates) {
                     Some(predicate) => LogicalPlan::Filter(Filter::try_new(
