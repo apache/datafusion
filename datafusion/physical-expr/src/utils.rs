@@ -235,6 +235,26 @@ pub fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(
     }
 }
 
+/// Get `Arc<dyn PhysicalExpr>` content of the `PhysicalSortExpr` for each entry in the vector
+pub fn convert_to_expr(in1: &[PhysicalSortExpr]) -> Vec<Arc<dyn PhysicalExpr>> {
+    in1.iter().map(|elem| elem.expr.clone()).collect::<Vec<_>>()
+}
+
+// TODO: Add unit test for function below
+/// Find the indices of matching entries inside the `searched` vector for each element if the `to_search` vector
+pub fn get_indices_of_matching_exprs(
+    to_search: &[Arc<dyn PhysicalExpr>],
+    searched: &[Arc<dyn PhysicalExpr>],
+) -> Vec<usize> {
+    let mut result = vec![];
+    for item in to_search {
+        if let Some(idx) = searched.iter().position(|e| e.eq(item)) {
+            result.push(idx);
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -244,8 +264,20 @@ mod tests {
     use arrow::compute::SortOptions;
     use datafusion_common::Result;
 
-    use arrow_schema::Schema;
+    use crate::expressions::col;
+    use arrow_schema::{DataType, Field, Schema};
     use std::sync::Arc;
+
+    #[test]
+    fn test_convert_to_expr() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::UInt64, false)]);
+        let sort_expr = vec![PhysicalSortExpr {
+            expr: col("a", &schema).unwrap(),
+            options: Default::default(),
+        }];
+        assert!(convert_to_expr(&sort_expr)[0].eq(&sort_expr[0].expr));
+        Ok(())
+    }
 
     #[test]
     fn expr_list_eq_test() -> Result<()> {

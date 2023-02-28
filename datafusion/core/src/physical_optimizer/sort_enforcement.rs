@@ -48,7 +48,10 @@ use crate::physical_plan::windows::{
 };
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 use datafusion_common::{reverse_sort_options, DataFusionError};
-use datafusion_physical_expr::utils::{ordering_satisfy, ordering_satisfy_concrete};
+use datafusion_physical_expr::utils::{
+    convert_to_expr, get_indices_of_matching_exprs, ordering_satisfy,
+    ordering_satisfy_concrete,
+};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use hashbrown::HashSet;
 use itertools::{concat, izip, Itertools};
@@ -659,11 +662,11 @@ fn can_skip_ordering(
             let orderby_exprs = convert_to_expr(orderby_keys);
             let physical_ordering_exprs = convert_to_expr(physical_ordering);
             let orderby_indices =
-                get_indices_of_matching_exprs(&orderby_exprs, &physical_ordering_exprs)?;
+                get_indices_of_matching_exprs(&orderby_exprs, &physical_ordering_exprs);
             let partitionby_indices = get_indices_of_matching_exprs(
                 partitionby_exprs,
                 &physical_ordering_exprs,
-            )?;
+            );
             let ordered_merged_indices =
                 get_ordered_merged_indices(&partitionby_indices, &orderby_indices);
             let is_merge_consecutive = is_consecutive_from_zero(&ordered_merged_indices);
@@ -741,7 +744,7 @@ fn can_skip_ordering(
                 let partitionby_mapping_indices = get_indices_of_matching_exprs(
                     &physical_ordering_exprs[0..first_n],
                     partitionby_exprs,
-                )?;
+                );
                 PartitionSearchMode::Sorted(partitionby_mapping_indices)
             } else if is_first_partition_by {
                 let first_n = calc_first_n(&ordered_partitionby_indices);
@@ -749,7 +752,7 @@ fn can_skip_ordering(
                 let partitionby_mapping_indices = get_indices_of_matching_exprs(
                     &physical_ordering_exprs[0..first_n],
                     partitionby_exprs,
-                )?;
+                );
                 PartitionSearchMode::PartiallySorted(partitionby_mapping_indices)
             } else {
                 PartitionSearchMode::Linear
@@ -930,25 +933,6 @@ fn find_match_indices<T: PartialEq>(to_search: &[T], searched: &[T]) -> Vec<usiz
     result
 }
 
-// Find the indices of matching entries inside the `searched` vector for each element if the `to_search` vector
-fn get_indices_of_matching_exprs(
-    to_search: &[Arc<dyn PhysicalExpr>],
-    searched: &[Arc<dyn PhysicalExpr>],
-) -> Result<Vec<usize>> {
-    let mut result = vec![];
-    for item in to_search {
-        if let Some(idx) = searched.iter().position(|e| e.eq(item)) {
-            result.push(idx);
-        }
-    }
-    Ok(result)
-}
-
-// Get `Arc<dyn PhysicalExpr>` content of the `PhysicalSortExpr` for each entry in the vector
-fn convert_to_expr(in1: &[PhysicalSortExpr]) -> Vec<Arc<dyn PhysicalExpr>> {
-    in1.iter().map(|elem| elem.expr.clone()).collect::<Vec<_>>()
-}
-
 // Compares the equality of two vectors independent of the ordering and duplicates
 // See https://stackoverflow.com/a/42748484/10554257
 fn compare_set_equality<T>(a: &[T], b: &[T]) -> bool
@@ -1098,17 +1082,6 @@ mod tests {
         assert_eq!(find_match_indices(&[0, 4, 3], &[0, 3, 4]), vec![0, 2, 1]);
         // return value should have same ordering with the in1
         assert_eq!(find_match_indices(&[0, 4, 3, 5], &[0, 3, 4]), vec![0, 2, 1]);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_convert_to_expr() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", DataType::UInt64, false)]);
-        let sort_expr = vec![PhysicalSortExpr {
-            expr: col("a", &schema).unwrap(),
-            options: Default::default(),
-        }];
-        assert!(convert_to_expr(&sort_expr)[0].eq(&sort_expr[0].expr));
         Ok(())
     }
 

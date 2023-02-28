@@ -39,6 +39,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::DataFusionError;
+use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use log::debug;
@@ -65,6 +66,8 @@ pub struct WindowAggExec {
     pub sort_keys: Option<Vec<PhysicalSortExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Partition by indices that define ordering
+    ordered_partition_by_indices: Vec<usize>,
 }
 
 impl WindowAggExec {
@@ -78,7 +81,14 @@ impl WindowAggExec {
     ) -> Result<Self> {
         let schema = create_schema(&input_schema, &window_expr)?;
         let schema = Arc::new(schema);
-
+        let partition_by_exprs = window_expr[0].partition_by();
+        let ordered_partition_by_indices =
+            if let Some(input_ordering) = input.output_ordering() {
+                let input_ordering_exprs = convert_to_expr(input_ordering);
+                get_indices_of_matching_exprs(partition_by_exprs, &input_ordering_exprs)
+            } else {
+                (0..partition_by_exprs.len()).collect()
+            };
         Ok(Self {
             input,
             window_expr,
@@ -87,6 +97,7 @@ impl WindowAggExec {
             partition_keys,
             sort_keys,
             metrics: ExecutionPlanMetricsSet::new(),
+            ordered_partition_by_indices,
         })
     }
 
@@ -231,6 +242,7 @@ impl ExecutionPlan for WindowAggExec {
             input,
             BaselineMetrics::new(&self.metrics, partition),
             self.partition_by_sort_keys()?,
+            self.ordered_partition_by_indices.clone(),
         ));
         Ok(stream)
     }
@@ -319,6 +331,7 @@ pub struct WindowAggStream {
     window_expr: Vec<Arc<dyn WindowExpr>>,
     partition_by_sort_keys: Vec<PhysicalSortExpr>,
     baseline_metrics: BaselineMetrics,
+    ordered_partition_by_indices: Vec<usize>,
 }
 
 impl WindowAggStream {
@@ -329,6 +342,7 @@ impl WindowAggStream {
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
         partition_by_sort_keys: Vec<PhysicalSortExpr>,
+        ordered_partition_by_indices: Vec<usize>,
     ) -> Self {
         Self {
             schema,
@@ -338,6 +352,7 @@ impl WindowAggStream {
             window_expr,
             baseline_metrics,
             partition_by_sort_keys,
+            ordered_partition_by_indices,
         }
     }
 
@@ -349,10 +364,21 @@ impl WindowAggStream {
             return Ok(RecordBatch::new_empty(self.schema.clone()));
         }
 
+        // let partition_by_sort_keys = self
+        //     .partition_by_sort_keys
+        //     .iter()
+        //     .map(|elem| elem.evaluate_to_sort_column(&batch))
+        //     .collect::<Result<Vec<_>>>()?;
+
+        // In WindowAggExec all partition by columns should be ordered.
+        assert_eq!(
+            self.ordered_partition_by_indices.len(),
+            self.partition_by_sort_keys.len()
+        );
         let partition_by_sort_keys = self
-            .partition_by_sort_keys
+            .ordered_partition_by_indices
             .iter()
-            .map(|elem| elem.evaluate_to_sort_column(&batch))
+            .map(|idx| self.partition_by_sort_keys[*idx].evaluate_to_sort_column(&batch))
             .collect::<Result<Vec<_>>>()?;
         let partition_points =
             self.evaluate_partition_points(batch.num_rows(), &partition_by_sort_keys)?;

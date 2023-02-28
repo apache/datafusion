@@ -54,6 +54,7 @@ use std::task::{Context, Poll};
 use arrow::array::UInt64Builder;
 use datafusion_common::utils::get_row_at_idx;
 use datafusion_expr::ColumnarValue;
+use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 use datafusion_physical_expr::window::{
     PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
     WindowAggState, WindowState,
@@ -92,6 +93,8 @@ pub struct BoundedWindowAggExec {
     metrics: ExecutionPlanMetricsSet,
     /// Partition by mode
     partition_search_mode: PartitionSearchMode,
+    /// Partition by indices that define ordering
+    ordered_partition_by_indices: Vec<usize>,
 }
 
 impl BoundedWindowAggExec {
@@ -106,6 +109,14 @@ impl BoundedWindowAggExec {
     ) -> Result<Self> {
         let schema = create_schema(&input_schema, &window_expr)?;
         let schema = Arc::new(schema);
+        let partition_by_exprs = window_expr[0].partition_by();
+        let ordered_partition_by_indices =
+            if let Some(input_ordering) = input.output_ordering() {
+                let input_ordering_exprs = convert_to_expr(input_ordering);
+                get_indices_of_matching_exprs(partition_by_exprs, &input_ordering_exprs)
+            } else {
+                (0..partition_by_exprs.len()).collect()
+            };
         Ok(Self {
             input,
             window_expr,
@@ -115,6 +126,7 @@ impl BoundedWindowAggExec {
             sort_keys,
             metrics: ExecutionPlanMetricsSet::new(),
             partition_search_mode,
+            ordered_partition_by_indices,
         })
     }
 
@@ -247,6 +259,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
             BaselineMetrics::new(&self.metrics, partition),
             self.partition_by_sort_keys()?,
             self.partition_search_mode.clone(),
+            self.ordered_partition_by_indices.clone(),
         ));
         Ok(stream)
     }
@@ -342,6 +355,7 @@ pub struct BoundedWindowAggStream {
     partition_by_sort_keys: Vec<PhysicalSortExpr>,
     baseline_metrics: BaselineMetrics,
     search_mode: PartitionSearchMode,
+    ordered_partition_by_indices: Vec<usize>,
 }
 
 impl BoundedWindowAggStream {
@@ -547,6 +561,7 @@ impl BoundedWindowAggStream {
         baseline_metrics: BaselineMetrics,
         partition_by_sort_keys: Vec<PhysicalSortExpr>,
         search_mode: PartitionSearchMode,
+        ordered_partition_by_indices: Vec<usize>,
     ) -> Self {
         let state = window_expr.iter().map(|_| IndexMap::new()).collect();
         let empty_batch = RecordBatch::new_empty(schema.clone());
@@ -561,6 +576,7 @@ impl BoundedWindowAggStream {
             baseline_metrics,
             partition_by_sort_keys,
             search_mode,
+            ordered_partition_by_indices,
         }
     }
 
@@ -789,13 +805,12 @@ impl BoundedWindowAggStream {
     }
 
     /// Get Partition Columns
-    pub fn partition_columns(
-        &self,
-        batch: &RecordBatch,
-        partition_indices: &[usize],
-    ) -> Result<Vec<SortColumn>> {
-        assert_eq!(self.partition_by_sort_keys.len(), partition_indices.len());
-        partition_indices
+    pub fn partition_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
+        assert_eq!(
+            self.partition_by_sort_keys.len(),
+            self.ordered_partition_by_indices.len()
+        );
+        self.ordered_partition_by_indices
             .iter()
             .map(|idx| self.partition_by_sort_keys[*idx].evaluate_to_sort_column(batch))
             .collect::<Result<Vec<_>>>()
@@ -830,9 +845,8 @@ impl BoundedWindowAggStream {
             IndexMap::new();
         let num_rows = record_batch.num_rows();
         match &self.search_mode {
-            PartitionSearchMode::Sorted(ordered_partition_by_indices) => {
-                let partition_columns =
-                    self.partition_columns(record_batch, ordered_partition_by_indices)?;
+            PartitionSearchMode::Sorted(_) => {
+                let partition_columns = self.partition_columns(record_batch)?;
                 let partition_points =
                     self.evaluate_partition_points(num_rows, &partition_columns)?;
                 let partition_bys = partition_columns
@@ -854,11 +868,13 @@ impl BoundedWindowAggStream {
                 // hence we use IndexMap.
                 let mut indices_map: IndexMap<Vec<ScalarValue>, Vec<usize>> =
                     IndexMap::new();
+                // Calculate indices for each partition
                 for idx in 0..num_rows {
                     let partition_row = get_row_at_idx(&partition_bys, idx)?;
                     let indices = indices_map.entry(partition_row).or_default();
                     indices.push(idx);
                 }
+                // Construct new record batch from the rows at the calculated indices for each partition.
                 for (partition_row, indices) in indices_map {
                     let partition_batch = get_at_indices(record_batch, &indices)?;
                     res.insert(partition_row, (partition_batch, indices));
