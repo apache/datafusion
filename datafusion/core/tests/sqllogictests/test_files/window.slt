@@ -92,7 +92,7 @@ limit 5
 
 
 
-# async fn csv_query_window_with_order_by
+# csv_query_window_with_order_by
 query IIRIIIIII
 select
 c9,
@@ -403,7 +403,7 @@ aa 3 2
 bb 7 2
 
 
-# async fn window_in_expression
+# window_in_expression
 query I rowsort
 select 1 - lag(amount, 1) over (order by idx) as column1 from (values ('a', 1, 100), ('a', 2, 150)) as t (col1, idx, amount)
 ---
@@ -412,7 +412,7 @@ select 1 - lag(amount, 1) over (order by idx) as column1 from (values ('a', 1, 1
 NULL
 
 
-# async fn window_with_agg_in_expression
+# window_with_agg_in_expression
 query TIIIII
 select col1, idx, count(*), sum(amount), lag(sum(amount), 1) over (order by idx) as prev_amount,
 sum(amount) - lag(sum(amount), 1) over (order by idx) as difference from (
@@ -424,7 +424,7 @@ a 1 1 100 NULL NULL
 a 2 1 150 100 50
 
 
-# async fn window_frame_empty
+# window_frame_empty
 query II
 SELECT
 SUM(c3) OVER() as sum1,
@@ -439,7 +439,7 @@ LIMIT 5
 781 100
 781 100
 
-# async fn window_frame_rows_preceding
+# window_frame_rows_preceding
 query IRI
 SELECT
 SUM(c4) OVER(ORDER BY c4 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
@@ -456,7 +456,7 @@ LIMIT 5
 46756 15585.333333333334 3
 
 
-# async fn window_frame_rows_preceding_stddev_variance
+# window_frame_rows_preceding_stddev_variance
 query RRRR
 SELECT
 VAR(c4) OVER(ORDER BY c4 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
@@ -473,7 +473,7 @@ LIMIT 5
 768422.9999999981 512281.9999999988 876.597399037893 715.738779164577
 66526.3333333288 44350.88888888587 257.926992254259 210.596507304575
 
-# async fn window_frame_rows_preceding_with_partition_unique_order_by
+# window_frame_rows_preceding_with_partition_unique_order_by
 query IRI
 SELECT
 SUM(c4) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
@@ -519,7 +519,7 @@ LIMIT 5
 #//     Ok(())
 #// }
 
-# async fn window_frame_ranges_preceding_following_desc
+# window_frame_ranges_preceding_following_desc
 query III
 SELECT
 SUM(c4) OVER(ORDER BY c2 DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
@@ -535,7 +535,7 @@ LIMIT 5
 260620 781 63
 260620 781 63
 
-# async fn window_frame_large_range
+# window_frame_large_range
 # Range offset 10000 is too big for Int8 (i.e. the type of c3).
 # In this case, we should be able to still produce correct results.
 # See the issue: https://github.com/apache/arrow-datafusion/issues/5346
@@ -554,7 +554,7 @@ LIMIT 5
 781
 781
 
-# async fn window_frame_order_by_asc_desc_large
+# window_frame_order_by_asc_desc_large
 query I
 SELECT
  SUM(c5) OVER (ORDER BY c2 ASC, c6 DESC) as sum1
@@ -568,7 +568,7 @@ SELECT
 -4246910946
 
 
-# async fn window_frame_order_by_desc_large
+# window_frame_order_by_desc_large
 query I
 SELECT
  SUM(c5) OVER (ORDER BY c2 DESC, c6 ASC) as sum1
@@ -582,7 +582,7 @@ SELECT
 15810962683
 18035025006
 
-# async fn window_frame_order_by_null_timestamp_order_by
+# window_frame_order_by_null_timestamp_order_by
 query I
 SELECT
  SUM(c1) OVER (ORDER BY c2 DESC) as summation1
@@ -595,7 +595,7 @@ SELECT
 962
 962
 
-# async fn window_frame_order_by_null_desc
+# window_frame_order_by_null_desc
 query I
 SELECT
  COUNT(c2) OVER (ORDER BY c1 DESC RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING)
@@ -608,7 +608,7 @@ SELECT
 9
 9
 
-# async fn window_frame_order_by_null_asc
+# window_frame_order_by_null_asc
 query I
 SELECT
  COUNT(c2) OVER (ORDER BY c1 RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING)
@@ -622,7 +622,7 @@ SELECT
 2
 5
 
-# async fn window_frame_order_by_null_asc_null_first
+# window_frame_order_by_null_asc_null_first
 query I
 SELECT
  COUNT(c2) OVER (ORDER BY c1 NULLS FIRST RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING)
@@ -635,7 +635,7 @@ SELECT
 9
 9
 
-# async fn window_frame_order_by_null_desc_null_last
+# window_frame_order_by_null_desc_null_last
 query I
 SELECT
  COUNT(c2) OVER (ORDER BY c1 DESC NULLS LAST RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING)
@@ -648,7 +648,7 @@ SELECT
 6
 6
 
-# async fn window_frame_rows_order_by_null
+# window_frame_rows_order_by_null
 query IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII
 SELECT
         SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as a,
@@ -1190,3 +1190,440 @@ NULL 3917
 -16974 -16974
 -1114 -1114
 15673 15673
+
+
+
+
+# test_window_agg_sort
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+
+# Only 1 SortExec was added
+query ??
+EXPLAIN SELECT
+      c9,
+      SUM(c9) OVER(ORDER BY c9) as sum1,
+      SUM(c9) OVER(ORDER BY c9, c8) as sum2
+      FROM aggregate_test_100
+---
+DD
+
+# over_order_by_sort_keys_sorting_prefix_compacting
+
+# Only 1 SortExec was added
+query ??
+EXPLAIN SELECT c2, MAX(c9) OVER (ORDER BY c2), SUM(c9) OVER (), MIN(c9) OVER (ORDER BY c2, c9) from aggregate_test_100
+----
+DDD
+
+# FIXME: for now we are not detecting prefix of sorting keys in order to re-arrange with global and save one SortExec
+# over_order_by_sort_keys_sorting_global_order_compacting
+
+# 3 SortExec are added
+query ??
+EXPLAIN SELECT c2, MAX(c9) OVER (ORDER BY c9, c2), SUM(c9) OVER (), MIN(c9) OVER (ORDER BY c2, c9) from aggregate_test_100 ORDER BY c2
+----
+DDD
+
+# test_window_partition_by_order_by
+statement ok
+set datafusion.execution.batch_size = 4096
+
+query ??
+EXPLAIN SELECT
+    SUM(c4) OVER(PARTITION BY c1, c2 ORDER BY c2 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+    COUNT(*) OVER(PARTITION BY c1 ORDER BY c2 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+    FROM aggregate_test_100
+----
+DDD
+
+# test_window_agg_sort_reversed_plan
+# Only 1 SortExec was added
+query ??
+EXPLAIN SELECT
+    c9,
+    SUM(c9) OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1,
+    SUM(c9) OVER(ORDER BY c9 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2
+    FROM aggregate_test_100
+    LIMIT 5
+----
+DDD
+
+query
+SELECT
+    c9,
+    SUM(c9) OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1,
+    SUM(c9) OVER(ORDER BY c9 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2
+    FROM aggregate_test_100
+    LIMIT 5
+---
+DDD
+
+# test_window_agg_sort_reversed_plan_builtin
+query ??
+EXPLAIN SELECT
+    c9,
+    FIRST_VALUE(c9) OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as fv1,
+    FIRST_VALUE(c9) OVER(ORDER BY c9 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as fv2,
+    LAG(c9, 2, 10101) OVER(ORDER BY c9 ASC) as lag1,
+    LAG(c9, 2, 10101) OVER(ORDER BY c9 DESC ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as lag2,
+    LEAD(c9, 2, 10101) OVER(ORDER BY c9 ASC) as lead1,
+    LEAD(c9, 2, 10101) OVER(ORDER BY c9 DESC ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as lead2
+    FROM aggregate_test_100
+    LIMIT 5
+----
+DDD
+
+query ??
+SELECT
+    c9,
+    FIRST_VALUE(c9) OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as fv1,
+    FIRST_VALUE(c9) OVER(ORDER BY c9 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as fv2,
+    LAG(c9, 2, 10101) OVER(ORDER BY c9 ASC) as lag1,
+    LAG(c9, 2, 10101) OVER(ORDER BY c9 DESC ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as lag2,
+    LEAD(c9, 2, 10101) OVER(ORDER BY c9 ASC) as lead1,
+    LEAD(c9, 2, 10101) OVER(ORDER BY c9 DESC ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as lead2
+    FROM aggregate_test_100
+    LIMIT 5
+----
+DDD
+
+# test_window_agg_sort_non_reversed_plan
+# We cannot reverse each window function (ROW_NUMBER is not reversible)
+
+query ??
+EXPLAIN SELECT
+    c9,
+    ROW_NUMBER() OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as rn1,
+    ROW_NUMBER() OVER(ORDER BY c9 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as rn2
+    FROM aggregate_test_100
+    LIMIT 5
+----
+DDD
+
+
+query ??
+SELECT
+    c9,
+    ROW_NUMBER() OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as rn1,
+    ROW_NUMBER() OVER(ORDER BY c9 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as rn2
+    FROM aggregate_test_100
+    LIMIT 5
+----
+DDD
+
+# test_window_agg_sort_multi_layer_non_reversed_plan
+# We cannot reverse each window function (ROW_NUMBER is not reversible)
+query ??
+EXPLAIN SELECT
+    c9,
+    SUM(c9) OVER(ORDER BY c9 ASC, c1 ASC, c2 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1,
+    SUM(c9) OVER(ORDER BY c9 DESC, c1 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2,
+    ROW_NUMBER() OVER(ORDER BY c9 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as rn2
+    FROM aggregate_test_100
+    LIMIT 5
+----
+DDD
+
+query ??
+SELECT
+    c9,
+    SUM(c9) OVER(ORDER BY c9 ASC, c1 ASC, c2 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1,
+    SUM(c9) OVER(ORDER BY c9 DESC, c1 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2,
+    ROW_NUMBER() OVER(ORDER BY c9 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as rn2
+    FROM aggregate_test_100
+    LIMIT 5
+----
+DDD
+
+# test_window_agg_complex_plan
+# Unnecessary SortExecs are removed
+query ??
+EXPLAIN SELECT
+    SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as a,
+    SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as b,
+    SUM(c1) OVER (ORDER BY c3 DESC RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as c,
+    SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as d,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS last RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as e,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS first RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as f,
+    SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as g,
+    SUM(c1) OVER (ORDER BY c3) as h,
+    SUM(c1) OVER (ORDER BY c3 DESC) as i,
+    SUM(c1) OVER (ORDER BY c3 NULLS first) as j,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS first) as k,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS last) as l,
+    SUM(c1) OVER (ORDER BY c3, c2) as m,
+    SUM(c1) OVER (ORDER BY c3, c1 DESC) as n,
+    SUM(c1) OVER (ORDER BY c3 DESC, c1) as o,
+    SUM(c1) OVER (ORDER BY c3, c1 NULLs first) as p,
+    SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as a1,
+    SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as b1,
+    SUM(c1) OVER (ORDER BY c3 DESC RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as c1,
+    SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as d1,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS last RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as e1,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as f1,
+    SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as g1,
+    SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as h1,
+    SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as j1,
+    SUM(c1) OVER (ORDER BY c3 DESC RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as k1,
+    SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as l1,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS last RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as m1,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as n1,
+    SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as o1,
+    SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as h11,
+    SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as j11,
+    SUM(c1) OVER (ORDER BY c3 DESC RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as k11,
+    SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as l11,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS last RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as m11,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS first RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as n11,
+    SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as o11
+    FROM null_cases
+    LIMIT 5
+----
+DDD
+
+query ??
+SELECT
+    SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as a,
+    SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as b,
+    SUM(c1) OVER (ORDER BY c3 DESC RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as c,
+    SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as d,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS last RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as e,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS first RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as f,
+    SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN 10 PRECEDING AND 11 FOLLOWING) as g,
+    SUM(c1) OVER (ORDER BY c3) as h,
+    SUM(c1) OVER (ORDER BY c3 DESC) as i,
+    SUM(c1) OVER (ORDER BY c3 NULLS first) as j,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS first) as k,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS last) as l,
+    SUM(c1) OVER (ORDER BY c3, c2) as m,
+    SUM(c1) OVER (ORDER BY c3, c1 DESC) as n,
+    SUM(c1) OVER (ORDER BY c3 DESC, c1) as o,
+    SUM(c1) OVER (ORDER BY c3, c1 NULLs first) as p,
+    SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as a1,
+    SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as b1,
+    SUM(c1) OVER (ORDER BY c3 DESC RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as c1,
+    SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as d1,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS last RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as e1,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as f1,
+    SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND 11 FOLLOWING) as g1,
+    SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as h1,
+    SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as j1,
+    SUM(c1) OVER (ORDER BY c3 DESC RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as k1,
+    SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as l1,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS last RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as m1,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as n1,
+    SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN UNBOUNDED PRECEDING AND current row) as o1,
+    SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as h11,
+    SUM(c1) OVER (ORDER BY c3 RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as j11,
+    SUM(c1) OVER (ORDER BY c3 DESC RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as k11,
+    SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as l11,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS last RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as m11,
+    SUM(c1) OVER (ORDER BY c3 DESC NULLS first RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as n11,
+    SUM(c1) OVER (ORDER BY c3 NULLS first RANGE BETWEEN current row AND UNBOUNDED FOLLOWING) as o11
+    FROM null_cases
+    LIMIT 5
+----
+DDD
+
+
+# test_window_agg_sort_orderby_reversed_partitionby_plan
+statement ok
+set datafusion.optimizer.repartition_windows = false;
+
+query ??
+EXPLAIN SELECT
+    c9,
+    SUM(c9) OVER(ORDER BY c1, c9 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1,
+    SUM(c9) OVER(PARTITION BY c1 ORDER BY c9 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2
+    FROM aggregate_test_100
+    LIMIT 5
+----
+DDD
+
+
+query ??
+SELECT
+    c9,
+    SUM(c9) OVER(ORDER BY c1, c9 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1,
+    SUM(c9) OVER(PARTITION BY c1 ORDER BY c9 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2
+    FROM aggregate_test_100
+    LIMIT 5
+----
+DDD
+
+statement ok
+set datafusion.optimizer.repartition_windows = true;
+
+# test_window_agg_sort_partitionby_reversed_plan
+statement ok
+set datafusion.optimizer.repartition_windows = false;
+
+query ??
+EXPLAIN SELECT
+    c9,
+    SUM(c9) OVER(PARTITION BY c1 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1,
+    SUM(c9) OVER(PARTITION BY c1 ORDER BY c9 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2
+    FROM aggregate_test_100
+    LIMIT 5
+----
+DDD
+
+query ??
+SELECT
+    c9,
+    SUM(c9) OVER(PARTITION BY c1 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1,
+    SUM(c9) OVER(PARTITION BY c1 ORDER BY c9 DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2
+    FROM aggregate_test_100
+    LIMIT 5
+----
+DDD
+
+
+statement ok
+set datafusion.optimizer.repartition_windows = false;
+
+# test_window_agg_sort_orderby_reversed_binary_expr
+
+statement ok
+set datafusion.optimizer.repartition_windows = false;
+
+query ??
+EXPLAIN SELECT c3,
+    SUM(c9) OVER(ORDER BY c3+c4 DESC, c9 DESC, c2 ASC) as sum1,
+    SUM(c9) OVER(ORDER BY c3+c4 ASC, c9 ASC ) as sum2
+    FROM aggregate_test_100
+    LIMIT 5
+----
+DDD
+
+query ??
+SELECT c3,
+    SUM(c9) OVER(ORDER BY c3+c4 DESC, c9 DESC, c2 ASC) as sum1,
+    SUM(c9) OVER(ORDER BY c3+c4 ASC, c9 ASC ) as sum2
+    FROM aggregate_test_100
+    LIMIT 5
+----
+DDD
+
+statement ok
+set datafusion.optimizer.repartition_windows = true;
+
+# test_remove_unnecessary_sort_in_sub_query
+#    // Unnecessary Sort in the sub query is removed
+query ??
+EXPLAIN SELECT count(*) as global_count FROM
+                 (SELECT count(*), c1
+                  FROM aggregate_test_100
+                  WHERE c13 != 'C2GT5KVyOPZpgKVl110TyZO0NcJ434'
+                  GROUP BY c1
+                  ORDER BY c1 ) AS a
+----
+DDD
+
+query ??
+SELECT count(*) as global_count FROM
+                 (SELECT count(*), c1
+                  FROM aggregate_test_100
+                  WHERE c13 != 'C2GT5KVyOPZpgKVl110TyZO0NcJ434'
+                  GROUP BY c1
+                  ORDER BY c1 ) AS a
+----
+DDD
+
+# test_window_agg_sort_orderby_reversed_partitionby_reversed_plan
+
+
+statement ok
+set datafusion.optimizer.repartition_windows = true;
+
+query ??
+EXPLAIN SELECT c3,
+    SUM(c9) OVER(ORDER BY c3 DESC, c9 DESC, c2 ASC) as sum1,
+    SUM(c9) OVER(PARTITION BY c3 ORDER BY c9 DESC ) as sum2
+    FROM aggregate_test_100
+    LIMIT 5
+----
+DDD
+
+
+query ??
+SELECT c3,
+    SUM(c9) OVER(ORDER BY c3 DESC, c9 DESC, c2 ASC) as sum1,
+    SUM(c9) OVER(PARTITION BY c3 ORDER BY c9 DESC ) as sum2
+    FROM aggregate_test_100
+    LIMIT 5
+----
+DDD
+
+
+statement ok
+set datafusion.optimizer.repartition_windows = true;
+
+# test_window_agg_global_sort
+query ??
+EXPLAIN SELECT c1, ROW_NUMBER() OVER (PARTITION BY c1) as rn1 FROM aggregate_test_100 ORDER BY c1 ASC
+----
+DDD
+
+query ??
+SELECT c1, ROW_NUMBER() OVER (PARTITION BY c1) as rn1 FROM aggregate_test_100 ORDER BY c1 ASC
+----
+DDD
+
+# test_window_agg_global_sort_parallelize_sort_disabled
+statement ok
+set datafusion.optimizer.repartition_sorts = false;
+
+query ??
+EXPLAIN SELECT c1, ROW_NUMBER() OVER (PARTITION BY c1) as rn1 FROM aggregate_test_100 ORDER BY c1 ASC
+----
+DDD
+
+statement ok
+set datafusion.optimizer.repartition_sorts = true;
+
+# test_window_agg_global_sort_intermediate_parallel_sort
+query ??
+EXPLAIN SELECT c1,
+    SUM(C9) OVER (PARTITION BY C1 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 3 FOLLOWING) as sum1,
+    SUM(C9) OVER (ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2
+    FROM aggregate_test_100 ORDER BY c1 ASC
+----
+DDD
+
+# test_window_agg_with_global_limit
+statement ok
+set datafusion.optimizer.repartition_partitions = false;
+
+query ??
+EXPLAIN SELECT ARRAY_AGG(c13) as array_agg1 FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1)
+----
+DDD
+
+
+query ??
+SELECT ARRAY_AGG(c13) as array_agg1 FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1)
+----
+DDD
+
+statement ok
+set datafusion.optimizer.repartition_partitions = true;
+
+# test_window_agg_low_cardinality
+statement ok
+set datafusion.execution.target_partitions = 32;
+
+query ??
+SELECT
+        SUM(c4) OVER(PARTITION BY c4 ORDER BY c3 GROUPS BETWEEN 1 PRECEDING AND 3 FOLLOWING) as summation1,
+        SUM(c5) OVER(PARTITION BY c4 ORDER BY c4 GROUPS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as summation2
+    FROM aggregate_test_100
+    ORDER BY c9
+    LIMIT 5
+----
+DDD
+
+statement ok
+set datafusion.execution.target_partitions = 2;
