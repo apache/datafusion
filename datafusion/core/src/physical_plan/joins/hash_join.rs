@@ -1241,9 +1241,9 @@ impl HashJoinStream {
                             self.join_metrics.output_rows.add(batch.num_rows());
                             Some(result)
                         }
-                        Err(_) => Some(Err(DataFusionError::Execution(
-                            "Build left right indices error".to_string(),
-                        ))),
+                        Err(err) => Some(Err(DataFusionError::Execution(format!(
+                            "Fail to build join indices in HashJoinExec, error:{err}",
+                        )))),
                     };
                     timer.done();
                     result
