@@ -420,6 +420,59 @@ async fn test_window_agg_sort_multi_layer_non_reversed_plan() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_window_agg_partition_by_set() -> Result<()> {
+    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(1));
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT
+    c9,
+    SUM(c9) OVER(PARTITION BY c1, c2 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1,
+    SUM(c9) OVER(PARTITION BY c2, c1 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2
+    FROM aggregate_test_100
+    ORDER BY c9
+    LIMIT 5";
+
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    // We cannot reverse each window function (ROW_NUMBER is not reversible)
+    let expected = {
+        vec![
+            "GlobalLimitExec: skip=0, fetch=5",
+            "  SortExec: fetch=5, expr=[c9@0 ASC NULLS LAST]",
+            "    ProjectionExec: expr=[c9@2 as c9, SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@3 as sum1, SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c2, aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@4 as sum2]",
+            "      BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
+            "        BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]",
+            "          SortExec: expr=[c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST,c9@2 ASC NULLS LAST]",
+        ]
+    };
+
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let actual_len = actual.len();
+    let actual_trim_last = &actual[..actual_len - 1];
+    assert_eq!(
+        expected, actual_trim_last,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------+------------+------------+",
+        "| c9        | sum1       | sum2       |",
+        "+-----------+------------+------------+",
+        "| 28774375  | 9144476174 | 9144476174 |",
+        "| 63044568  | 5125627947 | 5125627947 |",
+        "| 141047417 | 3650978969 | 3650978969 |",
+        "| 141680161 | 8526017165 | 8526017165 |",
+        "| 145294611 | 6802765992 | 6802765992 |",
+        "+-----------+------------+------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_window_agg_complex_plan() -> Result<()> {
     let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(2));
     register_aggregate_null_cases_csv(&ctx).await?;
@@ -1639,13 +1692,6 @@ mod tests {
         Ok(())
     }
 
-    fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
-        let formatted = displayable(plan.as_ref()).indent().to_string();
-        let actual: Vec<&str> = formatted.trim().lines().collect();
-        println!("{:#?}", actual);
-        Ok(())
-    }
-
     #[tokio::test]
     async fn test_source_partially_sorted_partition_by() -> Result<()> {
         let tmpdir = TempDir::new().unwrap();
@@ -1692,7 +1738,6 @@ mod tests {
             "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
 
-        print_plan(&physical_plan)?;
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+---------------+---------------+---------+------+------+------+------+------+------+",

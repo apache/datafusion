@@ -671,11 +671,11 @@ fn can_skip_ordering_fn(
                 &physical_ordering_exprs,
             )?;
             // partitionby_indices.sort();
-            let merged_indices =
+            let ordered_merged_indices =
                 get_sorted_merged_indices(&partitionby_indices, &orderby_indices);
-            let is_merge_consecutive = is_consecutive_from_zero(&merged_indices);
+            let is_merge_consecutive = is_consecutive_from_zero(&ordered_merged_indices);
             let all_partition =
-                compare_set_equality(&merged_indices, &partitionby_indices);
+                compare_set_equality(&ordered_merged_indices, &partitionby_indices);
             let contains_all_orderbys = orderby_indices.len() == orderby_keys.len();
             let only_orderby_indices =
                 get_set_diff_indices(&orderby_indices, &partitionby_indices);
@@ -719,7 +719,7 @@ fn can_skip_ordering_fn(
             let is_aligned = is_same_ordering || should_reverse;
 
             let streamable = (is_merge_consecutive
-                || (all_partition && merged_indices[0] == 0))
+                || (all_partition && ordered_merged_indices[0] == 0))
                 && contains_all_orderbys
                 && is_aligned
                 && is_orderby_diff_consecutive;
@@ -727,20 +727,18 @@ fn can_skip_ordering_fn(
                 return Ok(None);
             }
             let partition_by_consecutive = is_consecutive_from_zero(&partitionby_indices);
-            let is_first_partition_by = partitionby_indices
-                .first()
-                .map(|elem| *elem == 0)
-                .unwrap_or(true);
+            // Determine If 0th column in the sort_keys comes from partition by
+            let is_first_partition_by = partitionby_indices.contains(&0);
             let contains_all_partition_bys =
                 partitionby_indices.len() == partitionby_exprs.len();
-            let mode = if is_first_partition_by
+            let mode = if (is_first_partition_by || partitionby_indices.is_empty())
                 && partition_by_consecutive
                 && contains_all_partition_bys
             {
                 let first_n = calc_first_n(&partitionby_indices);
                 assert_eq!(first_n, partitionby_exprs.len());
                 PartitionSearchMode::Sorted
-            } else if is_first_partition_by && !partitionby_indices.is_empty() {
+            } else if is_first_partition_by {
                 let first_n = calc_first_n(&partitionby_indices);
                 assert!(first_n < partitionby_exprs.len());
                 let partitionby_mapping_indices = get_indices_of_matching_exprs(
