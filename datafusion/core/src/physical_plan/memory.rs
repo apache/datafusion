@@ -149,23 +149,14 @@ impl MemoryExec {
             sort_information: None,
         })
     }
-    /// Create a new execution plan for reading in-memory record batches
-    /// The provided `schema` should not have the projection applied. Also, you can specify sort
-    /// information on PhysicalExprs.
-    pub fn try_new_with_sort_information(
-        partitions: &[Vec<RecordBatch>],
-        schema: SchemaRef,
-        projection: Option<Vec<usize>>,
-        sort_information: Option<Vec<PhysicalSortExpr>>,
-    ) -> Result<Self> {
-        let projected_schema = project_schema(&schema, projection.as_ref())?;
-        Ok(Self {
-            partitions: partitions.to_vec(),
-            schema,
-            projected_schema,
-            projection,
-            sort_information,
-        })
+
+    /// Set sort information
+    pub fn with_sort_information(
+        mut self,
+        sort_information: Vec<PhysicalSortExpr>,
+    ) -> Self {
+        self.sort_information = Some(sort_information);
+        self
     }
 }
 

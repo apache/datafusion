@@ -56,8 +56,13 @@ impl PipelineFixer {
         Self {}
     }
 }
+/// [PipelineFixer] subrules are functions of this type. Such functions take a
+/// single [PipelineStatePropagator] argument, which stores state variables
+/// indicating the unboundedness status of the current [ExecutionPlan] as
+/// the [PipelineFixer] rule traverses the entire plan tree.
 type PipelineFixerSubrule =
     dyn Fn(PipelineStatePropagator) -> Option<Result<PipelineStatePropagator>>;
+
 impl PhysicalOptimizerRule for PipelineFixer {
     fn optimize(
         &self,

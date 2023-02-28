@@ -74,6 +74,8 @@ use arrow::datatypes::{DataType, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 
 use super::column::Column;
+use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
+use crate::intervals::{apply_operator, Interval};
 use crate::physical_expr::down_cast_any_ref;
 use crate::{analysis_expect, AnalysisContext, ExprBoundaries, PhysicalExpr};
 use datafusion_common::cast::{as_boolean_array, as_decimal128_array};
@@ -785,6 +787,49 @@ impl PhysicalExpr for BinaryExpr {
             }
             _ => context.with_boundaries(None),
         }
+    }
+
+    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
+        // Get children intervals:
+        let left_interval = children[0];
+        let right_interval = children[1];
+        // Calculate current node's interval:
+        apply_operator(&self.op, left_interval, right_interval)
+    }
+
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        children: &[&Interval],
+    ) -> Result<Vec<Option<Interval>>> {
+        // Get children intervals. Graph brings
+        let left_interval = children[0];
+        let right_interval = children[1];
+        let (left, right) = if self.op.is_logic_operator() {
+            // TODO: Currently, this implementation only supports the AND operator
+            //       and does not require any further propagation. In the future,
+            //       upon adding support for additional logical operators, this
+            //       method will require modification to support propagating the
+            //       changes accordingly.
+            return Ok(vec![]);
+        } else if self.op.is_comparison_operator() {
+            if let Interval {
+                lower: ScalarValue::Boolean(Some(false)),
+                upper: ScalarValue::Boolean(Some(false)),
+            } = interval
+            {
+                // TODO: We will handle strictly false clauses by negating
+                //       the comparison operator (e.g. GT to LE, LT to GE)
+                //       once open/closed intervals are supported.
+                return Ok(vec![]);
+            }
+            // Propagate the comparison operator.
+            propagate_comparison(&self.op, left_interval, right_interval)?
+        } else {
+            // Propagate the arithmetic operator.
+            propagate_arithmetic(&self.op, interval, left_interval, right_interval)?
+        };
+        Ok(vec![left, right])
     }
 }
 
