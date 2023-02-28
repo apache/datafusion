@@ -28,7 +28,7 @@ use arrow::array::{
 };
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, UInt32Type, UInt64Type};
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
@@ -790,6 +790,18 @@ pub(crate) fn build_batch_from_indices(
     right_indices: UInt32Array,
     column_indices: &[ColumnIndex],
 ) -> Result<RecordBatch> {
+    if schema.fields().is_empty() {
+        let options = RecordBatchOptions::new()
+            .with_match_field_names(true)
+            .with_row_count(Some(left_indices.len()));
+
+        return Ok(RecordBatch::try_new_with_options(
+            Arc::new(schema.clone()),
+            vec![],
+            &options,
+        )?);
+    }
+
     // build the columns of the new [RecordBatch]:
     // 1. pick whether the column is from the left or right
     // 2. based on the pick, `take` items from the different RecordBatches

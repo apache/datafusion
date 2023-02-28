@@ -475,9 +475,9 @@ fn join_left_and_right_batch(
     let mut left_indices_builder = UInt64Builder::new();
     let mut right_indices_builder = UInt32Builder::new();
     let left_right_indices = match indices_result {
-        Err(_) => Err(DataFusionError::Execution(
-            "Build left right indices error".to_string(),
-        )),
+        Err(err) => Err(DataFusionError::Execution(format!(
+            "Fail to build join indices in NestedLoopJoinExec, error:{err}"
+        ))),
         Ok(indices) => {
             for (left_side, right_side) in indices {
                 left_indices_builder
