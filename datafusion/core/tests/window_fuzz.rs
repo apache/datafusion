@@ -134,7 +134,7 @@ fn get_random_function(
 ) -> (WindowFunction, Vec<Arc<dyn PhysicalExpr>>, String) {
     let mut args = if is_linear {
         // Since in linear test we use ORDER BY a in the query. To make result
-        // non-dependent on table order. We should use column a in the window function.
+        // non-dependent on table order. We should use column a in the window function (Given that we do not use ROWS for the window frame).
         vec![col("a", schema).unwrap()]
     } else {
         vec![col("x", schema).unwrap()]
@@ -172,7 +172,7 @@ fn get_random_function(
     );
     if !is_linear {
         // row_number, rank, lead, lag doesn't use its window frame to calculate result. Their results are calculated
-        // according to table order. This adds the dependency to table order. Hence do not use these functions in
+        // according to table scan order. This adds the dependency to table order. Hence do not use these functions in
         // linear test.
         window_fn_map.insert(
             "row_number",

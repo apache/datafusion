@@ -129,9 +129,6 @@ impl WindowAggExec {
 
     /// Return the output sort order of order by keys: For example
     /// OVER(PARTITION BY a, ORDER BY b) -> would give sorting of the column b
-    // We are sure that partition by columns are always at the beginning of sort_keys
-    // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
-    // to calculate partition separation points
     pub fn order_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
         let mut result = vec![];
         // All window exprs have the same partition by, so we just use the first one:
