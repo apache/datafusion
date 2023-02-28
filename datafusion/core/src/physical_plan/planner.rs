@@ -628,7 +628,7 @@ impl DefaultPhysicalPlanner {
                             physical_input_schema,
                             physical_partition_keys,
                             physical_sort_keys,
-                            PartitionSearchMode::Sorted,
+                            PartitionSearchMode::Sorted((0..partition_keys.len()).collect()),
                         )?)
                     } else {
                         Arc::new(WindowAggExec::try_new(

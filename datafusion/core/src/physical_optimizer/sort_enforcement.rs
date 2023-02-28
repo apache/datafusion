@@ -571,11 +571,9 @@ fn analyze_window_sort_removal(
         ));
     };
 
-    let (should_reverse, partition_search_mode) = if let Some(res) = can_skip_ordering_fn(
-        sort_tree,
-        window_expr[0].partition_by(),
-        &orderby_sort_keys,
-    )? {
+    let (should_reverse, partition_search_mode) = if let Some(res) =
+        can_skip_ordering(sort_tree, window_expr[0].partition_by(), &orderby_sort_keys)?
+    {
         res
     } else {
         // cannot skip sort
@@ -640,7 +638,7 @@ fn analyze_window_sort_removal(
     Ok(None)
 }
 
-fn can_skip_ordering_fn(
+fn can_skip_ordering(
     sort_tree: &ExecTree,
     partitionby_exprs: &[Arc<dyn PhysicalExpr>],
     orderby_keys: &[PhysicalSortExpr],
@@ -659,20 +657,15 @@ fn can_skip_ordering_fn(
         //       Currently, we can not remove such sorts.
         if let Some(physical_ordering) = physical_ordering {
             let orderby_exprs = convert_to_expr(orderby_keys);
-            // let partition_by_exprs = convert_to_expr(partitionby_keys);
             let physical_ordering_exprs = convert_to_expr(physical_ordering);
-            // let orderby_indices = get_order_by_indices(orderby_keys, physical_ordering)?;
             let orderby_indices =
                 get_indices_of_matching_exprs(&orderby_exprs, &physical_ordering_exprs)?;
-            // let mut partitionby_indices =
-            //     get_partition_by_indices(partitionby_exprs, physical_ordering)?;
             let partitionby_indices = get_indices_of_matching_exprs(
                 partitionby_exprs,
                 &physical_ordering_exprs,
             )?;
-            // partitionby_indices.sort();
             let ordered_merged_indices =
-                get_sorted_merged_indices(&partitionby_indices, &orderby_indices);
+                get_ordered_merged_indices(&partitionby_indices, &orderby_indices);
             let is_merge_consecutive = is_consecutive_from_zero(&ordered_merged_indices);
             let all_partition =
                 compare_set_equality(&ordered_merged_indices, &partitionby_indices);
@@ -718,28 +711,40 @@ fn can_skip_ordering_fn(
             });
             let is_aligned = is_same_ordering || should_reverse;
 
-            let streamable = (is_merge_consecutive
-                || (all_partition && ordered_merged_indices[0] == 0))
+            // Determine If 0th column in the sort_keys comes from partition by
+            let is_first_partition_by = partitionby_indices.contains(&0);
+            let can_skip_sort = (is_merge_consecutive
+                || (all_partition && is_first_partition_by))
                 && contains_all_orderbys
                 && is_aligned
                 && is_orderby_diff_consecutive;
-            if !streamable {
+            if !can_skip_sort {
                 return Ok(None);
             }
-            let partition_by_consecutive = is_consecutive_from_zero(&partitionby_indices);
-            // Determine If 0th column in the sort_keys comes from partition by
-            let is_first_partition_by = partitionby_indices.contains(&0);
+
+            let ordered_partitionby_indices = partitionby_indices
+                .iter()
+                .copied()
+                .sorted()
+                .collect::<Vec<_>>();
+            let partition_by_consecutive =
+                is_consecutive_from_zero(&ordered_partitionby_indices);
             let contains_all_partition_bys =
                 partitionby_indices.len() == partitionby_exprs.len();
-            let mode = if (is_first_partition_by || partitionby_indices.is_empty())
+            let mode = if (is_first_partition_by
                 && partition_by_consecutive
-                && contains_all_partition_bys
+                && contains_all_partition_bys)
+                || partitionby_exprs.is_empty()
             {
-                let first_n = calc_first_n(&partitionby_indices);
+                let first_n = calc_first_n(&ordered_partitionby_indices);
                 assert_eq!(first_n, partitionby_exprs.len());
-                PartitionSearchMode::Sorted
+                let partitionby_mapping_indices = get_indices_of_matching_exprs(
+                    &physical_ordering_exprs[0..first_n],
+                    partitionby_exprs,
+                )?;
+                PartitionSearchMode::Sorted(partitionby_mapping_indices)
             } else if is_first_partition_by {
-                let first_n = calc_first_n(&partitionby_indices);
+                let first_n = calc_first_n(&ordered_partitionby_indices);
                 assert!(first_n < partitionby_exprs.len());
                 let partitionby_mapping_indices = get_indices_of_matching_exprs(
                     &physical_ordering_exprs[0..first_n],
@@ -939,12 +944,13 @@ fn get_indices_of_matching_exprs(
     Ok(result)
 }
 
-// Find the indices of matching entries inside the `searched` vector for each element if the `to_search` vector
+// Get `Arc<dyn PhysicalExpr>` content of the `PhysicalSortExpr` for each entry in the vector
 fn convert_to_expr(in1: &[PhysicalSortExpr]) -> Vec<Arc<dyn PhysicalExpr>> {
     in1.iter().map(|elem| elem.expr.clone()).collect::<Vec<_>>()
 }
 
 // Compares the equality of two vectors independent of the ordering and duplicates
+// See https://stackoverflow.com/a/42748484/10554257
 fn compare_set_equality<T>(a: &[T], b: &[T]) -> bool
 where
     T: Eq + Hash,
@@ -963,17 +969,22 @@ fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec<T>>
     Ok(result)
 }
 
-fn get_sorted_merged_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
+// Merges vectors `in1` and `in2` (removes duplicates) then sorts the result.
+fn get_ordered_merged_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
     let set: HashSet<_> = in1.iter().chain(in2.iter()).copied().collect();
     let mut res: Vec<_> = set.into_iter().collect();
     res.sort();
     res
 }
 
+// Checks if the vector in the form 0,1,2...n (Consecutive starting from zero)
+// Assumes input has ascending order
 fn is_consecutive_from_zero(in1: &[usize]) -> bool {
     in1.iter().enumerate().all(|(idx, elem)| idx == *elem)
 }
 
+// Checks if the vector in the form 1,2,3,..n (Consecutive) not necessarily starting from zero
+// Assumes input has ascending order
 fn is_consecutive(in1: &[usize]) -> bool {
     if !in1.is_empty() {
         in1.iter()
@@ -984,6 +995,8 @@ fn is_consecutive(in1: &[usize]) -> bool {
     }
 }
 
+// Returns the vector consisting of elements inside `in1` that are not inside `in2`.
+// Resulting vector have the same ordering as `in1` (except elements inside `in2` are removed.)
 fn get_set_diff_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
     let mut res = vec![];
     for lhs in in1 {
@@ -1048,7 +1061,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sorted_merged_indices() -> Result<()> {
-        let res = get_sorted_merged_indices(&[0, 3, 4], &[1, 3, 5]);
+        let res = get_ordered_merged_indices(&[0, 3, 4], &[1, 3, 5]);
         assert_eq!(res, vec![0, 1, 3, 4, 5]);
         Ok(())
     }

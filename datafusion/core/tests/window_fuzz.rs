@@ -418,7 +418,7 @@ async fn run_window_test(
     let search_mode = if is_linear {
         PartitionSearchMode::Linear
     } else {
-        PartitionSearchMode::Sorted
+        PartitionSearchMode::Sorted((0..partitionby_exprs.len()).collect())
     };
     let running_window_exec = Arc::new(
         BoundedWindowAggExec::try_new(

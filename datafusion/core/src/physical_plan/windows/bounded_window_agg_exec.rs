@@ -70,7 +70,7 @@ pub enum PartitionSearchMode {
     /// Some columns of the partition columns are ordered but not all
     PartiallySorted(Vec<usize>),
     /// Al; Partition columns are ordered
-    Sorted,
+    Sorted(Vec<usize>),
 }
 
 /// Window execution plan
@@ -271,7 +271,8 @@ impl ExecutionPlan for BoundedWindowAggExec {
                         )
                     })
                     .collect();
-                write!(f, "wdw=[{}]", g.join(", "))?;
+                let mode = &self.partition_search_mode;
+                write!(f, "wdw=[{}], mode=[{:?}]", g.join(", "), mode)?;
             }
         }
         Ok(())
@@ -347,7 +348,7 @@ impl BoundedWindowAggStream {
     /// This method constructs output columns using the result of each window expression
     fn calculate_out_columns(&mut self) -> Result<Option<Vec<ArrayRef>>> {
         match self.search_mode {
-            PartitionSearchMode::Sorted => {
+            PartitionSearchMode::Sorted(_) => {
                 let n_out = self.calculate_n_out_row();
                 if n_out == 0 {
                     Ok(None)
@@ -482,7 +483,7 @@ impl BoundedWindowAggStream {
             }
         }
         match &self.search_mode {
-            PartitionSearchMode::Sorted => {
+            PartitionSearchMode::Sorted(_) => {
                 let n_partitions = self.partition_buffers.len();
                 for (idx, (_, partition_batch_state)) in
                     self.partition_buffers.iter_mut().enumerate()
@@ -727,7 +728,7 @@ impl BoundedWindowAggStream {
     /// Prunes emitted parts from WindowAggState `out_col` field.
     fn prune_out_columns(&mut self, n_out: usize) -> Result<()> {
         match self.search_mode {
-            PartitionSearchMode::Sorted => {
+            PartitionSearchMode::Sorted(_) => {
                 // We store generated columns for each window expression in the `out_col`
                 // field of `WindowAggState`. Given how many rows are emitted, we remove
                 // these sections from state.
@@ -788,11 +789,20 @@ impl BoundedWindowAggStream {
     }
 
     /// Get Partition Columns
-    pub fn partition_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
-        self.partition_by_sort_keys
+    pub fn partition_columns(
+        &self,
+        batch: &RecordBatch,
+        partition_indices: &[usize],
+    ) -> Result<Vec<SortColumn>> {
+        assert_eq!(self.partition_by_sort_keys.len(), partition_indices.len());
+        partition_indices
             .iter()
-            .map(|e| e.evaluate_to_sort_column(batch))
+            .map(|idx| self.partition_by_sort_keys[*idx].evaluate_to_sort_column(batch))
             .collect::<Result<Vec<_>>>()
+        // self.partition_by_sort_keys
+        //     .iter()
+        //     .map(|e| e.evaluate_to_sort_column(batch))
+        //     .collect::<Result<Vec<_>>>()
     }
 
     /// evaluate the partition points given the sort columns; if the sort columns are
@@ -819,9 +829,10 @@ impl BoundedWindowAggStream {
         let mut res: IndexMap<Vec<ScalarValue>, (RecordBatch, Vec<usize>)> =
             IndexMap::new();
         let num_rows = record_batch.num_rows();
-        match self.search_mode {
-            PartitionSearchMode::Sorted => {
-                let partition_columns = self.partition_columns(record_batch)?;
+        match &self.search_mode {
+            PartitionSearchMode::Sorted(ordered_partition_by_indices) => {
+                let partition_columns =
+                    self.partition_columns(record_batch, ordered_partition_by_indices)?;
                 let partition_points =
                     self.evaluate_partition_points(num_rows, &partition_columns)?;
                 let partition_bys = partition_columns
