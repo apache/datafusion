@@ -19,11 +19,14 @@ use arrow::util::pretty;
 use datafusion::common::Result;
 use datafusion::logical_expr::{lit, or, Expr};
 use datafusion::optimizer::utils::disjunction;
+use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::physical_plan::collect;
+use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::prelude::{col, SessionContext};
 use parquet::file::properties::WriterProperties;
 use parquet_test_utils::{ParquetScanOptions, TestParquetFile};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 use structopt::StructOpt;
 use test_utils::AccessLogGenerator;
@@ -32,7 +35,7 @@ use test_utils::AccessLogGenerator;
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, StructOpt, Clone)]
 #[structopt(name = "Benchmarks", about = "Apache Arrow Rust Benchmarks.")]
 struct Opt {
     /// Activate debug mode to see query results
@@ -50,7 +53,6 @@ struct Opt {
     /// Path to folder where access log file will be generated
     #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
     path: PathBuf,
-
     /// Data page size of the generated parquet file
     #[structopt(long = "page-size")]
     page_size: Option<usize>,
@@ -84,13 +86,132 @@ async fn main() -> Result<()> {
     }
 
     let test_file = gen_data(path, opt.scale_factor, props_builder.build())?;
-
-    run_benchmarks(opt, &test_file).await?;
-
+    println!("running filter benchmarks");
+    run_filter_benchmarks(opt.clone(), &test_file).await?;
+    println!("running sort benchmarks");
+    run_sort_benchmarks(opt, &test_file).await?;
     Ok(())
 }
 
-async fn run_benchmarks(opt: Opt, test_file: &TestParquetFile) -> Result<()> {
+async fn run_sort_benchmarks(opt: Opt, test_file: &TestParquetFile) -> Result<()> {
+    use datafusion::physical_expr::expressions::col;
+    let scan_options_matrix = vec![
+        ParquetScanOptions {
+            pushdown_filters: false,
+            reorder_filters: false,
+            enable_page_index: false,
+        },
+        ParquetScanOptions {
+            pushdown_filters: true,
+            reorder_filters: true,
+            enable_page_index: true,
+        },
+        ParquetScanOptions {
+            pushdown_filters: true,
+            reorder_filters: true,
+            enable_page_index: false,
+        },
+    ];
+    let schema = test_file.schema();
+    let sort_cases = vec![
+        (
+            "sort utf8",
+            vec![PhysicalSortExpr {
+                expr: col("request_method", &schema)?,
+                options: Default::default(),
+            }],
+        ),
+        (
+            "sort int",
+            vec![PhysicalSortExpr {
+                expr: col("request_bytes", &schema)?,
+                options: Default::default(),
+            }],
+        ),
+        (
+            "sort decimal",
+            vec![
+                // sort decimal
+                PhysicalSortExpr {
+                    expr: col("decimal_price", &schema)?,
+                    options: Default::default(),
+                },
+            ],
+        ),
+        (
+            "sort integer tuple",
+            vec![
+                PhysicalSortExpr {
+                    expr: col("request_bytes", &schema)?,
+                    options: Default::default(),
+                },
+                PhysicalSortExpr {
+                    expr: col("response_bytes", &schema)?,
+                    options: Default::default(),
+                },
+            ],
+        ),
+        (
+            "sort utf8 tuple",
+            vec![
+                // sort utf8 tuple
+                PhysicalSortExpr {
+                    expr: col("service", &schema)?,
+                    options: Default::default(),
+                },
+                PhysicalSortExpr {
+                    expr: col("host", &schema)?,
+                    options: Default::default(),
+                },
+                PhysicalSortExpr {
+                    expr: col("pod", &schema)?,
+                    options: Default::default(),
+                },
+                PhysicalSortExpr {
+                    expr: col("image", &schema)?,
+                    options: Default::default(),
+                },
+            ],
+        ),
+        (
+            "sort mixed tuple",
+            vec![
+                PhysicalSortExpr {
+                    expr: col("service", &schema)?,
+                    options: Default::default(),
+                },
+                PhysicalSortExpr {
+                    expr: col("request_bytes", &schema)?,
+                    options: Default::default(),
+                },
+                PhysicalSortExpr {
+                    expr: col("decimal_price", &schema)?,
+                    options: Default::default(),
+                },
+            ],
+        ),
+    ];
+    for (title, expr) in sort_cases {
+        println!("Executing '{title}' (sorting by: {expr:?})");
+        for scan_options in &scan_options_matrix {
+            println!("Using scan options {scan_options:?}");
+            for i in 0..opt.iterations {
+                let config = scan_options.config().with_target_partitions(opt.partitions);
+                let ctx = SessionContext::with_config(config);
+                let start = Instant::now();
+                exec_sort(&ctx, &expr, test_file, opt.debug).await?;
+                println!(
+                    "Iteration {} finished in {} ms",
+                    i,
+                    start.elapsed().as_millis()
+                );
+            }
+        }
+        println!("\n");
+    }
+    Ok(())
+}
+async fn run_filter_benchmarks(opt: Opt, test_file: &TestParquetFile) -> Result<()> {
     let scan_options_matrix = vec![
         ParquetScanOptions {
             pushdown_filters: false,
@@ -176,6 +297,22 @@ async fn exec_scan(
         pretty::print_batches(&result)?;
     }
     Ok(result.iter().map(|b| b.num_rows()).sum())
+}
+
+async fn exec_sort(
+    ctx: &SessionContext,
+    expr: &[PhysicalSortExpr],
+    test_file: &TestParquetFile,
+    debug: bool,
+) -> Result<()> {
+    let scan = test_file.create_scan(lit(true)).await?;
+    let exec = Arc::new(SortExec::try_new(expr.to_owned(), scan, None)?);
+    let task_ctx = ctx.task_ctx();
+    let result = collect(exec, task_ctx).await?;
+    if debug {
+        pretty::print_batches(&result)?;
+    }
+    Ok(())
 }
 
 fn gen_data(
