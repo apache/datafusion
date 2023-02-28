@@ -340,9 +340,37 @@ impl LogicalPlanBuilder {
     }
 
     /// Add missing sort columns to all downstream projection
+    ///
+    /// Thus, if you have a LogialPlan that selects A and B and have
+    /// not requested a sort by C, this code will add C recursively to
+    /// all input projections.
+    ///
+    /// Adding a new column is not correct if there is a `Distinct`
+    /// node, which produces only distinct values of its
+    /// inputs. Adding a new column to its input will result in
+    /// potententially different results than with the original column.
+    ///
+    /// For example, if the input is like:
+    ///
+    /// Distinct(A, B)
+    ///
+    /// If the input looks like
+    ///
+    /// a | b | c
+    /// --+---+---
+    /// 1 | 2 | 3
+    /// 1 | 2 | 4
+    ///
+    /// Distinct (A, B) --> (1,2)
+    ///
+    /// But Distinct (A, B, C) --> (1, 2, 3), (1, 2, 4)
+    ///  (which will appear as a (1, 2), (1, 2) if a and b are projected
+    ///
+    /// See <https://github.com/apache/arrow-datafusion/issues/5065> for more details
     fn add_missing_columns(
         curr_plan: LogicalPlan,
         missing_cols: &[Column],
+        is_distinct: bool,
     ) -> Result<LogicalPlan> {
         match curr_plan {
             LogicalPlan::Projection(Projection {
@@ -362,15 +390,24 @@ impl LogicalPlanBuilder {
                 // missing_cols may be already present but without the new
                 // projected alias.
                 missing_exprs.retain(|e| !expr.contains(e));
+                if is_distinct {
+                    Self::ambiguous_distinct_check(&missing_exprs, missing_cols, &expr)?;
+                }
                 expr.extend(missing_exprs);
                 Ok(project((*input).clone(), expr)?)
             }
             _ => {
+                let is_distinct =
+                    is_distinct || matches!(curr_plan, LogicalPlan::Distinct(_));
                 let new_inputs = curr_plan
                     .inputs()
                     .into_iter()
                     .map(|input_plan| {
-                        Self::add_missing_columns((*input_plan).clone(), missing_cols)
+                        Self::add_missing_columns(
+                            (*input_plan).clone(),
+                            missing_cols,
+                            is_distinct,
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -378,6 +415,45 @@ impl LogicalPlanBuilder {
                 from_plan(&curr_plan, &expr, &new_inputs)
             }
         }
+    }
+
+    fn ambiguous_distinct_check(
+        missing_exprs: &[Expr],
+        missing_cols: &[Column],
+        projection_exprs: &[Expr],
+    ) -> Result<()> {
+        if missing_exprs.is_empty() {
+            return Ok(());
+        }
+
+        // if the missing columns are all only aliases for things in
+        // the existing select list, it is ok
+        //
+        // This handles the special case for
+        // SELECT col as <alias> ORDER BY <alias>
+        //
+        // As described in https://github.com/apache/arrow-datafusion/issues/5293
+        let all_aliases = missing_exprs.iter().all(|e| {
+            projection_exprs.iter().any(|proj_expr| {
+                if let Expr::Alias(expr, _) = proj_expr {
+                    e == expr.as_ref()
+                } else {
+                    false
+                }
+            })
+        });
+        if all_aliases {
+            return Ok(());
+        }
+
+        let missing_col_names = missing_cols
+            .iter()
+            .map(|col| col.flat_name())
+            .collect::<String>();
+
+        Err(DataFusionError::Plan(format!(
+            "For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list",
+        )))
     }
 
     /// Apply a sort
@@ -406,16 +482,6 @@ impl LogicalPlanBuilder {
                 Ok(())
             })?;
 
-        self.create_sort_plan(exprs, missing_cols)
-    }
-
-    pub fn create_sort_plan(
-        self,
-        exprs: impl IntoIterator<Item = impl Into<Expr>> + Clone,
-        missing_cols: Vec<Column>,
-    ) -> Result<Self> {
-        let schema = self.plan.schema();
-
         if missing_cols.is_empty() {
             return Ok(Self::from(LogicalPlan::Sort(Sort {
                 expr: normalize_cols(exprs, &self.plan)?,
@@ -431,7 +497,8 @@ impl LogicalPlanBuilder {
             .map(|f| Expr::Column(f.qualified_column()))
             .collect();
 
-        let plan = Self::add_missing_columns(self.plan, &missing_cols)?;
+        let is_distinct = false;
+        let plan = Self::add_missing_columns(self.plan, &missing_cols, is_distinct)?;
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_cols(exprs, &plan)?,
             input: Arc::new(plan),

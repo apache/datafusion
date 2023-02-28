@@ -1097,19 +1097,42 @@ mod tests {
             .unwrap()
             .distinct()
             .unwrap()
-            .sort(vec![col("c2").sort(true, true)])
+            .sort(vec![col("c1").sort(true, true)])
             .unwrap();
+
         let df_results = plan.clone().collect().await?;
+
+        #[rustfmt::skip]
         assert_batches_sorted_eq!(
             vec![
-                "+----+", "| c1 |", "+----+", "| a  |", "| a  |", "| a  |", "| a  |",
-                "| a  |", "| b  |", "| b  |", "| b  |", "| b  |", "| b  |", "| c  |",
-                "| c  |", "| c  |", "| c  |", "| c  |", "| d  |", "| d  |", "| d  |",
-                "| d  |", "| d  |", "| e  |", "| e  |", "| e  |", "| e  |", "| e  |",
+                "+----+",
+                "| c1 |",
+                "+----+",
+                "| a  |",
+                "| b  |",
+                "| c  |",
+                "| d  |",
+                "| e  |",
                 "+----+",
             ],
             &df_results
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_distinct_sort_by_unprojected() -> Result<()> {
+        let t = test_table().await?;
+        let err = t
+            .select(vec![col("c1")])
+            .unwrap()
+            .distinct()
+            .unwrap()
+            // try to sort on some value not present in input to distinct
+            .sort(vec![col("c2").sort(true, true)])
+            .unwrap_err();
+        assert_eq!(err.to_string(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions c2 must appear in select list");
 
         Ok(())
     }
@@ -1552,11 +1575,9 @@ mod tests {
         \n    Sort: t1.c1 ASC NULLS FIRST, t1.c2 ASC NULLS FIRST, t1.c3 ASC NULLS FIRST, t2.c1 ASC NULLS FIRST, t2.c2 ASC NULLS FIRST, t2.c3 ASC NULLS FIRST, fetch=1\
         \n      Inner Join: t1.c1 = t2.c1\
         \n        SubqueryAlias: t1\
-        \n          Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
-        \n            TableScan: aggregate_test_100 projection=[c1, c2, c3]\
+        \n          TableScan: aggregate_test_100 projection=[c1, c2, c3]\
         \n        SubqueryAlias: t2\
-        \n          Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
-        \n            TableScan: aggregate_test_100 projection=[c1, c2, c3]",
+        \n          TableScan: aggregate_test_100 projection=[c1, c2, c3]",
                    format!("{:?}", df_renamed.clone().into_optimized_plan()?)
         );
 

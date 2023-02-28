@@ -34,7 +34,9 @@ use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_when, get_coerce_type_for_list,
 };
-use datafusion_expr::type_coercion::{is_date, is_numeric, is_timestamp, is_uft8};
+use datafusion_expr::type_coercion::{
+    is_date, is_numeric, is_timestamp, is_utf8_or_large_utf8,
+};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     aggregate_function, function, is_false, is_not_false, is_not_true, is_not_unknown,
@@ -411,7 +413,7 @@ impl ExprRewriter for TypeCoercionRewriter {
                 window_frame,
             }) => {
                 let window_frame =
-                    get_coerced_window_frame(window_frame, &self.schema, &order_by)?;
+                    coerce_window_frame(window_frame, &self.schema, &order_by)?;
                 let expr = Expr::WindowFunction(WindowFunction::new(
                     fun,
                     args,
@@ -426,95 +428,127 @@ impl ExprRewriter for TypeCoercionRewriter {
     }
 }
 
-/// Casts the ScalarValue `value` to coerced type.
-// When coerced type is `Interval` we use `parse_interval` since `try_from_string` not
-// supports conversion from string to Interval
-fn convert_to_coerced_type(
-    coerced_type: &DataType,
-    value: &ScalarValue,
-) -> Result<ScalarValue> {
+/// Casts the given `value` to `target_type`. Note that this function
+/// only considers `Null` or `Utf8` values.
+fn coerce_scalar(target_type: &DataType, value: &ScalarValue) -> Result<ScalarValue> {
     match value {
-        // In here we do casting either for NULL types or
-        // ScalarValue::Utf8(Some(val)). The other types are already casted.
-        // The reason is that we convert the sqlparser result
-        // to the Utf8 for all possible cases. Hence the types other than Utf8
-        // are already casted to appropriate type. Therefore they can be returned directly.
+        // Coerce Utf8 values:
         ScalarValue::Utf8(Some(val)) => {
-            // we need special handling for Interval types
-            if let DataType::Interval(..) = coerced_type {
+            // When `target_type` is `Interval`, we use `parse_interval` since
+            // `try_from_string` does not support `String` to `Interval` coercions.
+            if let DataType::Interval(..) = target_type {
                 parse_interval("millisecond", val)
             } else {
-                ScalarValue::try_from_string(val.clone(), coerced_type)
+                ScalarValue::try_from_string(val.clone(), target_type)
             }
         }
         s => {
             if s.is_null() {
-                ScalarValue::try_from(coerced_type)
+                // Coerce `Null` values:
+                ScalarValue::try_from(target_type)
             } else {
+                // Values except `Utf8`/`Null` variants already have the right type
+                // (casted before) since we convert `sqlparser` outputs to `Utf8`
+                // for all possible cases. Therefore, we return a clone here.
                 Ok(s.clone())
             }
         }
     }
 }
 
-fn coerce_frame_bound(
-    coerced_type: &DataType,
-    bound: &WindowFrameBound,
-) -> Result<WindowFrameBound> {
-    Ok(match bound {
-        WindowFrameBound::Preceding(val) => {
-            WindowFrameBound::Preceding(convert_to_coerced_type(coerced_type, val)?)
-        }
-        WindowFrameBound::CurrentRow => WindowFrameBound::CurrentRow,
-        WindowFrameBound::Following(val) => {
-            WindowFrameBound::Following(convert_to_coerced_type(coerced_type, val)?)
+/// This function coerces `value` to `target_type` in a range-aware fashion.
+/// If the coercion is successful, we return an `Ok` value with the result.
+/// If the coercion fails because `target_type` is not wide enough (i.e. we
+/// can not coerce to `target_type`, but we can to a wider type in the same
+/// family), we return a `Null` value of this type to signal this situation.
+/// Downstream code uses this signal to treat these values as *unbounded*.
+fn coerce_scalar_range_aware(
+    target_type: &DataType,
+    value: &ScalarValue,
+) -> Result<ScalarValue> {
+    coerce_scalar(target_type, value).or_else(|err| {
+        // If type coercion fails, check if the largest type in family works:
+        if let Some(largest_type) = get_widest_type_in_family(target_type) {
+            coerce_scalar(largest_type, value).map_or_else(
+                |_| {
+                    Err(DataFusionError::Execution(format!(
+                        "Cannot cast {value:?} to {target_type:?}"
+                    )))
+                },
+                |_| ScalarValue::try_from(target_type),
+            )
+        } else {
+            Err(err)
         }
     })
 }
 
-fn get_coerced_window_frame(
+/// This function returns the widest type in the family of `given_type`.
+/// If the given type is already the widest type, it returns `None`.
+/// For example, if `given_type` is `Int8`, it returns `Int64`.
+fn get_widest_type_in_family(given_type: &DataType) -> Option<&DataType> {
+    match given_type {
+        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 => Some(&DataType::UInt64),
+        DataType::Int8 | DataType::Int16 | DataType::Int32 => Some(&DataType::Int64),
+        DataType::Float16 | DataType::Float32 => Some(&DataType::Float64),
+        _ => None,
+    }
+}
+
+/// Coerces the given (window frame) `bound` to `target_type`.
+fn coerce_frame_bound(
+    target_type: &DataType,
+    bound: &WindowFrameBound,
+) -> Result<WindowFrameBound> {
+    match bound {
+        WindowFrameBound::Preceding(v) => {
+            coerce_scalar_range_aware(target_type, v).map(WindowFrameBound::Preceding)
+        }
+        WindowFrameBound::CurrentRow => Ok(WindowFrameBound::CurrentRow),
+        WindowFrameBound::Following(v) => {
+            coerce_scalar_range_aware(target_type, v).map(WindowFrameBound::Following)
+        }
+    }
+}
+
+// Coerces the given `window_frame` to use appropriate natural types.
+// For example, ROWS and GROUPS frames use `UInt64` during calculations.
+fn coerce_window_frame(
     window_frame: WindowFrame,
     schema: &DFSchemaRef,
     expressions: &[Expr],
 ) -> Result<WindowFrame> {
-    fn get_coerced_type(column_type: &DataType) -> Result<DataType> {
-        if is_numeric(column_type) | is_uft8(column_type) {
-            Ok(column_type.clone())
-        } else if is_timestamp(column_type) || is_date(column_type) {
-            Ok(DataType::Interval(IntervalUnit::MonthDayNano))
-        } else {
-            Err(DataFusionError::Internal(format!(
-                "Cannot run range queries on datatype: {column_type:?}"
-            )))
-        }
-    }
-
     let mut window_frame = window_frame;
     let current_types = expressions
         .iter()
         .map(|e| e.get_type(schema))
         .collect::<Result<Vec<_>>>()?;
-    match &mut window_frame.units {
+    let target_type = match window_frame.units {
         WindowFrameUnits::Range => {
-            let col_type = current_types.first().ok_or_else(|| {
-                DataFusionError::Internal("ORDER BY column cannot be empty".to_string())
-            })?;
-            let coerced_type = get_coerced_type(col_type)?;
-            window_frame.start_bound =
-                coerce_frame_bound(&coerced_type, &window_frame.start_bound)?;
-            window_frame.end_bound =
-                coerce_frame_bound(&coerced_type, &window_frame.end_bound)?;
+            if let Some(col_type) = current_types.first() {
+                if is_numeric(col_type) || is_utf8_or_large_utf8(col_type) {
+                    col_type
+                } else if is_timestamp(col_type) || is_date(col_type) {
+                    &DataType::Interval(IntervalUnit::MonthDayNano)
+                } else {
+                    return Err(DataFusionError::Internal(format!(
+                        "Cannot run range queries on datatype: {col_type:?}"
+                    )));
+                }
+            } else {
+                return Err(DataFusionError::Internal(
+                    "ORDER BY column cannot be empty".to_string(),
+                ));
+            }
         }
-        WindowFrameUnits::Rows | WindowFrameUnits::Groups => {
-            let coerced_type = DataType::UInt64;
-            window_frame.start_bound =
-                coerce_frame_bound(&coerced_type, &window_frame.start_bound)?;
-            window_frame.end_bound =
-                coerce_frame_bound(&coerced_type, &window_frame.end_bound)?;
-        }
-    }
+        WindowFrameUnits::Rows | WindowFrameUnits::Groups => &DataType::UInt64,
+    };
+    window_frame.start_bound =
+        coerce_frame_bound(target_type, &window_frame.start_bound)?;
+    window_frame.end_bound = coerce_frame_bound(target_type, &window_frame.end_bound)?;
     Ok(window_frame)
 }
+
 // Support the `IsTrue` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion.
 // The above op will be rewrite to the binary op when creating the physical op.
 fn get_casted_expr_for_bool_op(expr: &Expr, schema: &DFSchemaRef) -> Result<Expr> {
@@ -954,6 +988,35 @@ mod test {
         assert!(err.unwrap_err().to_string().contains(
             "There isn't a common type to coerce Int64 and Utf8 in LIKE expression"
         ));
+
+        // ilike
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
+        let ilike_expr = Expr::ILike(Like::new(false, expr, pattern, None));
+        let empty = empty_with_type(DataType::Utf8);
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
+        let expected = "Projection: a ILIKE Utf8(\"abc\")\n  EmptyRelation";
+        assert_optimized_plan_eq(&plan, expected)?;
+
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit(ScalarValue::Null));
+        let ilike_expr = Expr::ILike(Like::new(false, expr, pattern, None));
+        let empty = empty_with_type(DataType::Utf8);
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
+        let expected = "Projection: a ILIKE CAST(NULL AS Utf8) AS a ILIKE NULL \
+             \n  EmptyRelation";
+        assert_optimized_plan_eq(&plan, expected)?;
+
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
+        let ilike_expr = Expr::ILike(Like::new(false, expr, pattern, None));
+        let empty = empty_with_type(DataType::Int64);
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
+        let err = assert_optimized_plan_eq(&plan, expected);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains(
+            "There isn't a common type to coerce Int64 and Utf8 in ILIKE expression"
+        ));
         Ok(())
     }
 
@@ -1034,6 +1097,21 @@ mod test {
 
     #[test]
     fn test_type_coercion_rewrite() -> Result<()> {
+        // gt
+        let schema = Arc::new(
+            DFSchema::new_with_metadata(
+                vec![DFField::new::<&str>(None, "a", DataType::Int64, true)],
+                std::collections::HashMap::new(),
+            )
+            .unwrap(),
+        );
+        let mut rewriter = TypeCoercionRewriter { schema };
+        let expr = is_true(lit(12i32).gt(lit(13i64)));
+        let expected = is_true(cast(lit(12i32), DataType::Int64).gt(lit(13i64)));
+        let result = expr.rewrite(&mut rewriter)?;
+        assert_eq!(expected, result);
+
+        // eq
         let schema = Arc::new(
             DFSchema::new_with_metadata(
                 vec![DFField::new::<&str>(None, "a", DataType::Int64, true)],
@@ -1046,8 +1124,22 @@ mod test {
         let expected = is_true(cast(lit(12i32), DataType::Int64).eq(lit(13i64)));
         let result = expr.rewrite(&mut rewriter)?;
         assert_eq!(expected, result);
+
+        // lt
+        let schema = Arc::new(
+            DFSchema::new_with_metadata(
+                vec![DFField::new::<&str>(None, "a", DataType::Int64, true)],
+                std::collections::HashMap::new(),
+            )
+            .unwrap(),
+        );
+        let mut rewriter = TypeCoercionRewriter { schema };
+        let expr = is_true(lit(12i32).lt(lit(13i64)));
+        let expected = is_true(cast(lit(12i32), DataType::Int64).lt(lit(13i64)));
+        let result = expr.rewrite(&mut rewriter)?;
+        assert_eq!(expected, result);
+
         Ok(())
-        // TODO add more test for this
     }
 
     #[test]

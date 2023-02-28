@@ -286,14 +286,31 @@ impl DFSchema {
         match matches.len() {
             0 => Err(field_not_found::<&str>(None, name, self)),
             1 => Ok(matches[0]),
-            _ => Err(DataFusionError::SchemaError(
-                SchemaError::AmbiguousReference {
-                    field: Column {
-                        relation: None,
-                        name: name.to_string(),
-                    },
-                },
-            )),
+            _ => {
+                // When `matches` size > 1, it doesn't necessarily mean an `ambiguous name` problem.
+                // Because name may generate from Alias/... . It means that it don't own qualifier.
+                // For example:
+                //             Join on id = b.id
+                // Project a.id as id   TableScan b id
+                // In this case, there isn't `ambiguous name` problem. When `matches` just contains
+                // one field without qualifier, we should return it.
+                let fields_without_qualifier = matches
+                    .iter()
+                    .filter(|f| f.qualifier.is_none())
+                    .collect::<Vec<_>>();
+                if fields_without_qualifier.len() == 1 {
+                    Ok(fields_without_qualifier[0])
+                } else {
+                    Err(DataFusionError::SchemaError(
+                        SchemaError::AmbiguousReference {
+                            field: Column {
+                                relation: None,
+                                name: name.to_string(),
+                            },
+                        },
+                    ))
+                }
+            }
         }
     }
 

@@ -348,6 +348,12 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 let value_datatype = dict.as_ref().value.as_deref().required("value")?;
                 DataType::Dictionary(Box::new(key_datatype), Box::new(value_datatype))
             }
+            arrow_type::ArrowTypeEnum::Map(map) => {
+                let field: Field =
+                    map.as_ref().field_type.as_deref().required("field_type")?;
+                let keys_sorted = map.keys_sorted;
+                DataType::Map(Box::new(field), keys_sorted)
+            }
         })
     }
 }
