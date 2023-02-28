@@ -240,8 +240,7 @@ pub fn convert_to_expr(in1: &[PhysicalSortExpr]) -> Vec<Arc<dyn PhysicalExpr>> {
     in1.iter().map(|elem| elem.expr.clone()).collect::<Vec<_>>()
 }
 
-// TODO: Add unit test for function below
-/// Find the indices of matching entries inside the `searched` vector for each element if the `to_search` vector
+/// Find the indices of matching entries inside the `searched` vector for each element in the `to_search` vector
 pub fn get_indices_of_matching_exprs(
     to_search: &[Arc<dyn PhysicalExpr>],
     searched: &[Arc<dyn PhysicalExpr>],
@@ -276,6 +275,24 @@ mod tests {
             options: Default::default(),
         }];
         assert!(convert_to_expr(&sort_expr)[0].eq(&sort_expr[0].expr));
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_indices_of_matching_exprs() -> Result<()> {
+        let list1: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(Column::new("a", 0)),
+            Arc::new(Column::new("b", 1)),
+            Arc::new(Column::new("c", 2)),
+            Arc::new(Column::new("d", 3)),
+        ];
+        let list2: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(Column::new("b", 1)),
+            Arc::new(Column::new("c", 2)),
+            Arc::new(Column::new("a", 0)),
+        ];
+        assert_eq!(get_indices_of_matching_exprs(&list1, &list2), vec![2, 0, 1]);
+        assert_eq!(get_indices_of_matching_exprs(&list2, &list1), vec![1, 2, 0]);
         Ok(())
     }
 

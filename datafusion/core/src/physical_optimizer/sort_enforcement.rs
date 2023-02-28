@@ -1040,9 +1040,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_sorted_merged_indices() -> Result<()> {
-        assert_eq!(get_ordered_merged_indices(&[0, 3, 4], &[1, 3, 5]), vec![0, 1, 3, 4, 5]);
+        assert_eq!(
+            get_ordered_merged_indices(&[0, 3, 4], &[1, 3, 5]),
+            vec![0, 1, 3, 4, 5]
+        );
         // Result should be ordered, even if inputs are not
-        assert_eq!(get_ordered_merged_indices(&[3, 0, 4], &[5, 1, 3]), vec![0, 1, 3, 4, 5]);
+        assert_eq!(
+            get_ordered_merged_indices(&[3, 0, 4], &[5, 1, 3]),
+            vec![0, 1, 3, 4, 5]
+        );
         Ok(())
     }
 
