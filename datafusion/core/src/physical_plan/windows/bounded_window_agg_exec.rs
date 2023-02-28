@@ -804,22 +804,6 @@ impl BoundedWindowAggStream {
         Ok(())
     }
 
-    /// Get Partition Columns
-    pub fn partition_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
-        assert_eq!(
-            self.partition_by_sort_keys.len(),
-            self.ordered_partition_by_indices.len()
-        );
-        self.ordered_partition_by_indices
-            .iter()
-            .map(|idx| self.partition_by_sort_keys[*idx].evaluate_to_sort_column(batch))
-            .collect::<Result<Vec<_>>>()
-        // self.partition_by_sort_keys
-        //     .iter()
-        //     .map(|e| e.evaluate_to_sort_column(batch))
-        //     .collect::<Result<Vec<_>>>()
-    }
-
     /// evaluate the partition points given the sort columns; if the sort columns are
     /// empty then the result will be a single element vec of the whole column rows.
     fn evaluate_partition_points(
@@ -846,7 +830,20 @@ impl BoundedWindowAggStream {
         let num_rows = record_batch.num_rows();
         match &self.search_mode {
             PartitionSearchMode::Sorted(_) => {
-                let partition_columns = self.partition_columns(record_batch)?;
+                // In Sorted case all partition by columns should have ordering, otherwise we cannot
+                // determine boundaries
+                assert_eq!(
+                    self.partition_by_sort_keys.len(),
+                    self.ordered_partition_by_indices.len()
+                );
+                let partition_columns = self
+                    .ordered_partition_by_indices
+                    .iter()
+                    .map(|idx| {
+                        self.partition_by_sort_keys[*idx]
+                            .evaluate_to_sort_column(record_batch)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 let partition_points =
                     self.evaluate_partition_points(num_rows, &partition_columns)?;
                 let partition_bys = partition_columns

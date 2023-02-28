@@ -364,12 +364,6 @@ impl WindowAggStream {
             return Ok(RecordBatch::new_empty(self.schema.clone()));
         }
 
-        // let partition_by_sort_keys = self
-        //     .partition_by_sort_keys
-        //     .iter()
-        //     .map(|elem| elem.evaluate_to_sort_column(&batch))
-        //     .collect::<Result<Vec<_>>>()?;
-
         // In WindowAggExec all partition by columns should be ordered.
         assert_eq!(
             self.ordered_partition_by_indices.len(),
