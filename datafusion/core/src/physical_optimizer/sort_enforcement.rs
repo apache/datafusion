@@ -53,6 +53,7 @@ use datafusion_physical_expr::utils::{ordering_satisfy, ordering_satisfy_concret
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use hashbrown::HashSet;
 use itertools::{concat, izip, Itertools};
+use std::hash::Hash;
 use std::iter::zip;
 use std::sync::Arc;
 
@@ -643,7 +644,7 @@ fn analyze_window_sort_removal(
 
 fn can_skip_ordering_fn(
     sort_tree: &ExecTree,
-    partitionby_keys: &[Arc<dyn PhysicalExpr>],
+    partitionby_exprs: &[Arc<dyn PhysicalExpr>],
     orderby_keys: &[PhysicalSortExpr],
 ) -> Result<Option<(bool, PartitionSearchMode)>> {
     let mut res = None;
@@ -659,14 +660,24 @@ fn can_skip_ordering_fn(
         //       This will enable us to handle cases such as (a,b) -> Sort -> (a,b,c) -> Required(a,b).
         //       Currently, we can not remove such sorts.
         if let Some(physical_ordering) = physical_ordering {
-            let orderby_indices = get_order_by_indices(orderby_keys, physical_ordering)?;
-            let mut partitionby_indices =
-                get_partition_by_indices(partitionby_keys, physical_ordering)?;
-            partitionby_indices.sort();
+            let orderby_exprs = convert_to_expr(orderby_keys);
+            // let partition_by_exprs = convert_to_expr(partitionby_keys);
+            let physical_ordering_exprs = convert_to_expr(physical_ordering);
+            // let orderby_indices = get_order_by_indices(orderby_keys, physical_ordering)?;
+            let orderby_indices =
+                get_indices_of_matching_exprs(&orderby_exprs, &physical_ordering_exprs)?;
+            // let mut partitionby_indices =
+            //     get_partition_by_indices(partitionby_exprs, physical_ordering)?;
+            let partitionby_indices = get_indices_of_matching_exprs(
+                partitionby_exprs,
+                &physical_ordering_exprs,
+            )?;
+            // partitionby_indices.sort();
             let merged_indices =
                 get_sorted_merged_indices(&partitionby_indices, &orderby_indices);
             let is_merge_consecutive = is_consecutive_from_zero(&merged_indices);
-            let all_partition = merged_indices == partitionby_indices;
+            let all_partition =
+                compare_set_equality(&merged_indices, &partitionby_indices);
             let contains_all_orderbys = orderby_indices.len() == orderby_keys.len();
             let only_orderby_indices =
                 get_set_diff_indices(&orderby_indices, &partitionby_indices);
@@ -677,13 +688,43 @@ fn can_skip_ordering_fn(
                 orderby_keys,
                 &find_match_indices(&only_orderby_indices, &orderby_indices),
             )?;
-
-            let (is_aligned, should_reverse) = can_skip_sort(
-                &[],
-                &expected_orderby_columns,
-                &sort_input.schema(),
+            let schema = sort_input.schema();
+            let nullables = input_orderby_columns
+                .iter()
+                .map(|elem| elem.expr.nullable(&schema))
+                .collect::<Result<Vec<_>>>()?;
+            let is_same_ordering = izip!(
                 &input_orderby_columns,
-            )?;
+                &expected_orderby_columns,
+                &nullables
+            )
+            .all(|(input, expected, is_nullable)| {
+                if *is_nullable {
+                    input.options == expected.options
+                } else {
+                    input.options.descending == expected.options.descending
+                }
+            });
+            let should_reverse = izip!(
+                &input_orderby_columns,
+                &expected_orderby_columns,
+                &nullables
+            )
+            .all(|(input, expected, is_nullable)| {
+                if *is_nullable {
+                    input.options == reverse_sort_options(expected.options)
+                } else {
+                    input.options.descending == !expected.options.descending
+                }
+            });
+            let is_aligned = is_same_ordering || should_reverse;
+
+            // let (is_aligned, should_reverse) = can_skip_sort(
+            //     &[],
+            //     &expected_orderby_columns,
+            //     &sort_input.schema(),
+            //     &input_orderby_columns,
+            // )?;
 
             let streamable = (is_merge_consecutive
                 || (all_partition && merged_indices[0] == 0))
@@ -696,23 +737,20 @@ fn can_skip_ordering_fn(
                 .map(|elem| *elem == 0)
                 .unwrap_or(true);
             let contains_all_partition_bys =
-                partitionby_indices.len() == partitionby_keys.len();
+                partitionby_indices.len() == partitionby_exprs.len();
             let mode = if is_first_partition_by
                 && partition_by_consecutive
                 && contains_all_partition_bys
             {
                 let first_n = calc_first_n(&partitionby_indices);
-                assert_eq!(first_n, partitionby_keys.len());
+                assert_eq!(first_n, partitionby_exprs.len());
                 PartitionSearchMode::Sorted
             } else if is_first_partition_by && !partitionby_indices.is_empty() {
                 let first_n = calc_first_n(&partitionby_indices);
-                assert!(first_n < partitionby_keys.len());
-                let partitionby_mapping_indices = get_partition_by_mapping_indices(
-                    &physical_ordering[0..first_n]
-                        .iter()
-                        .map(|elem| elem.expr.clone())
-                        .collect::<Vec<_>>(),
-                    partitionby_keys,
+                assert!(first_n < partitionby_exprs.len());
+                let partitionby_mapping_indices = get_indices_of_matching_exprs(
+                    &physical_ordering_exprs[0..first_n],
+                    partitionby_exprs,
                 )?;
                 PartitionSearchMode::PartiallySorted(partitionby_mapping_indices)
             } else {
@@ -1000,17 +1038,37 @@ fn get_partition_by_indices(
 }
 
 // Find the indices of matching entries inside the `searched` vector for each element if the `to_search` vector
-fn get_partition_by_mapping_indices(
+fn get_indices_of_matching_exprs<'a>(
     to_search: &[Arc<dyn PhysicalExpr>],
     searched: &[Arc<dyn PhysicalExpr>],
+    // to_search: impl IntoIterator<Item = &'a Arc<dyn PhysicalExpr>>,
+    // searched: impl IntoIterator<Item = &'a Arc<dyn PhysicalExpr>>,
 ) -> Result<Vec<usize>> {
     let mut result = vec![];
     for item in to_search {
-        if let Some(idx) = searched.iter().position(|e| e.eq(item)) {
+        if let Some(idx) = searched.into_iter().position(|e| e.eq(item)) {
             result.push(idx);
         }
     }
     Ok(result)
+}
+
+// Find the indices of matching entries inside the `searched` vector for each element if the `to_search` vector
+fn convert_to_expr(in1: &[PhysicalSortExpr]) -> Vec<Arc<dyn PhysicalExpr>> {
+    in1.into_iter()
+        .map(|elem| elem.expr.clone())
+        .collect::<Vec<_>>()
+}
+
+// Compares the equality of two vectors independent of the ordering and duplicates
+fn compare_set_equality<T>(a: &[T], b: &[T]) -> bool
+where
+    T: Eq + Hash,
+{
+    let a: HashSet<_> = a.iter().collect();
+    let b: HashSet<_> = b.iter().collect();
+
+    a == b
 }
 
 // Find the indices of matching entries inside the `searched` vector for each element if the `to_search` vector
@@ -1198,6 +1256,24 @@ mod tests {
         assert_eq!(find_match_indices(&[0, 4, 3], &[0, 3, 4]), vec![0, 2, 1]);
         // return value should have same ordering with the in1
         assert_eq!(find_match_indices(&[0, 4, 3, 5], &[0, 3, 4]), vec![0, 2, 1]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_convert_to_expr() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::UInt64, false)]);
+        let sort_expr = vec![PhysicalSortExpr {
+            expr: col("a", &schema).unwrap(),
+            options: Default::default(),
+        }];
+        assert!(convert_to_expr(&sort_expr)[0].eq(&sort_expr[0].expr));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_compare_set_equality() -> Result<()> {
+        assert!(compare_set_equality(&[4, 3, 2], &[3, 2, 4]));
+        assert!(!compare_set_equality(&[4, 3, 2, 1], &[3, 2, 4]));
         Ok(())
     }
 
