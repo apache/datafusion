@@ -739,21 +739,13 @@ fn can_skip_ordering(
                 && contains_all_partition_bys)
                 || partitionby_exprs.is_empty()
             {
-                let first_n = calc_first_n(&ordered_partitionby_indices);
+                let first_n = calc_ordering_range(&ordered_partitionby_indices);
                 assert_eq!(first_n, partitionby_exprs.len());
-                let partitionby_mapping_indices = get_indices_of_matching_exprs(
-                    &physical_ordering_exprs[0..first_n],
-                    partitionby_exprs,
-                );
-                PartitionSearchMode::Sorted(partitionby_mapping_indices)
+                PartitionSearchMode::Sorted
             } else if is_first_partition_by {
-                let first_n = calc_first_n(&ordered_partitionby_indices);
+                let first_n = calc_ordering_range(&ordered_partitionby_indices);
                 assert!(first_n < partitionby_exprs.len());
-                let partitionby_mapping_indices = get_indices_of_matching_exprs(
-                    &physical_ordering_exprs[0..first_n],
-                    partitionby_exprs,
-                );
-                PartitionSearchMode::PartiallySorted(partitionby_mapping_indices)
+                PartitionSearchMode::PartiallySorted
             } else {
                 PartitionSearchMode::Linear
             };
@@ -991,7 +983,10 @@ fn get_set_diff_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
     res
 }
 
-fn calc_first_n(in1: &[usize]) -> usize {
+// Find the largest range that satisfy 0,1,2 .. n in the `in1`
+// For 0,1,2,4,5 we would produce 3. meaning 0,1,2 is the largest consecutive range (starting from zero).
+// For 1,2,3,4 we would produce 0. Meaning there is no consecutive range (starting from zero).
+fn calc_ordering_range(in1: &[usize]) -> usize {
     let mut count = 0;
     for (idx, elem) in in1.iter().enumerate() {
         if idx != *elem {
@@ -1045,8 +1040,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_sorted_merged_indices() -> Result<()> {
-        let res = get_ordered_merged_indices(&[0, 3, 4], &[1, 3, 5]);
-        assert_eq!(res, vec![0, 1, 3, 4, 5]);
+        assert_eq!(get_ordered_merged_indices(&[0, 3, 4], &[1, 3, 5]), vec![0, 1, 3, 4, 5]);
+        // Result should be ordered, even if inputs are not
+        assert_eq!(get_ordered_merged_indices(&[3, 0, 4], &[5, 1, 3]), vec![0, 1, 3, 4, 5]);
         Ok(())
     }
 
@@ -1068,11 +1064,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_calc_first_n() -> Result<()> {
-        assert_eq!(calc_first_n(&[0, 3, 4]), 1);
-        assert_eq!(calc_first_n(&[0, 1, 3, 4]), 2);
-        // return value should have same ordering with the in1
-        assert_eq!(calc_first_n(&[0, 1, 2, 3, 4]), 5);
+    async fn test_calc_ordering_range() -> Result<()> {
+        assert_eq!(calc_ordering_range(&[0, 3, 4]), 1);
+        assert_eq!(calc_ordering_range(&[0, 1, 3, 4]), 2);
+        assert_eq!(calc_ordering_range(&[0, 1, 2, 3, 4]), 5);
+        assert_eq!(calc_ordering_range(&[1, 2, 3, 4]), 0);
         Ok(())
     }
 
@@ -1080,7 +1076,6 @@ mod tests {
     async fn test_find_match_indices() -> Result<()> {
         assert_eq!(find_match_indices(&[0, 3, 4], &[0, 3, 4]), vec![0, 1, 2]);
         assert_eq!(find_match_indices(&[0, 4, 3], &[0, 3, 4]), vec![0, 2, 1]);
-        // return value should have same ordering with the in1
         assert_eq!(find_match_indices(&[0, 4, 3, 5], &[0, 3, 4]), vec![0, 2, 1]);
         Ok(())
     }
