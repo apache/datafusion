@@ -1032,8 +1032,8 @@ impl ScalarValue {
             DataType::UInt16 => ScalarValue::UInt16(Some(0)),
             DataType::UInt32 => ScalarValue::UInt32(Some(0)),
             DataType::UInt64 => ScalarValue::UInt64(Some(0)),
-            DataType::Float32 => ScalarValue::UInt64(Some(0)),
-            DataType::Float64 => ScalarValue::UInt64(Some(0)),
+            DataType::Float32 => ScalarValue::Float32(Some(0.0)),
+            DataType::Float64 => ScalarValue::Float64(Some(0.0)),
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Can't create a zero scalar from data_type \"{datatype:?}\""
