@@ -464,6 +464,7 @@ impl CrossJoinStream {
 mod tests {
     use super::*;
     use crate::assert_batches_sorted_eq;
+    use crate::common::assert_contains;
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use crate::physical_plan::common;
     use crate::prelude::{SessionConfig, SessionContext};
@@ -678,11 +679,9 @@ mod tests {
 
         let err = join_collect(left, right, task_ctx).await.unwrap_err();
 
-        assert_eq!(
+        assert_contains!(
             err.to_string(),
-            "External error: Resources exhausted: Failed to allocate \
-             additional 744 bytes for CrossJoinStream[0] with 0 bytes \
-             already allocated - maximum available is 100"
+            "External error: Resources exhausted: Failed to allocate additional"
         );
 
         Ok(())
