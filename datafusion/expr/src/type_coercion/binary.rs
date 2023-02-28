@@ -238,7 +238,11 @@ fn comparison_binary_numeric_coercion(
         (_, Decimal128(_, _)) => get_comparison_common_decimal_type(rhs_type, lhs_type),
         (Float64, _) | (_, Float64) => Some(Float64),
         (_, Float32) | (Float32, _) => Some(Float32),
-        // start checking from Int64, that is the most inclusive integer type
+        // The following match arms encode the following logic: Given the two
+        // integral types, we choose the narrowest possible integral type that
+        // accommodates all values of both types. Note that some information
+        // loss is inevitable when we have a signed type and a `UInt64`, in
+        // which case we use `Int64`;i.e. the widest signed integral type.
         (Int64, _)
         | (_, Int64)
         | (UInt64, Int8)
