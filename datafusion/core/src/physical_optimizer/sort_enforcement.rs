@@ -552,28 +552,28 @@ fn analyze_window_sort_removal(
     sort_tree: &mut ExecTree,
     window_exec: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
-    let (window_expr, partition_keys, sort_keys, orderby_sort_keys) = if let Some(exec) =
+    let (window_expr, partition_keys, sort_keys) = if let Some(exec) =
         window_exec.as_any().downcast_ref::<BoundedWindowAggExec>()
     {
-        (
-            exec.window_expr(),
-            &exec.partition_keys,
-            &exec.sort_keys,
-            exec.order_by_sort_keys()?,
-        )
+        (exec.window_expr(), &exec.partition_keys, &exec.sort_keys)
     } else if let Some(exec) = window_exec.as_any().downcast_ref::<WindowAggExec>() {
-        (
-            exec.window_expr(),
-            &exec.partition_keys,
-            &exec.sort_keys,
-            exec.order_by_sort_keys()?,
-        )
+        (exec.window_expr(), &exec.partition_keys, &exec.sort_keys)
     } else {
         return Err(DataFusionError::Plan(
             "Expects to receive either WindowAggExec of BoundedWindowAggExec".to_string(),
         ));
     };
-
+    let mut orderby_sort_keys = vec![];
+    for item in window_expr[0].order_by() {
+        if let Some(elem) = sort_keys
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .find(|e| e.expr.eq(&item.expr))
+        {
+            orderby_sort_keys.push(elem.clone());
+        }
+    }
     let (should_reverse, partition_search_mode) = if let Some(res) =
         can_skip_ordering(sort_tree, window_expr[0].partition_by(), &orderby_sort_keys)?
     {

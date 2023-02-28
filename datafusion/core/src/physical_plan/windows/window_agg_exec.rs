@@ -137,21 +137,6 @@ impl WindowAggExec {
         }
         Ok(result)
     }
-
-    /// Return the output sort order of order by keys: For example
-    /// OVER(PARTITION BY a, ORDER BY b) -> would give sorting of the column b
-    pub fn order_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
-        let mut result = vec![];
-        // All window exprs have the same partition by, so we just use the first one:
-        let order_by = self.window_expr()[0].order_by();
-        let sort_keys = self.sort_keys.as_deref().unwrap_or(&[]);
-        for item in order_by {
-            if let Some(elem) = sort_keys.iter().find(|e| e.expr.eq(&item.expr)) {
-                result.push(elem.clone());
-            }
-        }
-        Ok(result)
-    }
 }
 
 impl ExecutionPlan for WindowAggExec {

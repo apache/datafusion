@@ -162,21 +162,6 @@ impl BoundedWindowAggExec {
         }
         Ok(result)
     }
-
-    /// Return the output sort order of order by keys: For example
-    /// OVER(PARTITION BY a, ORDER BY b) -> would give sorting of the column b
-    pub fn order_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
-        let mut result = vec![];
-        // All window exprs have the same partition by, so we just use the first one:
-        let order_by = self.window_expr()[0].order_by();
-        let sort_keys = self.sort_keys.as_deref().unwrap_or(&[]);
-        for item in order_by {
-            if let Some(elem) = sort_keys.iter().find(|e| e.expr.eq(&item.expr)) {
-                result.push(elem.clone());
-            }
-        }
-        Ok(result)
-    }
 }
 
 impl ExecutionPlan for BoundedWindowAggExec {
@@ -381,43 +366,31 @@ impl BoundedWindowAggStream {
                 }
             }
             PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted => {
+                // TODO: Simplify below code, add comments
                 let partition_by_columns =
                     self.evaluate_partition_by_column_values(&self.input_buffer)?;
                 let n_window_col = self.window_agg_states.len();
-                // Store for each window expression, number of columns generated for each partition.
-                let mut res_generated = vec![IndexMap::new(); n_window_col];
-                for (idx, window_agg_state) in self.window_agg_states.iter().enumerate() {
-                    let mut map = IndexMap::new();
-                    for (key, value) in window_agg_state {
-                        map.insert(key, value.state.out_col.len());
-                    }
-                    res_generated[idx] = map;
-                }
 
                 // Calculate the number of columns that can be emitted for each window expression for each partition.
-                let mut counter: IndexMap<Vec<ScalarValue>, Vec<usize>> = IndexMap::new();
+                let mut counter: IndexMap<Vec<ScalarValue>, usize> = IndexMap::new();
                 let mut rows_gen = vec![vec![]; n_window_col];
                 for idx in 0..self.input_buffer.num_rows() {
                     let row = get_row_at_idx(&partition_by_columns, idx)?;
                     let counts = if let Some(res) = counter.get_mut(&row) {
                         res
                     } else {
-                        let res: Vec<usize> = vec![0; n_window_col];
-                        counter.insert(row.clone(), res);
+                        counter.insert(row.clone(), 0);
                         counter.get_mut(&row).unwrap()
                     };
                     let mut row_res = vec![];
-                    for (window_idx, window_agg_state) in
-                        self.window_agg_states.iter().enumerate()
-                    {
+                    for window_agg_state in self.window_agg_states.iter() {
                         let partition = window_agg_state.get(&row).unwrap();
-                        if counts[window_idx] < partition.state.out_col.len() {
+                        if *counts < partition.state.out_col.len() {
                             let res = ScalarValue::try_from_array(
                                 &partition.state.out_col,
-                                counts[window_idx],
+                                *counts,
                             )?;
                             row_res.push(res);
-                            counts[window_idx] += 1;
                         } else {
                             break;
                         }
@@ -426,16 +399,17 @@ impl BoundedWindowAggStream {
                     if row_res.len() != n_window_col {
                         break;
                     }
+                    *counts += 1;
                     for (col_idx, elem) in row_res.into_iter().enumerate() {
                         rows_gen[col_idx].push(elem)
                     }
                 }
-                for (partition_row, val) in counter.iter() {
+                for (partition_row, count) in counter.iter() {
                     if let Some(partition_batch_state) =
                         self.partition_buffers.get_mut(partition_row)
                     {
                         // Store how many rows are generated for each partition
-                        partition_batch_state.n_out_row = *val.iter().min().unwrap();
+                        partition_batch_state.n_out_row = *count;
                     }
                 }
                 if !rows_gen[0].is_empty() {
