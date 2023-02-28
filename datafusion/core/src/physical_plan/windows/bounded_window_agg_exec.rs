@@ -424,10 +424,6 @@ impl BoundedWindowAggStream {
                     {
                         // Store how many rows are generated for each partition
                         partition_batch_state.n_out_row = *val.iter().min().unwrap();
-                        println!(
-                            "partition_batch_state.n_out_row: {:?}",
-                            partition_batch_state.n_out_row
-                        );
                     }
                 }
                 if !rows_gen[0].is_empty() {
