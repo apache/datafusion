@@ -544,102 +544,6 @@ fn analyze_immediate_sort_removal(
     None
 }
 
-fn can_skip_ordering_fn(
-    sort_tree: &ExecTree,
-    partitionby_keys: &[Arc<dyn PhysicalExpr>],
-    orderby_keys: &[PhysicalSortExpr],
-) -> Result<Option<(bool, PartitionSearchMode)>> {
-    let mut res = None;
-    for sort_any in sort_tree.get_leaves() {
-        // Variable `sort_any` will either be a `SortExec` or a
-        // `SortPreservingMergeExec`, and both have a single child.
-        // Therefore, we can use the 0th index without loss of generality.
-        let sort_input = sort_any.children()[0].clone();
-        let physical_ordering = sort_input.output_ordering();
-        // TODO: Once we can ensure that required ordering information propagates with
-        //       the necessary lineage information, compare `physical_ordering` and the
-        //       ordering required by the window executor instead of `sort_output_ordering`.
-        //       This will enable us to handle cases such as (a,b) -> Sort -> (a,b,c) -> Required(a,b).
-        //       Currently, we can not remove such sorts.
-        if let Some(physical_ordering) = physical_ordering {
-            let orderby_indices = get_order_by_indices(orderby_keys, physical_ordering)?;
-            let mut partitionby_indices =
-                get_partition_by_indices(partitionby_keys, physical_ordering)?;
-            partitionby_indices.sort();
-            let merged_indices =
-                get_sorted_merged_indices(&partitionby_indices, &orderby_indices);
-            let is_merge_consecutive = is_consecutive_from_zero(&merged_indices);
-            let all_partition = merged_indices == partitionby_indices;
-            let contains_all_orderbys = orderby_indices.len() == orderby_keys.len();
-            let only_orderby_indices =
-                get_set_diff_indices(&orderby_indices, &partitionby_indices);
-            let is_orderby_diff_consecutive = is_consecutive(&only_orderby_indices);
-            let input_orderby_columns =
-                get_at_indices(physical_ordering, &only_orderby_indices)?;
-            let expected_orderby_columns = get_at_indices(
-                orderby_keys,
-                &find_match_indices(&only_orderby_indices, &orderby_indices),
-            )?;
-
-            let (is_aligned, should_reverse) = can_skip_sort(
-                &[],
-                &expected_orderby_columns,
-                &sort_input.schema(),
-                &input_orderby_columns,
-            )?;
-
-            let streamable = (is_merge_consecutive
-                || (all_partition && merged_indices[0] == 0))
-                && contains_all_orderbys
-                && is_aligned
-                && is_orderby_diff_consecutive;
-            let partition_by_consecutive = is_consecutive_from_zero(&partitionby_indices);
-            let is_first_partition_by = partitionby_indices
-                .first()
-                .map(|elem| *elem == 0)
-                .unwrap_or(true);
-            let contains_all_partition_bys =
-                partitionby_indices.len() == partitionby_keys.len();
-            let mode = if is_first_partition_by
-                && partition_by_consecutive
-                && contains_all_partition_bys
-            {
-                let first_n = calc_first_n(&partitionby_indices);
-                assert_eq!(first_n, partitionby_keys.len());
-                PartitionSearchMode::Sorted
-            } else if is_first_partition_by && !partitionby_indices.is_empty() {
-                let first_n = calc_first_n(&partitionby_indices);
-                assert!(first_n < partitionby_keys.len());
-                let partitionby_mapping_indices = get_partition_by_mapping_indices(
-                    &physical_ordering[0..first_n]
-                        .iter()
-                        .map(|elem| elem.expr.clone())
-                        .collect::<Vec<_>>(),
-                    partitionby_keys,
-                )?;
-                PartitionSearchMode::PartiallySorted(partitionby_mapping_indices)
-            } else {
-                PartitionSearchMode::Linear
-            };
-
-            if !streamable {
-                return Ok(None);
-            }
-            if let Some((first_should_reverse, first_mode)) = &res {
-                if *first_should_reverse != should_reverse || first_mode != &mode {
-                    return Ok(None);
-                }
-            } else {
-                res = Some((should_reverse, mode));
-            }
-        } else {
-            // If there is no physical ordering, there is no way to remove a
-            // sort, so immediately return.
-            return Ok(None);
-        }
-    }
-    Ok(res)
-}
 /// Analyzes a [WindowAggExec] or a [BoundedWindowAggExec] to determine whether
 /// it may allow removing a sort.
 fn analyze_window_sort_removal(
@@ -735,6 +639,103 @@ fn analyze_window_sort_removal(
         return Ok(Some(PlanWithCorrespondingSort::new(new_plan)));
     }
     Ok(None)
+}
+
+fn can_skip_ordering_fn(
+    sort_tree: &ExecTree,
+    partitionby_keys: &[Arc<dyn PhysicalExpr>],
+    orderby_keys: &[PhysicalSortExpr],
+) -> Result<Option<(bool, PartitionSearchMode)>> {
+    let mut res = None;
+    for sort_any in sort_tree.get_leaves() {
+        // Variable `sort_any` will either be a `SortExec` or a
+        // `SortPreservingMergeExec`, and both have a single child.
+        // Therefore, we can use the 0th index without loss of generality.
+        let sort_input = sort_any.children()[0].clone();
+        let physical_ordering = sort_input.output_ordering();
+        // TODO: Once we can ensure that required ordering information propagates with
+        //       the necessary lineage information, compare `physical_ordering` and the
+        //       ordering required by the window executor instead of `sort_output_ordering`.
+        //       This will enable us to handle cases such as (a,b) -> Sort -> (a,b,c) -> Required(a,b).
+        //       Currently, we can not remove such sorts.
+        if let Some(physical_ordering) = physical_ordering {
+            let orderby_indices = get_order_by_indices(orderby_keys, physical_ordering)?;
+            let mut partitionby_indices =
+                get_partition_by_indices(partitionby_keys, physical_ordering)?;
+            partitionby_indices.sort();
+            let merged_indices =
+                get_sorted_merged_indices(&partitionby_indices, &orderby_indices);
+            let is_merge_consecutive = is_consecutive_from_zero(&merged_indices);
+            let all_partition = merged_indices == partitionby_indices;
+            let contains_all_orderbys = orderby_indices.len() == orderby_keys.len();
+            let only_orderby_indices =
+                get_set_diff_indices(&orderby_indices, &partitionby_indices);
+            let is_orderby_diff_consecutive = is_consecutive(&only_orderby_indices);
+            let input_orderby_columns =
+                get_at_indices(physical_ordering, &only_orderby_indices)?;
+            let expected_orderby_columns = get_at_indices(
+                orderby_keys,
+                &find_match_indices(&only_orderby_indices, &orderby_indices),
+            )?;
+
+            let (is_aligned, should_reverse) = can_skip_sort(
+                &[],
+                &expected_orderby_columns,
+                &sort_input.schema(),
+                &input_orderby_columns,
+            )?;
+
+            let streamable = (is_merge_consecutive
+                || (all_partition && merged_indices[0] == 0))
+                && contains_all_orderbys
+                && is_aligned
+                && is_orderby_diff_consecutive;
+            let partition_by_consecutive = is_consecutive_from_zero(&partitionby_indices);
+            let is_first_partition_by = partitionby_indices
+                .first()
+                .map(|elem| *elem == 0)
+                .unwrap_or(true);
+            let contains_all_partition_bys =
+                partitionby_indices.len() == partitionby_keys.len();
+            let mode = if is_first_partition_by
+                && partition_by_consecutive
+                && contains_all_partition_bys
+            {
+                let first_n = calc_first_n(&partitionby_indices);
+                assert_eq!(first_n, partitionby_keys.len());
+                PartitionSearchMode::Sorted
+            } else if is_first_partition_by && !partitionby_indices.is_empty() {
+                let first_n = calc_first_n(&partitionby_indices);
+                assert!(first_n < partitionby_keys.len());
+                let partitionby_mapping_indices = get_partition_by_mapping_indices(
+                    &physical_ordering[0..first_n]
+                        .iter()
+                        .map(|elem| elem.expr.clone())
+                        .collect::<Vec<_>>(),
+                    partitionby_keys,
+                )?;
+                PartitionSearchMode::PartiallySorted(partitionby_mapping_indices)
+            } else {
+                PartitionSearchMode::Linear
+            };
+
+            if !streamable {
+                return Ok(None);
+            }
+            if let Some((first_should_reverse, first_mode)) = &res {
+                if *first_should_reverse != should_reverse || first_mode != &mode {
+                    return Ok(None);
+                }
+            } else {
+                res = Some((should_reverse, mode));
+            }
+        } else {
+            // If there is no physical ordering, there is no way to remove a
+            // sort, so immediately return.
+            return Ok(None);
+        }
+    }
+    Ok(res)
 }
 
 /// Updates child to remove the unnecessary `CoalescePartitions` below it.
