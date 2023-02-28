@@ -447,18 +447,17 @@ impl ExprIntervalGraph {
         let mut dfs = DfsPostOrder::new(&self.graph, self.root);
         while let Some(node) = dfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(node, Outgoing);
-            let children = neighbors.collect::<Vec<_>>();
-            // If the current expression is a leaf, its interval should already
-            // be set externally, just continue with the evaluation procedure:
-            if children.is_empty() {
-                continue;
-            }
-            let children_intervals = children
-                .into_iter()
+            let mut children_intervals = neighbors
                 .map(|child| self.graph[child].interval())
                 .collect::<Vec<_>>();
-            self.graph[node].interval =
-                self.graph[node].expr.evaluate_bound(&children_intervals)?;
+            // If the current expression is a leaf, its interval should already
+            // be set externally, just continue with the evaluation procedure:
+            if !children_intervals.is_empty() {
+                // Reverse to align with [PhysicalExpr]'s children:
+                children_intervals.reverse();
+                self.graph[node].interval =
+                    self.graph[node].expr.evaluate_bounds(&children_intervals)?;
+            }
         }
         Ok(&self.graph[self.root].interval)
     }
@@ -470,35 +469,29 @@ impl ExprIntervalGraph {
         while let Some(node) = bfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(node, Outgoing);
             let mut children = neighbors.collect::<Vec<_>>();
-            // Reverse the children index order to align it with the ExecutionPlan's children order.
-            children.reverse();
             // If the current expression is a leaf, its range is now final.
             // So, just continue with the propagation procedure:
             if children.is_empty() {
                 continue;
             }
-            let node_interval = self.graph[node].interval();
+            // Reverse to align with [PhysicalExpr]'s children:
+            children.reverse();
             let children_intervals = children
                 .iter()
                 .map(|child| self.graph[*child].interval())
                 .collect::<Vec<_>>();
+            let node_interval = self.graph[node].interval();
             let propagated_intervals = self.graph[node]
                 .expr
                 .propagate_constraints(node_interval, &children_intervals)?;
-            // No new interval is calculated for node leafs.
-            if propagated_intervals.is_empty() {
-                continue;
+            for (child, interval) in children.into_iter().zip(propagated_intervals) {
+                if let Some(interval) = interval {
+                    self.graph[child].interval = interval;
+                } else {
+                    // The constraint is infeasible, report:
+                    return Ok(PropagationResult::Infeasible);
+                }
             }
-            // There is a feasibility problem
-            if propagated_intervals.iter().any(|i| i.is_none()) {
-                return Ok(PropagationResult::Infeasible);
-            }
-            children
-                .iter()
-                .zip(propagated_intervals.into_iter())
-                .for_each(|(child_index, new_interval)| {
-                    self.graph[*child_index].interval = new_interval.unwrap()
-                });
         }
         Ok(PropagationResult::Success)
     }

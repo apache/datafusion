@@ -83,18 +83,25 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
         context
     }
 
-    /// Computes bounds for the expression using interval arithmetic
-    fn evaluate_bound(&self, _child_intervals: &[&Interval]) -> Result<Interval> {
-        Err(DataFusionError::Internal("Not supported".to_owned()))
+    /// Computes bounds for the expression using interval arithmetic.
+    fn evaluate_bounds(&self, _children: &[&Interval]) -> Result<Interval> {
+        Err(DataFusionError::NotImplemented(format!(
+            "Not implemented for {self}"
+        )))
     }
 
-    /// Updates/shrinks bounds for the expression using interval arithmetic
+    /// Updates/shrinks bounds for the expression using interval arithmetic.
+    /// If constraint propagation reveals an infeasibility, returns [None] for
+    /// the child causing infeasibility. If none of the children intervals
+    /// change, may return an empty vector instead of cloning `children`.
     fn propagate_constraints(
         &self,
-        _parent_interval: &Interval,
-        _child_intervals: &[&Interval],
+        _interval: &Interval,
+        _children: &[&Interval],
     ) -> Result<Vec<Option<Interval>>> {
-        Err(DataFusionError::Internal("Not supported".to_owned()))
+        Err(DataFusionError::NotImplemented(format!(
+            "Not implemented for {self}"
+        )))
     }
 }
 

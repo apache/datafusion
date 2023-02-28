@@ -113,21 +113,6 @@ pub trait TreeNodeRewritable: Clone {
         Ok(new_node)
     }
 
-    fn mutable_transform_up<F>(self, op: &mut F) -> Result<Self>
-    where
-        F: FnMut(Self) -> Result<Option<Self>>,
-    {
-        let after_op_children =
-            self.map_children(|node| node.mutable_transform_up(op))?;
-
-        let after_op_children_clone = after_op_children.clone();
-        let new_node = match op(after_op_children)? {
-            Some(value) => value,
-            None => after_op_children_clone,
-        };
-        Ok(new_node)
-    }
-
     /// Apply transform `F` to the node's children, the transform `F` might have a direction(Preorder or Postorder)
     fn map_children<F>(self, transform: F) -> Result<Self>
     where

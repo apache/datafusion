@@ -1432,7 +1432,7 @@ mod tests {
     use tempfile::TempDir;
 
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{BinaryExpr, Column};
+    use datafusion_physical_expr::expressions::{binary, col, Column};
     use datafusion_physical_expr::intervals::test_utils::gen_conjunctive_numeric_expr;
     use datafusion_physical_expr::PhysicalExpr;
 
@@ -1669,25 +1669,25 @@ mod tests {
         let ordered: ArrayRef = Arc::new(Int32Array::from_iter(
             initial_range.clone().collect::<Vec<i32>>(),
         ));
-        let ordered_des: ArrayRef = Arc::new(Int32Array::from_iter(
+        let ordered_des = Arc::new(Int32Array::from_iter(
             initial_range.clone().rev().collect::<Vec<i32>>(),
         ));
-        let cardinality: ArrayRef = Arc::new(Int32Array::from_iter(
+        let cardinality = Arc::new(Int32Array::from_iter(
             initial_range.clone().map(|x| x % 4).collect::<Vec<i32>>(),
         ));
-        let cardinality_key: ArrayRef = Arc::new(Int32Array::from_iter(
+        let cardinality_key = Arc::new(Int32Array::from_iter(
             initial_range
                 .clone()
                 .map(|x| x % key_cardinality.0)
                 .collect::<Vec<i32>>(),
         ));
-        let ordered_asc_null_first: ArrayRef = Arc::new(Int32Array::from_iter({
+        let ordered_asc_null_first = Arc::new(Int32Array::from_iter({
             std::iter::repeat(None)
                 .take(index as usize)
                 .chain(rest_of.clone().map(Some))
                 .collect::<Vec<Option<i32>>>()
         }));
-        let ordered_asc_null_last: ArrayRef = Arc::new(Int32Array::from_iter({
+        let ordered_asc_null_last = Arc::new(Int32Array::from_iter({
             rest_of
                 .clone()
                 .map(Some)
@@ -1695,14 +1695,14 @@ mod tests {
                 .collect::<Vec<Option<i32>>>()
         }));
 
-        let ordered_desc_null_first: ArrayRef = Arc::new(Int32Array::from_iter({
+        let ordered_desc_null_first = Arc::new(Int32Array::from_iter({
             std::iter::repeat(None)
                 .take(index as usize)
                 .chain(rest_of.rev().map(Some))
                 .collect::<Vec<Option<i32>>>()
         }));
 
-        let time: ArrayRef = Arc::new(TimestampNanosecondArray::from(
+        let time = Arc::new(TimestampNanosecondArray::from(
             initial_range
                 .map(|x| 1664264591000000000 + (5000000000 * (x as i64)))
                 .collect::<Vec<i64>>(),
@@ -1779,13 +1779,7 @@ mod tests {
         )
         .await?;
         let second_batches = partitioned_hash_join_with_filter(
-            left.clone(),
-            right.clone(),
-            on.clone(),
-            filter.clone(),
-            &join_type,
-            false,
-            task_ctx.clone(),
+            left, right, on, filter, &join_type, false, task_ctx,
         )
         .await?;
         compare_batches(&first_batches, &second_batches);
@@ -1807,10 +1801,10 @@ mod tests {
         )]
         join_type: JoinType,
         #[values(
-        (4, 5),
-        (11, 21),
-        (31, 71),
-        (99, 12),
+            (4, 5),
+            (11, 21),
+            (31, 71),
+            (99, 12),
         )]
         cardinality: (i32, i32),
     ) -> Result<()> {
@@ -1820,31 +1814,35 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_schema = &left_batch.schema();
+        let right_schema = &right_batch.schema();
         let left_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(BinaryExpr::new(
-                Arc::new(Column::new_with_schema("la1", &left_batch.schema())?),
+            expr: binary(
+                col("la1", left_schema)?,
                 Operator::Plus,
-                Arc::new(Column::new_with_schema("la2", &left_batch.schema())?),
-            )),
+                col("la2", left_schema)?,
+                left_schema,
+            )?,
             options: SortOptions::default(),
         }];
-
         let right_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new_with_schema("ra1", &right_batch.schema())?),
+            expr: col("ra1", right_schema)?,
             options: SortOptions::default(),
         }];
         let (left, right) =
             create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", &left.schema())?,
-            Column::new_with_schema("rc1", &right.schema())?,
+            Column::new_with_schema("lc1", left_schema)?,
+            Column::new_with_schema("rc1", right_schema)?,
         )];
 
-        let filter_col_0 = Arc::new(Column::new("0", 0));
-        let filter_col_1 = Arc::new(Column::new("1", 1));
-        let filter_col_2 = Arc::new(Column::new("2", 2));
-
+        let intermediate_schema = Schema::new(vec![
+            Field::new("0", DataType::Int32, true),
+            Field::new("1", DataType::Int32, true),
+            Field::new("2", DataType::Int32, true),
+        ]);
+        let filter_expr = complicated_filter(&intermediate_schema)?;
         let column_indices = vec![
             ColumnIndex {
                 index: 0,
@@ -1859,19 +1857,7 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let intermediate_schema = Schema::new(vec![
-            Field::new(filter_col_0.name(), DataType::Int32, true),
-            Field::new(filter_col_1.name(), DataType::Int32, true),
-            Field::new(filter_col_2.name(), DataType::Int32, true),
-        ]);
-
-        let filter_expr = complicated_filter(&intermediate_schema)?;
-
-        let filter = JoinFilter::new(
-            filter_expr,
-            column_indices.clone(),
-            intermediate_schema.clone(),
-        );
+        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
         experiment(left, right, filter, join_type, on, task_ctx).await?;
         Ok(())
@@ -1892,10 +1878,10 @@ mod tests {
         )]
         join_type: JoinType,
         #[values(
-        (4, 5),
-        (11, 21),
-        (31, 71),
-        (99, 12),
+            (4, 5),
+            (11, 21),
+            (31, 71),
+            (99, 12),
         )]
         cardinality: (i32, i32),
         #[values(0, 1, 2, 3, 4)] case_expr: usize,
@@ -1905,25 +1891,33 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_schema = &left_batch.schema();
+        let right_schema = &right_batch.schema();
         let left_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new_with_schema("la1", &left_batch.schema())?),
+            expr: col("la1", left_schema)?,
             options: SortOptions::default(),
         }];
         let right_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new_with_schema("ra1", &right_batch.schema())?),
+            expr: col("ra1", right_schema)?,
             options: SortOptions::default(),
         }];
         let (left, right) =
             create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", &left.schema())?,
-            Column::new_with_schema("rc1", &right.schema())?,
+            Column::new_with_schema("lc1", left_schema)?,
+            Column::new_with_schema("rc1", right_schema)?,
         )];
 
-        let left_col = Arc::new(Column::new("left", 0));
-        let right_col = Arc::new(Column::new("right", 1));
-
+        let intermediate_schema = Schema::new(vec![
+            Field::new("left", DataType::Int32, true),
+            Field::new("right", DataType::Int32, true),
+        ]);
+        let filter_expr = join_expr_tests_fixture(
+            case_expr,
+            col("left", &intermediate_schema)?,
+            col("right", &intermediate_schema)?,
+        );
         let column_indices = vec![
             ColumnIndex {
                 index: 0,
@@ -1934,19 +1928,7 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let intermediate_schema = Schema::new(vec![
-            Field::new(left_col.name(), DataType::Int32, true),
-            Field::new(right_col.name(), DataType::Int32, true),
-        ]);
-
-        let filter_expr =
-            join_expr_tests_fixture(case_expr, left_col.clone(), right_col.clone());
-
-        let filter = JoinFilter::new(
-            filter_expr,
-            column_indices.clone(),
-            intermediate_schema.clone(),
-        );
+        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
         experiment(left, right, filter, join_type, on, task_ctx).await?;
         Ok(())
@@ -1962,15 +1944,17 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_schema = &left_batch.schema();
+        let right_schema = &right_batch.schema();
         let left_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new_with_schema("la1_des", &left_batch.schema())?),
+            expr: col("la1_des", left_schema)?,
             options: SortOptions {
                 descending: true,
                 nulls_first: true,
             },
         }];
         let right_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new_with_schema("ra1_des", &right_batch.schema())?),
+            expr: col("ra1_des", right_schema)?,
             options: SortOptions {
                 descending: true,
                 nulls_first: true,
@@ -1980,13 +1964,19 @@ mod tests {
             create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", &left.schema())?,
-            Column::new_with_schema("rc1", &right.schema())?,
+            Column::new_with_schema("lc1", left_schema)?,
+            Column::new_with_schema("rc1", right_schema)?,
         )];
 
-        let left_col = Arc::new(Column::new("left", 0));
-        let right_col = Arc::new(Column::new("right", 1));
-
+        let intermediate_schema = Schema::new(vec![
+            Field::new("left", DataType::Int32, true),
+            Field::new("right", DataType::Int32, true),
+        ]);
+        let filter_expr = join_expr_tests_fixture(
+            case_expr,
+            col("left", &intermediate_schema)?,
+            col("right", &intermediate_schema)?,
+        );
         let column_indices = vec![
             ColumnIndex {
                 index: 5,
@@ -1997,19 +1987,7 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let intermediate_schema = Schema::new(vec![
-            Field::new(left_col.name(), DataType::Int32, true),
-            Field::new(right_col.name(), DataType::Int32, true),
-        ]);
-
-        let filter_expr =
-            join_expr_tests_fixture(case_expr, left_col.clone(), right_col.clone());
-
-        let filter = JoinFilter::new(
-            filter_expr,
-            column_indices.clone(),
-            intermediate_schema.clone(),
-        );
+        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
         experiment(left, right, filter, join_type, on, task_ctx).await?;
         Ok(())
@@ -2030,10 +2008,10 @@ mod tests {
         )]
         join_type: JoinType,
         #[values(
-        (4, 5),
-        (11, 21),
-        (31, 71),
-        (99, 12),
+            (4, 5),
+            (11, 21),
+            (31, 71),
+            (99, 12),
         )]
         cardinality: (i32, i32),
         #[values(0, 1, 2, 3, 4)] case_expr: usize,
@@ -2043,15 +2021,17 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_schema = &left_batch.schema();
+        let right_schema = &right_batch.schema();
         let left_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new_with_schema("la1_des", &left_batch.schema())?),
+            expr: col("la1_des", left_schema)?,
             options: SortOptions {
                 descending: true,
                 nulls_first: true,
             },
         }];
         let right_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new_with_schema("ra1_des", &right_batch.schema())?),
+            expr: col("ra1_des", right_schema)?,
             options: SortOptions {
                 descending: true,
                 nulls_first: true,
@@ -2061,13 +2041,19 @@ mod tests {
             create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", &left.schema())?,
-            Column::new_with_schema("rc1", &right.schema())?,
+            Column::new_with_schema("lc1", left_schema)?,
+            Column::new_with_schema("rc1", right_schema)?,
         )];
 
-        let left_col = Arc::new(Column::new("left", 0));
-        let right_col = Arc::new(Column::new("right", 1));
-
+        let intermediate_schema = Schema::new(vec![
+            Field::new("left", DataType::Int32, true),
+            Field::new("right", DataType::Int32, true),
+        ]);
+        let filter_expr = join_expr_tests_fixture(
+            case_expr,
+            col("left", &intermediate_schema)?,
+            col("right", &intermediate_schema)?,
+        );
         let column_indices = vec![
             ColumnIndex {
                 index: 5,
@@ -2078,19 +2064,7 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let intermediate_schema = Schema::new(vec![
-            Field::new(left_col.name(), DataType::Int32, true),
-            Field::new(right_col.name(), DataType::Int32, true),
-        ]);
-
-        let filter_expr =
-            join_expr_tests_fixture(case_expr, left_col.clone(), right_col.clone());
-
-        let filter = JoinFilter::new(
-            filter_expr,
-            column_indices.clone(),
-            intermediate_schema.clone(),
-        );
+        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
         experiment(left, right, filter, join_type, on, task_ctx).await?;
         Ok(())
@@ -2139,21 +2113,17 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_schema = &left_batch.schema();
+        let right_schema = &right_batch.schema();
         let left_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new_with_schema(
-                "l_asc_null_first",
-                &left_batch.schema(),
-            )?),
+            expr: col("l_asc_null_first", left_schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: true,
             },
         }];
         let right_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new_with_schema(
-                "r_asc_null_first",
-                &right_batch.schema(),
-            )?),
+            expr: col("r_asc_null_first", right_schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: true,
@@ -2163,13 +2133,19 @@ mod tests {
             create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", &left.schema())?,
-            Column::new_with_schema("rc1", &right.schema())?,
+            Column::new_with_schema("lc1", left_schema)?,
+            Column::new_with_schema("rc1", right_schema)?,
         )];
 
-        let left_col = Arc::new(Column::new("left", 0));
-        let right_col = Arc::new(Column::new("right", 1));
-
+        let intermediate_schema = Schema::new(vec![
+            Field::new("left", DataType::Int32, true),
+            Field::new("right", DataType::Int32, true),
+        ]);
+        let filter_expr = join_expr_tests_fixture(
+            case_expr,
+            col("left", &intermediate_schema)?,
+            col("right", &intermediate_schema)?,
+        );
         let column_indices = vec![
             ColumnIndex {
                 index: 6,
@@ -2180,19 +2156,7 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let intermediate_schema = Schema::new(vec![
-            Field::new(left_col.name(), DataType::Int32, true),
-            Field::new(right_col.name(), DataType::Int32, true),
-        ]);
-
-        let filter_expr =
-            join_expr_tests_fixture(case_expr, left_col.clone(), right_col.clone());
-
-        let filter = JoinFilter::new(
-            filter_expr,
-            column_indices.clone(),
-            intermediate_schema.clone(),
-        );
+        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
         experiment(left, right, filter, join_type, on, task_ctx).await?;
         Ok(())
     }
@@ -2207,21 +2171,17 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_schema = &left_batch.schema();
+        let right_schema = &right_batch.schema();
         let left_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new_with_schema(
-                "l_asc_null_last",
-                &left_batch.schema(),
-            )?),
+            expr: col("l_asc_null_last", left_schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: false,
             },
         }];
         let right_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new_with_schema(
-                "r_asc_null_last",
-                &right_batch.schema(),
-            )?),
+            expr: col("r_asc_null_last", right_schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: false,
@@ -2231,13 +2191,19 @@ mod tests {
             create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", &left.schema())?,
-            Column::new_with_schema("rc1", &right.schema())?,
+            Column::new_with_schema("lc1", left_schema)?,
+            Column::new_with_schema("rc1", right_schema)?,
         )];
 
-        let left_col = Arc::new(Column::new("left", 0));
-        let right_col = Arc::new(Column::new("right", 1));
-
+        let intermediate_schema = Schema::new(vec![
+            Field::new("left", DataType::Int32, true),
+            Field::new("right", DataType::Int32, true),
+        ]);
+        let filter_expr = join_expr_tests_fixture(
+            case_expr,
+            col("left", &intermediate_schema)?,
+            col("right", &intermediate_schema)?,
+        );
         let column_indices = vec![
             ColumnIndex {
                 index: 7,
@@ -2248,19 +2214,7 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let intermediate_schema = Schema::new(vec![
-            Field::new(left_col.name(), DataType::Int32, true),
-            Field::new(right_col.name(), DataType::Int32, true),
-        ]);
-
-        let filter_expr =
-            join_expr_tests_fixture(case_expr, left_col.clone(), right_col.clone());
-
-        let filter = JoinFilter::new(
-            filter_expr,
-            column_indices.clone(),
-            intermediate_schema.clone(),
-        );
+        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
         experiment(left, right, filter, join_type, on, task_ctx).await?;
         Ok(())
@@ -2276,21 +2230,17 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_schema = &left_batch.schema();
+        let right_schema = &right_batch.schema();
         let left_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new_with_schema(
-                "l_desc_null_first",
-                &left_batch.schema(),
-            )?),
+            expr: col("l_desc_null_first", left_schema)?,
             options: SortOptions {
                 descending: true,
                 nulls_first: true,
             },
         }];
         let right_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new_with_schema(
-                "r_desc_null_first",
-                &right_batch.schema(),
-            )?),
+            expr: col("r_desc_null_first", right_schema)?,
             options: SortOptions {
                 descending: true,
                 nulls_first: true,
@@ -2300,13 +2250,19 @@ mod tests {
             create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", &left.schema())?,
-            Column::new_with_schema("rc1", &right.schema())?,
+            Column::new_with_schema("lc1", left_schema)?,
+            Column::new_with_schema("rc1", right_schema)?,
         )];
 
-        let left_col = Arc::new(Column::new("left", 0));
-        let right_col = Arc::new(Column::new("right", 1));
-
+        let intermediate_schema = Schema::new(vec![
+            Field::new("left", DataType::Int32, true),
+            Field::new("right", DataType::Int32, true),
+        ]);
+        let filter_expr = join_expr_tests_fixture(
+            case_expr,
+            col("left", &intermediate_schema)?,
+            col("right", &intermediate_schema)?,
+        );
         let column_indices = vec![
             ColumnIndex {
                 index: 8,
@@ -2317,19 +2273,7 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let intermediate_schema = Schema::new(vec![
-            Field::new(left_col.name(), DataType::Int32, true),
-            Field::new(right_col.name(), DataType::Int32, true),
-        ]);
-
-        let filter_expr =
-            join_expr_tests_fixture(case_expr, left_col.clone(), right_col.clone());
-
-        let filter = JoinFilter::new(
-            filter_expr,
-            column_indices.clone(),
-            intermediate_schema.clone(),
-        );
+        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
         experiment(left, right, filter, join_type, on, task_ctx).await?;
         Ok(())
@@ -2346,27 +2290,31 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_schema = &left_batch.schema();
+        let right_schema = &right_batch.schema();
         let left_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new_with_schema("la1", &left_batch.schema())?),
+            expr: col("la1", left_schema)?,
             options: SortOptions::default(),
         }];
 
         let right_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new_with_schema("ra1", &right_batch.schema())?),
+            expr: col("ra1", right_schema)?,
             options: SortOptions::default(),
         }];
         let (left, right) =
             create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
 
         let on = vec![(
-            Column::new_with_schema("lc1", &left.schema())?,
-            Column::new_with_schema("rc1", &right.schema())?,
+            Column::new_with_schema("lc1", left_schema)?,
+            Column::new_with_schema("rc1", right_schema)?,
         )];
 
-        let filter_col_0 = Arc::new(Column::new("0", 0));
-        let filter_col_1 = Arc::new(Column::new("1", 1));
-        let filter_col_2 = Arc::new(Column::new("2", 2));
-
+        let intermediate_schema = Schema::new(vec![
+            Field::new("0", DataType::Int32, true),
+            Field::new("1", DataType::Int32, true),
+            Field::new("2", DataType::Int32, true),
+        ]);
+        let filter_expr = complicated_filter(&intermediate_schema)?;
         let column_indices = vec![
             ColumnIndex {
                 index: 0,
@@ -2381,23 +2329,12 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let intermediate_schema = Schema::new(vec![
-            Field::new(filter_col_0.name(), DataType::Int32, true),
-            Field::new(filter_col_1.name(), DataType::Int32, true),
-            Field::new(filter_col_2.name(), DataType::Int32, true),
-        ]);
-
-        let filter_expr = complicated_filter(&intermediate_schema)?;
-
-        let filter = JoinFilter::new(
-            filter_expr,
-            column_indices.clone(),
-            intermediate_schema.clone(),
-        );
+        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
         experiment(left, right, filter, join_type, on, task_ctx).await?;
         Ok(())
     }
+
     #[rstest]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_one_side_hash_joiner_visited_rows(
@@ -2422,7 +2359,8 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         // Ensure there will be matching rows
         let (left_batch, right_batch) = build_sides_record_batches(20, (1, 1))?;
-        let (left_schema, right_schema) = (left_batch.schema(), right_batch.schema());
+        let left_schema = left_batch.schema();
+        let right_schema = right_batch.schema();
 
         // Build the join schema from the left and right schemas
         let (schema, join_column_indices) =
@@ -2431,22 +2369,35 @@ mod tests {
 
         // Sort information for MemoryExec
         let left_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new_with_schema("la1", &left_batch.schema())?),
+            expr: col("la1", &left_schema)?,
             options: SortOptions::default(),
         }];
         // Sort information for MemoryExec
         let right_sorted = vec![PhysicalSortExpr {
-            expr: Arc::new(Column::new_with_schema("ra1", &right_batch.schema())?),
+            expr: col("ra1", &right_schema)?,
             options: SortOptions::default(),
         }];
         // Construct MemoryExec
         let (left, right) =
             create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 10)?;
 
-        // Filter columns
-        let filter_col_0 = Arc::new(Column::new("0", 0));
-        let filter_col_1 = Arc::new(Column::new("1", 1));
-
+        // Filter columns, ensure first batches will have matching rows.
+        let intermediate_schema = Schema::new(vec![
+            Field::new("0", DataType::Int32, true),
+            Field::new("1", DataType::Int32, true),
+        ]);
+        let filter_expr = gen_conjunctive_numeric_expr(
+            col("0", &intermediate_schema)?,
+            col("1", &intermediate_schema)?,
+            Operator::Plus,
+            Operator::Minus,
+            Operator::Plus,
+            Operator::Plus,
+            0,
+            3,
+            0,
+            3,
+        );
         let column_indices = vec![
             ColumnIndex {
                 index: 0,
@@ -2457,39 +2408,15 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let intermediate_schema = Schema::new(vec![
-            Field::new(filter_col_0.name(), DataType::Int32, true),
-            Field::new(filter_col_1.name(), DataType::Int32, true),
-        ]);
-
-        // Ensure first batches will have matching rows.
-        let filter_expr = gen_conjunctive_numeric_expr(
-            filter_col_0.clone(),
-            filter_col_1.clone(),
-            Operator::Plus,
-            Operator::Minus,
-            Operator::Plus,
-            Operator::Plus,
-            0,
-            3,
-            0,
-            3,
-        );
-
-        let filter = JoinFilter::new(
-            filter_expr,
-            column_indices.clone(),
-            intermediate_schema.clone(),
-        );
+        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
         let left_sorted_filter_expr = SortedFilterExpr::new(
             PhysicalSortExpr {
-                expr: Arc::new(Column::new_with_schema("la1", &left_schema)?),
+                expr: col("la1", &left_schema)?,
                 options: SortOptions::default(),
             },
-            Arc::new(Column::new(filter_col_0.name(), 0)),
+            Arc::new(Column::new("0", 0)),
         );
-
         let mut left_side_joiner = OneSideHashJoiner::new(
             JoinSide::Left,
             left_sorted_filter_expr,
@@ -2499,12 +2426,11 @@ mod tests {
 
         let right_sorted_filter_expr = SortedFilterExpr::new(
             PhysicalSortExpr {
-                expr: Arc::new(Column::new_with_schema("ra1", &right_schema)?),
+                expr: col("ra1", &right_schema)?,
                 options: SortOptions::default(),
             },
-            Arc::new(Column::new(filter_col_1.name(), 0)),
+            Arc::new(Column::new("1", 0)),
         );
-
         let mut right_side_joiner = OneSideHashJoiner::new(
             JoinSide::Right,
             right_sorted_filter_expr,

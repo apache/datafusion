@@ -277,12 +277,13 @@ impl<T: Clone> TreeNodeRewritable for ExprTreeNode<T> {
     }
 }
 
-/// This struct  converts the [PhysicalExpr] tree into a DAG by collecting identical
-/// expressions in one node using a rewriter to transform an input expression tree.
-/// Caller specifies the node type in this DAG via the `constructor` argument,
-/// which constructs nodes in this DAG from the [ExprTreeNode] ancillary object.
-struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&'_ ExprTreeNode<NodeIndex>) -> T> {
-    // A graph containing physical expression trees.
+/// This struct facilitates the [TreeNodeRewriter] mechanism to convert a
+/// [PhysicalExpr] tree into a DAEG (i.e. an expression DAG) by collecting
+/// identical expressions in one node. Caller specifies the node type in the
+/// DAEG via the `constructor` argument, which constructs nodes in the DAEG
+/// from the [ExprTreeNode] ancillary object.
+struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> T> {
+    // The resulting DAEG (expression DAG).
     graph: StableGraph<T, usize>,
     // A vector of visited expression nodes and their corresponding node indices.
     visited_plans: Vec<(Arc<dyn PhysicalExpr>, NodeIndex)>,
@@ -290,7 +291,7 @@ struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&'_ ExprTreeNode<NodeIndex>) -> T> {
     constructor: &'a F,
 }
 
-impl<'a, T, F: Fn(&'_ ExprTreeNode<NodeIndex>) -> T>
+impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> T>
     TreeNodeRewriter<ExprTreeNode<NodeIndex>> for PhysicalExprDAEGBuilder<'a, T, F>
 {
     // This method mutates an expression node by transforming it to a physical expression
@@ -335,7 +336,7 @@ where
 {
     // Create a new expression tree node from the input expression.
     let init = ExprTreeNode::new(expr);
-    // Create a new PhysicalExprDAEGBuilder instance.
+    // Create a new `PhysicalExprDAEGBuilder` instance.
     let mut builder = PhysicalExprDAEGBuilder {
         graph: StableGraph::<T, usize>::new(),
         visited_plans: Vec::<(Arc<dyn PhysicalExpr>, NodeIndex)>::new(),
@@ -360,7 +361,26 @@ mod tests {
     use petgraph::visit::Bfs;
     use std::sync::Arc;
 
-    fn make_dummy_nodes(node: &ExprTreeNode<NodeIndex>) -> PhysicalExprDummyNode {
+    #[derive(Clone)]
+    struct DummyProperty {
+        expr_type: String,
+    }
+
+    /// This is a dummy node in the DAEG; it stores a reference to the actual
+    /// [PhysicalExpr] as well as a dummy property.
+    #[derive(Clone)]
+    struct PhysicalExprDummyNode {
+        pub expr: Arc<dyn PhysicalExpr>,
+        pub property: DummyProperty,
+    }
+
+    impl Display for PhysicalExprDummyNode {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.expr)
+        }
+    }
+
+    fn make_dummy_node(node: &ExprTreeNode<NodeIndex>) -> PhysicalExprDummyNode {
         let expr = node.expression().clone();
         let dummy_property = if expr.as_any().is::<BinaryExpr>() {
             "Binary"
@@ -379,27 +399,9 @@ mod tests {
             },
         }
     }
-    #[derive(Clone)]
-    struct DummyProperty {
-        expr_type: String,
-    }
-
-    /// This is a node in the DAEG; it encapsulates a reference to the actual
-    /// [PhysicalExpr] as well as a dummy property to use it in DAEG traversal.
-    #[derive(Clone)]
-    struct PhysicalExprDummyNode {
-        pub expr: Arc<dyn PhysicalExpr>,
-        pub property: DummyProperty,
-    }
-
-    impl Display for PhysicalExprDummyNode {
-        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            write!(f, "{}", self.expr)
-        }
-    }
 
     #[test]
-    fn testing_build_dag() -> Result<()> {
+    fn test_build_dag() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("0", DataType::Int32, true),
             Field::new("1", DataType::Int32, true),
@@ -426,7 +428,7 @@ mod tests {
             &schema,
         )?;
         let mut vector_dummy_props = vec![];
-        let (root, graph) = build_dag(expr, &make_dummy_nodes)?;
+        let (root, graph) = build_dag(expr, &make_dummy_node)?;
         let mut bfs = Bfs::new(&graph, root);
         while let Some(node_index) = bfs.next(&graph) {
             let node = &graph[node_index];

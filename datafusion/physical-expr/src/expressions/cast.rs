@@ -117,23 +117,21 @@ impl PhysicalExpr for CastExpr {
         )))
     }
 
-    fn evaluate_bound(&self, _child_intervals: &[&Interval]) -> Result<Interval> {
-        let interval = _child_intervals[0];
-        // Cast current node's interval to the right type
-        interval.cast_to(&self.cast_type, &self.cast_options)
+    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
+        // Cast current node's interval to the right type:
+        children[0].cast_to(&self.cast_type, &self.cast_options)
     }
 
     fn propagate_constraints(
         &self,
-        _parent_interval: &Interval,
-        _child_intervals: &[&Interval],
+        interval: &Interval,
+        children: &[&Interval],
     ) -> Result<Vec<Option<Interval>>> {
-        let child_interval = _child_intervals[0];
-        // Get child's datatype
+        let child_interval = children[0];
+        // Get child's datatype:
         let cast_type = child_interval.get_datatype();
-
         Ok(vec![Some(
-            _parent_interval.cast_to(&cast_type, self.cast_options())?,
+            interval.cast_to(&cast_type, &self.cast_options)?,
         )])
     }
 }
