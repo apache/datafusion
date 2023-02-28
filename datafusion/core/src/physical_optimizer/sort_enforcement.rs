@@ -544,111 +544,6 @@ fn analyze_immediate_sort_removal(
     None
 }
 
-// Find the indices of each element if the to_search vector inside the searched vector
-fn find_match_indices<T: PartialEq>(to_search: &[T], searched: &[T]) -> Vec<usize> {
-    let mut result = vec![];
-    for item in to_search {
-        if let Some(idx) = searched.iter().position(|e| e.eq(item)) {
-            result.push(idx);
-        }
-    }
-    result
-}
-
-// Find indices of matching physical expression inside `searched` for each entry in the `to_search`.
-fn get_partition_by_indices(
-    to_search: &[Arc<dyn PhysicalExpr>],
-    searched: &[PhysicalSortExpr],
-) -> Result<Vec<usize>> {
-    let mut result = vec![];
-    for item in to_search {
-        if let Some(idx) = searched.iter().position(|e| e.expr.eq(item)) {
-            result.push(idx);
-        }
-    }
-    Ok(result)
-}
-
-// Find the indices of matching entries inside the `searched` vector for each element if the `to_search` vector
-fn get_partition_by_mapping_indices(
-    to_search: &[Arc<dyn PhysicalExpr>],
-    searched: &[Arc<dyn PhysicalExpr>],
-) -> Result<Vec<usize>> {
-    let mut result = vec![];
-    for item in to_search {
-        if let Some(idx) = searched.iter().position(|e| e.eq(item)) {
-            result.push(idx);
-        }
-    }
-    Ok(result)
-}
-
-// Find the indices of matching entries inside the `searched` vector for each element if the `to_search` vector
-fn get_order_by_indices(
-    to_search: &[PhysicalSortExpr],
-    searched: &[PhysicalSortExpr],
-) -> Result<Vec<usize>> {
-    let mut result = vec![];
-    for item in to_search {
-        if let Some(idx) = searched.iter().position(|e| e.expr.eq(&item.expr)) {
-            result.push(idx);
-        }
-    }
-    Ok(result)
-}
-
-// Create a new vector from the elements at the `indices` of `searched` vector
-fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec<T>> {
-    let mut result = vec![];
-    for idx in indices {
-        result.push(searched[*idx].clone());
-    }
-    Ok(result)
-}
-
-fn get_sorted_merged_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
-    let set: HashSet<_> = in1.iter().chain(in2.iter()).copied().collect();
-    let mut res: Vec<_> = set.into_iter().collect();
-    res.sort();
-    res
-}
-
-fn is_consecutive_from_zero(in1: &[usize]) -> bool {
-    in1.iter().enumerate().all(|(idx, elem)| idx == *elem)
-}
-
-fn is_consecutive(in1: &[usize]) -> bool {
-    if !in1.is_empty() {
-        in1.iter()
-            .zip(in1[0]..in1[0] + in1.len())
-            .all(|(lhs, rhs)| *lhs == rhs)
-    } else {
-        true
-    }
-}
-
-fn get_set_diff_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
-    let mut res = vec![];
-    for lhs in in1 {
-        if !in2.iter().contains(lhs) {
-            res.push(*lhs);
-        }
-    }
-    res
-}
-
-fn calc_first_n(in1: &[usize]) -> usize {
-    let mut count = 0;
-    for (idx, elem) in in1.iter().enumerate() {
-        if idx != *elem {
-            break;
-        } else {
-            count += 1
-        }
-    }
-    count
-}
-
 fn can_skip_ordering_fn(
     sort_tree: &ExecTree,
     partitionby_keys: &[Arc<dyn PhysicalExpr>],
@@ -1076,6 +971,111 @@ fn check_alignment(
     } else {
         (false, false)
     }
+}
+
+// Find the indices of each element if the to_search vector inside the searched vector
+fn find_match_indices<T: PartialEq>(to_search: &[T], searched: &[T]) -> Vec<usize> {
+    let mut result = vec![];
+    for item in to_search {
+        if let Some(idx) = searched.iter().position(|e| e.eq(item)) {
+            result.push(idx);
+        }
+    }
+    result
+}
+
+// Find indices of matching physical expression inside `searched` for each entry in the `to_search`.
+fn get_partition_by_indices(
+    to_search: &[Arc<dyn PhysicalExpr>],
+    searched: &[PhysicalSortExpr],
+) -> Result<Vec<usize>> {
+    let mut result = vec![];
+    for item in to_search {
+        if let Some(idx) = searched.iter().position(|e| e.expr.eq(item)) {
+            result.push(idx);
+        }
+    }
+    Ok(result)
+}
+
+// Find the indices of matching entries inside the `searched` vector for each element if the `to_search` vector
+fn get_partition_by_mapping_indices(
+    to_search: &[Arc<dyn PhysicalExpr>],
+    searched: &[Arc<dyn PhysicalExpr>],
+) -> Result<Vec<usize>> {
+    let mut result = vec![];
+    for item in to_search {
+        if let Some(idx) = searched.iter().position(|e| e.eq(item)) {
+            result.push(idx);
+        }
+    }
+    Ok(result)
+}
+
+// Find the indices of matching entries inside the `searched` vector for each element if the `to_search` vector
+fn get_order_by_indices(
+    to_search: &[PhysicalSortExpr],
+    searched: &[PhysicalSortExpr],
+) -> Result<Vec<usize>> {
+    let mut result = vec![];
+    for item in to_search {
+        if let Some(idx) = searched.iter().position(|e| e.expr.eq(&item.expr)) {
+            result.push(idx);
+        }
+    }
+    Ok(result)
+}
+
+// Create a new vector from the elements at the `indices` of `searched` vector
+fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec<T>> {
+    let mut result = vec![];
+    for idx in indices {
+        result.push(searched[*idx].clone());
+    }
+    Ok(result)
+}
+
+fn get_sorted_merged_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
+    let set: HashSet<_> = in1.iter().chain(in2.iter()).copied().collect();
+    let mut res: Vec<_> = set.into_iter().collect();
+    res.sort();
+    res
+}
+
+fn is_consecutive_from_zero(in1: &[usize]) -> bool {
+    in1.iter().enumerate().all(|(idx, elem)| idx == *elem)
+}
+
+fn is_consecutive(in1: &[usize]) -> bool {
+    if !in1.is_empty() {
+        in1.iter()
+            .zip(in1[0]..in1[0] + in1.len())
+            .all(|(lhs, rhs)| *lhs == rhs)
+    } else {
+        true
+    }
+}
+
+fn get_set_diff_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
+    let mut res = vec![];
+    for lhs in in1 {
+        if !in2.iter().contains(lhs) {
+            res.push(*lhs);
+        }
+    }
+    res
+}
+
+fn calc_first_n(in1: &[usize]) -> usize {
+    let mut count = 0;
+    for (idx, elem) in in1.iter().enumerate() {
+        if idx != *elem {
+            break;
+        } else {
+            count += 1
+        }
+    }
+    count
 }
 
 #[cfg(test)]
