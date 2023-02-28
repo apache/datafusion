@@ -376,6 +376,7 @@ impl ExecutionPlan for ParquetExec {
             partition_index,
             projection: Arc::from(projection),
             batch_size: ctx.session_config().batch_size(),
+            limit: self.base_config.limit,
             predicate: self.predicate.clone(),
             pruning_predicate: self.pruning_predicate.clone(),
             page_pruning_predicate: self.page_pruning_predicate.clone(),
@@ -460,6 +461,7 @@ struct ParquetOpener {
     partition_index: usize,
     projection: Arc<[usize]>,
     batch_size: usize,
+    limit: Option<usize>,
     predicate: Option<Arc<Expr>>,
     pruning_predicate: Option<Arc<PruningPredicate>>,
     page_pruning_predicate: Option<Arc<PagePruningPredicate>>,
@@ -500,6 +502,7 @@ impl FileOpener for ParquetOpener {
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let enable_page_index = self.enable_page_index;
+        let limit = self.limit;
 
         Ok(Box::pin(async move {
             let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
@@ -560,6 +563,10 @@ impl FileOpener for ParquetOpener {
                         builder = builder.with_row_selection(row_selection);
                     }
                 }
+            }
+
+            if let Some(limit) = limit {
+                builder = builder.with_limit(limit)
             }
 
             let stream = builder

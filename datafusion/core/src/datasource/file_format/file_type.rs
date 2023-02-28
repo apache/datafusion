@@ -26,7 +26,7 @@ use crate::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
 #[cfg(feature = "compression")]
 use async_compression::tokio::bufread::{
     BzDecoder as AsyncBzDecoder, GzipDecoder as AsyncGzDecoder,
-    XzDecoder as AsyncXzDecoder,
+    XzDecoder as AsyncXzDecoder, ZstdDecoder as AsyncZstdDecoer,
 };
 use bytes::Bytes;
 #[cfg(feature = "compression")]
@@ -42,6 +42,8 @@ use std::str::FromStr;
 use tokio_util::io::{ReaderStream, StreamReader};
 #[cfg(feature = "compression")]
 use xz2::read::XzDecoder;
+#[cfg(feature = "compression")]
+use zstd::Decoder as ZstdDecoder;
 use CompressionTypeVariant::*;
 
 /// Define each `FileType`/`FileCompressionType`'s extension
@@ -62,6 +64,7 @@ impl GetExt for FileCompressionType {
             GZIP => ".gz".to_owned(),
             BZIP2 => ".bz2".to_owned(),
             XZ => ".xz".to_owned(),
+            ZSTD => ".zst".to_owned(),
             UNCOMPRESSED => "".to_owned(),
         }
     }
@@ -94,6 +97,9 @@ impl FileCompressionType {
 
     /// Xz-ed file (liblzma)
     pub const XZ: Self = Self { variant: XZ };
+
+    /// Zstd-ed file
+    pub const ZSTD: Self = Self { variant: ZSTD };
 
     /// Uncompressed file
     pub const UNCOMPRESSED: Self = Self {
@@ -140,8 +146,13 @@ impl FileCompressionType {
                 ReaderStream::new(AsyncXzDecoder::new(StreamReader::new(s)))
                     .map_err(err_converter),
             ),
+            #[cfg(feature = "compression")]
+            ZSTD => Box::new(
+                ReaderStream::new(AsyncZstdDecoer::new(StreamReader::new(s)))
+                    .map_err(err_converter),
+            ),
             #[cfg(not(feature = "compression"))]
-            GZIP | BZIP2 | XZ => {
+            GZIP | BZIP2 | XZ | ZSTD => {
                 return Err(DataFusionError::NotImplemented(
                     "Compression feature is not enabled".to_owned(),
                 ))
@@ -162,8 +173,13 @@ impl FileCompressionType {
             BZIP2 => Box::new(BzDecoder::new(r)),
             #[cfg(feature = "compression")]
             XZ => Box::new(XzDecoder::new(r)),
+            #[cfg(feature = "compression")]
+            ZSTD => match ZstdDecoder::new(r) {
+                Ok(decoder) => Box::new(decoder),
+                Err(e) => return Err(DataFusionError::External(Box::new(e))),
+            },
             #[cfg(not(feature = "compression"))]
-            GZIP | BZIP2 | XZ => {
+            GZIP | BZIP2 | XZ | ZSTD => {
                 return Err(DataFusionError::NotImplemented(
                     "Compression feature is not enabled".to_owned(),
                 ))
@@ -239,155 +255,90 @@ mod tests {
 
     #[test]
     fn get_ext_with_compression() {
-        let file_type = FileType::CSV;
-        assert_eq!(
-            file_type
-                .get_ext_with_compression(FileCompressionType::UNCOMPRESSED)
-                .unwrap(),
-            ".csv"
-        );
-        assert_eq!(
-            file_type
-                .get_ext_with_compression(FileCompressionType::GZIP)
-                .unwrap(),
-            ".csv.gz"
-        );
-        assert_eq!(
-            file_type
-                .get_ext_with_compression(FileCompressionType::XZ)
-                .unwrap(),
-            ".csv.xz"
-        );
-        assert_eq!(
-            file_type
-                .get_ext_with_compression(FileCompressionType::BZIP2)
-                .unwrap(),
-            ".csv.bz2"
-        );
+        for (file_type, compression, extension) in [
+            (FileType::CSV, FileCompressionType::UNCOMPRESSED, ".csv"),
+            (FileType::CSV, FileCompressionType::GZIP, ".csv.gz"),
+            (FileType::CSV, FileCompressionType::XZ, ".csv.xz"),
+            (FileType::CSV, FileCompressionType::BZIP2, ".csv.bz2"),
+            (FileType::CSV, FileCompressionType::ZSTD, ".csv.zst"),
+            (FileType::JSON, FileCompressionType::UNCOMPRESSED, ".json"),
+            (FileType::JSON, FileCompressionType::GZIP, ".json.gz"),
+            (FileType::JSON, FileCompressionType::XZ, ".json.xz"),
+            (FileType::JSON, FileCompressionType::BZIP2, ".json.bz2"),
+            (FileType::JSON, FileCompressionType::ZSTD, ".json.zst"),
+        ] {
+            assert_eq!(
+                file_type.get_ext_with_compression(compression).unwrap(),
+                extension
+            );
+        }
 
-        let file_type = FileType::JSON;
-        assert_eq!(
-            file_type
-                .get_ext_with_compression(FileCompressionType::UNCOMPRESSED)
-                .unwrap(),
-            ".json"
-        );
-        assert_eq!(
-            file_type
-                .get_ext_with_compression(FileCompressionType::GZIP)
-                .unwrap(),
-            ".json.gz"
-        );
-        assert_eq!(
-            file_type
-                .get_ext_with_compression(FileCompressionType::XZ)
-                .unwrap(),
-            ".json.xz"
-        );
-        assert_eq!(
-            file_type
-                .get_ext_with_compression(FileCompressionType::BZIP2)
-                .unwrap(),
-            ".json.bz2"
-        );
-
-        let file_type = FileType::AVRO;
-        assert_eq!(
-            file_type
-                .get_ext_with_compression(FileCompressionType::UNCOMPRESSED)
-                .unwrap(),
-            ".avro"
-        );
-        assert!(matches!(
-            file_type.get_ext_with_compression(FileCompressionType::GZIP),
-            Err(DataFusionError::Internal(_))
-        ));
-        assert!(matches!(
-            file_type.get_ext_with_compression(FileCompressionType::BZIP2),
-            Err(DataFusionError::Internal(_))
-        ));
-
-        let file_type = FileType::PARQUET;
-        assert_eq!(
-            file_type
-                .get_ext_with_compression(FileCompressionType::UNCOMPRESSED)
-                .unwrap(),
-            ".parquet"
-        );
-        assert!(matches!(
-            file_type.get_ext_with_compression(FileCompressionType::GZIP),
-            Err(DataFusionError::Internal(_))
-        ));
-        assert!(matches!(
-            file_type.get_ext_with_compression(FileCompressionType::BZIP2),
-            Err(DataFusionError::Internal(_))
-        ));
+        // Cannot specify compression for these file types
+        for (file_type, extension) in
+            [(FileType::AVRO, ".avro"), (FileType::PARQUET, ".parquet")]
+        {
+            assert_eq!(
+                file_type
+                    .get_ext_with_compression(FileCompressionType::UNCOMPRESSED)
+                    .unwrap(),
+                extension
+            );
+            for compression in [
+                FileCompressionType::GZIP,
+                FileCompressionType::XZ,
+                FileCompressionType::BZIP2,
+                FileCompressionType::ZSTD,
+            ] {
+                assert!(matches!(
+                    file_type.get_ext_with_compression(compression),
+                    Err(DataFusionError::Internal(_))
+                ));
+            }
+        }
     }
 
     #[test]
     fn from_str() {
-        assert_eq!(FileType::from_str("csv").unwrap(), FileType::CSV);
-        assert_eq!(FileType::from_str("CSV").unwrap(), FileType::CSV);
-
-        assert_eq!(FileType::from_str("json").unwrap(), FileType::JSON);
-        assert_eq!(FileType::from_str("JSON").unwrap(), FileType::JSON);
-
-        assert_eq!(FileType::from_str("avro").unwrap(), FileType::AVRO);
-        assert_eq!(FileType::from_str("AVRO").unwrap(), FileType::AVRO);
-
-        assert_eq!(FileType::from_str("parquet").unwrap(), FileType::PARQUET);
-        assert_eq!(FileType::from_str("PARQUET").unwrap(), FileType::PARQUET);
+        for (ext, file_type) in [
+            ("csv", FileType::CSV),
+            ("CSV", FileType::CSV),
+            ("json", FileType::JSON),
+            ("JSON", FileType::JSON),
+            ("avro", FileType::AVRO),
+            ("AVRO", FileType::AVRO),
+            ("parquet", FileType::PARQUET),
+            ("PARQUET", FileType::PARQUET),
+        ] {
+            assert_eq!(FileType::from_str(ext).unwrap(), file_type);
+        }
 
         assert!(matches!(
             FileType::from_str("Unknown"),
             Err(DataFusionError::NotImplemented(_))
         ));
 
-        assert_eq!(
-            FileCompressionType::from_str("gz").unwrap(),
-            FileCompressionType::GZIP
-        );
-        assert_eq!(
-            FileCompressionType::from_str("GZ").unwrap(),
-            FileCompressionType::GZIP
-        );
-        assert_eq!(
-            FileCompressionType::from_str("gzip").unwrap(),
-            FileCompressionType::GZIP
-        );
-        assert_eq!(
-            FileCompressionType::from_str("GZIP").unwrap(),
-            FileCompressionType::GZIP
-        );
-        assert_eq!(
-            FileCompressionType::from_str("xz").unwrap(),
-            FileCompressionType::XZ
-        );
-        assert_eq!(
-            FileCompressionType::from_str("XZ").unwrap(),
-            FileCompressionType::XZ
-        );
-        assert_eq!(
-            FileCompressionType::from_str("bz2").unwrap(),
-            FileCompressionType::BZIP2
-        );
-        assert_eq!(
-            FileCompressionType::from_str("BZ2").unwrap(),
-            FileCompressionType::BZIP2
-        );
-        assert_eq!(
-            FileCompressionType::from_str("bzip2").unwrap(),
-            FileCompressionType::BZIP2
-        );
-        assert_eq!(
-            FileCompressionType::from_str("BZIP2").unwrap(),
-            FileCompressionType::BZIP2
-        );
-
-        assert_eq!(
-            FileCompressionType::from_str("").unwrap(),
-            FileCompressionType::UNCOMPRESSED
-        );
+        for (ext, compression_type) in [
+            ("gz", FileCompressionType::GZIP),
+            ("GZ", FileCompressionType::GZIP),
+            ("gzip", FileCompressionType::GZIP),
+            ("GZIP", FileCompressionType::GZIP),
+            ("xz", FileCompressionType::XZ),
+            ("XZ", FileCompressionType::XZ),
+            ("bz2", FileCompressionType::BZIP2),
+            ("BZ2", FileCompressionType::BZIP2),
+            ("bzip2", FileCompressionType::BZIP2),
+            ("BZIP2", FileCompressionType::BZIP2),
+            ("zst", FileCompressionType::ZSTD),
+            ("ZST", FileCompressionType::ZSTD),
+            ("zstd", FileCompressionType::ZSTD),
+            ("ZSTD", FileCompressionType::ZSTD),
+            ("", FileCompressionType::UNCOMPRESSED),
+        ] {
+            assert_eq!(
+                FileCompressionType::from_str(ext).unwrap(),
+                compression_type
+            );
+        }
 
         assert!(matches!(
             FileCompressionType::from_str("Unknown"),

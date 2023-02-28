@@ -27,8 +27,8 @@ use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
-    Aggregate, Distinct, EmptyRelation, Join, Projection, Sort, SubqueryAlias, TableScan,
-    Unnest, Window,
+    Aggregate, EmptyRelation, Join, Projection, Sort, SubqueryAlias, TableScan, Unnest,
+    Window,
 };
 use crate::logical_expr::{
     CrossJoin, Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType,
@@ -65,7 +65,6 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{logical_plan, StringifiedPlan};
 use datafusion_expr::{WindowFrame, WindowFrameBound};
 use datafusion_optimizer::utils::unalias;
@@ -710,17 +709,6 @@ impl DefaultPhysicalPlanner {
                         physical_input_schema.clone(),
                     )?))
                 }
-                LogicalPlan::Distinct(Distinct { input }) => {
-                    // Convert distinct to groupby with no aggregations
-                    let group_expr = expand_wildcard(input.schema(), input)?;
-                    let aggregate = LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
-                        input.clone(),
-                        group_expr,
-                        vec![],
-                        input.schema().clone(), // input schema and aggregate schema are the same in this case
-                    )?);
-                    Ok(self.create_initial_plan(&aggregate, session_state).await?)
-                }
                 LogicalPlan::Projection(Projection { input, expr, .. }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
                     let input_schema = input.as_ref().schema();
@@ -1207,6 +1195,11 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::Explain(_) => Err(DataFusionError::Internal(
                     "Unsupported logical plan: Explain must be root of the plan".to_string(),
                 )),
+                LogicalPlan::Distinct(_) => {
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: Distinct should be replaced to Aggregate".to_string(),
+                    ))
+                }
                 LogicalPlan::Analyze(a) => {
                     let input = self.create_initial_plan(&a.input, session_state).await?;
                     let schema = SchemaRef::new((*a.schema).clone().into());

@@ -24,13 +24,16 @@ use crate::eliminate_cross_join::EliminateCrossJoin;
 use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_outer_join::EliminateOuterJoin;
+use crate::eliminate_project::EliminateProjection;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::inline_table_scan::InlineTableScan;
+use crate::merge_projection::MergeProjection;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
 use crate::push_down_projection::PushDownProjection;
+use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
 use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
@@ -63,7 +66,7 @@ pub trait OptimizerRule {
 
     /// How should the rule be applied by the optimizer? See comments on [`ApplyOrder`] for details.
     ///
-    /// If a rule use default None, its should traverse recursively plan inside itself
+    /// If a rule use default None, it should traverse recursively plan inside itself
     fn apply_order(&self) -> Option<ApplyOrder> {
         None
     }
@@ -207,6 +210,7 @@ impl Optimizer {
             Arc::new(TypeCoercion::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
+            Arc::new(ReplaceDistinctWithAggregate::new()),
             Arc::new(DecorrelateWhereExists::new()),
             Arc::new(DecorrelateWhereIn::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
@@ -215,6 +219,7 @@ impl Optimizer {
             // run it again after running the optimizations that potentially converted
             // subqueries to joins
             Arc::new(SimplifyExpressions::new()),
+            Arc::new(MergeProjection::new()),
             Arc::new(RewriteDisjunctivePredicate::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(EliminateCrossJoin::new()),
@@ -233,6 +238,7 @@ impl Optimizer {
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(PushDownProjection::new()),
+            Arc::new(EliminateProjection::new()),
         ];
 
         Self::with_rules(rules)

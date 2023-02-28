@@ -399,7 +399,7 @@ impl<'a> DFParser<'a> {
         let token = self.parser.next_token();
         match &token.token {
             Token::Word(w) => CompressionTypeVariant::from_str(&w.value),
-            _ => self.expected("one of GZIP, BZIP2, XZ", token),
+            _ => self.expected("one of GZIP, BZIP2, XZ, ZSTD", token),
         }
     }
 
@@ -586,6 +586,7 @@ mod tests {
             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE GZIP LOCATION 'foo.csv'", "GZIP"),
             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE BZIP2 LOCATION 'foo.csv'", "BZIP2"),
             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE XZ LOCATION 'foo.csv'", "XZ"),
+            ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE ZSTD LOCATION 'foo.csv'", "ZSTD"),
         ];
         for (sql, file_compression_type) in sqls {
             let expected = Statement::CreateExternalTable(CreateExternalTable {
