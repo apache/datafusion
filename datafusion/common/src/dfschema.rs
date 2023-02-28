@@ -270,21 +270,6 @@ impl DFSchema {
             .collect()
     }
 
-    /// Find all fields match the given qualified name
-    pub fn fields_with_qualified_name(
-        &self,
-        qualifier: &str,
-        name: &str,
-    ) -> Vec<&DFField> {
-        self.fields
-            .iter()
-            .filter(|field| {
-                field.qualifier().map(|q| q.eq(qualifier)).unwrap_or(false)
-                    && field.name() == name
-            })
-            .collect()
-    }
-
     /// Find all fields match the given name
     pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&DFField> {
         self.fields
@@ -331,14 +316,15 @@ impl DFSchema {
 
     /// Find if the field exists with the given name
     pub fn has_column_with_unqualified_name(&self, name: &str) -> bool {
-        let matches = self.fields_with_unqualified_name(name);
-        matches.len() == 1
+        self.fields().iter().any(|field| field.name() == name)
     }
 
     /// Find if the field exists with the given qualified name
     pub fn has_column_with_qualified_name(&self, qualifier: &str, name: &str) -> bool {
-        let matches = self.fields_with_qualified_name(qualifier, name);
-        matches.len() == 1
+        self.fields().iter().any(|field| {
+            field.qualifier().map(|q| q.eq(qualifier)).unwrap_or(false)
+                && field.name() == name
+        })
     }
 
     /// Find if the field exists with the given qualified column
