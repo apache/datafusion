@@ -77,6 +77,7 @@ expressions such as `col("a") + col("b")` to be used.
 | exp(x)                | exponential                                       |
 | floor(x)              | nearest integer less than or equal to argument    |
 | ln(x)                 | natural logarithm                                 |
+| log(base, x)          | logarithm of x for a particular base              |
 | log10(x)              | base 10 logarithm                                 |
 | log2(x)               | base 2 logarithm                                  |
 | power(base, exponent) | base raised to the power of exponent              |
@@ -86,6 +87,19 @@ expressions such as `col("a") + col("b")` to be used.
 | sqrt(x)               | square root                                       |
 | tan(x)                | tangent                                           |
 | trunc(x)              | truncate toward zero                              |
+
+### Math functions usage notes:
+
+Unlike to some databases the math functions in Datafusion works the same way as Rust math functions, avoiding failing on corner cases e.g
+
+```
+❯ select log(-1), log(0), sqrt(-1);
++----------------+---------------+-----------------+
+| log(Int64(-1)) | log(Int64(0)) | sqrt(Int64(-1)) |
++----------------+---------------+-----------------+
+| NaN            | -inf          | NaN             |
++----------------+---------------+-----------------+
+```
 
 ## Bitwise Operators
 

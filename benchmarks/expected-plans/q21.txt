@@ -16,6 +16,7 @@ Sort: numwait DESC NULLS FIRST, supplier.s_name ASC NULLS LAST
               TableScan: nation projection=[n_nationkey, n_name]
           SubqueryAlias: l2
             TableScan: lineitem projection=[l_orderkey, l_suppkey]
-        SubqueryAlias: l3
-          Filter: lineitem.l_receiptdate > lineitem.l_commitdate
-            TableScan: lineitem projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate]
+        Projection: l3.l_orderkey, l3.l_suppkey
+          SubqueryAlias: l3
+            Filter: lineitem.l_receiptdate > lineitem.l_commitdate
+              TableScan: lineitem projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate]

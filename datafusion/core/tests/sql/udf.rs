@@ -121,6 +121,64 @@ async fn scalar_udf() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn scalar_udf_zero_params() -> Result<()> {
+    let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(Int32Array::from_slice([1, 10, 10, 100]))],
+    )?;
+    let ctx = SessionContext::new();
+
+    ctx.register_batch("t", batch)?;
+    // create function just returns 100 regardless of inp
+    let myfunc = |args: &[ArrayRef]| {
+        let num_rows = args[0].len();
+        Ok(Arc::new((0..num_rows).map(|_| 100).collect::<Int32Array>()) as ArrayRef)
+    };
+    let myfunc = make_scalar_function(myfunc);
+
+    ctx.register_udf(create_udf(
+        "get_100",
+        vec![],
+        Arc::new(DataType::Int32),
+        Volatility::Immutable,
+        myfunc,
+    ));
+
+    let result = plan_and_collect(&ctx, "select get_100() a from t").await?;
+    let expected = vec![
+        "+-----+", //
+        "| a   |", //
+        "+-----+", //
+        "| 100 |", //
+        "| 100 |", //
+        "| 100 |", //
+        "| 100 |", //
+        "+-----+", //
+    ];
+    assert_batches_eq!(expected, &result);
+
+    let result = plan_and_collect(&ctx, "select get_100() a").await?;
+    let expected = vec![
+        "+-----+", //
+        "| a   |", //
+        "+-----+", //
+        "| 100 |", //
+        "+-----+", //
+    ];
+    assert_batches_eq!(expected, &result);
+
+    let result = plan_and_collect(&ctx, "select get_100() from t where a=999").await?;
+    let expected = vec![
+        "++", //
+        "++",
+    ];
+    assert_batches_eq!(expected, &result);
+    Ok(())
+}
+
 /// tests the creation, registration and usage of a UDAF
 #[tokio::test]
 async fn simple_udaf() -> Result<()> {
@@ -158,7 +216,7 @@ async fn simple_udaf() -> Result<()> {
         "+-------------+",
         "| my_avg(t.a) |",
         "+-------------+",
-        "| 3           |",
+        "| 3.0         |",
         "+-------------+",
     ];
     assert_batches_eq!(expected, &result);

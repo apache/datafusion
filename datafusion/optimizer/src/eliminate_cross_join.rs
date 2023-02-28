@@ -38,7 +38,7 @@ impl EliminateCrossJoin {
     }
 }
 
-/// Attempt to reorder join tp eliminate cross joins to inner joins.
+/// Attempt to reorder join to eliminate cross joins to inner joins.
 /// for queries:
 /// 'select ... from a, b where a.x = b.y and b.xx = 100;'
 /// 'select ... from a, b where (a.x = b.y and b.xx = 100) or (a.x = b.y and b.xx = 200);'
@@ -247,10 +247,12 @@ fn intersect(
     vec1: &[(Expr, Expr)],
     vec2: &[(Expr, Expr)],
 ) {
-    for x1 in vec1.iter() {
-        for x2 in vec2.iter() {
-            if x1.0 == x2.0 && x1.1 == x2.1 || x1.1 == x2.0 && x1.0 == x2.1 {
-                accum.push((x1.0.clone(), x1.1.clone()));
+    if !(vec1.is_empty() || vec2.is_empty()) {
+        for x1 in vec1.iter() {
+            for x2 in vec2.iter() {
+                if x1.0 == x2.0 && x1.1 == x2.1 || x1.1 == x2.0 && x1.0 == x2.1 {
+                    accum.push((x1.0.clone(), x1.1.clone()));
+                }
             }
         }
     }

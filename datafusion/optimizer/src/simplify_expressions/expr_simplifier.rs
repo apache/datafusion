@@ -154,7 +154,7 @@ struct ConstEvaluator<'a> {
     /// traversal when we are N levels deep in the tree, one entry for
     /// this Expr and each of its parents.
     ///
-    /// After visiting all siblings if `can_evauate.top()`` is true, that
+    /// After visiting all siblings if `can_evaluate.top()` is true, that
     /// means there were no non evaluatable siblings (or their
     /// descendants) so this `Expr` can be evaluated
     can_evaluate: Vec<bool>,

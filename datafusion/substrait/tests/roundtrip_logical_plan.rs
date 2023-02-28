@@ -178,9 +178,8 @@ mod tests {
     async fn aggregate_case() -> Result<()> {
         assert_expected_plan(
             "SELECT SUM(CASE WHEN a > 0 THEN 1 ELSE NULL END) FROM data",
-            "Projection: SUM(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE Int64(NULL) END)\
-            \n  Aggregate: groupBy=[[]], aggr=[[SUM(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE Int64(NULL) END)]]\
-            \n    TableScan: data projection=[a]",
+            "Aggregate: groupBy=[[]], aggr=[[SUM(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE Int64(NULL) END)]]\
+            \n  TableScan: data projection=[a]",
         )
         .await
     }
@@ -227,13 +226,11 @@ mod tests {
     async fn simple_intersect() -> Result<()> {
         assert_expected_plan(
             "SELECT COUNT(*) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
-            "Projection: COUNT(Int16(1))\
-            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int16(1))]]\
-            \n    LeftSemi Join: data.a = data2.a\
-            \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
-            \n        TableScan: data projection=[a]\
-            \n      Projection: data2.a\
-            \n        TableScan: data2 projection=[a]",
+            "Aggregate: groupBy=[[]], aggr=[[COUNT(Int16(1))]]\
+            \n  LeftSemi Join: data.a = data2.a\
+            \n    Aggregate: groupBy=[[data.a]], aggr=[[]]\
+            \n      TableScan: data projection=[a]\
+            \n    TableScan: data2 projection=[a]",
         )
         .await
     }
