@@ -32,6 +32,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
+use arrow::row::{OwnedRow, Row};
 
 /// A window expression that:
 /// * knows its resulting field
@@ -378,10 +379,10 @@ pub struct WindowState {
     pub state: WindowAggState,
     pub window_fn: WindowFn,
 }
-pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowState>;
+pub type PartitionWindowAggStates = IndexMap<OwnedRow, WindowState>;
 
 /// The IndexMap (i.e. an ordered HashMap) where record batches are separated for each partition.
-pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState>;
+pub type PartitionBatches = IndexMap<OwnedRow, PartitionBatchState>;
 
 impl WindowAggState {
     pub fn new(out_type: &DataType) -> Result<Self> {
