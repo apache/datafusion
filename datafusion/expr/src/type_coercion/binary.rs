@@ -238,13 +238,36 @@ fn comparison_binary_numeric_coercion(
         (_, Decimal128(_, _)) => get_comparison_common_decimal_type(rhs_type, lhs_type),
         (Float64, _) | (_, Float64) => Some(Float64),
         (_, Float32) | (Float32, _) => Some(Float32),
-        (Int64, _) | (_, Int64) => Some(Int64),
-        (Int32, _) | (_, Int32) => Some(Int32),
-        (Int16, _) | (_, Int16) => Some(Int16),
-        (Int8, _) | (_, Int8) => Some(Int8),
+        // The following match arms encode the following logic: Given the two
+        // integral types, we choose the narrowest possible integral type that
+        // accommodates all values of both types. Note that some information
+        // loss is inevitable when we have a signed type and a `UInt64`, in
+        // which case we use `Int64`;i.e. the widest signed integral type.
+        (Int64, _)
+        | (_, Int64)
+        | (UInt64, Int8)
+        | (Int8, UInt64)
+        | (UInt64, Int16)
+        | (Int16, UInt64)
+        | (UInt64, Int32)
+        | (Int32, UInt64)
+        | (UInt32, Int8)
+        | (Int8, UInt32)
+        | (UInt32, Int16)
+        | (Int16, UInt32)
+        | (UInt32, Int32)
+        | (Int32, UInt32) => Some(Int64),
         (UInt64, _) | (_, UInt64) => Some(UInt64),
+        (Int32, _)
+        | (_, Int32)
+        | (UInt16, Int16)
+        | (Int16, UInt16)
+        | (UInt16, Int8)
+        | (Int8, UInt16) => Some(Int32),
         (UInt32, _) | (_, UInt32) => Some(UInt32),
+        (Int16, _) | (_, Int16) | (Int8, UInt8) | (UInt8, Int8) => Some(Int16),
         (UInt16, _) | (_, UInt16) => Some(UInt16),
+        (Int8, _) | (_, Int8) => Some(Int8),
         (UInt8, _) | (_, UInt8) => Some(UInt8),
         _ => None,
     }

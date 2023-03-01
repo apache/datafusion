@@ -149,6 +149,43 @@ impl DistinctCountAccumulator {
             self.update(&row_values)
         })
     }
+
+    // calculating the size for fixed length values, taking first batch size * number of batches
+    // This method is faster than .full_size(), however it is not suitable for variable length values like strings or complex types
+    fn fixed_size(&self) -> usize {
+        std::mem::size_of_val(self)
+            + (std::mem::size_of::<DistinctScalarValues>() * self.values.capacity())
+            + self
+                .values
+                .iter()
+                .next()
+                .map(|vals| {
+                    (ScalarValue::size_of_vec(&vals.0) - std::mem::size_of_val(&vals.0))
+                        * self.values.capacity()
+                })
+                .unwrap_or(0)
+    }
+
+    // calculates the size as accurate as possible, call to this method is expensive
+    fn full_size(&self) -> usize {
+        std::mem::size_of_val(self)
+            + (std::mem::size_of::<DistinctScalarValues>() * self.values.capacity())
+            + self
+                .values
+                .iter()
+                .map(|vals| {
+                    ScalarValue::size_of_vec(&vals.0) - std::mem::size_of_val(&vals.0)
+                })
+                .sum::<usize>()
+            + (std::mem::size_of::<DataType>() * self.state_data_types.capacity())
+            + self
+                .state_data_types
+                .iter()
+                .map(|dt| dt.size() - std::mem::size_of_val(dt))
+                .sum::<usize>()
+            + self.count_data_type.size()
+            - std::mem::size_of_val(&self.count_data_type)
+    }
 }
 
 impl Accumulator for DistinctCountAccumulator {
@@ -216,23 +253,11 @@ impl Accumulator for DistinctCountAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + (std::mem::size_of::<DistinctScalarValues>() * self.values.capacity())
-            + self
-                .values
-                .iter()
-                .map(|vals| {
-                    ScalarValue::size_of_vec(&vals.0) - std::mem::size_of_val(&vals.0)
-                })
-                .sum::<usize>()
-            + (std::mem::size_of::<DataType>() * self.state_data_types.capacity())
-            + self
-                .state_data_types
-                .iter()
-                .map(|dt| dt.size() - std::mem::size_of_val(dt))
-                .sum::<usize>()
-            + self.count_data_type.size()
-            - std::mem::size_of_val(&self.count_data_type)
+        if self.count_data_type.is_primitive() {
+            self.fixed_size()
+        } else {
+            self.full_size()
+        }
     }
 }
 

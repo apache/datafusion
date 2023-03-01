@@ -77,7 +77,7 @@ impl OptimizerRule for EliminateProjection {
     }
 }
 
-fn can_eliminate(projection: &Projection, schema: &DFSchemaRef) -> bool {
+pub(crate) fn can_eliminate(projection: &Projection, schema: &DFSchemaRef) -> bool {
     if projection.expr.len() != schema.fields().len() {
         return false;
     }

@@ -20,6 +20,7 @@
 use crate::error::{DataFusionError, Result, SharedResult};
 use crate::logical_expr::JoinType;
 use crate::physical_plan::expressions::Column;
+use crate::physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::physical_plan::SchemaRef;
 use arrow::array::{
     new_null_array, Array, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
@@ -27,7 +28,7 @@ use arrow::array::{
 };
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, UInt32Type, UInt64Type};
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
@@ -789,6 +790,18 @@ pub(crate) fn build_batch_from_indices(
     right_indices: UInt32Array,
     column_indices: &[ColumnIndex],
 ) -> Result<RecordBatch> {
+    if schema.fields().is_empty() {
+        let options = RecordBatchOptions::new()
+            .with_match_field_names(true)
+            .with_row_count(Some(left_indices.len()));
+
+        return Ok(RecordBatch::try_new_with_options(
+            Arc::new(schema.clone()),
+            vec![],
+            &options,
+        )?);
+    }
+
     // build the columns of the new [RecordBatch]:
     // 1. pick whether the column is from the left or right
     // 2. based on the pick, `take` items from the different RecordBatches
@@ -966,6 +979,68 @@ pub(crate) fn get_semi_u64_indices(
     (0..row_count)
         .filter_map(|idx| (bitmap.get_bit(idx)).then_some(idx as u64))
         .collect::<UInt64Array>()
+}
+
+/// Metrics for build & probe joins
+#[derive(Clone, Debug)]
+pub(crate) struct BuildProbeJoinMetrics {
+    /// Total time for collecting build-side of join
+    pub(crate) build_time: metrics::Time,
+    /// Number of batches consumed by build-side
+    pub(crate) build_input_batches: metrics::Count,
+    /// Number of rows consumed by build-side
+    pub(crate) build_input_rows: metrics::Count,
+    /// Memory used by build-side in bytes
+    pub(crate) build_mem_used: metrics::Gauge,
+    /// Total time for joining probe-side batches to the build-side batches
+    pub(crate) join_time: metrics::Time,
+    /// Number of batches consumed by probe-side of this operator
+    pub(crate) input_batches: metrics::Count,
+    /// Number of rows consumed by probe-side this operator
+    pub(crate) input_rows: metrics::Count,
+    /// Number of batches produced by this operator
+    pub(crate) output_batches: metrics::Count,
+    /// Number of rows produced by this operator
+    pub(crate) output_rows: metrics::Count,
+}
+
+impl BuildProbeJoinMetrics {
+    pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
+        let join_time = MetricBuilder::new(metrics).subset_time("join_time", partition);
+
+        let build_time = MetricBuilder::new(metrics).subset_time("build_time", partition);
+
+        let build_input_batches =
+            MetricBuilder::new(metrics).counter("build_input_batches", partition);
+
+        let build_input_rows =
+            MetricBuilder::new(metrics).counter("build_input_rows", partition);
+
+        let build_mem_used =
+            MetricBuilder::new(metrics).gauge("build_mem_used", partition);
+
+        let input_batches =
+            MetricBuilder::new(metrics).counter("input_batches", partition);
+
+        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
+
+        let output_batches =
+            MetricBuilder::new(metrics).counter("output_batches", partition);
+
+        let output_rows = MetricBuilder::new(metrics).output_rows(partition);
+
+        Self {
+            build_time,
+            build_input_batches,
+            build_input_rows,
+            build_mem_used,
+            join_time,
+            input_batches,
+            input_rows,
+            output_batches,
+            output_rows,
+        }
+    }
 }
 
 #[cfg(test)]

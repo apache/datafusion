@@ -29,11 +29,39 @@ use std::sync::Arc;
 use datafusion::dataframe::DataFrame;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
-use datafusion::prelude::CsvReadOptions;
 use datafusion::prelude::JoinType;
+use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::{avg, col, count, lit, sum, Expr, ExprSchemable};
+
+#[tokio::test]
+async fn describe() -> Result<()> {
+    let ctx = SessionContext::new();
+    let testdata = datafusion::test_util::parquet_test_data();
+
+    let filename = &format!("{testdata}/alltypes_plain.parquet");
+
+    let df = ctx
+        .read_parquet(filename, ParquetReadOptions::default())
+        .await?;
+
+    let describe_record_batch = df.describe().await.unwrap().collect().await.unwrap();
+    #[rustfmt::skip]
+        let expected = vec![
+        "+------------+-----+----------+-------------+--------------+---------+------------+-------------------+------------+-----------------+------------+---------------------+",
+        "| describe   | id  | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col         | double_col | date_string_col | string_col | timestamp_col       |",
+        "+------------+-----+----------+-------------+--------------+---------+------------+-------------------+------------+-----------------+------------+---------------------+",
+        "| count      | 8.0 | 8        | 8.0         | 8.0          | 8.0     | 8.0        | 8.0               | 8.0        | 8               | 8          | 8                   |",
+        "| null_count | 8.0 | 8        | 8.0         | 8.0          | 8.0     | 8.0        | 8.0               | 8.0        | 8               | 8          | 8                   |",
+        "| max        | 7.0 | null     | 1.0         | 1.0          | 1.0     | 10.0       | 1.100000023841858 | 10.1       | null            | null       | 2009-04-01T00:01:00 |",
+        "| min        | 0.0 | null     | 0.0         | 0.0          | 0.0     | 0.0        | 0.0               | 0.0        | null            | null       | 2009-01-01T00:00:00 |",
+        "+------------+-----+----------+-------------+--------------+---------+------------+-------------------+------------+-----------------+------------+---------------------+",
+    ];
+    assert_batches_eq!(expected, &describe_record_batch);
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn join() -> Result<()> {
@@ -503,8 +531,9 @@ async fn right_semi_with_alias_filter() -> Result<()> {
     let optimized_plan = df.clone().into_optimized_plan()?;
     let expected = vec![
         "RightSemi Join: t1.a = t2.a [a:UInt32, b:Utf8, c:Int32]",
-        "  Filter: t1.c > Int32(1) [a:UInt32, c:Int32]",
-        "    TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]",
+        "  Projection: t1.a [a:UInt32]",
+        "    Filter: t1.c > Int32(1) [a:UInt32, c:Int32]",
+        "      TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]",
         "  Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]",
         "    TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
     ];
@@ -547,8 +576,9 @@ async fn right_anti_filter_push_down() -> Result<()> {
     let optimized_plan = df.clone().into_optimized_plan()?;
     let expected = vec![
         "RightAnti Join: t1.a = t2.a Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]",
-        "  Filter: t1.c > Int32(1) [a:UInt32, c:Int32]",
-        "    TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]",
+        "  Projection: t1.a [a:UInt32]",
+        "    Filter: t1.c > Int32(1) [a:UInt32, c:Int32]",
+        "      TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]",
         "  TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
     ];
 
