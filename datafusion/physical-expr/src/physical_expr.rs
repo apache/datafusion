@@ -83,6 +83,9 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     }
 }
 
+/// Shared [`PhysicalExpr`].
+pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
+
 /// The shared context used during the analysis of an expression. Includes
 /// the boundaries for all known columns.
 #[derive(Clone, Debug, PartialEq)]

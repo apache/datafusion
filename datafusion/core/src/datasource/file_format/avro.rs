@@ -23,13 +23,13 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
+use datafusion_physical_expr::PhysicalExpr;
 use object_store::{GetResult, ObjectMeta, ObjectStore};
 
 use super::FileFormat;
 use crate::avro_to_arrow::read_avro_schema_from_reader;
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::logical_expr::Expr;
 use crate::physical_plan::file_format::{AvroExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
@@ -82,7 +82,7 @@ impl FileFormat for AvroFormat {
         &self,
         _state: &SessionState,
         conf: FileScanConfig,
-        _filters: &[Expr],
+        _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = AvroExec::new(conf);
         Ok(Arc::new(exec))

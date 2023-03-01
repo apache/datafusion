@@ -33,12 +33,12 @@ use std::sync::Arc;
 
 use crate::arrow::datatypes::SchemaRef;
 use crate::error::Result;
-use crate::logical_expr::Expr;
 use crate::physical_plan::file_format::FileScanConfig;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
 use crate::execution::context::SessionState;
 use async_trait::async_trait;
+use datafusion_physical_expr::PhysicalExpr;
 use object_store::{ObjectMeta, ObjectStore};
 
 /// This trait abstracts all the file format specific implementations
@@ -84,7 +84,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         &self,
         state: &SessionState,
         conf: FileScanConfig,
-        filters: &[Expr],
+        filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 }
 
@@ -143,7 +143,7 @@ pub(crate) mod test_util {
                     output_ordering: None,
                     infinite_source: false,
                 },
-                &[],
+                None,
             )
             .await?;
         Ok(exec)

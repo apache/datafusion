@@ -25,7 +25,7 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use datafusion_common::DataFusionError;
-use datafusion_optimizer::utils::conjunction;
+use datafusion_physical_expr::PhysicalExpr;
 use hashbrown::HashMap;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::parquet_to_arrow_schema;
@@ -44,7 +44,6 @@ use crate::config::ConfigOptions;
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::logical_expr::Expr;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::file_format::{ParquetExec, SchemaAdapter};
 use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
@@ -189,16 +188,15 @@ impl FileFormat for ParquetFormat {
         &self,
         state: &SessionState,
         conf: FileScanConfig,
-        filters: &[Expr],
+        filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // If enable pruning then combine the filters to build the predicate.
         // If disable pruning then set the predicate to None, thus readers
         // will not prune data based on the statistics.
-        let predicate = if self.enable_pruning(state.config_options()) {
-            conjunction(filters.to_vec())
-        } else {
-            None
-        };
+        let predicate = self
+            .enable_pruning(state.config_options())
+            .then(|| filters.cloned())
+            .flatten();
 
         Ok(Arc::new(ParquetExec::new(
             conf,
