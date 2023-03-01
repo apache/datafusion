@@ -40,7 +40,7 @@ use arrow::{
     datatypes::{Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::{DataFusionError, ExprSchema, ScalarValue};
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use std::any::Any;
@@ -53,6 +53,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use arrow::array::UInt64Builder;
+use arrow::row::{RowConverter, SortField};
 use datafusion_common::utils::get_row_at_idx;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
@@ -349,6 +350,7 @@ pub struct BoundedWindowAggStream {
     elapsed_evaluate_stateful: Duration,
     elapsed_prune_partition_batches: Duration,
     elapsed_prune_input_batch: Duration,
+    row_converter: RowConverter,
 }
 
 impl BoundedWindowAggStream {
@@ -561,6 +563,14 @@ impl BoundedWindowAggStream {
     ) -> Self {
         let state = window_expr.iter().map(|_| IndexMap::new()).collect();
         let empty_batch = RecordBatch::new_empty(schema.clone());
+        let partition_by = window_expr[0].partition_by();
+        // let res = partition_by[0].data_type(&schema)?;
+        let row_converter = RowConverter::new(
+            partition_by
+                .iter()
+                .map(|f| SortField::new(f.data_type(&schema).unwrap()))
+                .collect(),
+        ).unwrap();
         Self {
             schema,
             input,
@@ -580,6 +590,7 @@ impl BoundedWindowAggStream {
             elapsed_evaluate_stateful: Duration::new(0, 0),
             elapsed_prune_partition_batches: Duration::new(0, 0),
             elapsed_prune_input_batch: Duration::new(0, 0),
+            row_converter,
         }
     }
 
@@ -879,12 +890,17 @@ impl BoundedWindowAggStream {
                     self.evaluate_partition_by_column_values(record_batch)?;
                 // In PartiallySorted implementation we expect indices_map to remember insertion order
                 // hence we use IndexMap.
-                let mut indices_map: IndexMap<Vec<ScalarValue>, Vec<usize>> =
-                    IndexMap::new();
+                let mut indices_map = IndexMap::new();
                 // Calculate indices for each partition
+                // let group_rows = self.row_converter.convert_columns(&partition_bys)?;
+                // for idx in 0..group_rows.num_rows() {
+                //     let row = group_rows.row(idx);
+                //     let indices: &mut Vec<usize> = indices_map.entry(row).or_default();
+                //     indices.push(idx);
+                // }
                 for idx in 0..num_rows {
                     let partition_row = get_row_at_idx(&partition_bys, idx)?;
-                    let indices = indices_map.entry(partition_row).or_default();
+                    let indices: &mut Vec<usize> = indices_map.entry(partition_row).or_default();
                     indices.push(idx);
                 }
                 // Construct new record batch from the rows at the calculated indices for each partition.
