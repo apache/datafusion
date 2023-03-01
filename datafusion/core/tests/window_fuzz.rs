@@ -51,17 +51,18 @@ mod tests {
     async fn single_order_by_test() -> Result<()> {
         let n = 100;
         let distincts = vec![1, 100];
+        // make_staggered_batches gives result sorted according to a,b
+        // ORDER BY A should work in Sorted case
+        let is_linear = false;
         for distinct in distincts {
             let mut handles = Vec::new();
             for i in 0..n {
-                // make_staggered_batches gives result sorted according to a,b
-                // ORDER BY A should work in Sorted case
                 let job = tokio::spawn(run_window_test(
                     make_staggered_batches::<true>(1000, distinct, i),
                     i,
                     vec!["a"],
                     vec![],
-                    false,
+                    is_linear,
                 ));
                 handles.push(job);
             }
@@ -76,19 +77,20 @@ mod tests {
     async fn order_by_with_partition_test() -> Result<()> {
         let n = 100;
         let distincts = vec![1, 100];
+        // make_staggered_batches gives result sorted according to a,b
+        // PARTITION BY A, ORDER BY B should work in Sorted case
+        let is_linear = false;
         for distinct in distincts {
             // since we have sorted pairs (a,b) to not violate per partition soring
             // partition should be field a, order by should be field b
             let mut handles = Vec::new();
             for i in 0..n {
-                // make_staggered_batches gives result sorted according to a,b
-                // PARTITION BY A, ORDER BY B should work in Sorted case
                 let job = tokio::spawn(run_window_test(
                     make_staggered_batches::<true>(1000, distinct, i),
                     i,
                     vec!["b"],
                     vec!["a"],
-                    false,
+                    is_linear,
                 ));
                 handles.push(job);
             }
@@ -103,19 +105,18 @@ mod tests {
     async fn partition_by_linear_test() -> Result<()> {
         let n = 100;
         let distincts = vec![1, 100];
+        // make_staggered_batches gives result sorted according to a,b
+        // PARTITION BY B, ORDER BY A should work in linear case.
+        let is_linear = true;
         for distinct in distincts {
-            // since we have sorted pairs (a,b) to not violate per partition soring
-            // partition should be field a, order by should be field b
             let mut handles = Vec::new();
             for i in 0..n {
-                // make_staggered_batches gives result sorted according to a,b
-                // PARTITION BY B, ORDER BY A should work in linear case
                 let job = tokio::spawn(run_window_test(
                     make_staggered_batches::<true>(1000, distinct, i),
                     i,
                     vec!["a"],
                     vec!["b"],
-                    true,
+                    is_linear,
                 ));
                 handles.push(job);
             }
