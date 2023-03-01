@@ -424,6 +424,7 @@ async fn test_window_agg_sort_multi_layer_non_reversed_plan() -> Result<()> {
 async fn test_window_agg_partition_by_set() -> Result<()> {
     let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(1));
     register_aggregate_csv(&ctx).await?;
+    // When partition by are same but their ordering are different we should be able to calculate result without new SortExec for BoundedWindowAggExec.
     let sql = "SELECT
     c9,
     SUM(c9) OVER(PARTITION BY c1, c2 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1,
@@ -436,7 +437,6 @@ async fn test_window_agg_partition_by_set() -> Result<()> {
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
-    // We cannot reverse each window function (ROW_NUMBER is not reversible)
     let expected = {
         vec![
             "GlobalLimitExec: skip=0, fetch=5",
@@ -478,6 +478,7 @@ async fn test_window_agg_partition_by_set() -> Result<()> {
 async fn test_window_agg_partition_by_set2() -> Result<()> {
     let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(1));
     register_aggregate_csv(&ctx).await?;
+    // When partition by are same but their ordering are different we should be able to calculate result without new SortExec for WindowAggExec.
     let sql = "SELECT
     c9,
     SUM(c9) OVER(PARTITION BY c1, c2 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum1,
@@ -490,7 +491,6 @@ async fn test_window_agg_partition_by_set2() -> Result<()> {
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
-    // We cannot reverse each window function (ROW_NUMBER is not reversible)
     let expected = {
         vec![
             "GlobalLimitExec: skip=0, fetch=5",
@@ -1074,7 +1074,7 @@ async fn test_window_agg_low_cardinality() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_source_linear_partition_by() -> Result<()> {
+async fn test_source_partially_sorted_partition_by() -> Result<()> {
     let config = SessionConfig::new().with_target_partitions(1);
     let ctx = SessionContext::with_config(config);
     register_aggregate_csv(&ctx).await?;
@@ -1236,9 +1236,6 @@ fn write_test_data_to_parquet2(tmpdir: &TempDir, n_file: usize) -> Result<()> {
     let low_card_col2 = Field::new("low_card_col2", DataType::Int32, false);
     let inc_col = Field::new("inc_col", DataType::Int32, false);
     let unsorted_col = Field::new("unsorted_col", DataType::Int32, false);
-    // let inc_field = Field::new("inc_col", DataType::Int32, false);
-    // let desc_field = Field::new("desc_col", DataType::Int32, false);
-    // let low_card_field = Field::new("low_card_col", DataType::Int32, false);
 
     let schema = Arc::new(Schema::new(vec![
         low_card_col1,
@@ -1306,15 +1303,6 @@ async fn get_test_context2(tmpdir: &TempDir) -> Result<SessionContext> {
     let ctx = SessionContext::with_config(session_config);
 
     let parquet_read_options = ParquetReadOptions::default();
-    // The sort order is specified (not actually correct in this case)
-    // let file_sort_order = [col("ts")]
-    //     .into_iter()
-    //     .map(|e| {
-    //         let ascending = true;
-    //         let nulls_first = false;
-    //         e.sort(ascending, nulls_first)
-    //     })
-    //     .collect::<Vec<_>>();
     let file_sort_order = vec![
         col("low_card_col1").sort(true, false),
         col("low_card_col2").sort(true, false),
@@ -1614,7 +1602,8 @@ mod tests {
         SUM(inc_col) OVER(PARTITION BY low_card_col ORDER BY ts ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum1,
         SUM(inc_col) OVER(PARTITION BY low_card_col ORDER BY ts ASC ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING) as sum2
            FROM annotated_data
-           ORDER BY inc_col ASC";
+           ORDER BY inc_col ASC
+           LIMIT 5";
 
         let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
@@ -1622,9 +1611,10 @@ mod tests {
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
         let expected = {
             vec![
-                "SortExec: expr=[inc_col@0 ASC NULLS LAST]",
-                "  ProjectionExec: expr=[inc_col@1 as inc_col, low_card_col@2 as low_card_col, SUM(annotated_data.inc_col) PARTITION BY [annotated_data.low_card_col] ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@3 as sum1, SUM(annotated_data.inc_col) PARTITION BY [annotated_data.low_card_col] ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING@4 as sum2]",
-                "    BoundedWindowAggExec: wdw=[SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(3)), end_bound: Following(UInt64(1)) }], mode=[Linear]",
+                "GlobalLimitExec: skip=0, fetch=5",
+                "  SortExec: fetch=5, expr=[inc_col@0 ASC NULLS LAST]",
+                "    ProjectionExec: expr=[inc_col@1 as inc_col, low_card_col@2 as low_card_col, SUM(annotated_data.inc_col) PARTITION BY [annotated_data.low_card_col] ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@3 as sum1, SUM(annotated_data.inc_col) PARTITION BY [annotated_data.low_card_col] ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING@4 as sum2]",
+                "      BoundedWindowAggExec: wdw=[SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(3)), end_bound: Following(UInt64(1)) }], mode=[Linear]",
             ]
         };
 
@@ -1646,101 +1636,6 @@ mod tests {
             "| 10      | 4            | 47   | 47   |",
             "| 15      | 3            | 53   | 53   |",
             "| 20      | 2            | 41   | 41   |",
-            "| 21      | 2            | 90   | 90   |",
-            "| 26      | 0            | 70   | 70   |",
-            "| 29      | 1            | 59   | 59   |",
-            "| 30      | 1            | 99   | 99   |",
-            "| 33      | 3            | 98   | 98   |",
-            "| 37      | 4            | 100  | 100  |",
-            "| 40      | 1            | 143  | 143  |",
-            "| 43      | 0            | 153  | 153  |",
-            "| 44      | 1            | 165  | 194  |",
-            "| 45      | 3            | 163  | 168  |",
-            "| 49      | 2            | 181  | 181  |",
-            "| 51      | 1            | 196  | 226  |",
-            "| 53      | 4            | 158  | 158  |",
-            "| 58      | 4            | 213  | 223  |",
-            "| 61      | 1            | 246  | 286  |",
-            "| 65      | 4            | 251  | 288  |",
-            "| 70      | 3            | 245  | 260  |",
-            "| 75      | 4            | 276  | 329  |",
-            "| 78      | 4            | 306  | 364  |",
-            "| 83      | 0            | 281  | 282  |",
-            "| 88      | 4            | 336  | 401  |",
-            "| 90      | 1            | 307  | 351  |",
-            "| 91      | 2            | 261  | 281  |",
-            "| 95      | 4            | 370  | 445  |",
-            "| 97      | 3            | 371  | 404  |",
-            "| 100     | 2            | 351  | 372  |",
-            "| 105     | 1            | 382  | 433  |",
-            "| 109     | 4            | 411  | 489  |",
-            "| 111     | 2            | 417  | 466  |",
-            "| 115     | 2            | 446  | 537  |",
-            "| 119     | 4            | 447  | 535  |",
-            "| 120     | 2            | 490  | 590  |",
-            "| 124     | 4            | 492  | 587  |",
-            "| 126     | 1            | 452  | 513  |",
-            "| 129     | 0            | 425  | 451  |",
-            "| 131     | 1            | 497  | 587  |",
-            "| 135     | 1            | 539  | 644  |",
-            "| 140     | 4            | 526  | 635  |",
-            "| 143     | 4            | 555  | 674  |",
-            "| 144     | 2            | 616  | 727  |",
-            "| 147     | 1            | 562  | 688  |",
-            "| 148     | 4            | 582  | 706  |",
-            "| 149     | 1            | 586  | 717  |",
-            "| 151     | 4            | 602  | 742  |",
-            "| 155     | 1            | 607  | 742  |",
-            "| 156     | 1            | 663  | 810  |",
-            "| 159     | 3            | 491  | 536  |",
-            "| 160     | 4            | 622  | 765  |",
-            "| 163     | 4            | 646  | 794  |",
-            "| 165     | 3            | 602  | 672  |",
-            "| 170     | 0            | 559  | 602  |",
-            "| 172     | 4            | 681  | 832  |",
-            "| 177     | 0            | 658  | 741  |",
-            "| 181     | 3            | 704  | 801  |",
-            "| 182     | 0            | 721  | 850  |",
-            "| 186     | 4            | 708  | 868  |",
-            "| 187     | 4            | 742  | 905  |",
-            "| 192     | 0            | 747  | 917  |",
-            "| 196     | 0            | 777  | 954  |",
-            "| 197     | 4            | 791  | 963  |",
-            "| 199     | 3            | 754  | 913  |",
-            "| 203     | 1            | 728  | 877  |",
-            "| 207     | 0            | 814  | 996  |",
-            "| 209     | 3            | 802  | 967  |",
-            "| 213     | 3            | 843  | 1024 |",
-            "| 214     | 1            | 789  | 944  |",
-            "| 216     | 1            | 875  | 1031 |",
-            "| 219     | 0            | 848  | 1040 |",
-            "| 221     | 4            | 841  | 1027 |",
-            "| 222     | 3            | 869  | 1068 |",
-            "| 225     | 3            | 905  | 1114 |",
-            "| 226     | 0            | 883  | 1079 |",
-            "| 231     | 0            | 959  | 1166 |",
-            "| 236     | 4            | 915  | 1102 |",
-            "| 237     | 2            | 748  | 863  |",
-            "| 242     | 1            | 925  | 1128 |",
-            "| 245     | 3            | 946  | 1159 |",
-            "| 247     | 2            | 876  | 996  |",
-            "| 248     | 2            | 1010 | 1154 |",
-            "| 253     | 1            | 970  | 1184 |",
-            "| 254     | 3            | 993  | 1215 |",
-            "| 259     | 1            | 1020 | 1236 |",
-            "| 261     | 4            | 718  | 915  |",
-            "| 266     | 1            | 1053 | 1295 |",
-            "| 269     | 3            | 1040 | 1265 |",
-            "| 272     | 3            | 1086 | 1331 |",
-            "| 275     | 1            | 1086 | 1339 |",
-            "| 278     | 2            | 1069 | 1306 |",
-            "| 283     | 0            | 1029 | 1248 |",
-            "| 286     | 1            | 1128 | 1387 |",
-            "| 289     | 0            | 803  | 1029 |",
-            "| 291     | 3            | 832  | 1086 |",
-            "| 296     | 2            | 1127 | 1374 |",
-            "| 301     | 1            | 862  | 1128 |",
-            "| 305     | 2            | 879  | 1127 |",
             "+---------+--------------+------+------+",
         ];
         assert_batches_eq!(expected, &actual);
@@ -1760,13 +1655,8 @@ mod tests {
         SUM(inc_col) OVER(PARTITION BY low_card_col1, low_card_col2, unsorted_col ORDER BY inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum5,
         SUM(inc_col) OVER(PARTITION BY low_card_col2, low_card_col1, unsorted_col ORDER BY inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum6
            FROM annotated_data2
-           ORDER BY inc_col ASC";
-
-        // let sql = "SELECT
-        // SUM(inc_col) OVER(PARTITION BY low_card_col1, inc_col ORDER BY low_card_col2 ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum5,
-        // SUM(inc_col) OVER(PARTITION BY inc_col, low_card_col1 ORDER BY low_card_col2 ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum6
-        //    FROM annotated_data2
-        //    ORDER BY inc_col ASC";
+           ORDER BY inc_col DESC
+           LIMIT 5";
 
         let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
@@ -1774,14 +1664,15 @@ mod tests {
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
         let expected = {
             vec![
-                "SortExec: expr=[inc_col@2 ASC NULLS LAST]",
-                "  ProjectionExec: expr=[low_card_col1@0 as low_card_col1, low_card_col2@1 as low_card_col2, inc_col@2 as inc_col, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col1, annotated_data2.unsorted_col] ORDER BY [annotated_data2.low_card_col2 ASC NULLS LAST, annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@6 as sum1, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.unsorted_col] ORDER BY [annotated_data2.low_card_col1 ASC NULLS LAST, annotated_data2.low_card_col2 ASC NULLS LAST, annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@9 as sum2, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col1, annotated_data2.low_card_col2] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@4 as sum3, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col2, annotated_data2.low_card_col1] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@7 as sum4, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col1, annotated_data2.low_card_col2, annotated_data2.unsorted_col] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@5 as sum5, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col2, annotated_data2.low_card_col1, annotated_data2.unsorted_col] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@8 as sum6]",
-                "    BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }], mode=[Linear]",
-                "      BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }], mode=[PartiallySorted]",
-                "        BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }], mode=[Sorted]",
-                "          BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }], mode=[PartiallySorted]",
+                "GlobalLimitExec: skip=0, fetch=5",
+                "  SortExec: fetch=5, expr=[inc_col@2 DESC]",
+                "    ProjectionExec: expr=[low_card_col1@0 as low_card_col1, low_card_col2@1 as low_card_col2, inc_col@2 as inc_col, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col1, annotated_data2.unsorted_col] ORDER BY [annotated_data2.low_card_col2 ASC NULLS LAST, annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@6 as sum1, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.unsorted_col] ORDER BY [annotated_data2.low_card_col1 ASC NULLS LAST, annotated_data2.low_card_col2 ASC NULLS LAST, annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@9 as sum2, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col1, annotated_data2.low_card_col2] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@4 as sum3, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col2, annotated_data2.low_card_col1] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@7 as sum4, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col1, annotated_data2.low_card_col2, annotated_data2.unsorted_col] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@5 as sum5, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col2, annotated_data2.low_card_col1, annotated_data2.unsorted_col] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@8 as sum6]",
+                "      BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }], mode=[Linear]",
+                "        BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }], mode=[PartiallySorted]",
+                "          BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }], mode=[Sorted]",
                 "            BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }], mode=[PartiallySorted]",
-                "              BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }], mode=[Sorted]",
+                "              BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }], mode=[PartiallySorted]",
+                "                BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }], mode=[Sorted]",
             ]
         };
 
@@ -1798,106 +1689,11 @@ mod tests {
             "+---------------+---------------+---------+------+------+------+------+------+------+",
             "| low_card_col1 | low_card_col2 | inc_col | sum1 | sum2 | sum3 | sum4 | sum5 | sum6 |",
             "+---------------+---------------+---------+------+------+------+------+------+------+",
-            "| 0             | 0             | 0       | 2    | 2    | 1    | 1    | 2    | 2    |",
-            "| 0             | 0             | 1       | 8    | 8    | 3    | 3    | 8    | 8    |",
-            "| 0             | 0             | 2       | 5    | 5    | 6    | 6    | 5    | 5    |",
-            "| 0             | 0             | 3       | 11   | 11   | 10   | 10   | 11   | 11   |",
-            "| 0             | 0             | 4       | 9    | 9    | 14   | 14   | 9    | 9    |",
-            "| 0             | 0             | 5       | 17   | 17   | 18   | 18   | 17   | 17   |",
-            "| 0             | 0             | 6       | 31   | 31   | 22   | 22   | 31   | 31   |",
-            "| 0             | 0             | 7       | 19   | 19   | 26   | 26   | 19   | 19   |",
-            "| 0             | 0             | 8       | 30   | 30   | 30   | 30   | 30   | 30   |",
-            "| 0             | 0             | 9       | 19   | 19   | 34   | 34   | 19   | 19   |",
-            "| 0             | 0             | 10      | 38   | 38   | 38   | 38   | 38   | 38   |",
-            "| 0             | 0             | 11      | 31   | 31   | 42   | 42   | 31   | 31   |",
-            "| 0             | 0             | 12      | 44   | 44   | 46   | 46   | 44   | 44   |",
-            "| 0             | 0             | 13      | 44   | 44   | 50   | 50   | 44   | 44   |",
-            "| 0             | 0             | 14      | 54   | 54   | 54   | 54   | 54   | 54   |",
-            "| 0             | 0             | 15      | 31   | 31   | 58   | 58   | 31   | 31   |",
-            "| 0             | 0             | 16      | 52   | 52   | 62   | 62   | 52   | 52   |",
-            "| 0             | 0             | 17      | 69   | 69   | 66   | 66   | 43   | 43   |",
-            "| 0             | 0             | 18      | 67   | 67   | 70   | 70   | 39   | 39   |",
-            "| 0             | 0             | 19      | 62   | 62   | 74   | 74   | 62   | 62   |",
-            "| 0             | 0             | 20      | 51   | 51   | 78   | 78   | 51   | 51   |",
-            "| 0             | 0             | 21      | 82   | 82   | 82   | 82   | 52   | 52   |",
-            "| 0             | 0             | 22      | 71   | 71   | 86   | 86   | 71   | 71   |",
-            "| 0             | 0             | 23      | 90   | 90   | 90   | 90   | 65   | 65   |",
-            "| 0             | 0             | 24      | 84   | 84   | 69   | 69   | 53   | 53   |",
-            "| 0             | 1             | 25      | 97   | 97   | 51   | 51   | 52   | 52   |",
-            "| 0             | 1             | 26      | 89   | 89   | 78   | 78   | 58   | 58   |",
-            "| 0             | 1             | 27      | 110  | 110  | 106  | 106  | 87   | 87   |",
-            "| 0             | 1             | 28      | 88   | 88   | 110  | 110  | 57   | 57   |",
-            "| 0             | 1             | 29      | 111  | 111  | 114  | 114  | 93   | 93   |",
-            "| 0             | 1             | 30      | 108  | 108  | 118  | 118  | 71   | 71   |",
-            "| 0             | 1             | 31      | 108  | 108  | 122  | 122  | 65   | 65   |",
-            "| 0             | 1             | 32      | 108  | 108  | 126  | 126  | 91   | 91   |",
-            "| 0             | 1             | 33      | 134  | 134  | 130  | 130  | 134  | 134  |",
-            "| 0             | 1             | 34      | 126  | 126  | 134  | 134  | 102  | 102  |",
-            "| 0             | 1             | 35      | 125  | 125  | 138  | 138  | 125  | 125  |",
-            "| 0             | 1             | 36      | 132  | 132  | 142  | 142  | 132  | 132  |",
-            "| 0             | 1             | 37      | 102  | 156  | 146  | 146  | 102  | 102  |",
-            "| 0             | 1             | 38      | 145  | 145  | 150  | 150  | 145  | 145  |",
-            "| 0             | 1             | 39      | 144  | 144  | 154  | 154  | 144  | 144  |",
-            "| 0             | 1             | 40      | 162  | 162  | 158  | 158  | 162  | 162  |",
-            "| 0             | 1             | 41      | 134  | 134  | 162  | 162  | 113  | 113  |",
-            "| 0             | 1             | 42      | 157  | 157  | 166  | 166  | 157  | 157  |",
-            "| 0             | 1             | 43      | 108  | 163  | 170  | 170  | 108  | 108  |",
-            "| 0             | 1             | 44      | 176  | 176  | 174  | 174  | 176  | 176  |",
-            "| 0             | 1             | 45      | 164  | 164  | 178  | 178  | 164  | 164  |",
-            "| 0             | 1             | 46      | 129  | 179  | 182  | 182  | 129  | 129  |",
-            "| 0             | 1             | 47      | 174  | 174  | 186  | 186  | 174  | 174  |",
-            "| 0             | 1             | 48      | 135  | 187  | 190  | 190  | 135  | 135  |",
-            "| 0             | 1             | 49      | 135  | 186  | 144  | 144  | 135  | 135  |",
-            "| 1             | 2             | 50      | 115  | 206  | 101  | 101  | 115  | 115  |",
-            "| 1             | 2             | 51      | 112  | 205  | 153  | 153  | 112  | 112  |",
-            "| 1             | 2             | 52      | 105  | 200  | 206  | 206  | 105  | 105  |",
-            "| 1             | 2             | 53      | 161  | 209  | 210  | 210  | 161  | 161  |",
-            "| 1             | 2             | 54      | 114  | 185  | 214  | 214  | 114  | 114  |",
-            "| 1             | 2             | 55      | 114  | 190  | 218  | 218  | 114  | 114  |",
-            "| 1             | 2             | 56      | 218  | 218  | 222  | 222  | 218  | 218  |",
-            "| 1             | 2             | 57      | 224  | 224  | 226  | 226  | 224  | 224  |",
-            "| 1             | 2             | 58      | 233  | 233  | 230  | 230  | 233  | 233  |",
-            "| 1             | 2             | 59      | 180  | 223  | 234  | 234  | 180  | 180  |",
-            "| 1             | 2             | 60      | 177  | 214  | 238  | 238  | 177  | 177  |",
-            "| 1             | 2             | 61      | 200  | 249  | 242  | 242  | 112  | 112  |",
-            "| 1             | 2             | 62      | 245  | 245  | 246  | 246  | 245  | 245  |",
-            "| 1             | 2             | 63      | 241  | 241  | 250  | 250  | 241  | 241  |",
-            "| 1             | 2             | 64      | 254  | 254  | 254  | 254  | 254  | 254  |",
-            "| 1             | 2             | 65      | 185  | 231  | 258  | 258  | 185  | 185  |",
-            "| 1             | 2             | 66      | 251  | 251  | 262  | 262  | 251  | 251  |",
-            "| 1             | 2             | 67      | 268  | 268  | 266  | 266  | 268  | 268  |",
-            "| 1             | 2             | 68      | 257  | 257  | 270  | 270  | 257  | 257  |",
-            "| 1             | 2             | 69      | 271  | 271  | 274  | 274  | 271  | 271  |",
-            "| 1             | 2             | 70      | 261  | 261  | 278  | 278  | 185  | 185  |",
-            "| 1             | 2             | 71      | 271  | 271  | 282  | 282  | 196  | 196  |",
-            "| 1             | 2             | 72      | 282  | 282  | 286  | 286  | 282  | 282  |",
-            "| 1             | 2             | 73      | 292  | 292  | 290  | 290  | 214  | 214  |",
-            "| 1             | 2             | 74      | 284  | 284  | 219  | 219  | 205  | 205  |",
-            "| 1             | 3             | 75      | 289  | 289  | 151  | 151  | 152  | 152  |",
-            "| 1             | 3             | 76      | 292  | 292  | 228  | 228  | 157  | 157  |",
-            "| 1             | 3             | 77      | 303  | 303  | 306  | 306  | 232  | 232  |",
-            "| 1             | 3             | 78      | 307  | 307  | 310  | 310  | 162  | 162  |",
-            "| 1             | 3             | 79      | 302  | 302  | 314  | 314  | 161  | 161  |",
-            "| 1             | 3             | 80      | 315  | 315  | 318  | 318  | 315  | 315  |",
-            "| 1             | 3             | 81      | 319  | 319  | 322  | 322  | 249  | 249  |",
-            "| 1             | 3             | 82      | 322  | 322  | 326  | 326  | 248  | 248  |",
-            "| 1             | 3             | 83      | 331  | 331  | 330  | 330  | 331  | 331  |",
-            "| 1             | 3             | 84      | 320  | 320  | 334  | 334  | 247  | 247  |",
-            "| 1             | 3             | 85      | 333  | 333  | 338  | 338  | 333  | 333  |",
-            "| 1             | 3             | 86      | 345  | 345  | 342  | 342  | 345  | 345  |",
-            "| 1             | 3             | 87      | 337  | 337  | 346  | 346  | 337  | 337  |",
-            "| 1             | 3             | 88      | 299  | 299  | 350  | 350  | 187  | 187  |",
-            "| 1             | 3             | 89      | 354  | 354  | 354  | 354  | 354  | 354  |",
-            "| 1             | 3             | 90      | 261  | 261  | 358  | 358  | 261  | 261  |",
-            "| 1             | 3             | 91      | 348  | 348  | 362  | 362  | 348  | 348  |",
-            "| 1             | 3             | 92      | 342  | 342  | 366  | 366  | 342  | 342  |",
-            "| 1             | 3             | 93      | 361  | 361  | 370  | 370  | 361  | 361  |",
-            "| 1             | 3             | 94      | 365  | 365  | 374  | 374  | 365  | 365  |",
-            "| 1             | 3             | 95      | 280  | 280  | 378  | 378  | 280  | 280  |",
-            "| 1             | 3             | 96      | 370  | 370  | 382  | 382  | 370  | 370  |",
-            "| 1             | 3             | 97      | 282  | 282  | 386  | 386  | 282  | 282  |",
-            "| 1             | 3             | 98      | 283  | 283  | 390  | 390  | 283  | 283  |",
             "| 1             | 3             | 99      | 248  | 248  | 294  | 294  | 187  | 187  |",
+            "| 1             | 3             | 98      | 283  | 283  | 390  | 390  | 283  | 283  |",
+            "| 1             | 3             | 97      | 282  | 282  | 386  | 386  | 282  | 282  |",
+            "| 1             | 3             | 96      | 370  | 370  | 382  | 382  | 370  | 370  |",
+            "| 1             | 3             | 95      | 280  | 280  | 378  | 378  | 280  | 280  |",
             "+---------------+---------------+---------+------+------+------+------+------+------+",
         ];
         assert_batches_eq!(expected, &actual);

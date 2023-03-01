@@ -371,9 +371,14 @@ impl BoundedWindowAggStream {
                     self.evaluate_partition_by_column_values(&self.input_buffer)?;
                 let n_window_col = self.window_agg_states.len();
 
-                // Calculate the number of columns that can be emitted for each partition.
+                // Stores the number of columns that can be emitted for each partition.
                 let mut counter = HashMap::new();
+                // Stores the emitted window expression results as Vec<ScalarValue> for each
+                // window expression. Vec<ScalarValue> then converted to ArrayRef.
                 let mut rows_gen = vec![vec![]; n_window_col];
+                let err = || {
+                    DataFusionError::Execution("Expects to have partition".to_string())
+                };
                 // TODO: Do below iteration after row conversion
                 for idx in 0..self.input_buffer.num_rows() {
                     let row = get_row_at_idx(&partition_by_columns, idx)?;
@@ -383,14 +388,11 @@ impl BoundedWindowAggStream {
                     } else {
                         counter.entry(row.clone()).or_insert(0)
                     };
+
+                    // Store result of each window expression for current row if it is produced.
                     let mut row_res = vec![];
                     for window_agg_state in self.window_agg_states.iter() {
-                        let partition = window_agg_state.get(&row).ok_or_else(|| {
-                            DataFusionError::Execution(format!(
-                                "Should contain partition:{:?}",
-                                row
-                            ))
-                        })?;
+                        let partition = window_agg_state.get(&row).ok_or_else(err)?;
                         if *counts < partition.state.out_col.len() {
                             let res = ScalarValue::try_from_array(
                                 &partition.state.out_col,
@@ -401,22 +403,21 @@ impl BoundedWindowAggStream {
                             break;
                         }
                     }
-                    // If we cannot produce result for each window expression stop iteration
+                    // If we cannot produce result for all of the window expressions stop iteration
                     if row_res.len() != n_window_col {
                         break;
                     }
+                    // We could produce result for all window expression at current row.
                     *counts += 1;
                     for (col_idx, elem) in row_res.into_iter().enumerate() {
                         rows_gen[col_idx].push(elem)
                     }
-                }
-                for (partition_row, count) in counter.iter() {
-                    if let Some(partition_batch_state) =
-                        self.partition_buffers.get_mut(partition_row)
-                    {
-                        // Store how many rows are generated for each partition
-                        partition_batch_state.n_out_row = *count;
-                    }
+                } // end of row iteration
+                for (row, count) in counter.iter() {
+                    let partition_batch_state =
+                        self.partition_buffers.get_mut(row).ok_or_else(err)?;
+                    // Store how many rows are generated for each partition
+                    partition_batch_state.n_out_row = *count;
                 }
                 if !rows_gen[0].is_empty() {
                     let n_out = rows_gen[0].len();
@@ -754,6 +755,9 @@ impl BoundedWindowAggStream {
                 }
             }
             PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted => {
+                let err = || {
+                    DataFusionError::Execution("Expects to have partition".to_string())
+                };
                 // We store generated columns for each window expression in the `out_col`
                 // field of `WindowAggState`. Given how many rows are emitted, we remove
                 // these sections from state.
@@ -773,12 +777,7 @@ impl BoundedWindowAggStream {
                         let partition_batch = self
                             .partition_buffers
                             .get_mut(partition_key)
-                            .ok_or_else(|| {
-                                DataFusionError::Execution(format!(
-                                    "Expect partition buffer to contain key: {:?}",
-                                    partition_key
-                                ))
-                            })?;
+                            .ok_or_else(err)?;
                         assert_eq!(
                             partition_batch.record_batch.num_rows(),
                             partition_batch.indices.len()
