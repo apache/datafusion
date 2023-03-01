@@ -666,4 +666,20 @@ mod tests {
         }
         Ok(())
     }
+
+    #[test]
+    #[ignore] // TODO: fix this test.
+    fn test_cast_decimal() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+        let a = Int64Array::from(vec![100]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+        let expression = cast_with_options(
+            col("a", &schema)?,
+            &schema,
+            DataType::Decimal128(38, 38),
+            DEFAULT_DATAFUSION_CAST_OPTIONS,
+        )?;
+        expression.evaluate(&batch)?;
+        Ok(())
+    }
 }
