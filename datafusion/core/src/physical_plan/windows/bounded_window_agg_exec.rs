@@ -50,6 +50,7 @@ use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 
 use arrow::array::UInt64Builder;
 use datafusion_common::utils::get_row_at_idx;
@@ -341,13 +342,22 @@ pub struct BoundedWindowAggStream {
     baseline_metrics: BaselineMetrics,
     search_mode: PartitionSearchMode,
     ordered_partition_by_indices: Vec<usize>,
+    elapsed_calculate_out: Duration,
+    elapsed_prune_out: Duration,
+    elapsed_is_end_check: Duration,
+    elapsed_evaluate_partition: Duration,
+    elapsed_evaluate_stateful: Duration,
+    elapsed_prune_partition_batches: Duration,
+    elapsed_prune_input_batch: Duration,
 }
 
 impl BoundedWindowAggStream {
     /// This method constructs output columns using the result of each window expression
     fn calculate_out_columns(&mut self) -> Result<Option<Vec<ArrayRef>>> {
-        match self.search_mode {
+        let now = Instant::now();
+        let res = match &self.search_mode {
             PartitionSearchMode::Sorted => {
+                // Ok(None)
                 let n_out = self.calculate_n_out_row();
                 if n_out == 0 {
                     Ok(None)
@@ -366,6 +376,7 @@ impl BoundedWindowAggStream {
                 }
             }
             PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted => {
+                // Ok(None)
                 // TODO: Simplify below code, add comments
                 let partition_by_columns =
                     self.evaluate_partition_by_column_values(&self.input_buffer)?;
@@ -426,7 +437,9 @@ impl BoundedWindowAggStream {
                     Ok(None)
                 }
             }
-        }
+        };
+        self.elapsed_calculate_out += now.elapsed();
+        res
     }
 
     /// Prunes sections of the state that are no longer needed when calculating
@@ -440,9 +453,13 @@ impl BoundedWindowAggStream {
         // Prune `self.window_agg_states`:
         self.prune_out_columns(n_out)?;
         // Prune `self.partition_batches`:
+        let now = Instant::now();
         self.prune_partition_batches()?;
+        self.elapsed_prune_partition_batches += now.elapsed();
         // Prune `self.input_buffer_record_batch`:
+        let now = Instant::now();
         self.prune_input_batch(n_out)?;
+        self.elapsed_prune_input_batch += now.elapsed();
         Ok(())
     }
 
@@ -471,6 +488,7 @@ impl BoundedWindowAggStream {
                 };
             }
         }
+        let now = Instant::now();
         match &self.search_mode {
             PartitionSearchMode::Sorted => {
                 let n_partitions = self.partition_buffers.len();
@@ -504,6 +522,7 @@ impl BoundedWindowAggStream {
             }
             _ => {}
         };
+        self.elapsed_is_end_check += now.elapsed();
 
         self.input_buffer = if self.input_buffer.num_rows() == 0 {
             record_batch
@@ -554,16 +573,25 @@ impl BoundedWindowAggStream {
             partition_by_sort_keys,
             search_mode,
             ordered_partition_by_indices,
+            elapsed_calculate_out: Duration::new(0, 0),
+            elapsed_prune_out: Duration::new(0, 0),
+            elapsed_is_end_check: Duration::new(0, 0),
+            elapsed_evaluate_partition: Duration::new(0, 0),
+            elapsed_evaluate_stateful: Duration::new(0, 0),
+            elapsed_prune_partition_batches: Duration::new(0, 0),
+            elapsed_prune_input_batch: Duration::new(0, 0),
         }
     }
 
     fn compute_aggregates(&mut self) -> Result<RecordBatch> {
+        let now = Instant::now();
         // calculate window cols
         for (cur_window_expr, state) in
             self.window_expr.iter().zip(&mut self.window_agg_states)
         {
             cur_window_expr.evaluate_stateful(&self.partition_buffers, state)?;
         }
+        self.elapsed_evaluate_stateful += now.elapsed();
 
         let schema = self.schema.clone();
         let columns_to_show = self.calculate_out_columns()?;
@@ -582,6 +610,14 @@ impl BoundedWindowAggStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         if self.finished {
+            println!("search_mode:{:?}", self.search_mode);
+            println!("elapsed_calculate_out: {:?}", self.elapsed_calculate_out);
+            println!("elapsed_prune_out: {:?}", self.elapsed_prune_out);
+            println!("elapsed_is_end_check: {:?}", self.elapsed_is_end_check);
+            println!("elapsed_evaluate_partition: {:?}", self.elapsed_evaluate_partition);
+            println!("elapsed_evaluate_stateful: {:?}", self.elapsed_evaluate_stateful);
+            println!("elapsed_prune_partition_batches: {:?}", self.elapsed_prune_partition_batches);
+            println!("elapsed_prune_input_batch: {:?}", self.elapsed_prune_input_batch);
             return Poll::Ready(None);
         }
 
@@ -720,7 +756,8 @@ impl BoundedWindowAggStream {
 
     /// Prunes emitted parts from WindowAggState `out_col` field.
     fn prune_out_columns(&mut self, n_out: usize) -> Result<()> {
-        match self.search_mode {
+        let now = Instant::now();
+        match &self.search_mode {
             PartitionSearchMode::Sorted => {
                 // We store generated columns for each window expression in the `out_col`
                 // field of `WindowAggState`. Given how many rows are emitted, we remove
@@ -778,6 +815,7 @@ impl BoundedWindowAggStream {
                 }
             }
         }
+        self.elapsed_prune_out += now.elapsed();
         Ok(())
     }
 
@@ -799,12 +837,13 @@ impl BoundedWindowAggStream {
     }
 
     fn evaluate_partition_batches(
-        &self,
+        &mut self,
         record_batch: &RecordBatch,
     ) -> Result<PartitionRecordBatchIndices> {
         let mut res: IndexMap<Vec<ScalarValue>, (RecordBatch, Vec<usize>)> =
             IndexMap::new();
         let num_rows = record_batch.num_rows();
+        let now = Instant::now();
         match &self.search_mode {
             PartitionSearchMode::Sorted => {
                 // In Sorted case all partition by columns should have ordering, otherwise we cannot
@@ -855,6 +894,7 @@ impl BoundedWindowAggStream {
                 }
             }
         }
+        self.elapsed_evaluate_partition += now.elapsed();
         Ok(res)
     }
 
