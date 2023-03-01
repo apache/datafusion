@@ -1719,34 +1719,19 @@ pub struct Analyze {
 }
 
 /// Extension operator defined outside of DataFusion
-#[derive(Clone)]
+#[allow(clippy::derive_hash_xor_eq)] // see impl PartialEq for explanation
+#[derive(Clone, Eq, Hash)]
 pub struct Extension {
     /// The runtime extension operator
     pub node: Arc<dyn UserDefinedLogicalNode>,
 }
 
-struct ExtensionExplainDisplay<'a> {
-    extension: &'a Extension,
-}
-
-impl Display for ExtensionExplainDisplay<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.extension.node.fmt_for_explain(f)
-    }
-}
-
 impl PartialEq for Extension {
+    #[allow(clippy::op_ref)] // clippy false positive
     fn eq(&self, other: &Self) -> bool {
-        format!("{}", ExtensionExplainDisplay { extension: self })
-            == format!("{}", ExtensionExplainDisplay { extension: other })
-    }
-}
-
-impl Eq for Extension {}
-
-impl Hash for Extension {
-    fn hash<H: Hasher>(&self, _state: &mut H) {
-        // noop
+        // must be manually derived due to a bug in #[derive(PartialEq)]
+        // https://github.com/rust-lang/rust/issues/39128
+        &self.node == &other.node
     }
 }
 
