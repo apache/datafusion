@@ -265,10 +265,7 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     let data = ArrayData::try_new(
         GenericStringArray::<T>::DATA_TYPE,
         string_array.len(),
-        string_array
-            .data_ref()
-            .null_buffer()
-            .map(|b| b.bit_slice(string_array.offset(), string_array.len())),
+        string_array.data().nulls().map(|b| b.inner().sliced()),
         0,
         vec![new_offsets.finish(), vals.finish()],
         vec![],
