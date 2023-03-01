@@ -371,21 +371,26 @@ impl BoundedWindowAggStream {
                     self.evaluate_partition_by_column_values(&self.input_buffer)?;
                 let n_window_col = self.window_agg_states.len();
 
-                // Calculate the number of columns that can be emitted for each window expression for each partition.
-                let mut counter = IndexMap::new();
+                // Calculate the number of columns that can be emitted for each partition.
+                let mut counter = HashMap::new();
                 let mut rows_gen = vec![vec![]; n_window_col];
                 // TODO: Do below iteration after row conversion
                 for idx in 0..self.input_buffer.num_rows() {
                     let row = get_row_at_idx(&partition_by_columns, idx)?;
+                    // get counts for the current partition if empty initialize then start count from zero
                     let counts = if let Some(res) = counter.get_mut(&row) {
                         res
                     } else {
-                        counter.insert(row.clone(), 0);
-                        counter.get_mut(&row).unwrap()
+                        counter.entry(row.clone()).or_insert(0)
                     };
                     let mut row_res = vec![];
                     for window_agg_state in self.window_agg_states.iter() {
-                        let partition = window_agg_state.get(&row).unwrap();
+                        let partition = window_agg_state.get(&row).ok_or_else(|| {
+                            DataFusionError::Execution(format!(
+                                "Should contain partition:{:?}",
+                                row
+                            ))
+                        })?;
                         if *counts < partition.state.out_col.len() {
                             let res = ScalarValue::try_from_array(
                                 &partition.state.out_col,
@@ -765,8 +770,15 @@ impl BoundedWindowAggStream {
                         },
                     ) in partition_window_agg_states
                     {
-                        let partition_batch =
-                            self.partition_buffers.get_mut(partition_key).unwrap();
+                        let partition_batch = self
+                            .partition_buffers
+                            .get_mut(partition_key)
+                            .ok_or_else(|| {
+                                DataFusionError::Execution(format!(
+                                    "Expect partition buffer to contain key: {:?}",
+                                    partition_key
+                                ))
+                            })?;
                         assert_eq!(
                             partition_batch.record_batch.num_rows(),
                             partition_batch.indices.len()
@@ -849,7 +861,8 @@ impl BoundedWindowAggStream {
                 }
                 // Construct new record batch from the rows at the calculated indices for each partition.
                 for (partition_row, indices) in indices_map {
-                    let partition_batch = get_at_indices(record_batch, &indices)?;
+                    let partition_batch =
+                        get_record_batch_at_indices(record_batch, &indices)?;
                     res.insert(partition_row, (partition_batch, indices));
                 }
             }
@@ -872,7 +885,6 @@ impl BoundedWindowAggStream {
                         "Sort operation is not applicable to scalar value {scalar}"
                     ))),
                 };
-                // elem.evaluate(&record_batch).unwrap()
                 array_to_sort
             })
             .collect::<Result<Vec<ArrayRef>>>()
@@ -886,7 +898,10 @@ impl RecordBatchStream for BoundedWindowAggStream {
     }
 }
 
-fn get_at_indices(record_batch: &RecordBatch, indices: &[usize]) -> Result<RecordBatch> {
+fn get_record_batch_at_indices(
+    record_batch: &RecordBatch,
+    indices: &[usize],
+) -> Result<RecordBatch> {
     let mut batch_indices = UInt64Builder::with_capacity(0);
     let casted_indices = indices.iter().map(|elem| *elem as u64).collect::<Vec<_>>();
     batch_indices.append_slice(&casted_indices);
@@ -900,9 +915,9 @@ fn get_at_indices(record_batch: &RecordBatch, indices: &[usize]) -> Result<Recor
                 &batch_indices,
                 None, // None: no index check
             )
-            .unwrap()
+            .map_err(DataFusionError::ArrowError)
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     RecordBatch::try_new(record_batch.schema(), new_columns)
         .map_err(DataFusionError::ArrowError)
 }
