@@ -2624,7 +2624,7 @@ impl TryFrom<&DataType> for ScalarValue {
 macro_rules! format_option {
     ($F:expr, $EXPR:expr) => {{
         match $EXPR {
-            Some(e) => write!($F, "{}", e),
+            Some(e) => write!($F, "{e}"),
             None => write!($F, "NULL"),
         }
     }};

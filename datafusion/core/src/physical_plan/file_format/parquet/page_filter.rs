@@ -351,7 +351,7 @@ fn prune_pages_in_one_row_group(
             // stats filter array could not be built
             // return a result which will not filter out any pages
             Err(e) => {
-                debug!("Error evaluating page index predicate values {}", e);
+                debug!("Error evaluating page index predicate values {e}");
                 metrics.predicate_evaluation_errors.add(1);
                 return Ok(vec![RowSelector::select(group.num_rows() as usize)]);
             }
