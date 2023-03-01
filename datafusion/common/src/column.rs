@@ -35,7 +35,12 @@ pub struct Column {
 }
 
 impl Column {
-    /// Create Column from optional qualifier and name
+    /// Create Column from optional qualifier and name. The optional qualifier, if present,
+    /// will be parsed and normalized by default.
+    ///
+    /// See full details on [`TableReference::parse_str`]
+    ///
+    /// [`TableReference::parse_str`]: crate::TableReference::parse_str
     pub fn new(
         relation: Option<impl Into<OwnedTableReference>>,
         name: impl Into<String>,
