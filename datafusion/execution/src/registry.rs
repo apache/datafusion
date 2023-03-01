@@ -17,7 +17,7 @@
 
 //! FunctionRegistry trait
 
-use crate::error::Result;
+use datafusion_common::Result;
 use datafusion_expr::{AggregateUDF, ScalarUDF};
 use std::{collections::HashSet, sync::Arc};
 
