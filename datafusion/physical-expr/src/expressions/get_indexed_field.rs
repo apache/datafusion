@@ -457,9 +457,7 @@ mod tests {
         let result = expr.evaluate(batch).unwrap().into_array(batch.num_rows());
         assert!(
             result == expected_result.clone(),
-            "result: {:?} != expected result: {:?}",
-            result,
-            expected_result
+            "result: {result:?} != expected result: {expected_result:?}"
         );
         assert_eq!(result.data_type(), &DataType::Float64);
     }
