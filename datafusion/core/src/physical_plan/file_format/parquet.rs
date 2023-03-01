@@ -129,7 +129,7 @@ impl ParquetExec {
                 match PruningPredicate::try_new(predicate_expr, file_schema.clone()) {
                     Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
                     Err(e) => {
-                        debug!("Could not create pruning predicate for: {}", e);
+                        debug!("Could not create pruning predicate for: {e}");
                         predicate_creation_errors.add(1);
                         None
                     }

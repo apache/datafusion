@@ -75,7 +75,7 @@ pub(crate) fn prune_row_groups(
                 // stats filter array could not be built
                 // return a closure which will not filter out any row groups
                 Err(e) => {
-                    debug!("Error evaluating row group predicate values {}", e);
+                    debug!("Error evaluating row group predicate values {e}");
                     metrics.predicate_evaluation_errors.add(1);
                 }
             }
