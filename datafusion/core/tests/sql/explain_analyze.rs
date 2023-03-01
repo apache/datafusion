@@ -758,7 +758,8 @@ async fn explain_logical_plan_only() {
             "logical_plan",
             "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
             \n  SubqueryAlias: t\
-            \n    Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))",
+            \n    Projection: column1\
+            \n      Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))"
         ]];
     assert_eq!(expected, actual);
 }

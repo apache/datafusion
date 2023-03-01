@@ -20,12 +20,13 @@ use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
 use crate::rewrite::{TreeNodeRewritable, TreeNodeRewriter};
 use crate::{EquivalenceProperties, PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Operator;
 
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Compare the two expr lists are equal no matter the order.
@@ -346,6 +347,65 @@ where
     let root = init.transform_using(&mut builder)?;
     // Return a tuple containing the root node index and the DAG.
     Ok((root.data.unwrap(), builder.graph))
+}
+
+fn collect_columns_recursive(
+    expr: &Arc<dyn PhysicalExpr>,
+    columns: &mut HashSet<Column>,
+) {
+    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+        if !columns.iter().any(|c| c.eq(column)) {
+            columns.insert(column.clone());
+        }
+    }
+    expr.children()
+        .iter()
+        .for_each(|e| collect_columns_recursive(e, columns))
+}
+
+/// Recursively extract referenced [`Column`]s within a [`PhysicalExpr`].
+pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
+    let mut columns = HashSet::<Column>::new();
+    collect_columns_recursive(expr, &mut columns);
+    columns
+}
+
+/// Re-assign column indices referenced in predicate according to given schema.
+/// This may be helpful when dealing with projections.
+pub fn reassign_predicate_columns(
+    pred: Arc<dyn PhysicalExpr>,
+    schema: &SchemaRef,
+    ignore_not_found: bool,
+) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
+    let mut rewriter = ColumnAssigner {
+        schema,
+        ignore_not_found,
+    };
+    pred.transform_using(&mut rewriter)
+}
+
+#[derive(Debug)]
+struct ColumnAssigner<'a> {
+    schema: &'a SchemaRef,
+    ignore_not_found: bool,
+}
+
+impl<'a> TreeNodeRewriter<Arc<dyn PhysicalExpr>> for ColumnAssigner<'a> {
+    fn mutate(
+        &mut self,
+        expr: Arc<dyn PhysicalExpr>,
+    ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
+        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            let index = match self.schema.index_of(column.name()) {
+                Ok(idx) => idx,
+                Err(_) if self.ignore_not_found => usize::MAX,
+                Err(e) => return Err(e.into()),
+            };
+            return Ok(Arc::new(Column::new(column.name(), index)));
+        }
+
+        Ok(expr)
+    }
 }
 
 #[cfg(test)]

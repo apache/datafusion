@@ -28,6 +28,7 @@ use datafusion_common::DataFusionError;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::Interval;
 use datafusion_physical_expr::rewrite::TreeNodeRewritable;
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
 use crate::common::Result;
@@ -42,23 +43,6 @@ fn check_filter_expr_contains_sort_information(
             .children()
             .iter()
             .any(|e| check_filter_expr_contains_sort_information(e, reference))
-}
-
-fn collect_columns_recursive(expr: &Arc<dyn PhysicalExpr>, columns: &mut Vec<Column>) {
-    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-        if !columns.iter().any(|c| c.eq(column)) {
-            columns.push(column.clone())
-        }
-    }
-    expr.children()
-        .iter()
-        .for_each(|e| collect_columns_recursive(e, columns))
-}
-
-fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> Vec<Column> {
-    let mut columns = vec![];
-    collect_columns_recursive(expr, &mut columns);
-    columns
 }
 
 /// Create a one to one mapping from main columns to filter columns using
