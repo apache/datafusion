@@ -323,7 +323,8 @@ impl DataFrame {
     /// ```
     pub async fn describe(self) -> Result<Self> {
         //the functions now supported
-        let supported_describe_functions = vec!["count", "null_count", "max", "min"];
+        let supported_describe_functions =
+            vec!["count", "null_count", "mean", "min", "max"];
 
         let fields_iter = self.schema().fields().iter();
 
@@ -369,16 +370,14 @@ impl DataFrame {
                 )?
                 .collect()
                 .await?,
-            // max aggregation
+            // mean aggregation
             self.clone()
                 .aggregate(
                     vec![],
                     fields_iter
                         .clone()
-                        .filter(|f| {
-                            !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
-                        })
-                        .map(|f| datafusion_expr::max(col(f.name())).alias(f.name()))
+                        .filter(|f| f.data_type().is_numeric())
+                        .map(|f| datafusion_expr::avg(col(f.name())).alias(f.name()))
                         .collect::<Vec<_>>(),
                 )?
                 .collect()
@@ -393,6 +392,20 @@ impl DataFrame {
                             !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
                         })
                         .map(|f| datafusion_expr::min(col(f.name())).alias(f.name()))
+                        .collect::<Vec<_>>(),
+                )?
+                .collect()
+                .await?,
+            // max aggregation
+            self.clone()
+                .aggregate(
+                    vec![],
+                    fields_iter
+                        .clone()
+                        .filter(|f| {
+                            !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
+                        })
+                        .map(|f| datafusion_expr::max(col(f.name())).alias(f.name()))
                         .collect::<Vec<_>>(),
                 )?
                 .collect()
