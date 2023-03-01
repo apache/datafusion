@@ -618,6 +618,9 @@ fn analyze_window_sort_removal(
         } else {
             match (partition_search_mode, sort_keys) {
                 (PartitionSearchMode::Linear, Some(sort_keys)) => {
+                    // For `WindowAggExec` to work correctly POARTITION BY columns should be sorted.
+                    // Hence if `PartitionSearchMode` is `Linear` we should satisfy required ordering.
+                    // Effectively `WindowAggExec` works only in PartitionSearchMode::Sorted mode.
                     add_sort_above(&mut new_child, sort_keys.clone())?;
                     Arc::new(WindowAggExec::try_new(
                         window_expr,
@@ -673,14 +676,14 @@ fn can_skip_ordering(
             let all_partition =
                 compare_set_equality(&ordered_merged_indices, &partitionby_indices);
             let contains_all_orderbys = orderby_indices.len() == orderby_keys.len();
-            let only_orderby_indices =
+            let col_indices_only_at_orderby =
                 get_set_diff_indices(&orderby_indices, &partitionby_indices);
-            let is_orderby_diff_consecutive = is_consecutive(&only_orderby_indices);
+            let is_orderby_diff_consecutive = is_consecutive(&col_indices_only_at_orderby);
             let input_orderby_columns =
-                get_at_indices(physical_ordering, &only_orderby_indices)?;
+                get_at_indices(physical_ordering, &col_indices_only_at_orderby)?;
             let expected_orderby_columns = get_at_indices(
                 orderby_keys,
-                &find_match_indices(&only_orderby_indices, &orderby_indices),
+                &find_match_indices(&col_indices_only_at_orderby, &orderby_indices),
             )?;
             let schema = sort_input.schema();
             let nullables = input_orderby_columns
