@@ -46,10 +46,9 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{downcast_value, ScalarValue};
-use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
-
 use datafusion_physical_expr::rewrite::{TreeNodeRewritable, TreeNodeRewriter};
-use datafusion_physical_expr::utils::get_phys_expr_columns;
+use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
 use log::trace;
 
 /// Interface to pass statistics information to [`PruningPredicate`]
@@ -447,8 +446,8 @@ impl<'a> PruningExpressionBuilder<'a> {
         required_columns: &'a mut RequiredStatColumns,
     ) -> Result<Self> {
         // find column name; input could be a more complicated expression
-        let left_columns = get_phys_expr_columns(left);
-        let right_columns = get_phys_expr_columns(right);
+        let left_columns = collect_columns(left);
+        let right_columns = collect_columns(right);
         let (column_expr, scalar_expr, columns, correct_operator) =
             match (left_columns.len(), right_columns.len()) {
                 (1, 0) => (left, right, left_columns, op),
