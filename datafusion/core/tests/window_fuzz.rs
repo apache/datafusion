@@ -135,7 +135,8 @@ fn get_random_function(
 ) -> (WindowFunction, Vec<Arc<dyn PhysicalExpr>>, String) {
     let mut args = if is_linear {
         // Since in linear test we use ORDER BY a in the query. To make result
-        // non-dependent on table order. We should use column a in the window function (Given that we do not use ROWS for the window frame).
+        // non-dependent on table order. We should use column a in the window function
+        // (Given that we do not use ROWS for the window frame. ROWS also introduces dependency to the table order.).
         vec![col("a", schema).unwrap()]
     } else {
         vec![col("x", schema).unwrap()]
@@ -174,7 +175,7 @@ fn get_random_function(
     if !is_linear {
         // row_number, rank, lead, lag doesn't use its window frame to calculate result. Their results are calculated
         // according to table scan order. This adds the dependency to table order. Hence do not use these functions in
-        // linear test.
+        // Partition by linear test.
         window_fn_map.insert(
             "row_number",
             (
@@ -392,6 +393,8 @@ async fn run_window_test(
     let mut exec1 = Arc::new(
         MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None).unwrap(),
     ) as Arc<dyn ExecutionPlan>;
+    // Table is ordered according to ORDER BY a,b In linear test we use PARTITION BY b, ORDER BY b
+    // For WindowAggExec  to produce correct result it need table to be ordered by b,a. Hence add a sort.
     if is_linear {
         exec1 = Arc::new(SortExec::try_new(sort_keys.clone(), exec1, None)?) as _;
     }
