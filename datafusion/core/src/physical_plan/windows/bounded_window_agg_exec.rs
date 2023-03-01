@@ -372,7 +372,7 @@ impl BoundedWindowAggStream {
                 let n_window_col = self.window_agg_states.len();
 
                 // Calculate the number of columns that can be emitted for each window expression for each partition.
-                let mut counter: IndexMap<Vec<ScalarValue>, usize> = IndexMap::new();
+                let mut counter = IndexMap::new();
                 let mut rows_gen = vec![vec![]; n_window_col];
                 // TODO: Do below iteration after row conversion
                 for idx in 0..self.input_buffer.num_rows() {
@@ -653,7 +653,7 @@ impl BoundedWindowAggStream {
         // batch in `self.partition_batches`.
 
         // Calculate how many elements to prune for each partition batch
-        let mut n_prune_each_partition: HashMap<PartitionKey, usize> = HashMap::new();
+        let mut n_prune_each_partition = HashMap::new();
         for window_agg_state in self.window_agg_states.iter_mut() {
             window_agg_state.retain(|_, WindowState { state, .. }| !state.is_end);
             for (partition_row, WindowState { state: value, .. }) in window_agg_state {
@@ -802,8 +802,7 @@ impl BoundedWindowAggStream {
         &self,
         record_batch: &RecordBatch,
     ) -> Result<PartitionRecordBatchIndices> {
-        let mut res: IndexMap<Vec<ScalarValue>, (RecordBatch, Vec<usize>)> =
-            IndexMap::new();
+        let mut res = IndexMap::new();
         let num_rows = record_batch.num_rows();
         match &self.search_mode {
             PartitionSearchMode::Sorted => {
@@ -840,12 +839,12 @@ impl BoundedWindowAggStream {
                     self.evaluate_partition_by_column_values(record_batch)?;
                 // In PartiallySorted implementation we expect indices_map to remember insertion order
                 // hence we use IndexMap.
-                let mut indices_map: IndexMap<Vec<ScalarValue>, Vec<usize>> =
-                    IndexMap::new();
+                let mut indices_map = IndexMap::new();
                 // Calculate indices for each partition
                 for idx in 0..num_rows {
                     let partition_row = get_row_at_idx(&partition_bys, idx)?;
-                    let indices = indices_map.entry(partition_row).or_default();
+                    let indices: &mut Vec<usize> =
+                        indices_map.entry(partition_row).or_default();
                     indices.push(idx);
                 }
                 // Construct new record batch from the rows at the calculated indices for each partition.
@@ -888,7 +887,7 @@ impl RecordBatchStream for BoundedWindowAggStream {
 }
 
 fn get_at_indices(record_batch: &RecordBatch, indices: &[usize]) -> Result<RecordBatch> {
-    let mut batch_indices: UInt64Builder = UInt64Builder::with_capacity(0);
+    let mut batch_indices = UInt64Builder::with_capacity(0);
     let casted_indices = indices.iter().map(|elem| *elem as u64).collect::<Vec<_>>();
     batch_indices.append_slice(&casted_indices);
     let batch_indices = batch_indices.finish();
