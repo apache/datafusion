@@ -1165,7 +1165,11 @@ message FileScanExecConf {
 
 message ParquetScanExecNode {
   FileScanExecConf base_conf = 1;
-  LogicalExprNode pruning_predicate = 2;
+
+  // Was pruning predicate based on a logical expr.
+  reserved 2;
+
+  PhysicalExprNode predicate = 3;
 }
 
 message CsvScanExecNode {
