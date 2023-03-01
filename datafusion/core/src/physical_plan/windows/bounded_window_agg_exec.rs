@@ -374,6 +374,7 @@ impl BoundedWindowAggStream {
                 // Calculate the number of columns that can be emitted for each window expression for each partition.
                 let mut counter: IndexMap<Vec<ScalarValue>, usize> = IndexMap::new();
                 let mut rows_gen = vec![vec![]; n_window_col];
+                // TODO: Do below iteration after row conversion
                 for idx in 0..self.input_buffer.num_rows() {
                     let row = get_row_at_idx(&partition_by_columns, idx)?;
                     let counts = if let Some(res) = counter.get_mut(&row) {
