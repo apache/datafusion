@@ -1059,8 +1059,7 @@ impl SessionContext {
         plan: Arc<dyn ExecutionPlan>,
         path: impl AsRef<str>,
     ) -> Result<()> {
-        let state = self.state.read().clone();
-        plan_to_csv(&state, plan, path).await
+        plan_to_csv(self.task_ctx(), plan, path).await
     }
 
     /// Executes a query and writes the results to a partitioned JSON file.
@@ -1069,8 +1068,7 @@ impl SessionContext {
         plan: Arc<dyn ExecutionPlan>,
         path: impl AsRef<str>,
     ) -> Result<()> {
-        let state = self.state.read().clone();
-        plan_to_json(&state, plan, path).await
+        plan_to_json(self.task_ctx(), plan, path).await
     }
 
     /// Executes a query and writes the results to a partitioned Parquet file.
@@ -1080,8 +1078,7 @@ impl SessionContext {
         path: impl AsRef<str>,
         writer_properties: Option<WriterProperties>,
     ) -> Result<()> {
-        let state = self.state.read().clone();
-        plan_to_parquet(&state, plan, path, writer_properties).await
+        plan_to_parquet(self.task_ctx(), plan, path, writer_properties).await
     }
 
     /// Get a new TaskContext to run in this session
