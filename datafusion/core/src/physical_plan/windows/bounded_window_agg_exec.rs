@@ -248,7 +248,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
             self.partition_by_sort_keys()?,
             self.partition_search_mode.clone(),
             self.ordered_partition_by_indices.clone(),
-        ));
+        )?);
         Ok(stream)
     }
 
@@ -384,15 +384,10 @@ impl BoundedWindowAggStream {
                     DataFusionError::Execution("Expects to have partition".to_string())
                 };
                 let rows = self.row_converter.convert_columns(&partition_by_columns)?;
-                // TODO: Do below iteration after row conversion
                 for idx in 0..rows.num_rows() {
                     let row = rows.row(idx);
                     // get counts for the current partition if empty initialize then start count from zero
-                    let counts = if let Some(res) = counter.get_mut(&row) {
-                        res
-                    } else {
-                        counter.entry(row).or_insert(0)
-                    };
+                    let counts = counter.entry(row).or_insert(0);
 
                     // Store result of each window expression for current row if it is produced.
                     let mut row_res = vec![];
@@ -559,7 +554,7 @@ impl BoundedWindowAggStream {
         partition_by_sort_keys: Vec<PhysicalSortExpr>,
         search_mode: PartitionSearchMode,
         ordered_partition_by_indices: Vec<usize>,
-    ) -> Self {
+    ) -> Result<Self> {
         // TODO: make this function return Result. remove unwraps.
         let state = window_expr.iter().map(|_| IndexMap::new()).collect();
         let empty_batch = RecordBatch::new_empty(schema.clone());
@@ -572,12 +567,11 @@ impl BoundedWindowAggStream {
             RowConverter::new(
                 partition_by
                     .iter()
-                    .map(|f| SortField::new(f.data_type(&schema).unwrap()))
-                    .collect(),
-            )
-            .unwrap()
+                    .map(|f| Ok(SortField::new(f.data_type(&schema)?)))
+                    .collect::<Result<Vec<_>>>()?,
+            )?
         };
-        Self {
+        Ok(Self {
             schema,
             input,
             input_buffer: empty_batch,
@@ -590,7 +584,7 @@ impl BoundedWindowAggStream {
             search_mode,
             ordered_partition_by_indices,
             row_converter,
-        }
+        })
     }
 
     fn compute_aggregates(&mut self) -> Result<RecordBatch> {
