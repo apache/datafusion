@@ -51,10 +51,7 @@ async fn main() -> Result<()> {
 
     // Reading PARQUET file and print describe
     let parquet_df = ctx
-        .read_parquet(
-            &format!("{testdata}/alltypes_plain.parquet"),
-            ParquetReadOptions::default(),
-        )
+        .read_parquet(filename, ParquetReadOptions::default())
         .await?;
     parquet_df.describe().await.unwrap().show().await?;
 
