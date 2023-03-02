@@ -38,6 +38,9 @@ pub trait SimplifyInfo {
 
     /// Returns details needed for partial expression evaluation
     fn execution_props(&self) -> &ExecutionProps;
+
+    /// Returns data type of this expr needed for determining optimized int type of a value
+    fn get_data_type(&self, expr: &Expr) -> DataType;
 }
 
 /// Provides simplification information based on DFSchema and
@@ -121,6 +124,18 @@ impl<'a> SimplifyInfo for SimplifyContext<'a> {
                     "Could not find columns in '{expr}' during simplify"
                 ))
             })
+    }
+
+    /// Returns data type of this expr needed for determining optimized int type of a value
+    fn get_data_type(&self, expr: &Expr) -> DataType {
+        if self.schemas.len() == 1 {
+            match expr.get_type(&self.schemas[0]) {
+                Ok(expr_data_type) => expr_data_type,
+                Err(_) => DataType::Int32,
+            }
+        } else {
+            DataType::Int32
+        }
     }
 
     fn execution_props(&self) -> &ExecutionProps {

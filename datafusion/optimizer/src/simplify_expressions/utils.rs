@@ -17,6 +17,7 @@
 
 //! Utility functions for expression simplification
 
+use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     expr::{Between, BinaryExpr},
@@ -78,7 +79,7 @@ pub fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
     }
 }
 
-/// This enum is needed for the function "delete_expressions_in_complex_expr" for
+/// This enum is needed for the function "delete_xor_in_complex_expr" for
 /// creating a postfix notation vector
 #[derive(PartialEq)]
 enum SyntaxTreeItem {
@@ -237,6 +238,21 @@ pub fn is_not_of(not_expr: &Expr, expr: &Expr) -> bool {
 /// returns true if `not_expr` is !`expr` (bitwise not)
 pub fn is_negative_of(not_expr: &Expr, expr: &Expr) -> bool {
     matches!(not_expr, Expr::Negative(inner) if expr == inner.as_ref())
+}
+
+/// Returns a new int type based on data type of an expression
+pub fn new_int_by_expr_data_type(val: i64, expr_data_type: &DataType) -> Expr {
+    match expr_data_type {
+        DataType::Int8 => Expr::Literal(ScalarValue::Int8(Some(val.try_into().unwrap()))),
+        DataType::Int16 => {
+            Expr::Literal(ScalarValue::Int16(Some(val.try_into().unwrap())))
+        }
+        DataType::Int32 => {
+            Expr::Literal(ScalarValue::Int32(Some(val.try_into().unwrap())))
+        }
+        DataType::Int64 => Expr::Literal(ScalarValue::Int64(Some(val))),
+        _ => Expr::Literal(ScalarValue::Int32(Some(val.try_into().unwrap()))),
+    }
 }
 
 /// returns the contained boolean value in `expr` as
