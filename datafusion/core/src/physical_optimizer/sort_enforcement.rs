@@ -678,7 +678,8 @@ fn can_skip_ordering(
             let contains_all_orderbys = orderby_indices.len() == orderby_keys.len();
             let col_indices_only_at_orderby =
                 get_set_diff_indices(&orderby_indices, &partitionby_indices);
-            let is_orderby_diff_consecutive = is_consecutive(&col_indices_only_at_orderby);
+            let is_orderby_diff_consecutive =
+                is_consecutive(&col_indices_only_at_orderby);
             let input_orderby_columns =
                 get_at_indices(physical_ordering, &col_indices_only_at_orderby)?;
             let expected_orderby_columns = get_at_indices(
@@ -939,8 +940,8 @@ where
     a == b
 }
 
-// Create a new vector from the elements at the `indices` of `searched` vector
-fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec<T>> {
+/// Create a new vector from the elements at the `indices` of `searched` vector
+pub fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec<T>> {
     let mut result = vec![];
     for idx in indices {
         result.push(searched[*idx].clone());

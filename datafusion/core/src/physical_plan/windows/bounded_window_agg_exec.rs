@@ -51,13 +51,16 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::physical_optimizer::sort_enforcement::get_at_indices;
 use arrow::array::UInt64Builder;
+use arrow::datatypes::DataType;
+use arrow::row::{OwnedRow, RowConverter, SortField};
 use datafusion_common::utils::get_row_at_idx;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 use datafusion_physical_expr::window::{
-    PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
-    WindowAggState, WindowState,
+    PartitionBatchState, PartitionBatches, PartitionWindowAggStates, WindowAggState,
+    WindowState,
 };
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use indexmap::IndexMap;
@@ -341,12 +344,13 @@ pub struct BoundedWindowAggStream {
     baseline_metrics: BaselineMetrics,
     search_mode: PartitionSearchMode,
     ordered_partition_by_indices: Vec<usize>,
+    row_converter: RowConverter,
 }
 
 impl BoundedWindowAggStream {
     /// This method constructs output columns using the result of each window expression
     fn calculate_out_columns(&mut self) -> Result<Option<Vec<ArrayRef>>> {
-        match self.search_mode {
+        match &self.search_mode {
             PartitionSearchMode::Sorted => {
                 let n_out = self.calculate_n_out_row();
                 if n_out == 0 {
@@ -379,20 +383,22 @@ impl BoundedWindowAggStream {
                 let err = || {
                     DataFusionError::Execution("Expects to have partition".to_string())
                 };
+                let rows = self.row_converter.convert_columns(&partition_by_columns)?;
                 // TODO: Do below iteration after row conversion
-                for idx in 0..self.input_buffer.num_rows() {
-                    let row = get_row_at_idx(&partition_by_columns, idx)?;
+                for idx in 0..rows.num_rows() {
+                    let row = rows.row(idx);
                     // get counts for the current partition if empty initialize then start count from zero
                     let counts = if let Some(res) = counter.get_mut(&row) {
                         res
                     } else {
-                        counter.entry(row.clone()).or_insert(0)
+                        counter.entry(row).or_insert(0)
                     };
 
                     // Store result of each window expression for current row if it is produced.
                     let mut row_res = vec![];
                     for window_agg_state in self.window_agg_states.iter() {
-                        let partition = window_agg_state.get(&row).ok_or_else(err)?;
+                        let partition =
+                            window_agg_state.get(&row.owned()).ok_or_else(err)?;
                         if *counts < partition.state.out_col.len() {
                             let res = ScalarValue::try_from_array(
                                 &partition.state.out_col,
@@ -407,15 +413,17 @@ impl BoundedWindowAggStream {
                     if row_res.len() != n_window_col {
                         break;
                     }
-                    // We could produce result for all window expression at current row.
+                    // We can produce result for all window expression at current row.
                     *counts += 1;
                     for (col_idx, elem) in row_res.into_iter().enumerate() {
                         rows_gen[col_idx].push(elem)
                     }
                 } // end of row iteration
                 for (row, count) in counter.iter() {
-                    let partition_batch_state =
-                        self.partition_buffers.get_mut(row).ok_or_else(err)?;
+                    let partition_batch_state = self
+                        .partition_buffers
+                        .get_mut(&row.owned())
+                        .ok_or_else(err)?;
                     // Store how many rows are generated for each partition
                     partition_batch_state.n_out_row = *count;
                 }
@@ -488,6 +496,9 @@ impl BoundedWindowAggStream {
             }
             PartitionSearchMode::PartiallySorted => {
                 if let Some((last_row, _)) = self.partition_buffers.last() {
+                    let last_row_col =
+                        self.row_converter.convert_rows(vec![last_row.row()])?;
+                    let last_row = get_row_at_idx(&last_row_col, 0)?;
                     let last_sorted_cols = self
                         .ordered_partition_by_indices
                         .iter()
@@ -496,6 +507,9 @@ impl BoundedWindowAggStream {
                     for (partition_row, partition_batch_state) in
                         self.partition_buffers.iter_mut()
                     {
+                        let partition_row_col =
+                            self.row_converter.convert_rows(vec![partition_row.row()])?;
+                        let partition_row = get_row_at_idx(&partition_row_col, 0)?;
                         let sorted_cols = self
                             .ordered_partition_by_indices
                             .iter()
@@ -521,7 +535,7 @@ impl BoundedWindowAggStream {
     }
 }
 
-type PartitionRecordBatchIndices = IndexMap<PartitionKey, (RecordBatch, Vec<usize>)>;
+type PartitionRecordBatchIndices = IndexMap<OwnedRow, (RecordBatch, Vec<usize>)>;
 
 impl Stream for BoundedWindowAggStream {
     type Item = Result<RecordBatch>;
@@ -546,8 +560,23 @@ impl BoundedWindowAggStream {
         search_mode: PartitionSearchMode,
         ordered_partition_by_indices: Vec<usize>,
     ) -> Self {
+        // TODO: make this function return Result. remove unwraps.
         let state = window_expr.iter().map(|_| IndexMap::new()).collect();
         let empty_batch = RecordBatch::new_empty(schema.clone());
+        let partition_by = window_expr[0].partition_by();
+        // let res = partition_by[0].data_type(&schema)?;
+        let row_converter = if partition_by.is_empty() {
+            // If empty create dummy converted with datatype null.
+            RowConverter::new(vec![SortField::new(DataType::Null)]).unwrap()
+        } else {
+            RowConverter::new(
+                partition_by
+                    .iter()
+                    .map(|f| SortField::new(f.data_type(&schema).unwrap()))
+                    .collect(),
+            )
+            .unwrap()
+        };
         Self {
             schema,
             input,
@@ -560,6 +589,7 @@ impl BoundedWindowAggStream {
             partition_by_sort_keys,
             search_mode,
             ordered_partition_by_indices,
+            row_converter,
         }
     }
 
@@ -726,7 +756,7 @@ impl BoundedWindowAggStream {
 
     /// Prunes emitted parts from WindowAggState `out_col` field.
     fn prune_out_columns(&mut self, n_out: usize) -> Result<()> {
-        match self.search_mode {
+        match &self.search_mode {
             PartitionSearchMode::Sorted => {
                 // We store generated columns for each window expression in the `out_col`
                 // field of `WindowAggState`. Given how many rows are emitted, we remove
@@ -810,7 +840,7 @@ impl BoundedWindowAggStream {
     }
 
     fn evaluate_partition_batches(
-        &self,
+        &mut self,
         record_batch: &RecordBatch,
     ) -> Result<PartitionRecordBatchIndices> {
         let mut res = IndexMap::new();
@@ -824,21 +854,28 @@ impl BoundedWindowAggStream {
                     self.ordered_partition_by_indices.len()
                 );
                 let partition_columns = self
-                    .ordered_partition_by_indices
+                    .partition_by_sort_keys
                     .iter()
-                    .map(|idx| {
-                        self.partition_by_sort_keys[*idx]
-                            .evaluate_to_sort_column(record_batch)
-                    })
+                    .map(|elem| elem.evaluate_to_sort_column(record_batch))
                     .collect::<Result<Vec<_>>>()?;
+                let partition_columns_ordered = get_at_indices(
+                    &partition_columns,
+                    &self.ordered_partition_by_indices,
+                )?;
                 let partition_points =
-                    self.evaluate_partition_points(num_rows, &partition_columns)?;
+                    self.evaluate_partition_points(num_rows, &partition_columns_ordered)?;
                 let partition_bys = partition_columns
                     .into_iter()
                     .map(|arr| arr.values)
                     .collect::<Vec<ArrayRef>>();
+                let rows = if partition_bys.is_empty() {
+                    let null_arr = ScalarValue::iter_to_array(vec![ScalarValue::Null])?;
+                    self.row_converter.convert_columns(&[null_arr])?
+                } else {
+                    self.row_converter.convert_columns(&partition_bys)?
+                };
                 for range in partition_points {
-                    let partition_row = get_row_at_idx(&partition_bys, range.start)?;
+                    let partition_row = rows.row(range.start).owned();
                     let len = range.end - range.start;
                     let slice = record_batch.slice(range.start, len);
                     let indices = (range.start..range.end).collect();
@@ -852,10 +889,11 @@ impl BoundedWindowAggStream {
                 // hence we use IndexMap.
                 let mut indices_map = IndexMap::new();
                 // Calculate indices for each partition
-                for idx in 0..num_rows {
-                    let partition_row = get_row_at_idx(&partition_bys, idx)?;
+                let rows = self.row_converter.convert_columns(&partition_bys)?;
+                for idx in 0..rows.num_rows() {
+                    let row = rows.row(idx);
                     let indices: &mut Vec<usize> =
-                        indices_map.entry(partition_row).or_default();
+                        indices_map.entry(row.owned()).or_default();
                     indices.push(idx);
                 }
                 // Construct new record batch from the rows at the calculated indices for each partition.
