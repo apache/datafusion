@@ -125,7 +125,10 @@ impl TestParquetFile {
     /// (FilterExec)
     ///   (ParquetExec)
     /// ```
-    pub async fn create_scan(&self, filter: Expr) -> Result<Arc<dyn ExecutionPlan>> {
+    pub async fn create_scan(
+        &self,
+        maybe_filter: Option<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         let scan_config = FileScanConfig {
             object_store_url: self.object_store_url.clone(),
             file_schema: self.schema.clone(),
@@ -148,25 +151,26 @@ impl TestParquetFile {
         // run coercion on the filters to coerce types etc.
         let props = ExecutionProps::new();
         let context = SimplifyContext::new(&props).with_schema(df_schema.clone());
-        let simplifier = ExprSimplifier::new(context);
-        let filter = simplifier.coerce(filter, df_schema.clone()).unwrap();
+        if let Some(filter) = maybe_filter {
+            let simplifier = ExprSimplifier::new(context);
+            let filter = simplifier.coerce(filter, df_schema.clone()).unwrap();
+            let physical_filter_expr = create_physical_expr(
+                &filter,
+                &df_schema,
+                self.schema.as_ref(),
+                &ExecutionProps::default(),
+            )?;
+            let parquet_exec = Arc::new(ParquetExec::new(
+                scan_config,
+                Some(physical_filter_expr.clone()),
+                None,
+            ));
 
-        let physical_filter_expr = create_physical_expr(
-            &filter,
-            &df_schema,
-            self.schema.as_ref(),
-            &ExecutionProps::default(),
-        )?;
-
-        let parquet_exec = Arc::new(ParquetExec::new(
-            scan_config,
-            Some(physical_filter_expr.clone()),
-            None,
-        ));
-
-        let exec = Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
-
-        Ok(exec)
+            let exec = Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
+            Ok(exec)
+        } else {
+            Ok(Arc::new(ParquetExec::new(scan_config, None, None)))
+        }
     }
 
     /// Retrieve metrics from the parquet exec returned from `create_scan`

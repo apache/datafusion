@@ -150,8 +150,10 @@ h2o groupby query 1 took 1669 ms
 This is a set of benchmarks for testing and verifying performance of parquet filtering and sorting.
 The queries are executed on a synthetic dataset generated during the benchmark execution and designed to simulate web server access logs.
 
+To run filter benchmarks, run:
+
 ```base
-cargo run --release --bin parquet --  --path ./data --scale-factor 1.0
+cargo run --release --bin parquet -- filter  --path ./data --scale-factor 1.0
 ```
 
 This will generate the synthetic dataset at `./data/logs.parquet`. The size of the dataset can be controlled through the `size_factor`
@@ -180,6 +182,12 @@ Iteration 2 returned 1781686 rows in 1947 ms
 ...
 ```
 
-After the filter benchmarks run, the sort benchmarks will. This proceeds in a similar way
-as above: each sort expression combination will be run using the same
-set of `ParquetScanOption` as the filter benchmarks.
+Similarly, to run sorting benchmarks, run:
+
+```base
+cargo run --release --bin parquet -- sort  --path ./data --scale-factor 1.0
+```
+
+This proceeds in the same way as the filter benchmarks: each sort expression
+combination will be run using the same set of `ParquetScanOption` as the
+filter benchmarks.

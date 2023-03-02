@@ -22,7 +22,7 @@ use datafusion::optimizer::utils::disjunction;
 use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::sorts::sort::SortExec;
-use datafusion::prelude::{col, SessionContext};
+use datafusion::prelude::{col, SessionConfig, SessionContext};
 use parquet::file::properties::WriterProperties;
 use parquet_test_utils::{ParquetScanOptions, TestParquetFile};
 use std::path::PathBuf;
@@ -35,8 +35,16 @@ use test_utils::AccessLogGenerator;
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
-#[derive(Debug, StructOpt, Clone)]
+#[derive(Debug, Clone, StructOpt)]
 #[structopt(name = "Benchmarks", about = "Apache Arrow Rust Benchmarks.")]
+enum ParquetBenchCmd {
+    /// Benchmark sorting parquet files
+    Sort(Opt),
+    /// Benchmark parquet filter pushdown
+    Filter(Opt),
+}
+
+#[derive(Debug, StructOpt, Clone)]
 struct Opt {
     /// Activate debug mode to see query results
     #[structopt(short, long)]
@@ -65,53 +73,47 @@ struct Opt {
     #[structopt(short = "s", long = "scale-factor", default_value = "1.0")]
     scale_factor: f32,
 }
+impl Opt {
+    /// Initialize parquet test file given options.
+    fn init_file(&self) -> Result<parquet_test_utils::TestParquetFile> {
+        let path = self.path.join("logs.parquet");
+
+        let mut props_builder = WriterProperties::builder();
+
+        if let Some(s) = self.page_size {
+            props_builder = props_builder
+                .set_data_pagesize_limit(s)
+                .set_write_batch_size(s);
+        }
+
+        if let Some(s) = self.row_group_size {
+            props_builder = props_builder.set_max_row_group_size(s);
+        }
+
+        gen_data(path, self.scale_factor, props_builder.build())
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let opt: Opt = Opt::from_args();
-    println!("Running benchmarks with the following options: {opt:?}");
-
-    let path = opt.path.join("logs.parquet");
-
-    let mut props_builder = WriterProperties::builder();
-
-    if let Some(s) = opt.page_size {
-        props_builder = props_builder
-            .set_data_pagesize_limit(s)
-            .set_write_batch_size(s);
+    let cmd = ParquetBenchCmd::from_args();
+    match cmd {
+        ParquetBenchCmd::Filter(opt) => {
+            println!("running filter benchmarks");
+            let test_file = opt.init_file()?;
+            run_filter_benchmarks(opt, &test_file).await?;
+        }
+        ParquetBenchCmd::Sort(opt) => {
+            println!("running sort benchmarks");
+            let test_file = opt.init_file()?;
+            run_sort_benchmarks(opt, &test_file).await?;
+        }
     }
-
-    if let Some(s) = opt.row_group_size {
-        props_builder = props_builder.set_max_row_group_size(s);
-    }
-
-    let test_file = gen_data(path, opt.scale_factor, props_builder.build())?;
-    println!("running filter benchmarks");
-    run_filter_benchmarks(opt.clone(), &test_file).await?;
-    println!("running sort benchmarks");
-    run_sort_benchmarks(opt, &test_file).await?;
     Ok(())
 }
 
 async fn run_sort_benchmarks(opt: Opt, test_file: &TestParquetFile) -> Result<()> {
     use datafusion::physical_expr::expressions::col;
-    let scan_options_matrix = vec![
-        ParquetScanOptions {
-            pushdown_filters: false,
-            reorder_filters: false,
-            enable_page_index: false,
-        },
-        ParquetScanOptions {
-            pushdown_filters: true,
-            reorder_filters: true,
-            enable_page_index: true,
-        },
-        ParquetScanOptions {
-            pushdown_filters: true,
-            reorder_filters: true,
-            enable_page_index: false,
-        },
-    ];
     let schema = test_file.schema();
     let sort_cases = vec![
         (
@@ -193,19 +195,16 @@ async fn run_sort_benchmarks(opt: Opt, test_file: &TestParquetFile) -> Result<()
     ];
     for (title, expr) in sort_cases {
         println!("Executing '{title}' (sorting by: {expr:?})");
-        for scan_options in &scan_options_matrix {
-            println!("Using scan options {scan_options:?}");
-            for i in 0..opt.iterations {
-                let config = scan_options.config().with_target_partitions(opt.partitions);
-                let ctx = SessionContext::with_config(config);
-                let start = Instant::now();
-                exec_sort(&ctx, &expr, test_file, opt.debug).await?;
-                println!(
-                    "Iteration {} finished in {} ms",
-                    i,
-                    start.elapsed().as_millis()
-                );
-            }
+        for i in 0..opt.iterations {
+            let config = SessionConfig::new().with_target_partitions(opt.partitions);
+            let ctx = SessionContext::with_config(config);
+            let start = Instant::now();
+            exec_sort(&ctx, &expr, test_file, opt.debug).await?;
+            println!(
+                "Iteration {} finished in {} ms",
+                i,
+                start.elapsed().as_millis()
+            );
         }
         println!("\n");
     }
@@ -288,7 +287,7 @@ async fn exec_scan(
     filter: Expr,
     debug: bool,
 ) -> Result<usize> {
-    let exec = test_file.create_scan(filter).await?;
+    let exec = test_file.create_scan(Some(filter)).await?;
 
     let task_ctx = ctx.task_ctx();
     let result = collect(exec, task_ctx).await?;
@@ -305,7 +304,7 @@ async fn exec_sort(
     test_file: &TestParquetFile,
     debug: bool,
 ) -> Result<()> {
-    let scan = test_file.create_scan(lit(true)).await?;
+    let scan = test_file.create_scan(None).await?;
     let exec = Arc::new(SortExec::try_new(expr.to_owned(), scan, None)?);
     let task_ctx = ctx.task_ctx();
     let result = collect(exec, task_ctx).await?;
