@@ -505,26 +505,32 @@ impl BoundedWindowAggStream {
                 }
             }
             PartitionSearchMode::PartiallySorted => {
-                // if let Some((last_row, _)) = self.partition_buffers.last() {
-                //     let last_sorted_cols = self
-                //         .ordered_partition_by_indices
-                //         .iter()
-                //         .map(|idx| last_row[*idx].clone())
-                //         .collect::<Vec<_>>();
-                //     for (partition_row, partition_batch_state) in
-                //         self.partition_buffers.iter_mut()
-                //     {
-                //         let sorted_cols = self
-                //             .ordered_partition_by_indices
-                //             .iter()
-                //             .map(|idx| partition_row[*idx].clone())
-                //             .collect::<Vec<_>>();
-                //         if sorted_cols != last_sorted_cols {
-                //             // It is guaranteed that we will no longer receive value for these partitions
-                //             partition_batch_state.is_end = true;
-                //         }
-                //     }
-                // }
+                if let Some((last_row, _)) = self.partition_buffers.last() {
+                    let last_row_col =
+                        self.row_converter.convert_rows(vec![last_row.row()])?;
+                    let last_row = get_row_at_idx(&last_row_col, 0)?;
+                    let last_sorted_cols = self
+                        .ordered_partition_by_indices
+                        .iter()
+                        .map(|idx| last_row[*idx].clone())
+                        .collect::<Vec<_>>();
+                    for (partition_row, partition_batch_state) in
+                        self.partition_buffers.iter_mut()
+                    {
+                        let partition_row_col =
+                            self.row_converter.convert_rows(vec![partition_row.row()])?;
+                        let partition_row = get_row_at_idx(&partition_row_col, 0)?;
+                        let sorted_cols = self
+                            .ordered_partition_by_indices
+                            .iter()
+                            .map(|idx| partition_row[*idx].clone())
+                            .collect::<Vec<_>>();
+                        if sorted_cols != last_sorted_cols {
+                            // It is guaranteed that we will no longer receive value for these partitions
+                            partition_batch_state.is_end = true;
+                        }
+                    }
+                }
             }
             _ => {}
         };
