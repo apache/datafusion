@@ -2014,7 +2014,7 @@ mod test_linear_partition_by {
         // let n_rows = vec![100, 1000, 10_000];
         let n_rows = vec![10_000];
         // let distincts = vec![10, 1000, 100_000_000];
-        let distincts = vec![1000];
+        let distincts = vec![5, 1000];
         let n_batches = vec![10];
         let n_partitions = vec![1, 16];
         // let n_trials = vec![10];

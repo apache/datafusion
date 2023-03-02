@@ -880,7 +880,7 @@ impl BoundedWindowAggStream {
                     .collect::<Vec<ArrayRef>>();
                 let rows = self.row_converter.convert_columns(&partition_bys)?;
                 // let def_row = rows.row(0).owned();
-                let def_row = Row::new();
+                // let def_row = Row::new();
                 println!("row num rows:{:?}", rows.num_rows());
                 for range in partition_points {
                     // let partition_row = get_row_at_idx(&partition_bys, range.start)?;
