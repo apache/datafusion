@@ -92,6 +92,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///   fn execution_props(&self) -> &ExecutionProps {
     ///     &self.execution_props
     ///   }
+    ///   fn get_data_type(&self, expr: &Expr) -> DataType {
+    ///     DataType::Int32
+    ///   }
     /// }
     ///
     /// // Create the simplifier
