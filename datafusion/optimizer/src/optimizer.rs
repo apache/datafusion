@@ -229,7 +229,7 @@ impl Optimizer {
             Arc::new(PropagateEmptyRelation::new()),
             Arc::new(FilterNullJoinKeys::default()),
             Arc::new(EliminateOuterJoin::new()),
-            // Filters can't be pushed down past Limits, we should do PushDownFilter after LimitPushDown
+            // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit
             Arc::new(PushDownLimit::new()),
             Arc::new(PushDownFilter::new()),
             Arc::new(SingleDistinctToGroupBy::new()),
@@ -240,6 +240,8 @@ impl Optimizer {
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(PushDownProjection::new()),
             Arc::new(EliminateProjection::new()),
+            // PushDownProjection can pushdown Projections through Limits, do PushDownLimit again.
+            Arc::new(PushDownLimit::new()),
         ];
 
         Self::with_rules(rules)

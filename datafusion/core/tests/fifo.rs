@@ -18,17 +18,23 @@
 //! This test demonstrates the DataFusion FIFO capabilities.
 //!
 #[cfg(not(target_os = "windows"))]
+#[cfg(test)]
 mod unix_test {
+    use arrow::array::Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::{
         prelude::{CsvReadOptions, SessionConfig, SessionContext},
-        test_util::{aggr_test_schema, arrow_test_data},
+        test_util::{
+            aggr_test_schema, arrow_test_data, test_create_unbounded_sorted_file,
+        },
     };
     use datafusion_common::{DataFusionError, Result};
     use futures::StreamExt;
     use itertools::enumerate;
     use nix::sys::stat;
     use nix::unistd;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
     use rstest::*;
     use std::fs::{File, OpenOptions};
     use std::io::Write;
@@ -38,8 +44,10 @@ mod unix_test {
     use std::sync::mpsc::{Receiver, Sender};
     use std::sync::{Arc, Mutex};
     use std::thread;
+    use std::thread::JoinHandle;
     use std::time::{Duration, Instant};
     use tempfile::TempDir;
+
     // !  For the sake of the test, do not alter the numbers. !
     // Session batch size
     const TEST_BATCH_SIZE: usize = 20;
@@ -133,7 +141,7 @@ mod unix_test {
     }
 
     // This test provides a relatively realistic end-to-end scenario where
-    // we ensure that we swap join sides correctly to accommodate a FIFO source.
+    // we swap join sides to accommodate a FIFO source.
     #[rstest]
     #[timeout(std::time::Duration::from_secs(30))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
@@ -147,7 +155,7 @@ mod unix_test {
         let (tx, rx): (Sender<Operation>, Receiver<Operation>) = mpsc::channel();
         // Create a new temporary FIFO file
         let tmp_dir = TempDir::new()?;
-        let fifo_path = create_fifo_file(&tmp_dir, "fisrt_fifo.csv")?;
+        let fifo_path = create_fifo_file(&tmp_dir, "first_fifo.csv")?;
         // Prevent move
         let fifo_path_thread = fifo_path.clone();
         // Timeout for a long period of BrokenPipe error
@@ -215,6 +223,114 @@ mod unix_test {
         drop(tx);
         let result = result_collector.join().unwrap();
         assert_eq!(interleave(&result), unbounded_file);
+        Ok(())
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum JoinOperation {
+        LeftUnmatched,
+        RightUnmatched,
+        Equal,
+    }
+
+    // This test provides a relatively realistic end-to-end scenario where
+    // we change the join into a [SymmetricHashJoin] to accommodate two
+    // unbounded (FIFO) sources.
+    #[rstest]
+    #[timeout(std::time::Duration::from_secs(30))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unbounded_file_with_symmetric_join() -> Result<()> {
+        // To make unbounded deterministic
+        let waiting = Arc::new(Mutex::new(true));
+        let thread_bools = vec![waiting.clone(), waiting.clone()];
+        // Create a new temporary FIFO file
+        let tmp_dir = TempDir::new()?;
+        let file_names = vec!["first_fifo.csv", "second_fifo.csv"];
+        // The sender endpoint can be copied
+        let (threads, file_paths): (Vec<JoinHandle<()>>, Vec<PathBuf>) = file_names
+            .iter()
+            .zip(thread_bools.iter())
+            .map(|(file_name, lock)| {
+                let waiting_thread = lock.clone();
+                let fifo_path = create_fifo_file(&tmp_dir, file_name).unwrap();
+                let return_path = fifo_path.clone();
+                // Timeout for a long period of BrokenPipe error
+                let broken_pipe_timeout = Duration::from_secs(5);
+                // Spawn a new thread to write to the FIFO file
+                let fifo_writer = thread::spawn(move || {
+                    let mut rng = StdRng::seed_from_u64(42);
+                    let file = OpenOptions::new()
+                        .write(true)
+                        .open(fifo_path.clone())
+                        .unwrap();
+                    // Reference time to use when deciding to fail the test
+                    let execution_start = Instant::now();
+                    // Join filter
+                    let a1_iter = (0..TEST_DATA_SIZE).map(|x| {
+                        if rng.gen_range(0.0..1.0) < 0.3 {
+                            x - 1
+                        } else {
+                            x
+                        }
+                    });
+                    // Join key
+                    let a2_iter = (0..TEST_DATA_SIZE).map(|x| x % 10);
+                    for (cnt, (a1, a2)) in a1_iter.zip(a2_iter).enumerate() {
+                        // Wait a reading sign for unbounded execution
+                        // After first batch FIFO reading, we will wait for a batch created.
+                        while *waiting_thread.lock().unwrap() && TEST_BATCH_SIZE + 1 < cnt
+                        {
+                            thread::sleep(Duration::from_millis(200));
+                        }
+                        let line = format!("{a1},{a2}\n").to_owned();
+                        write_to_fifo(&file, &line, execution_start, broken_pipe_timeout)
+                            .unwrap();
+                    }
+                });
+                (fifo_writer, return_path)
+            })
+            .unzip();
+        let config = SessionConfig::new()
+            .with_batch_size(TEST_BATCH_SIZE)
+            .set_bool("datafusion.execution.coalesce_batches", false)
+            .with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+        test_create_unbounded_sorted_file(&ctx, file_paths[0].clone(), "left").await?;
+        test_create_unbounded_sorted_file(&ctx, file_paths[1].clone(), "right").await?;
+        // Execute the query
+        let df = ctx.sql("SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10").await?;
+        let mut stream = df.execute_stream().await?;
+        let mut operations = vec![];
+        while let Some(Ok(batch)) = stream.next().await {
+            *waiting.lock().unwrap() = false;
+            let op = if batch.column(0).null_count() > 0 {
+                JoinOperation::LeftUnmatched
+            } else if batch.column(2).null_count() > 0 {
+                JoinOperation::RightUnmatched
+            } else {
+                JoinOperation::Equal
+            };
+            operations.push(op);
+        }
+
+        // The SymmetricHashJoin executor produces FULL join results at every
+        // pruning, which happens before it reaches the end of input and more
+        // than once. In this test, we feed partially joinable data to both
+        // sides in order to ensure that both left/right unmatched results are
+        // generated more than once during the test.
+        assert!(
+            operations
+                .iter()
+                .filter(|&n| JoinOperation::RightUnmatched.eq(n))
+                .count()
+                > 1
+                && operations
+                    .iter()
+                    .filter(|&n| JoinOperation::LeftUnmatched.eq(n))
+                    .count()
+                    > 1
+        );
+        threads.into_iter().for_each(|j| j.join().unwrap());
         Ok(())
     }
 }

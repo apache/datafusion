@@ -23,9 +23,9 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::SchemaRef, error::ArrowError};
-use datafusion_common::{Column, DataFusionError, Result};
-use datafusion_expr::Expr;
-use datafusion_optimizer::utils::split_conjunction;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
 use log::{debug, trace};
 use parquet::schema::types::ColumnDescriptor;
 use parquet::{
@@ -107,7 +107,7 @@ pub(crate) struct PagePruningPredicate {
 
 impl PagePruningPredicate {
     /// Create a new [`PagePruningPredicate`]
-    pub fn try_new(expr: &Expr, schema: SchemaRef) -> Result<Self> {
+    pub fn try_new(expr: &Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
         let predicates = split_conjunction(expr)
             .into_iter()
             .filter_map(|predicate| {
@@ -253,7 +253,8 @@ fn find_column_index(
         if let Some(found_required_column) = found_required_column.as_ref() {
             // make sure it is the same name we have seen previously
             assert_eq!(
-                column.name, found_required_column.name,
+                column.name(),
+                found_required_column.name(),
                 "Unexpected multi column predicate"
             );
         } else {
@@ -272,11 +273,11 @@ fn find_column_index(
         .columns()
         .iter()
         .enumerate()
-        .find(|(_idx, c)| c.column_descr().name() == column.name)
+        .find(|(_idx, c)| c.column_descr().name() == column.name())
         .map(|(idx, _c)| idx);
 
     if col_idx.is_none() {
-        trace!("Can not find column {} in row group meta", column.name);
+        trace!("Can not find column {} in row group meta", column.name());
     }
 
     col_idx
@@ -351,7 +352,7 @@ fn prune_pages_in_one_row_group(
             // stats filter array could not be built
             // return a result which will not filter out any pages
             Err(e) => {
-                debug!("Error evaluating page index predicate values {}", e);
+                debug!("Error evaluating page index predicate values {e}");
                 metrics.predicate_evaluation_errors.add(1);
                 return Ok(vec![RowSelector::select(group.num_rows() as usize)]);
             }
@@ -506,11 +507,11 @@ macro_rules! get_min_max_values_for_page_index {
 }
 
 impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
-    fn min_values(&self, _column: &Column) -> Option<ArrayRef> {
+    fn min_values(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
         get_min_max_values_for_page_index!(self, min)
     }
 
-    fn max_values(&self, _column: &Column) -> Option<ArrayRef> {
+    fn max_values(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
         get_min_max_values_for_page_index!(self, max)
     }
 
@@ -518,7 +519,7 @@ impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
         self.col_offset_indexes.len()
     }
 
-    fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
+    fn null_counts(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
         match self.col_page_indexes {
             Index::NONE => None,
             Index::BOOLEAN(index) => Some(Arc::new(Int64Array::from_iter(

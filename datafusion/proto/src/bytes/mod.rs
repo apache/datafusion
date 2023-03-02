@@ -160,11 +160,9 @@ pub fn logical_plan_to_json(plan: &LogicalPlan) -> Result<String> {
     let extension_codec = DefaultLogicalExtensionCodec {};
     let protobuf =
         protobuf::LogicalPlanNode::try_from_logical_plan(plan, &extension_codec)
-            .map_err(|e| {
-                DataFusionError::Plan(format!("Error serializing plan: {}", e))
-            })?;
+            .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {e}")))?;
     serde_json::to_string(&protobuf)
-        .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {}", e)))
+        .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {e}")))
 }
 
 /// Serialize a LogicalPlan as bytes, using the provided extension codec
@@ -185,7 +183,7 @@ pub fn logical_plan_to_bytes_with_extension_codec(
 #[cfg(feature = "json")]
 pub fn logical_plan_from_json(json: &str, ctx: &SessionContext) -> Result<LogicalPlan> {
     let back: protobuf::LogicalPlanNode = serde_json::from_str(json)
-        .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {}", e)))?;
+        .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {e}")))?;
     let extension_codec = DefaultLogicalExtensionCodec {};
     back.try_into_logical_plan(ctx, &extension_codec)
 }
@@ -223,11 +221,9 @@ pub fn physical_plan_to_json(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
     let extension_codec = DefaultPhysicalExtensionCodec {};
     let protobuf =
         protobuf::PhysicalPlanNode::try_from_physical_plan(plan, &extension_codec)
-            .map_err(|e| {
-                DataFusionError::Plan(format!("Error serializing plan: {}", e))
-            })?;
+            .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {e}")))?;
     serde_json::to_string(&protobuf)
-        .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {}", e)))
+        .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {e}")))
 }
 
 /// Serialize a PhysicalPlan as bytes, using the provided extension codec
@@ -251,7 +247,7 @@ pub fn physical_plan_from_json(
     ctx: &SessionContext,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let back: protobuf::PhysicalPlanNode = serde_json::from_str(json)
-        .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {}", e)))?;
+        .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {e}")))?;
     let extension_codec = DefaultPhysicalExtensionCodec {};
     back.try_into_physical_plan(ctx, &ctx.runtime_env(), &extension_codec)
 }

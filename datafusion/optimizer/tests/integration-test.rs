@@ -71,8 +71,9 @@ fn subquery_filter_with_cast() -> Result<()> {
     \n      SubqueryAlias: __scalar_sq_1\
     \n        Projection: AVG(test.col_int32) AS __value\
     \n          Aggregate: groupBy=[[]], aggr=[[AVG(test.col_int32)]]\
-    \n            Filter: test.col_utf8 >= Utf8(\"2002-05-08\") AND test.col_utf8 <= Utf8(\"2002-05-13\")\
-    \n              TableScan: test projection=[col_int32, col_utf8]";
+    \n            Projection: test.col_int32\
+    \n              Filter: test.col_utf8 >= Utf8(\"2002-05-08\") AND test.col_utf8 <= Utf8(\"2002-05-13\")\
+    \n                TableScan: test projection=[col_int32, col_utf8]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }

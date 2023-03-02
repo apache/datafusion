@@ -17,7 +17,7 @@
 
 //! Manages all available memory during query execution
 
-use crate::error::Result;
+use datafusion_common::Result;
 use std::sync::Arc;
 
 mod pool;

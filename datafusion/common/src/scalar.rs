@@ -1019,6 +1019,29 @@ impl ScalarValue {
         Self::List(scalars, Box::new(Field::new("item", child_type, true)))
     }
 
+    // Create a zero value in the given type.
+    pub fn new_zero(datatype: &DataType) -> Result<ScalarValue> {
+        assert!(datatype.is_primitive());
+        Ok(match datatype {
+            DataType::Boolean => ScalarValue::Boolean(Some(false)),
+            DataType::Int8 => ScalarValue::Int8(Some(0)),
+            DataType::Int16 => ScalarValue::Int16(Some(0)),
+            DataType::Int32 => ScalarValue::Int32(Some(0)),
+            DataType::Int64 => ScalarValue::Int64(Some(0)),
+            DataType::UInt8 => ScalarValue::UInt8(Some(0)),
+            DataType::UInt16 => ScalarValue::UInt16(Some(0)),
+            DataType::UInt32 => ScalarValue::UInt32(Some(0)),
+            DataType::UInt64 => ScalarValue::UInt64(Some(0)),
+            DataType::Float32 => ScalarValue::Float32(Some(0.0)),
+            DataType::Float64 => ScalarValue::Float64(Some(0.0)),
+            _ => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Can't create a zero scalar from data_type \"{datatype:?}\""
+                )));
+            }
+        })
+    }
+
     /// Getter for the `DataType` of the value
     pub fn get_datatype(&self) -> DataType {
         match self {
@@ -2624,7 +2647,7 @@ impl TryFrom<&DataType> for ScalarValue {
 macro_rules! format_option {
     ($F:expr, $EXPR:expr) => {{
         match $EXPR {
-            Some(e) => write!($F, "{}", e),
+            Some(e) => write!($F, "{e}"),
             None => write!($F, "NULL"),
         }
     }};

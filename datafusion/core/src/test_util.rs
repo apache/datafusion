@@ -27,11 +27,13 @@ use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::{empty::EmptyTable, provider_as_source, TableProvider};
 use crate::error::Result;
 use crate::execution::context::{SessionState, TaskContext};
+use crate::execution::options::ReadOptions;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream,
 };
+use crate::prelude::{CsvReadOptions, SessionContext};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -511,4 +513,45 @@ mod tests {
         let res = parquet_test_data();
         assert!(PathBuf::from(res).is_dir());
     }
+}
+
+/// This function creates an unbounded sorted file for testing purposes.
+pub async fn test_create_unbounded_sorted_file(
+    ctx: &SessionContext,
+    file_path: PathBuf,
+    table_name: &str,
+) -> datafusion_common::Result<()> {
+    // Create schema:
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a1", DataType::UInt32, false),
+        Field::new("a2", DataType::UInt32, false),
+    ]));
+    // Specify the ordering:
+    let file_sort_order = [datafusion_expr::col("a1")]
+        .into_iter()
+        .map(|e| {
+            let ascending = true;
+            let nulls_first = false;
+            e.sort(ascending, nulls_first)
+        })
+        .collect::<Vec<_>>();
+    // Mark infinite and provide schema:
+    let fifo_options = CsvReadOptions::new()
+        .schema(schema.as_ref())
+        .has_header(false)
+        .mark_infinite(true);
+    // Get listing options:
+    let options_sort = fifo_options
+        .to_listing_options(&ctx.copied_config())
+        .with_file_sort_order(Some(file_sort_order));
+    // Register table:
+    ctx.register_listing_table(
+        table_name,
+        file_path.as_os_str().to_str().unwrap(),
+        options_sort,
+        Some(schema),
+        None,
+    )
+    .await?;
+    Ok(())
 }

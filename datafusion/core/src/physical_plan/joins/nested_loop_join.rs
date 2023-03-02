@@ -24,7 +24,7 @@ use crate::physical_plan::joins::utils::{
     build_batch_from_indices, build_join_schema, check_join_is_valid,
     combine_join_equivalence_properties, estimate_join_statistics, get_anti_indices,
     get_anti_u64_indices, get_final_indices_from_bit_map, get_semi_indices,
-    get_semi_u64_indices, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
+    get_semi_u64_indices, ColumnIndex, JoinFilter, JoinSide, OnceAsync, OnceFut,
 };
 use crate::physical_plan::{
     DisplayFormatType, Distribution, ExecutionPlan, Partitioning, RecordBatchStream,
@@ -348,6 +348,7 @@ fn build_join_indices(
             left_indices,
             right_indices,
             filter,
+            JoinSide::Left,
         )
     } else {
         Ok((left_indices, right_indices))
@@ -412,6 +413,7 @@ impl NestedLoopJoinStream {
                             left_side,
                             right_side,
                             &self.column_indices,
+                            JoinSide::Left,
                         );
                         self.is_exhausted = true;
                         Some(result)
@@ -475,9 +477,9 @@ fn join_left_and_right_batch(
     let mut left_indices_builder = UInt64Builder::new();
     let mut right_indices_builder = UInt32Builder::new();
     let left_right_indices = match indices_result {
-        Err(_) => Err(DataFusionError::Execution(
-            "Build left right indices error".to_string(),
-        )),
+        Err(err) => Err(DataFusionError::Execution(format!(
+            "Fail to build join indices in NestedLoopJoinExec, error:{err}"
+        ))),
         Ok(indices) => {
             for (left_side, right_side) in indices {
                 left_indices_builder
@@ -516,6 +518,7 @@ fn join_left_and_right_batch(
                 left_side,
                 right_side,
                 column_indices,
+                JoinSide::Left,
             )
         }
         Err(e) => Err(e),
