@@ -29,7 +29,10 @@ use parquet::file::properties::WriterProperties;
 
 use datafusion_common::from_slice::FromSlice;
 use datafusion_common::{Column, DFSchema, ScalarValue};
-use datafusion_expr::{TableProviderFilterPushDown, UNNAMED_TABLE};
+use datafusion_expr::{
+    avg, count, is_null, max, median, min, stddev, TableProviderFilterPushDown,
+    UNNAMED_TABLE,
+};
 
 use crate::arrow::datatypes::Schema;
 use crate::arrow::datatypes::SchemaRef;
@@ -323,7 +326,8 @@ impl DataFrame {
     /// ```
     pub async fn describe(self) -> Result<Self> {
         //the functions now supported
-        let supported_describe_functions = vec!["count", "null_count", "max", "min"];
+        let supported_describe_functions =
+            vec!["count", "null_count", "mean", "std", "min", "max", "median"];
 
         let fields_iter = self.schema().fields().iter();
 
@@ -348,7 +352,7 @@ impl DataFrame {
                     vec![],
                     fields_iter
                         .clone()
-                        .map(|f| datafusion_expr::count(col(f.name())).alias(f.name()))
+                        .map(|f| count(col(f.name())).alias(f.name()))
                         .collect::<Vec<_>>(),
                 )?
                 .collect()
@@ -359,26 +363,31 @@ impl DataFrame {
                     vec![],
                     fields_iter
                         .clone()
-                        .map(|f| {
-                            datafusion_expr::count(datafusion_expr::is_null(
-                                col(f.name()),
-                            ))
-                            .alias(f.name())
-                        })
+                        .map(|f| count(is_null(col(f.name()))).alias(f.name()))
                         .collect::<Vec<_>>(),
                 )?
                 .collect()
                 .await?,
-            // max aggregation
+            // mean aggregation
             self.clone()
                 .aggregate(
                     vec![],
                     fields_iter
                         .clone()
-                        .filter(|f| {
-                            !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
-                        })
-                        .map(|f| datafusion_expr::max(col(f.name())).alias(f.name()))
+                        .filter(|f| f.data_type().is_numeric())
+                        .map(|f| avg(col(f.name())).alias(f.name()))
+                        .collect::<Vec<_>>(),
+                )?
+                .collect()
+                .await?,
+            // std aggregation
+            self.clone()
+                .aggregate(
+                    vec![],
+                    fields_iter
+                        .clone()
+                        .filter(|f| f.data_type().is_numeric())
+                        .map(|f| stddev(col(f.name())).alias(f.name()))
                         .collect::<Vec<_>>(),
                 )?
                 .collect()
@@ -392,7 +401,33 @@ impl DataFrame {
                         .filter(|f| {
                             !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
                         })
-                        .map(|f| datafusion_expr::min(col(f.name())).alias(f.name()))
+                        .map(|f| min(col(f.name())).alias(f.name()))
+                        .collect::<Vec<_>>(),
+                )?
+                .collect()
+                .await?,
+            // max aggregation
+            self.clone()
+                .aggregate(
+                    vec![],
+                    fields_iter
+                        .clone()
+                        .filter(|f| {
+                            !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
+                        })
+                        .map(|f| max(col(f.name())).alias(f.name()))
+                        .collect::<Vec<_>>(),
+                )?
+                .collect()
+                .await?,
+            // median aggregation
+            self.clone()
+                .aggregate(
+                    vec![],
+                    fields_iter
+                        .clone()
+                        .filter(|f| f.data_type().is_numeric())
+                        .map(|f| median(col(f.name())).alias(f.name()))
                         .collect::<Vec<_>>(),
                 )?
                 .collect()
