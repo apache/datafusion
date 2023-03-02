@@ -347,6 +347,15 @@ pub struct BoundedWindowAggStream {
     row_converter: RowConverter,
 }
 
+// This functions converts OwnedRow to Vec<ScalarValue>.
+fn convert_row_to_vec(
+    row_converter: &RowConverter,
+    last_row: &OwnedRow,
+) -> Result<Vec<ScalarValue>> {
+    let last_row_col = row_converter.convert_rows(vec![last_row.row()])?;
+    get_row_at_idx(&last_row_col, 0)
+}
+
 impl BoundedWindowAggStream {
     /// This method constructs output columns using the result of each window expression
     fn calculate_out_columns(&mut self) -> Result<Option<Vec<ArrayRef>>> {
@@ -491,24 +500,19 @@ impl BoundedWindowAggStream {
             }
             PartitionSearchMode::PartiallySorted => {
                 if let Some((last_row, _)) = self.partition_buffers.last() {
-                    let last_row_col =
-                        self.row_converter.convert_rows(vec![last_row.row()])?;
-                    let last_row = get_row_at_idx(&last_row_col, 0)?;
+                    let last_row = convert_row_to_vec(&self.row_converter, last_row)?;
                     let last_sorted_cols = self
                         .ordered_partition_by_indices
                         .iter()
                         .map(|idx| last_row[*idx].clone())
                         .collect::<Vec<_>>();
-                    for (partition_row, partition_batch_state) in
-                        self.partition_buffers.iter_mut()
+                    for (row, partition_batch_state) in self.partition_buffers.iter_mut()
                     {
-                        let partition_row_col =
-                            self.row_converter.convert_rows(vec![partition_row.row()])?;
-                        let partition_row = get_row_at_idx(&partition_row_col, 0)?;
+                        let row = convert_row_to_vec(&self.row_converter, row)?;
                         let sorted_cols = self
                             .ordered_partition_by_indices
                             .iter()
-                            .map(|idx| partition_row[*idx].clone())
+                            .map(|idx| row[*idx].clone())
                             .collect::<Vec<_>>();
                         if sorted_cols != last_sorted_cols {
                             // It is guaranteed that we will no longer receive value for these partitions
