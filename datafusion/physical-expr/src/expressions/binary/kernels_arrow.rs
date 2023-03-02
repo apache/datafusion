@@ -32,6 +32,14 @@ use std::sync::Arc;
 // Simple (low performance) kernels until optimized kernels are added to arrow
 // See https://github.com/apache/arrow-rs/issues/960
 
+macro_rules! distinct_float {
+    ($LEFT:expr, $RIGHT:expr, $LEFT_ISNULL:expr, $RIGHT_ISNULL:expr) => {{
+        $LEFT_ISNULL != $RIGHT_ISNULL
+            || $LEFT.is_nan() != $RIGHT.is_nan()
+            || (!$LEFT.is_nan() && !$RIGHT.is_nan() && $LEFT != $RIGHT)
+    }};
+}
+
 pub(crate) fn is_distinct_from_bool(
     left: &BooleanArray,
     right: &BooleanArray,
@@ -132,11 +140,7 @@ pub(crate) fn is_distinct_from_f32(
         left,
         right,
         |left_value, right_value, left_isnull, right_isnull| {
-            left_isnull != right_isnull
-                || left_value.is_nan() != right_value.is_nan()
-                || (!left_value.is_nan()
-                    && !right_value.is_nan()
-                    && left_value != right_value)
+            distinct_float!(left_value, right_value, left_isnull, right_isnull)
         },
     )
 }
@@ -149,11 +153,7 @@ pub(crate) fn is_not_distinct_from_f32(
         left,
         right,
         |left_value, right_value, left_isnull, right_isnull| {
-            !(left_isnull != right_isnull
-                || left_value.is_nan() != right_value.is_nan()
-                || (!left_value.is_nan()
-                    && !right_value.is_nan()
-                    && left_value != right_value))
+            !(distinct_float!(left_value, right_value, left_isnull, right_isnull))
         },
     )
 }
@@ -166,11 +166,7 @@ pub(crate) fn is_distinct_from_f64(
         left,
         right,
         |left_value, right_value, left_isnull, right_isnull| {
-            left_isnull != right_isnull
-                || left_value.is_nan() != right_value.is_nan()
-                || (!left_value.is_nan()
-                    && !right_value.is_nan()
-                    && left_value != right_value)
+            distinct_float!(left_value, right_value, left_isnull, right_isnull)
         },
     )
 }
@@ -183,11 +179,7 @@ pub(crate) fn is_not_distinct_from_f64(
         left,
         right,
         |left_value, right_value, left_isnull, right_isnull| {
-            !(left_isnull != right_isnull
-                || left_value.is_nan() != right_value.is_nan()
-                || (!left_value.is_nan()
-                    && !right_value.is_nan()
-                    && left_value != right_value))
+            !(distinct_float!(left_value, right_value, left_isnull, right_isnull))
         },
     )
 }
