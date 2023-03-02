@@ -29,11 +29,42 @@ use std::sync::Arc;
 use datafusion::dataframe::DataFrame;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
-use datafusion::prelude::CsvReadOptions;
 use datafusion::prelude::JoinType;
+use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::{avg, col, count, lit, sum, Expr, ExprSchemable};
+
+#[tokio::test]
+async fn describe() -> Result<()> {
+    let ctx = SessionContext::new();
+    let testdata = datafusion::test_util::parquet_test_data();
+
+    let filename = &format!("{testdata}/alltypes_plain.parquet");
+
+    let df = ctx
+        .read_parquet(filename, ParquetReadOptions::default())
+        .await?;
+
+    let describe_record_batch = df.describe().await.unwrap().collect().await.unwrap();
+    #[rustfmt::skip]
+        let expected = vec![
+        "+------------+--------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+-------------------+-----------------+------------+---------------------+",
+        "| describe   | id                 | bool_col | tinyint_col        | smallint_col       | int_col            | bigint_col         | float_col          | double_col        | date_string_col | string_col | timestamp_col       |",
+        "+------------+--------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+-------------------+-----------------+------------+---------------------+",
+        "| count      | 8.0                | 8        | 8.0                | 8.0                | 8.0                | 8.0                | 8.0                | 8.0               | 8               | 8          | 8                   |",
+        "| null_count | 8.0                | 8        | 8.0                | 8.0                | 8.0                | 8.0                | 8.0                | 8.0               | 8               | 8          | 8                   |",
+        "| mean       | 3.5                | null     | 0.5                | 0.5                | 0.5                | 5.0                | 0.550000011920929  | 5.05              | null            | null       | null                |",
+        "| std        | 2.4494897427831783 | null     | 0.5345224838248488 | 0.5345224838248488 | 0.5345224838248488 | 5.3452248382484875 | 0.5879747449513427 | 5.398677086630973 | null            | null       | null                |",
+        "| min        | 0.0                | null     | 0.0                | 0.0                | 0.0                | 0.0                | 0.0                | 0.0               | null            | null       | 2009-01-01T00:00:00 |",
+        "| max        | 7.0                | null     | 1.0                | 1.0                | 1.0                | 10.0               | 1.100000023841858  | 10.1              | null            | null       | 2009-04-01T00:01:00 |",
+        "| median     | 3.0                | null     | 0.0                | 0.0                | 0.0                | 5.0                | 0.550000011920929  | 5.05              | null            | null       | null                |",
+        "+------------+--------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+-------------------+-----------------+------------+---------------------+",
+    ];
+    assert_batches_eq!(expected, &describe_record_batch);
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn join() -> Result<()> {
@@ -250,7 +281,7 @@ async fn select_with_alias_overwrite() -> Result<()> {
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("t", batch).unwrap();
+    ctx.register_batch("t", batch)?;
 
     let df = ctx
         .table("t")
@@ -502,12 +533,12 @@ async fn right_semi_with_alias_filter() -> Result<()> {
         .select(vec![col("t2.a"), col("t2.b"), col("t2.c")])?;
     let optimized_plan = df.clone().into_optimized_plan()?;
     let expected = vec![
-        "Projection: t2.a, t2.b, t2.c [a:UInt32, b:Utf8, c:Int32]",
-        "  RightSemi Join: t1.a = t2.a [a:UInt32, b:Utf8, c:Int32]",
+        "RightSemi Join: t1.a = t2.a [a:UInt32, b:Utf8, c:Int32]",
+        "  Projection: t1.a [a:UInt32]",
         "    Filter: t1.c > Int32(1) [a:UInt32, c:Int32]",
         "      TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]",
-        "    Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]",
-        "      TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
+        "  Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]",
+        "    TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
     ];
 
     let formatted = optimized_plan.display_indent_schema().to_string();
@@ -547,11 +578,11 @@ async fn right_anti_filter_push_down() -> Result<()> {
         .select(vec![col("t2.a"), col("t2.b"), col("t2.c")])?;
     let optimized_plan = df.clone().into_optimized_plan()?;
     let expected = vec![
-        "Projection: t2.a, t2.b, t2.c [a:UInt32, b:Utf8, c:Int32]",
-        "  RightAnti Join: t1.a = t2.a Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]",
+        "RightAnti Join: t1.a = t2.a Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]",
+        "  Projection: t1.a [a:UInt32]",
         "    Filter: t1.c > Int32(1) [a:UInt32, c:Int32]",
         "      TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]",
-        "    TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
+        "  TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
     ];
 
     let formatted = optimized_plan.display_indent_schema().to_string();

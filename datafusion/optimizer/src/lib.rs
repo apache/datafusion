@@ -23,6 +23,7 @@ pub mod eliminate_cross_join;
 pub mod eliminate_filter;
 pub mod eliminate_limit;
 pub mod eliminate_outer_join;
+pub mod eliminate_project;
 pub mod extract_equijoin_predicate;
 pub mod filter_null_join_keys;
 pub mod inline_table_scan;
@@ -38,6 +39,7 @@ pub mod single_distinct_to_groupby;
 pub mod type_coercion;
 pub mod utils;
 
+pub mod replace_distinct_aggregate;
 pub mod rewrite_disjunctive_predicate;
 #[cfg(test)]
 pub mod test;

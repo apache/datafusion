@@ -743,6 +743,11 @@ message Struct{
   repeated Field sub_field_types = 1;
 }
 
+message Map {
+  Field field_type = 1;
+  bool keys_sorted = 2;
+}
+
 enum UnionMode{
   sparse = 0;
   dense = 1;
@@ -894,6 +899,7 @@ message ArrowType{
     Struct STRUCT = 28;
     Union UNION = 29;
     Dictionary DICTIONARY = 30;
+    Map MAP = 33;
   }
 }
 
@@ -1159,7 +1165,11 @@ message FileScanExecConf {
 
 message ParquetScanExecNode {
   FileScanExecConf base_conf = 1;
-  LogicalExprNode pruning_predicate = 2;
+
+  // Was pruning predicate based on a logical expr.
+  reserved 2;
+
+  PhysicalExprNode predicate = 3;
 }
 
 message CsvScanExecNode {

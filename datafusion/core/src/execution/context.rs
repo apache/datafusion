@@ -31,6 +31,7 @@ use datafusion_expr::{DescribeTable, StringifiedPlan};
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::{
     any::{Any, TypeId},
@@ -82,7 +83,7 @@ use crate::physical_plan::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_common::ScalarValue;
+use datafusion_common::{OwnedTableReference, ScalarValue};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -1583,6 +1584,9 @@ impl SessionState {
             // repartitioning and local sorting steps to meet distribution and ordering requirements.
             // Therefore, it should run before EnforceDistribution and EnforceSorting.
             Arc::new(JoinSelection::new()),
+            // Enforce sort before PipelineFixer
+            Arc::new(EnforceDistribution::new()),
+            Arc::new(EnforceSorting::new()),
             // If the query is processing infinite inputs, the PipelineFixer rule applies the
             // necessary transformations to make the query runnable (if it is not already runnable).
             // If the query can not be made runnable, the rule emits an error with a diagnostic message.
@@ -1774,21 +1778,20 @@ impl SessionState {
         Ok(statement)
     }
 
-    /// Convert an AST Statement into a LogicalPlan
-    pub async fn statement_to_plan(
+    /// Resolve all table references in the SQL statement.
+    pub fn resolve_table_references(
         &self,
-        statement: datafusion_sql::parser::Statement,
-    ) -> Result<LogicalPlan> {
+        statement: &datafusion_sql::parser::Statement,
+    ) -> Result<Vec<OwnedTableReference>> {
         use crate::catalog::information_schema::INFORMATION_SCHEMA_TABLES;
         use datafusion_sql::parser::Statement as DFStatement;
         use sqlparser::ast::*;
-        use std::collections::hash_map::Entry;
 
         // Getting `TableProviders` is async but planing is not -- thus pre-fetch
         // table providers for all relations referenced in this query
         let mut relations = hashbrown::HashSet::with_capacity(10);
 
-        match &statement {
+        match statement {
             DFStatement::Statement(s) => {
                 struct RelationVisitor<'a>(&'a mut hashbrown::HashSet<ObjectName>);
 
@@ -1839,18 +1842,31 @@ impl SessionState {
             }
         }
 
+        let enable_ident_normalization =
+            self.config.options.sql_parser.enable_ident_normalization;
+        relations
+            .into_iter()
+            .map(|x| object_name_to_table_reference(x, enable_ident_normalization))
+            .collect::<Result<_>>()
+    }
+
+    /// Convert an AST Statement into a LogicalPlan
+    pub async fn statement_to_plan(
+        &self,
+        statement: datafusion_sql::parser::Statement,
+    ) -> Result<LogicalPlan> {
+        let references = self.resolve_table_references(&statement)?;
+
         let mut provider = SessionContextProvider {
             state: self,
-            tables: HashMap::with_capacity(relations.len()),
+            tables: HashMap::with_capacity(references.len()),
         };
 
         let enable_ident_normalization =
             self.config.options.sql_parser.enable_ident_normalization;
         let parse_float_as_decimal =
             self.config.options.sql_parser.parse_float_as_decimal;
-        for relation in relations {
-            let reference =
-                object_name_to_table_reference(relation, enable_ident_normalization)?;
+        for reference in references {
             let table = reference.table();
             let resolved = self.resolve_table_ref(reference.as_table_reference());
             if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {

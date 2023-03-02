@@ -41,11 +41,14 @@
 //!
 
 pub mod context;
-pub mod disk_manager;
-pub mod memory_pool;
-pub mod options;
-pub mod registry;
+// backwards compatibility
+pub use crate::datasource::file_format::options;
 pub mod runtime_env;
+
+// backwards compatibility
+pub use datafusion_execution::disk_manager;
+pub use datafusion_execution::memory_pool;
+pub use datafusion_execution::registry;
 
 pub use disk_manager::DiskManager;
 pub use registry::FunctionRegistry;

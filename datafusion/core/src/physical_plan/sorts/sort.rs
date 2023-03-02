@@ -1565,7 +1565,7 @@ mod tests {
     #[tokio::test]
     async fn test_sort_fetch_memory_calculation() -> Result<()> {
         // This test mirrors down the size from the example above.
-        let avg_batch_size = 5336;
+        let avg_batch_size = 6000;
         let partitions = 4;
         let added_row_size = 1289 * partitions;
 

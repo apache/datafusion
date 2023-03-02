@@ -71,8 +71,9 @@ fn subquery_filter_with_cast() -> Result<()> {
     \n      SubqueryAlias: __scalar_sq_1\
     \n        Projection: AVG(test.col_int32) AS __value\
     \n          Aggregate: groupBy=[[]], aggr=[[AVG(test.col_int32)]]\
-    \n            Filter: test.col_utf8 >= Utf8(\"2002-05-08\") AND test.col_utf8 <= Utf8(\"2002-05-13\")\
-    \n              TableScan: test projection=[col_int32, col_utf8]";
+    \n            Projection: test.col_int32\
+    \n              Filter: test.col_utf8 >= Utf8(\"2002-05-08\") AND test.col_utf8 <= Utf8(\"2002-05-13\")\
+    \n                TableScan: test projection=[col_int32, col_utf8]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
@@ -105,8 +106,7 @@ fn distribute_by() -> Result<()> {
     let sql = "SELECT col_int32, col_utf8 FROM test DISTRIBUTE BY (col_utf8)";
     let plan = test_sql(sql)?;
     let expected = "Repartition: DistributeBy(col_utf8)\
-    \n  Projection: test.col_int32, test.col_utf8\
-    \n    TableScan: test projection=[col_int32, col_utf8]";
+    \n  TableScan: test projection=[col_int32, col_utf8]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
@@ -121,9 +121,8 @@ fn semi_join_with_join_filter() -> Result<()> {
     let expected = "Projection: test.col_utf8\
                     \n  LeftSemi Join: test.col_int32 = t2.col_int32 Filter: test.col_uint32 != t2.col_uint32\
                     \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
-                    \n    Projection: t2.col_int32, t2.col_uint32\
-                    \n      SubqueryAlias: t2\
-                    \n        TableScan: test projection=[col_int32, col_uint32]";
+                    \n    SubqueryAlias: t2\
+                    \n      TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
@@ -136,11 +135,10 @@ fn anti_join_with_join_filter() -> Result<()> {
                AND test.col_uint32 != t2.col_uint32)";
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_utf8\
-                    \n  LeftAnti Join: test.col_int32 = t2.col_int32 Filter: test.col_uint32 != t2.col_uint32\
-                    \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
-                    \n    Projection: t2.col_int32, t2.col_uint32\
-                    \n      SubqueryAlias: t2\
-                    \n        TableScan: test projection=[col_int32, col_uint32]";
+    \n  LeftAnti Join: test.col_int32 = t2.col_int32 Filter: test.col_uint32 != t2.col_uint32\
+    \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
+    \n    SubqueryAlias: t2\
+    \n      TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
@@ -151,12 +149,10 @@ fn where_exists_distinct() -> Result<()> {
     let sql = "SELECT col_int32 FROM test WHERE EXISTS (\
                SELECT DISTINCT col_int32 FROM test t2 WHERE test.col_int32 = t2.col_int32)";
     let plan = test_sql(sql)?;
-    let expected = "Projection: test.col_int32\
-                    \n  LeftSemi Join: test.col_int32 = t2.col_int32\
-                    \n    TableScan: test projection=[col_int32]\
-                    \n    Projection: t2.col_int32\
-                    \n      SubqueryAlias: t2\
-                    \n        TableScan: test projection=[col_int32]";
+    let expected = "LeftSemi Join: test.col_int32 = t2.col_int32\
+    \n  TableScan: test projection=[col_int32]\
+    \n  SubqueryAlias: t2\
+    \n    TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
@@ -169,9 +165,9 @@ fn intersect() -> Result<()> {
     let plan = test_sql(sql)?;
     let expected =
         "LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
-    \n  Distinct:\
+    \n  Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
     \n    LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
-    \n      Distinct:\
+    \n      Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
     \n        TableScan: test projection=[col_int32, col_utf8]\
     \n      TableScan: test projection=[col_int32, col_utf8]\
     \n  TableScan: test projection=[col_int32, col_utf8]";
@@ -185,9 +181,9 @@ fn between_date32_plus_interval() -> Result<()> {
     WHERE col_date32 between '1998-03-18' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
-        "Projection: COUNT(Int64(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
-        \n    Filter: test.col_date32 >= Date32(\"10303\") AND test.col_date32 <= Date32(\"10393\")\
-        \n      TableScan: test projection=[col_date32]";
+        "Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
+        \n  Filter: test.col_date32 >= Date32(\"10303\") AND test.col_date32 <= Date32(\"10393\")\
+        \n    TableScan: test projection=[col_date32]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
@@ -198,9 +194,9 @@ fn between_date64_plus_interval() -> Result<()> {
     WHERE col_date64 between '1998-03-18T00:00:00' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
-        "Projection: COUNT(Int64(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
-        \n    Filter: test.col_date64 >= Date64(\"890179200000\") AND test.col_date64 <= Date64(\"897955200000\")\
-        \n      TableScan: test projection=[col_date64]";
+        "Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
+        \n  Filter: test.col_date64 >= Date64(\"890179200000\") AND test.col_date64 <= Date64(\"897955200000\")\
+        \n    TableScan: test projection=[col_date64]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
@@ -276,15 +272,15 @@ fn propagate_empty_relation() {
 fn join_keys_in_subquery_alias() {
     let sql = "SELECT * FROM test AS A, ( SELECT col_int32 as key FROM test ) AS B where A.col_int32 = B.key;";
     let plan = test_sql(sql).unwrap();
-    let expected = "Projection: a.col_int32, a.col_uint32, a.col_utf8, a.col_date32, a.col_date64, a.col_ts_nano_none, a.col_ts_nano_utc, b.key\
-    \n  Inner Join: a.col_int32 = b.key\
-    \n    SubqueryAlias: a\
+    let expected = "Inner Join: a.col_int32 = b.key\
+    \n  SubqueryAlias: a\
+    \n    Filter: test.col_int32 IS NOT NULL\
+    \n      TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]\
+    \n  SubqueryAlias: b\
+    \n    Projection: test.col_int32 AS key\
     \n      Filter: test.col_int32 IS NOT NULL\
-    \n        TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]\
-    \n    SubqueryAlias: b\
-    \n      Projection: test.col_int32 AS key\
-    \n        Filter: test.col_int32 IS NOT NULL\
-    \n          TableScan: test projection=[col_int32]";
+    \n        TableScan: test projection=[col_int32]";
+
     assert_eq!(expected, format!("{plan:?}"));
 }
 
@@ -292,19 +288,18 @@ fn join_keys_in_subquery_alias() {
 fn join_keys_in_subquery_alias_1() {
     let sql = "SELECT * FROM test AS A, ( SELECT test.col_int32 AS key FROM test JOIN test AS C on test.col_int32 = C.col_int32 ) AS B where A.col_int32 = B.key;";
     let plan = test_sql(sql).unwrap();
-    let expected = "Projection: a.col_int32, a.col_uint32, a.col_utf8, a.col_date32, a.col_date64, a.col_ts_nano_none, a.col_ts_nano_utc, b.key\
-    \n  Inner Join: a.col_int32 = b.key\
-    \n    SubqueryAlias: a\
-    \n      Filter: test.col_int32 IS NOT NULL\
-    \n        TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]\
-    \n    SubqueryAlias: b\
-    \n      Projection: test.col_int32 AS key\
-    \n        Inner Join: test.col_int32 = c.col_int32\
+    let expected = "Inner Join: a.col_int32 = b.key\
+    \n  SubqueryAlias: a\
+    \n    Filter: test.col_int32 IS NOT NULL\
+    \n      TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]\
+    \n  SubqueryAlias: b\
+    \n    Projection: test.col_int32 AS key\
+    \n      Inner Join: test.col_int32 = c.col_int32\
+    \n        Filter: test.col_int32 IS NOT NULL\
+    \n          TableScan: test projection=[col_int32]\
+    \n        SubqueryAlias: c\
     \n          Filter: test.col_int32 IS NOT NULL\
-    \n            TableScan: test projection=[col_int32]\
-    \n          SubqueryAlias: c\
-    \n            Filter: test.col_int32 IS NOT NULL\
-    \n              TableScan: test projection=[col_int32]";
+    \n            TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan:?}"));
 }
 
@@ -325,13 +320,12 @@ fn test_same_name_but_not_ambiguous() {
     let sql = "SELECT t1.col_int32 AS col_int32 FROM test t1 intersect SELECT col_int32 FROM test t2";
     let plan = test_sql(sql).unwrap();
     let expected = "LeftSemi Join: col_int32 = t2.col_int32\
-    \n  Distinct:\
+    \n  Aggregate: groupBy=[[col_int32]], aggr=[[]]\
     \n    Projection: t1.col_int32 AS col_int32\
     \n      SubqueryAlias: t1\
     \n        TableScan: test projection=[col_int32]\
-    \n  Projection: t2.col_int32\
-    \n    SubqueryAlias: t2\
-    \n      TableScan: test projection=[col_int32]";
+    \n  SubqueryAlias: t2\
+    \n    TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan:?}"));
 }
 
