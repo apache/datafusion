@@ -24,6 +24,10 @@ updates:
     open-pull-requests-limit: 10
     target-branch: main
     labels: [auto-dependencies]
+    ignore:
+      # arrow is bumped manually
+      - dependency-name: "arrow*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

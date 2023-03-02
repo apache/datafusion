@@ -175,6 +175,16 @@ pub fn approx_distinct(expr: Expr) -> Expr {
     ))
 }
 
+/// Calculate the median for `expr`.
+pub fn median(expr: Expr) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::Median,
+        vec![expr],
+        false,
+        None,
+    ))
+}
+
 /// Calculate an approximation of the median for `expr`.
 pub fn approx_median(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
@@ -246,6 +256,16 @@ pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
 /// Create a scalar subquery expression
 pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
     Expr::ScalarSubquery(Subquery { subquery })
+}
+
+/// Create an expression to represent the stddev() aggregate function
+pub fn stddev(expr: Expr) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::Stddev,
+        vec![expr],
+        false,
+        None,
+    ))
 }
 
 /// Create a grouping set

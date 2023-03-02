@@ -24,8 +24,10 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use dashmap::DashMap;
+use datafusion_common::ToDFSchema;
 use datafusion_expr::expr::Sort;
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_optimizer::utils::conjunction;
+use datafusion_physical_expr::{create_physical_expr, PhysicalSortExpr};
 use futures::{future, stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -661,6 +663,20 @@ impl TableProvider for ListingTable {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        let filters = if let Some(expr) = conjunction(filters.to_vec()) {
+            // NOTE: Use the table schema (NOT file schema) here because `expr` may contain references to partition columns.
+            let table_df_schema = self.table_schema.as_ref().clone().to_dfschema()?;
+            let filters = create_physical_expr(
+                &expr,
+                &table_df_schema,
+                &self.table_schema,
+                state.execution_props(),
+            )?;
+            Some(filters)
+        } else {
+            None
+        };
+
         // create the execution plan
         self.options
             .format
@@ -677,7 +693,7 @@ impl TableProvider for ListingTable {
                     table_partition_cols,
                     infinite_source: self.infinite_source,
                 },
-                filters,
+                filters.as_ref(),
             )
             .await
     }

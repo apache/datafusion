@@ -50,21 +50,24 @@ where c_acctbal < (
 
     let plan = dataframe.into_optimized_plan().unwrap();
     let actual = format!("{}", plan.display_indent());
-    let expected = r#"Sort: customer.c_custkey ASC NULLS LAST
-  Projection: customer.c_custkey
-    Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_1.__value
-      Inner Join: customer.c_custkey = __scalar_sq_1.o_custkey
-        TableScan: customer projection=[c_custkey, c_acctbal]
-        SubqueryAlias: __scalar_sq_1
-          Projection: orders.o_custkey, SUM(orders.o_totalprice) AS __value
-            Aggregate: groupBy=[[orders.o_custkey]], aggr=[[SUM(orders.o_totalprice)]]
-              Filter: CAST(orders.o_totalprice AS Decimal128(25, 2)) < __scalar_sq_2.__value
-                Inner Join: orders.o_orderkey = __scalar_sq_2.l_orderkey
-                  TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice]
-                  SubqueryAlias: __scalar_sq_2
-                    Projection: lineitem.l_orderkey, SUM(lineitem.l_extendedprice) AS price AS __value
-                      Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[SUM(lineitem.l_extendedprice)]]
-                        TableScan: lineitem projection=[l_orderkey, l_extendedprice]"#;
+    let expected =  "Sort: customer.c_custkey ASC NULLS LAST\
+    \n  Projection: customer.c_custkey\
+    \n    Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_1.__value\
+    \n      Projection: customer.c_custkey, customer.c_acctbal, __scalar_sq_1.__value\
+    \n        Inner Join: customer.c_custkey = __scalar_sq_1.o_custkey\
+    \n          TableScan: customer projection=[c_custkey, c_acctbal]\
+    \n          SubqueryAlias: __scalar_sq_1\
+    \n            Projection: orders.o_custkey, SUM(orders.o_totalprice) AS __value\
+    \n              Aggregate: groupBy=[[orders.o_custkey]], aggr=[[SUM(orders.o_totalprice)]]\
+    \n                Projection: orders.o_custkey, orders.o_totalprice\
+    \n                  Filter: CAST(orders.o_totalprice AS Decimal128(25, 2)) < __scalar_sq_2.__value\
+    \n                    Projection: orders.o_custkey, orders.o_totalprice, __scalar_sq_2.__value\
+    \n                      Inner Join: orders.o_orderkey = __scalar_sq_2.l_orderkey\
+    \n                        TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice]\
+    \n                        SubqueryAlias: __scalar_sq_2\
+    \n                          Projection: lineitem.l_orderkey, SUM(lineitem.l_extendedprice) AS price AS __value\
+    \n                            Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[SUM(lineitem.l_extendedprice)]]\
+    \n                              TableScan: lineitem projection=[l_orderkey, l_extendedprice]";
     assert_eq!(actual, expected);
 
     Ok(())
@@ -113,6 +116,66 @@ where o_orderstatus in (
         "+------------+",
     ];
     assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn exists_subquery_with_same_table() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", true)?;
+
+    // Subquery and outer query refer to the same table.
+    // It will not be rewritten to join because it is not a correlated subquery.
+    let sql = "SELECT t1_id, t1_name, t1_int FROM t1 WHERE EXISTS(SELECT t1_int FROM t1 WHERE t1.t1_id > t1.t1_int)";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Filter: EXISTS (<subquery>) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    Subquery: [t1_int:UInt32;N]",
+        "      Projection: t1.t1_int [t1_int:UInt32;N]",
+        "        Filter: t1.t1_id > t1.t1_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "          TableScan: t1 [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn in_subquery_with_same_table() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", true)?;
+
+    // Subquery and outer query refer to the same table.
+    // It will be rewritten to join because in-subquery has extra predicate(`t1.t1_id = __correlated_sq_1.t1_int`).
+    let sql = "SELECT t1_id, t1_name, t1_int FROM t1 WHERE t1_id IN(SELECT t1_int FROM t1 WHERE t1.t1_id > t1.t1_int)";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  LeftSemi Join: t1.t1_id = __correlated_sq_1.t1_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    SubqueryAlias: __correlated_sq_1 [t1_int:UInt32;N]",
+        "      Projection: t1.t1_int AS t1_int [t1_int:UInt32;N]",
+        "        Filter: t1.t1_id > t1.t1_int [t1_id:UInt32;N, t1_int:UInt32;N]",
+        "          TableScan: t1 projection=[t1_id, t1_int] [t1_id:UInt32;N, t1_int:UInt32;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
 
     Ok(())
 }

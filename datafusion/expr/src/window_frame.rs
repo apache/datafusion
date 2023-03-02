@@ -164,7 +164,7 @@ pub fn regularize(mut frame: WindowFrame, order_bys: usize) -> Result<WindowFram
             }
         } else {
             return Err(DataFusionError::Plan(format!(
-                "With window frame of type RANGE, the ORDER BY expression must be of length 1, got {}", order_bys)));
+                "With window frame of type RANGE, the ORDER BY expression must be of length 1, got {order_bys}")));
         }
     } else if frame.units == WindowFrameUnits::Groups && order_bys == 0 {
         return Err(DataFusionError::Plan(

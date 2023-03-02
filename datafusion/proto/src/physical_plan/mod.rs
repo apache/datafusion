@@ -53,7 +53,6 @@ use prost::Message;
 
 use crate::common::proto_error;
 use crate::common::{csv_delimiter_to_string, str_to_byte};
-use crate::logical_plan;
 use crate::physical_plan::from_proto::{
     parse_physical_expr, parse_protobuf_file_scan_config,
 };
@@ -156,19 +155,22 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 FileCompressionType::UNCOMPRESSED,
             ))),
             PhysicalPlanType::ParquetScan(scan) => {
+                let base_config = parse_protobuf_file_scan_config(
+                    scan.base_conf.as_ref().unwrap(),
+                    registry,
+                )?;
                 let predicate = scan
-                    .pruning_predicate
+                    .predicate
                     .as_ref()
-                    .map(|expr| logical_plan::from_proto::parse_expr(expr, registry))
+                    .map(|expr| {
+                        parse_physical_expr(
+                            expr,
+                            registry,
+                            base_config.file_schema.as_ref(),
+                        )
+                    })
                     .transpose()?;
-                Ok(Arc::new(ParquetExec::new(
-                    parse_protobuf_file_scan_config(
-                        scan.base_conf.as_ref().unwrap(),
-                        registry,
-                    )?,
-                    predicate,
-                    None,
-                )))
+                Ok(Arc::new(ParquetExec::new(base_config, predicate, None)))
             }
             PhysicalPlanType::AvroScan(scan) => {
                 Ok(Arc::new(AvroExec::new(parse_protobuf_file_scan_config(
@@ -956,13 +958,13 @@ impl AsExecutionPlan for PhysicalPlanNode {
         } else if let Some(exec) = plan.downcast_ref::<ParquetExec>() {
             let pruning_expr = exec
                 .pruning_predicate()
-                .map(|pred| pred.logical_expr().try_into())
+                .map(|pred| pred.orig_expr().clone().try_into())
                 .transpose()?;
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ParquetScan(
                     protobuf::ParquetScanExecNode {
                         base_conf: Some(exec.base_config().try_into()?),
-                        pruning_predicate: pruning_expr,
+                        predicate: pruning_expr,
                     },
                 )),
             })
@@ -1218,7 +1220,7 @@ mod roundtrip_tests {
     use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
     use datafusion::physical_expr::ScalarFunctionExpr;
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
-    use datafusion::physical_plan::expressions::{like, GetIndexedFieldExpr};
+    use datafusion::physical_plan::expressions::{like, BinaryExpr, GetIndexedFieldExpr};
     use datafusion::physical_plan::functions;
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::physical_plan::projection::ProjectionExec;
@@ -1510,7 +1512,11 @@ mod roundtrip_tests {
             infinite_source: false,
         };
 
-        let predicate = datafusion::prelude::col("col").eq(datafusion::prelude::lit("1"));
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("col", 1)),
+            Operator::Eq,
+            lit("1"),
+        ));
         roundtrip_test(Arc::new(ParquetExec::new(
             scan_config,
             Some(predicate),

@@ -33,7 +33,7 @@ use std::sync::Arc;
 /// Attempt to replace outer joins with inner joins.
 ///
 /// Outer joins are typically more expensive to compute at runtime
-/// than inner joins and prevent various forms fo predicate pushdown
+/// than inner joins and prevent various forms of predicate pushdown
 /// and other optimizations, so removing them if possible is beneficial.
 ///
 /// Inner joins filter out rows that do match. Outer joins pass rows
@@ -44,7 +44,7 @@ use std::sync::Arc;
 /// For example, in the `select ... from a left join b on ... where b.xx = 100;`
 ///
 /// For rows when `b.xx` is null (as it would be after an outer join),
-/// the `b.xx = 100` predicate filters them out and there there is no
+/// the `b.xx = 100` predicate filters them out and there is no
 /// need to produce null rows for output.
 ///
 /// Generally, an outer join can be rewritten to inner join if the

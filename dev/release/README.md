@@ -310,6 +310,7 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion/row && cargo publish)
 (cd datafusion/physical-expr && cargo publish)
 (cd datafusion/optimizer && cargo publish)
+(cd datafusion/execution && cargo publish)
 (cd datafusion/core && cargo publish)
 (cd datafusion/proto && cargo publish)
 (cd datafusion/substrait && cargo publish)
