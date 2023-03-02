@@ -19,6 +19,7 @@
 
 use crate::error::Result;
 use crate::execution::context::TaskContext;
+use crate::physical_optimizer::sort_enforcement::get_at_indices;
 use crate::physical_plan::common::transpose;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
@@ -85,7 +86,12 @@ impl WindowAggExec {
         let ordered_partition_by_indices =
             if let Some(input_ordering) = input.output_ordering() {
                 let input_ordering_exprs = convert_to_expr(input_ordering);
-                get_indices_of_matching_exprs(partition_by_exprs, &input_ordering_exprs)
+                let equal_properties = || input.equivalence_properties();
+                get_indices_of_matching_exprs(
+                    partition_by_exprs,
+                    &input_ordering_exprs,
+                    equal_properties,
+                )
             } else {
                 (0..partition_by_exprs.len()).collect()
             };
@@ -122,20 +128,17 @@ impl WindowAggExec {
     // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
     // to calculate partition separation points
     pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
-        let mut result = vec![];
         // All window exprs have the same partition by, so we just use the first one:
         let partition_by = self.window_expr()[0].partition_by();
         let sort_keys = self.sort_keys.as_deref().unwrap_or(&[]);
-        for item in partition_by {
-            if let Some(a) = sort_keys.iter().find(|&e| e.expr.eq(item)) {
-                result.push(a.clone());
-            } else {
-                return Err(DataFusionError::Execution(
-                    "Partition key not found in sort keys".to_string(),
-                ));
-            }
-        }
-        Ok(result)
+        let sort_keys_exprs = convert_to_expr(sort_keys);
+        let equal_properties = || self.equivalence_properties();
+        let indices = get_indices_of_matching_exprs(
+            partition_by,
+            &sort_keys_exprs,
+            equal_properties,
+        );
+        get_at_indices(sort_keys, &indices)
     }
 }
 

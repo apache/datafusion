@@ -527,6 +527,116 @@ async fn test_window_agg_partition_by_set2() -> Result<()> {
     Ok(())
 }
 
+// TODO: Move below test to the window.slt
+#[tokio::test]
+async fn test_window_agg_child_equivalence() -> Result<()> {
+    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(1));
+    register_aggregate_csv(&ctx).await?;
+    // When partition by are same but their ordering are different we should be able to calculate result without new SortExec for BoundedWindowAggExec.
+    // In below case there is an alias for column c1. In this case we should still be able to remove sort.
+    let sql = "SELECT c9,
+    SUM(c9) OVER(PARTITION BY c1, c2 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1,
+    SUM(c9) OVER(PARTITION BY c2, c1_alias ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2
+    FROM (SELECT c1, c2, c9, c1 as c1_alias
+        FROM aggregate_test_100
+        ORDER BY c9) t1
+    LIMIT 5";
+
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let expected = {
+        vec![
+            "ProjectionExec: expr=[c9@2 as c9, SUM(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@4 as sum1, SUM(t1.c9) PARTITION BY [t1.c2, t1.c1_alias] ORDER BY [t1.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@5 as sum2]",
+            "  GlobalLimitExec: skip=0, fetch=5",
+            "    BoundedWindowAggExec: wdw=[SUM(t1.c9): Ok(Field { name: \"SUM(t1.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }], mode=[Sorted]",
+            "      BoundedWindowAggExec: wdw=[SUM(t1.c9): Ok(Field { name: \"SUM(t1.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }], mode=[Sorted]",
+            "        SortExec: expr=[c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST,c9@2 ASC NULLS LAST]",
+            "          ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c9@2 as c9, c1@0 as c1_alias]",
+        ]
+    };
+
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let actual_len = actual.len();
+    let actual_trim_last = &actual[..actual_len - 1];
+    assert_eq!(
+        expected, actual_trim_last,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------------+-------------+-------------+",
+        "| c9         | sum1        | sum2        |",
+        "+------------+-------------+-------------+",
+        "| 774637006  | 12189635055 | 12189635055 |",
+        "| 1454057357 | 12189635055 | 12189635055 |",
+        "| 2669374863 | 11414998049 | 11414998049 |",
+        "| 3276123488 | 9960940692  | 9960940692  |",
+        "| 4015442341 | 7291565829  | 7291565829  |",
+        "+------------+-------------+-------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+// TODO: Move below test to the window.slt
+#[tokio::test]
+async fn test_window_agg_child_equivalence2() -> Result<()> {
+    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(1));
+    register_aggregate_csv(&ctx).await?;
+    // When partition by are same but their ordering are different we should be able to calculate result without new SortExec for WindowAggExec.
+    // In below case there is an alias for column c1. In this case we should still be able to remove sort.
+    let sql = "SELECT c9,
+    SUM(c9) OVER(PARTITION BY c1, c2 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum1,
+    SUM(c9) OVER(PARTITION BY c2, c1_alias ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum2
+    FROM (SELECT c1, c2, c9, c1 as c1_alias
+        FROM aggregate_test_100
+        ORDER BY c9) t1
+    LIMIT 5";
+
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let expected = {
+        vec![
+            "ProjectionExec: expr=[c9@2 as c9, SUM(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING@4 as sum1, SUM(t1.c9) PARTITION BY [t1.c2, t1.c1_alias] ORDER BY [t1.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING@5 as sum2]",
+            "  GlobalLimitExec: skip=0, fetch=5",
+            "    WindowAggExec: wdw=[SUM(t1.c9): Ok(Field { name: \"SUM(t1.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(NULL)) }]",
+            "      WindowAggExec: wdw=[SUM(t1.c9): Ok(Field { name: \"SUM(t1.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(NULL)) }]",
+            "        SortExec: expr=[c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST,c9@2 ASC NULLS LAST]",
+            "          ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c9@2 as c9, c1@0 as c1_alias]",
+        ]
+    };
+
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let actual_len = actual.len();
+    let actual_trim_last = &actual[..actual_len - 1];
+    assert_eq!(
+        expected, actual_trim_last,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------------+-------------+-------------+",
+        "| c9         | sum1        | sum2        |",
+        "+------------+-------------+-------------+",
+        "| 774637006  | 12189635055 | 12189635055 |",
+        "| 1454057357 | 12189635055 | 12189635055 |",
+        "| 2669374863 | 11414998049 | 11414998049 |",
+        "| 3276123488 | 9960940692  | 9960940692  |",
+        "| 4015442341 | 7291565829  | 7291565829  |",
+        "+------------+-------------+-------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_window_agg_complex_plan() -> Result<()> {
     let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(2));

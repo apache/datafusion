@@ -664,11 +664,16 @@ fn can_skip_ordering(
         if let Some(physical_ordering) = physical_ordering {
             let orderby_exprs = convert_to_expr(orderby_keys);
             let physical_ordering_exprs = convert_to_expr(physical_ordering);
-            let orderby_indices =
-                get_indices_of_matching_exprs(&orderby_exprs, &physical_ordering_exprs);
+            let equal_properties = || sort_input.equivalence_properties();
+            let orderby_indices = get_indices_of_matching_exprs(
+                &orderby_exprs,
+                &physical_ordering_exprs,
+                equal_properties,
+            );
             let partitionby_indices = get_indices_of_matching_exprs(
                 partitionby_exprs,
                 &physical_ordering_exprs,
+                equal_properties,
             );
             let ordered_merged_indices =
                 get_ordered_merged_indices(&partitionby_indices, &orderby_indices);

@@ -240,8 +240,8 @@ pub fn convert_to_expr(in1: &[PhysicalSortExpr]) -> Vec<Arc<dyn PhysicalExpr>> {
     in1.iter().map(|elem| elem.expr.clone()).collect::<Vec<_>>()
 }
 
-/// Find the indices of matching entries inside the `searched` vector for each element in the `to_search` vector
-pub fn get_indices_of_matching_exprs(
+// implementation for searching after normalization.
+fn get_indices_of_matching_exprs_normalized(
     to_search: &[Arc<dyn PhysicalExpr>],
     searched: &[Arc<dyn PhysicalExpr>],
 ) -> Vec<usize> {
@@ -252,6 +252,30 @@ pub fn get_indices_of_matching_exprs(
         }
     }
     result
+}
+
+/// Find the indices of matching entries inside the `searched` vector for each element in the `to_search` vector
+pub fn get_indices_of_matching_exprs<F: FnOnce() -> EquivalenceProperties>(
+    to_search: &[Arc<dyn PhysicalExpr>],
+    searched: &[Arc<dyn PhysicalExpr>],
+    equal_properties: F,
+) -> Vec<usize> {
+    if let eq_classes @ [_, ..] = equal_properties().classes() {
+        let to_search_normalized = to_search
+            .iter()
+            .map(|e| normalize_expr_with_equivalence_properties(e.clone(), eq_classes))
+            .collect::<Vec<_>>();
+        let searched_normalized = searched
+            .iter()
+            .map(|e| normalize_expr_with_equivalence_properties(e.clone(), eq_classes))
+            .collect::<Vec<_>>();
+        get_indices_of_matching_exprs_normalized(
+            &to_search_normalized,
+            &searched_normalized,
+        )
+    } else {
+        get_indices_of_matching_exprs_normalized(to_search, searched)
+    }
 }
 
 #[cfg(test)]
@@ -280,6 +304,11 @@ mod tests {
 
     #[test]
     fn test_get_indices_of_matching_exprs() -> Result<()> {
+        let empty_schema = &Arc::new(Schema {
+            fields: vec![],
+            metadata: Default::default(),
+        });
+        let equal_properties = || EquivalenceProperties::new(empty_schema.clone());
         let list1: Vec<Arc<dyn PhysicalExpr>> = vec![
             Arc::new(Column::new("a", 0)),
             Arc::new(Column::new("b", 1)),
@@ -291,8 +320,14 @@ mod tests {
             Arc::new(Column::new("c", 2)),
             Arc::new(Column::new("a", 0)),
         ];
-        assert_eq!(get_indices_of_matching_exprs(&list1, &list2), vec![2, 0, 1]);
-        assert_eq!(get_indices_of_matching_exprs(&list2, &list1), vec![1, 2, 0]);
+        assert_eq!(
+            get_indices_of_matching_exprs(&list1, &list2, equal_properties),
+            vec![2, 0, 1]
+        );
+        assert_eq!(
+            get_indices_of_matching_exprs(&list2, &list1, equal_properties),
+            vec![1, 2, 0]
+        );
         Ok(())
     }
 
