@@ -74,6 +74,16 @@ async fn group_by_hash() {
     .await
 }
 
+#[tokio::test]
+async fn cross_join() {
+    run_limit_test(
+        "select t1.* from t t1 CROSS JOIN t t2",
+        "Resources exhausted: Failed to allocate additional",
+        1_000,
+    )
+    .await
+}
+
 /// 50 byte memory limit
 const MEMORY_FRACTION: f64 = 0.95;
 

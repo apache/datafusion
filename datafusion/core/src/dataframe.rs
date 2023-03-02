@@ -20,19 +20,22 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::Int64Array;
+use arrow::array::{ArrayRef, Int64Array, StringArray};
+use arrow::compute::{cast, concat};
+use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
 use parquet::file::properties::WriterProperties;
 
+use datafusion_common::from_slice::FromSlice;
 use datafusion_common::{Column, DFSchema, ScalarValue};
-use datafusion_expr::TableProviderFilterPushDown;
+use datafusion_expr::{TableProviderFilterPushDown, UNNAMED_TABLE};
 
 use crate::arrow::datatypes::Schema;
 use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
-use crate::datasource::{MemTable, TableProvider};
+use crate::datasource::{provider_as_source, MemTable, TableProvider};
 use crate::error::Result;
 use crate::execution::{
     context::{SessionState, TaskContext},
@@ -299,6 +302,168 @@ impl DataFrame {
         Ok(DataFrame::new(
             self.session_state,
             LogicalPlanBuilder::from(self.plan).distinct()?.build()?,
+        ))
+    }
+
+    /// Summary statistics for a DataFrame. Only summarizes numeric datatypes at the moment and
+    /// returns nulls for non numeric datatypes. Try in keep output similar to pandas
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use arrow::util::pretty;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/tpch-csv/customer.csv", CsvReadOptions::new()).await?;    
+    /// df.describe().await.unwrap();
+    ///
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn describe(self) -> Result<Self> {
+        //the functions now supported
+        let supported_describe_functions =
+            vec!["count", "null_count", "mean", "min", "max"];
+
+        let fields_iter = self.schema().fields().iter();
+
+        //define describe column
+        let mut describe_schemas = fields_iter
+            .clone()
+            .map(|field| {
+                if field.data_type().is_numeric() {
+                    Field::new(field.name(), DataType::Float64, true)
+                } else {
+                    Field::new(field.name(), DataType::Utf8, true)
+                }
+            })
+            .collect::<Vec<_>>();
+        describe_schemas.insert(0, Field::new("describe", DataType::Utf8, false));
+
+        //collect recordBatch
+        let describe_record_batch = vec![
+            // count aggregation
+            self.clone()
+                .aggregate(
+                    vec![],
+                    fields_iter
+                        .clone()
+                        .map(|f| datafusion_expr::count(col(f.name())).alias(f.name()))
+                        .collect::<Vec<_>>(),
+                )?
+                .collect()
+                .await?,
+            // null_count aggregation
+            self.clone()
+                .aggregate(
+                    vec![],
+                    fields_iter
+                        .clone()
+                        .map(|f| {
+                            datafusion_expr::count(datafusion_expr::is_null(
+                                col(f.name()),
+                            ))
+                            .alias(f.name())
+                        })
+                        .collect::<Vec<_>>(),
+                )?
+                .collect()
+                .await?,
+            // mean aggregation
+            self.clone()
+                .aggregate(
+                    vec![],
+                    fields_iter
+                        .clone()
+                        .filter(|f| f.data_type().is_numeric())
+                        .map(|f| datafusion_expr::avg(col(f.name())).alias(f.name()))
+                        .collect::<Vec<_>>(),
+                )?
+                .collect()
+                .await?,
+            // min aggregation
+            self.clone()
+                .aggregate(
+                    vec![],
+                    fields_iter
+                        .clone()
+                        .filter(|f| {
+                            !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
+                        })
+                        .map(|f| datafusion_expr::min(col(f.name())).alias(f.name()))
+                        .collect::<Vec<_>>(),
+                )?
+                .collect()
+                .await?,
+            // max aggregation
+            self.clone()
+                .aggregate(
+                    vec![],
+                    fields_iter
+                        .clone()
+                        .filter(|f| {
+                            !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
+                        })
+                        .map(|f| datafusion_expr::max(col(f.name())).alias(f.name()))
+                        .collect::<Vec<_>>(),
+                )?
+                .collect()
+                .await?,
+        ];
+
+        let mut array_ref_vec: Vec<ArrayRef> = vec![];
+        for field in fields_iter {
+            let mut array_datas = vec![];
+            for record_batch in describe_record_batch.iter() {
+                let column = record_batch.get(0).unwrap().column_by_name(field.name());
+                match column {
+                    Some(c) => {
+                        if field.data_type().is_numeric() {
+                            array_datas.push(cast(c, &DataType::Float64)?);
+                        } else {
+                            array_datas.push(cast(c, &DataType::Utf8)?);
+                        }
+                    }
+                    //if None mean the column cannot be min/max aggregation
+                    None => {
+                        array_datas.push(Arc::new(StringArray::from_slice(["null"])));
+                    }
+                }
+            }
+
+            array_ref_vec.push(concat(
+                array_datas
+                    .iter()
+                    .map(|af| af.as_ref())
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            )?);
+        }
+
+        //insert first column with function names
+        array_ref_vec.insert(
+            0,
+            Arc::new(StringArray::from_slice(
+                supported_describe_functions.clone(),
+            )),
+        );
+
+        let describe_record_batch =
+            RecordBatch::try_new(Arc::new(Schema::new(describe_schemas)), array_ref_vec)?;
+
+        let provider = MemTable::try_new(
+            describe_record_batch.schema(),
+            vec![vec![describe_record_batch]],
+        )?;
+        Ok(DataFrame::new(
+            self.session_state,
+            LogicalPlanBuilder::scan(
+                UNNAMED_TABLE,
+                provider_as_source(Arc::new(provider)),
+                None,
+            )?
+            .build()?,
         ))
     }
 
@@ -1097,19 +1262,42 @@ mod tests {
             .unwrap()
             .distinct()
             .unwrap()
-            .sort(vec![col("c2").sort(true, true)])
+            .sort(vec![col("c1").sort(true, true)])
             .unwrap();
+
         let df_results = plan.clone().collect().await?;
+
+        #[rustfmt::skip]
         assert_batches_sorted_eq!(
             vec![
-                "+----+", "| c1 |", "+----+", "| a  |", "| a  |", "| a  |", "| a  |",
-                "| a  |", "| b  |", "| b  |", "| b  |", "| b  |", "| b  |", "| c  |",
-                "| c  |", "| c  |", "| c  |", "| c  |", "| d  |", "| d  |", "| d  |",
-                "| d  |", "| d  |", "| e  |", "| e  |", "| e  |", "| e  |", "| e  |",
+                "+----+",
+                "| c1 |",
+                "+----+",
+                "| a  |",
+                "| b  |",
+                "| c  |",
+                "| d  |",
+                "| e  |",
                 "+----+",
             ],
             &df_results
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_distinct_sort_by_unprojected() -> Result<()> {
+        let t = test_table().await?;
+        let err = t
+            .select(vec![col("c1")])
+            .unwrap()
+            .distinct()
+            .unwrap()
+            // try to sort on some value not present in input to distinct
+            .sort(vec![col("c2").sort(true, true)])
+            .unwrap_err();
+        assert_eq!(err.to_string(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions c2 must appear in select list");
 
         Ok(())
     }
@@ -1552,11 +1740,9 @@ mod tests {
         \n    Sort: t1.c1 ASC NULLS FIRST, t1.c2 ASC NULLS FIRST, t1.c3 ASC NULLS FIRST, t2.c1 ASC NULLS FIRST, t2.c2 ASC NULLS FIRST, t2.c3 ASC NULLS FIRST, fetch=1\
         \n      Inner Join: t1.c1 = t2.c1\
         \n        SubqueryAlias: t1\
-        \n          Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
-        \n            TableScan: aggregate_test_100 projection=[c1, c2, c3]\
+        \n          TableScan: aggregate_test_100 projection=[c1, c2, c3]\
         \n        SubqueryAlias: t2\
-        \n          Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
-        \n            TableScan: aggregate_test_100 projection=[c1, c2, c3]",
+        \n          TableScan: aggregate_test_100 projection=[c1, c2, c3]",
                    format!("{:?}", df_renamed.clone().into_optimized_plan()?)
         );
 

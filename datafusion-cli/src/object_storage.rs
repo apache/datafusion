@@ -156,7 +156,7 @@ mod tests {
         let url = Url::from_str(s3).expect("Unable to parse s3 url");
         let res = provider.get_by_url(&url);
         let msg = match res {
-            Err(e) => format!("{}", e),
+            Err(e) => format!("{e}"),
             Ok(_) => "".to_string(),
         };
         assert_eq!("".to_string(), msg); // Fail with error message

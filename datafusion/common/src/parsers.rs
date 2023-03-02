@@ -34,6 +34,8 @@ pub enum CompressionTypeVariant {
     BZIP2,
     /// Xz-ed file (liblzma)
     XZ,
+    /// Zstd-ed file,
+    ZSTD,
     /// Uncompressed file
     UNCOMPRESSED,
 }
@@ -47,6 +49,7 @@ impl FromStr for CompressionTypeVariant {
             "GZIP" | "GZ" => Ok(Self::GZIP),
             "BZIP2" | "BZ2" => Ok(Self::BZIP2),
             "XZ" => Ok(Self::XZ),
+            "ZST" | "ZSTD" => Ok(Self::ZSTD),
             "" => Ok(Self::UNCOMPRESSED),
             _ => Err(ParserError::ParserError(format!(
                 "Unsupported file compression type {s}"
@@ -61,6 +64,7 @@ impl ToString for CompressionTypeVariant {
             Self::GZIP => "GZIP",
             Self::BZIP2 => "BZIP2",
             Self::XZ => "XZ",
+            Self::ZSTD => "ZSTD",
             Self::UNCOMPRESSED => "",
         }
         .to_string()

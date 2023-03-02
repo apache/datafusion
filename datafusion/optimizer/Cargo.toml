@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-optimizer"
 description = "DataFusion Query Optimizer"
-version = "18.0.0"
+version = "19.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "README.md"
@@ -37,17 +37,18 @@ default = ["unicode_expressions"]
 unicode_expressions = []
 
 [dependencies]
-arrow = { version = "32.0.0", features = ["prettyprint"] }
+arrow = { version = "34.0.0", features = ["prettyprint"] }
 async-trait = "0.1.41"
 chrono = { version = "0.4.23", default-features = false }
-datafusion-common = { path = "../common", version = "18.0.0" }
-datafusion-expr = { path = "../expr", version = "18.0.0" }
-datafusion-physical-expr = { path = "../physical-expr", version = "18.0.0" }
+datafusion-common = { path = "../common", version = "19.0.0" }
+datafusion-expr = { path = "../expr", version = "19.0.0" }
+datafusion-physical-expr = { path = "../physical-expr", version = "19.0.0" }
 hashbrown = { version = "0.13", features = ["raw"] }
+itertools = "0.10"
 log = "^0.4"
 regex-syntax = "0.6.28"
 
 [dev-dependencies]
 ctor = "0.1.22"
-datafusion-sql = { path = "../sql", version = "18.0.0" }
+datafusion-sql = { path = "../sql", version = "19.0.0" }
 env_logger = "0.10.0"

@@ -650,8 +650,7 @@ async fn test_physical_plan_display_indent_multi_children() {
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 9000), input_partitions=9000",
         "          RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
-        "            ProjectionExec: expr=[c1@0 as c1]",
-        "              CsvExec: files={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1]",
+        "            CsvExec: files={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1]",
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        RepartitionExec: partitioning=Hash([Column { name: \"c2\", index: 0 }], 9000), input_partitions=9000",
         "          RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
@@ -757,10 +756,10 @@ async fn explain_logical_plan_only() {
     let expected = vec![
         vec![
             "logical_plan",
-            "Projection: COUNT(UInt8(1))\
-            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-            \n    SubqueryAlias: t\
-            \n      Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))",
+            "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+            \n  SubqueryAlias: t\
+            \n    Projection: column1\
+            \n      Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))"
         ]];
     assert_eq!(expected, actual);
 }
@@ -776,9 +775,8 @@ async fn explain_physical_plan_only() {
 
     let expected = vec![vec![
         "physical_plan",
-        "ProjectionExec: expr=[COUNT(UInt8(1))@0 as COUNT(UInt8(1))]\
-        \n  ProjectionExec: expr=[2 as COUNT(UInt8(1))]\
-        \n    EmptyExec: produce_one_row=true\
+        "ProjectionExec: expr=[2 as COUNT(UInt8(1))]\
+        \n  EmptyExec: produce_one_row=true\
         \n",
     ]];
     assert_eq!(expected, actual);

@@ -110,6 +110,35 @@ impl Operator {
         }
     }
 
+    /// Return true if the operator is a comparison operator.
+    ///
+    /// For example, 'Binary(a, >, b)' would be a comparison expression.
+    pub fn is_comparison_operator(&self) -> bool {
+        matches!(
+            self,
+            Operator::Eq
+                | Operator::NotEq
+                | Operator::Lt
+                | Operator::LtEq
+                | Operator::Gt
+                | Operator::GtEq
+                | Operator::IsDistinctFrom
+                | Operator::IsNotDistinctFrom
+                | Operator::RegexMatch
+                | Operator::RegexIMatch
+                | Operator::RegexNotMatch
+                | Operator::RegexNotIMatch
+        )
+    }
+
+    /// Return true if the operator is a logic operator.
+    ///
+    /// For example, 'Binary(Binary(a, >, b), AND, Binary(a, <, b + 3))' would
+    /// be a logical expression.
+    pub fn is_logic_operator(&self) -> bool {
+        matches!(self, Operator::And | Operator::Or)
+    }
+
     /// Return the operator where swapping lhs and rhs wouldn't change the result.
     ///
     /// For example `Binary(50, >=, a)` could also be represented as `Binary(a, <=, 50)`.
@@ -140,6 +169,35 @@ impl Operator {
             | Operator::BitwiseShiftRight
             | Operator::BitwiseShiftLeft
             | Operator::StringConcat => None,
+        }
+    }
+
+    /// Get the operator precedence
+    /// use <https://www.postgresql.org/docs/7.0/operators.htm#AEN2026> as a reference
+    pub fn precedence(&self) -> u8 {
+        match self {
+            Operator::Or => 5,
+            Operator::And => 10,
+            Operator::NotEq
+            | Operator::Eq
+            | Operator::Lt
+            | Operator::LtEq
+            | Operator::Gt
+            | Operator::GtEq => 20,
+            Operator::Plus | Operator::Minus => 30,
+            Operator::Multiply | Operator::Divide | Operator::Modulo => 40,
+            Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom
+            | Operator::RegexMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotIMatch
+            | Operator::BitwiseAnd
+            | Operator::BitwiseOr
+            | Operator::BitwiseShiftLeft
+            | Operator::BitwiseShiftRight
+            | Operator::BitwiseXor
+            | Operator::StringConcat => 0,
         }
     }
 }

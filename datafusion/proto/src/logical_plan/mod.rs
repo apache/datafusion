@@ -2212,6 +2212,17 @@ mod roundtrip_tests {
                     4,
                 )),
             ),
+            DataType::Map(
+                new_box_field(
+                    "entries",
+                    DataType::Struct(vec![
+                        Field::new("keys", DataType::Utf8, false),
+                        Field::new("values", DataType::Int32, true),
+                    ]),
+                    true,
+                ),
+                false,
+            ),
         ];
 
         for test_case in test_cases.into_iter() {

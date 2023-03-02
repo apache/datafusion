@@ -416,7 +416,7 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 /// Rewrites `expr` using `rewriter`, ensuring that the output has the
 /// same name as `expr` prior to rewrite, adding an alias if necessary.
 ///
-/// This is important when optimzing plans to ensure the the output
+/// This is important when optimizing plans to ensure the output
 /// schema of plan nodes don't change after optimization
 pub fn rewrite_preserving_name<R>(expr: Expr, rewriter: &mut R) -> Result<Expr>
 where
@@ -436,7 +436,7 @@ fn name_for_alias(expr: &Expr) -> Result<String> {
     }
 }
 
-/// Ensure `expr` has the name name as `original_name` by adding an
+/// Ensure `expr` has the name as `original_name` by adding an
 /// alias if necessary.
 fn add_alias_if_changed(original_name: String, expr: Expr) -> Result<Expr> {
     let new_name = name_for_alias(&expr)?;

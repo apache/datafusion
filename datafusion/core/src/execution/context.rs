@@ -31,6 +31,7 @@ use datafusion_expr::{DescribeTable, StringifiedPlan};
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::{
     any::{Any, TypeId},
@@ -82,7 +83,7 @@ use crate::physical_plan::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_common::ScalarValue;
+use datafusion_common::{OwnedTableReference, ScalarValue};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -105,6 +106,43 @@ use uuid::Uuid;
 use super::options::{
     AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions, ReadOptions,
 };
+
+/// DataFilePaths adds a method to convert strings and vector of strings to vector of [`ListingTableUrl`] URLs.
+/// This allows methods such [`SessionContext::read_csv`] and `[`SessionContext::read_avro`]
+/// to take either a single file or multiple files.
+pub trait DataFilePaths {
+    /// Parse to a vector of [`ListingTableUrl`] URLs.
+    fn to_urls(self) -> Result<Vec<ListingTableUrl>>;
+}
+
+impl DataFilePaths for &str {
+    fn to_urls(self) -> Result<Vec<ListingTableUrl>> {
+        Ok(vec![ListingTableUrl::parse(self)?])
+    }
+}
+
+impl DataFilePaths for String {
+    fn to_urls(self) -> Result<Vec<ListingTableUrl>> {
+        Ok(vec![ListingTableUrl::parse(self)?])
+    }
+}
+
+impl DataFilePaths for &String {
+    fn to_urls(self) -> Result<Vec<ListingTableUrl>> {
+        Ok(vec![ListingTableUrl::parse(self)?])
+    }
+}
+
+impl<P> DataFilePaths for Vec<P>
+where
+    P: AsRef<str>,
+{
+    fn to_urls(self) -> Result<Vec<ListingTableUrl>> {
+        self.iter()
+            .map(ListingTableUrl::parse)
+            .collect::<Result<Vec<ListingTableUrl>>>()
+    }
+}
 
 /// SessionContext is the main interface for executing queries with DataFusion. It stands for
 /// the connection between user and DataFusion/Ballista cluster.
@@ -627,22 +665,18 @@ impl SessionContext {
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    async fn _read_type<'a>(
+    async fn _read_type<'a, P: DataFilePaths>(
         &self,
-        table_path: impl AsRef<str>,
+        table_paths: P,
         options: impl ReadOptions<'a>,
     ) -> Result<DataFrame> {
-        let table_path = ListingTableUrl::parse(table_path)?;
+        let table_paths = table_paths.to_urls()?;
         let session_config = self.copied_config();
         let listing_options = options.to_listing_options(&session_config);
-        let resolved_schema = match options
-            .get_resolved_schema(&session_config, self.state(), table_path.clone())
-            .await
-        {
-            Ok(resolved_schema) => resolved_schema,
-            Err(e) => return Err(e),
-        };
-        let config = ListingTableConfig::new(table_path)
+        let resolved_schema = options
+            .get_resolved_schema(&session_config, self.state(), table_paths[0].clone())
+            .await?;
+        let config = ListingTableConfig::new_with_multi_paths(table_paths)
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
         let provider = ListingTable::try_new(config)?;
@@ -653,24 +687,28 @@ impl SessionContext {
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    pub async fn read_avro(
+    ///
+    /// For an example, see [`read_csv`](Self::read_csv)
+    pub async fn read_avro<P: DataFilePaths>(
         &self,
-        table_path: impl AsRef<str>,
+        table_paths: P,
         options: AvroReadOptions<'_>,
     ) -> Result<DataFrame> {
-        self._read_type(table_path, options).await
+        self._read_type(table_paths, options).await
     }
 
     /// Creates a [`DataFrame`] for reading an JSON data source.
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    pub async fn read_json(
+    ///
+    /// For an example, see [`read_csv`](Self::read_csv)
+    pub async fn read_json<P: DataFilePaths>(
         &self,
-        table_path: impl AsRef<str>,
+        table_paths: P,
         options: NdJsonReadOptions<'_>,
     ) -> Result<DataFrame> {
-        self._read_type(table_path, options).await
+        self._read_type(table_paths, options).await
     }
 
     /// Creates an empty DataFrame.
@@ -685,24 +723,42 @@ impl SessionContext {
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    pub async fn read_csv(
+    ///
+    /// Example usage is given below:
+    ///
+    /// ```
+    /// use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// // You can read a single file using `read_csv`
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// // you can also read multiple files:
+    /// let df = ctx.read_csv(vec!["tests/data/example.csv", "tests/data/example.csv"], CsvReadOptions::new()).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn read_csv<P: DataFilePaths>(
         &self,
-        table_path: impl AsRef<str>,
+        table_paths: P,
         options: CsvReadOptions<'_>,
     ) -> Result<DataFrame> {
-        self._read_type(table_path, options).await
+        self._read_type(table_paths, options).await
     }
 
     /// Creates a [`DataFrame`] for reading a Parquet data source.
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    pub async fn read_parquet(
+    ///
+    /// For an example, see [`read_csv`](Self::read_csv)
+    pub async fn read_parquet<P: DataFilePaths>(
         &self,
-        table_path: impl AsRef<str>,
+        table_paths: P,
         options: ParquetReadOptions<'_>,
     ) -> Result<DataFrame> {
-        self._read_type(table_path, options).await
+        self._read_type(table_paths, options).await
     }
 
     /// Creates a [`DataFrame`] for a [`TableProvider`] such as a
@@ -1528,6 +1584,9 @@ impl SessionState {
             // repartitioning and local sorting steps to meet distribution and ordering requirements.
             // Therefore, it should run before EnforceDistribution and EnforceSorting.
             Arc::new(JoinSelection::new()),
+            // Enforce sort before PipelineFixer
+            Arc::new(EnforceDistribution::new()),
+            Arc::new(EnforceSorting::new()),
             // If the query is processing infinite inputs, the PipelineFixer rule applies the
             // necessary transformations to make the query runnable (if it is not already runnable).
             // If the query can not be made runnable, the rule emits an error with a diagnostic message.
@@ -1719,21 +1778,20 @@ impl SessionState {
         Ok(statement)
     }
 
-    /// Convert an AST Statement into a LogicalPlan
-    pub async fn statement_to_plan(
+    /// Resolve all table references in the SQL statement.
+    pub fn resolve_table_references(
         &self,
-        statement: datafusion_sql::parser::Statement,
-    ) -> Result<LogicalPlan> {
+        statement: &datafusion_sql::parser::Statement,
+    ) -> Result<Vec<OwnedTableReference>> {
         use crate::catalog::information_schema::INFORMATION_SCHEMA_TABLES;
         use datafusion_sql::parser::Statement as DFStatement;
         use sqlparser::ast::*;
-        use std::collections::hash_map::Entry;
 
         // Getting `TableProviders` is async but planing is not -- thus pre-fetch
         // table providers for all relations referenced in this query
         let mut relations = hashbrown::HashSet::with_capacity(10);
 
-        match &statement {
+        match statement {
             DFStatement::Statement(s) => {
                 struct RelationVisitor<'a>(&'a mut hashbrown::HashSet<ObjectName>);
 
@@ -1784,18 +1842,31 @@ impl SessionState {
             }
         }
 
+        let enable_ident_normalization =
+            self.config.options.sql_parser.enable_ident_normalization;
+        relations
+            .into_iter()
+            .map(|x| object_name_to_table_reference(x, enable_ident_normalization))
+            .collect::<Result<_>>()
+    }
+
+    /// Convert an AST Statement into a LogicalPlan
+    pub async fn statement_to_plan(
+        &self,
+        statement: datafusion_sql::parser::Statement,
+    ) -> Result<LogicalPlan> {
+        let references = self.resolve_table_references(&statement)?;
+
         let mut provider = SessionContextProvider {
             state: self,
-            tables: HashMap::with_capacity(relations.len()),
+            tables: HashMap::with_capacity(references.len()),
         };
 
         let enable_ident_normalization =
             self.config.options.sql_parser.enable_ident_normalization;
         let parse_float_as_decimal =
             self.config.options.sql_parser.parse_float_as_decimal;
-        for relation in relations {
-            let reference =
-                object_name_to_table_reference(relation, enable_ident_normalization)?;
+        for reference in references {
             let table = reference.table();
             let resolved = self.resolve_table_ref(reference.as_table_reference());
             if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
@@ -2319,7 +2390,7 @@ mod tests {
             "+-------------+",
             "| MY_AVG(t.i) |",
             "+-------------+",
-            "| 1           |",
+            "| 1.0         |",
             "+-------------+",
         ];
         assert_batches_eq!(expected, &result);

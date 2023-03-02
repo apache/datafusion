@@ -238,35 +238,6 @@ impl BinaryExpr {
     pub fn new(left: Box<Expr>, op: Operator, right: Box<Expr>) -> Self {
         Self { left, op, right }
     }
-
-    /// Get the operator precedence
-    /// use <https://www.postgresql.org/docs/7.0/operators.htm#AEN2026> as a reference
-    pub fn precedence(&self) -> u8 {
-        match self.op {
-            Operator::Or => 5,
-            Operator::And => 10,
-            Operator::NotEq
-            | Operator::Eq
-            | Operator::Lt
-            | Operator::LtEq
-            | Operator::Gt
-            | Operator::GtEq => 20,
-            Operator::Plus | Operator::Minus => 30,
-            Operator::Multiply | Operator::Divide | Operator::Modulo => 40,
-            Operator::IsDistinctFrom
-            | Operator::IsNotDistinctFrom
-            | Operator::RegexMatch
-            | Operator::RegexNotMatch
-            | Operator::RegexIMatch
-            | Operator::RegexNotIMatch
-            | Operator::BitwiseAnd
-            | Operator::BitwiseOr
-            | Operator::BitwiseShiftLeft
-            | Operator::BitwiseShiftRight
-            | Operator::BitwiseXor
-            | Operator::StringConcat => 0,
-        }
-    }
 }
 
 impl Display for BinaryExpr {
@@ -283,7 +254,7 @@ impl Display for BinaryExpr {
         ) -> fmt::Result {
             match expr {
                 Expr::BinaryExpr(child) => {
-                    let p = child.precedence();
+                    let p = child.op.precedence();
                     if p == 0 || p < precedence {
                         write!(f, "({child})")?;
                     } else {
@@ -295,7 +266,7 @@ impl Display for BinaryExpr {
             Ok(())
         }
 
-        let precedence = self.precedence();
+        let precedence = self.op.precedence();
         write_child(f, self.left.as_ref(), precedence)?;
         write!(f, " {} ", self.op)?;
         write_child(f, self.right.as_ref(), precedence)

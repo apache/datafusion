@@ -30,6 +30,7 @@ use std::fmt::{Debug, Display};
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterator};
 
+use crate::intervals::Interval;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -81,7 +82,31 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
         context
     }
+
+    /// Computes bounds for the expression using interval arithmetic.
+    fn evaluate_bounds(&self, _children: &[&Interval]) -> Result<Interval> {
+        Err(DataFusionError::NotImplemented(format!(
+            "Not implemented for {self}"
+        )))
+    }
+
+    /// Updates/shrinks bounds for the expression using interval arithmetic.
+    /// If constraint propagation reveals an infeasibility, returns [None] for
+    /// the child causing infeasibility. If none of the children intervals
+    /// change, may return an empty vector instead of cloning `children`.
+    fn propagate_constraints(
+        &self,
+        _interval: &Interval,
+        _children: &[&Interval],
+    ) -> Result<Vec<Option<Interval>>> {
+        Err(DataFusionError::NotImplemented(format!(
+            "Not implemented for {self}"
+        )))
+    }
 }
+
+/// Shared [`PhysicalExpr`].
+pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 
 /// The shared context used during the analysis of an expression. Includes
 /// the boundaries for all known columns.

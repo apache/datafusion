@@ -25,4 +25,4 @@ edition = "2021"
 [dependencies]
 datafusion = { path = "../datafusion/core" }
 object_store = "0.5.4"
-parquet = "32.0.0"
+parquet = "34.0.0"

@@ -33,16 +33,16 @@ async fn json_query() {
         "+-----------------+------+",
         "| a               | b    |",
         "+-----------------+------+",
-        "| 1               | 2    |",
+        "| 1               | 2.0  |",
         "| -10             | -3.5 |",
         "| 2               | 0.6  |",
-        "| 1               | 2    |",
+        "| 1               | 2.0  |",
         "| 7               | -3.5 |",
         "| 1               | 0.6  |",
-        "| 1               | 2    |",
+        "| 1               | 2.0  |",
         "| 5               | -3.5 |",
         "| 1               | 0.6  |",
-        "| 1               | 2    |",
+        "| 1               | 2.0  |",
         "| 1               | -3.5 |",
         "| 100000000000000 | 0.6  |",
         "+-----------------+------+",
@@ -83,18 +83,16 @@ async fn json_explain() {
     let expected = vec![
         vec![
             "logical_plan",
-            "Projection: COUNT(UInt8(1))\
-            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-            \n    TableScan: t1 projection=[a]",
+            "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+            \n  TableScan: t1 projection=[a]",
         ],
         vec![
             "physical_plan",
-            "ProjectionExec: expr=[COUNT(UInt8(1))@0 as COUNT(UInt8(1))]\
-            \n  AggregateExec: mode=Final, gby=[], aggr=[COUNT(UInt8(1))]\
-            \n    CoalescePartitionsExec\
-            \n      AggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]\
-            \n        RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1\
-            \n          JsonExec: limit=None, files={1 group: [[WORKING_DIR/tests/jsons/2.json]]}\n",
+            "AggregateExec: mode=Final, gby=[], aggr=[COUNT(UInt8(1))]\
+            \n  CoalescePartitionsExec\
+            \n    AggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]\
+            \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1\
+            \n        JsonExec: limit=None, files={1 group: [[WORKING_DIR/tests/jsons/2.json]]}\n",
         ],
     ];
     assert_eq!(expected, actual);

@@ -364,14 +364,14 @@ mod tests {
 
         assert_batches_eq!(
             &[
-                "+-----+----------------+---------------+------+",
-                "| a   | b              | c             | d    |",
-                "+-----+----------------+---------------+------+",
-                "| 1   | [2, 1.3, -6.1] | [false, true] | 4    |",
-                "| -10 | [2, 1.3, -6.1] | [true, true]  | 4    |",
-                "| 2   | [2, , -6.1]    | [false, ]     | text |",
-                "|     |                |               |      |",
-                "+-----+----------------+---------------+------+",
+                "+-----+------------------+---------------+------+",
+                "| a   | b                | c             | d    |",
+                "+-----+------------------+---------------+------+",
+                "| 1   | [2.0, 1.3, -6.1] | [false, true] | 4    |",
+                "| -10 | [2.0, 1.3, -6.1] | [true, true]  | 4    |",
+                "| 2   | [2.0, , -6.1]    | [false, ]     | text |",
+                "|     |                  |               |      |",
+                "+-----+------------------+---------------+------+",
             ],
             &results
         );
@@ -382,7 +382,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn nd_json_exec_file_without_projection(
@@ -452,7 +453,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn nd_json_exec_file_with_missing_column(
@@ -504,7 +506,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn nd_json_exec_file_projection(
@@ -554,7 +557,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn nd_json_exec_file_mixed_order_projection(
@@ -658,7 +662,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn test_chunked_json(
