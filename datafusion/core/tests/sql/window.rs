@@ -1905,19 +1905,24 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod test_linear_partition_by {
-    use std::sync::Arc;
+    use arrow::array::{ArrayRef, Int32Array};
     use arrow::compute::{concat_batches, SortOptions};
+    use arrow::record_batch::RecordBatch;
+    use arrow::util::pretty::print_batches;
     use datafusion::physical_plan::aggregates::AggregateExec;
     use datafusion::physical_plan::aggregates::{AggregateMode, PhysicalGroupBy};
     use datafusion::physical_plan::memory::MemoryExec;
+    use datafusion::physical_plan::repartition::RepartitionExec;
     use datafusion::physical_plan::sorts::sort::SortExec;
+    use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use datafusion::physical_plan::windows::create_window_expr;
     use datafusion::physical_plan::windows::{
         BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
     };
+    use datafusion::physical_plan::{collect, displayable, ExecutionPlan, Partitioning};
+    use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{
         AggregateFunction, WindowFrame, WindowFrameBound, WindowFrameUnits,
@@ -1929,14 +1934,8 @@ mod test_linear_partition_by {
     use itertools::iproduct;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
-    use arrow::array::{ArrayRef, Int32Array};
-    use arrow::record_batch::RecordBatch;
-    use arrow::util::pretty::print_batches;
-    use datafusion::physical_plan::{collect, displayable, ExecutionPlan, Partitioning};
-    use datafusion::physical_plan::repartition::RepartitionExec;
-    use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-    use datafusion::prelude::{SessionConfig, SessionContext};
     use test_utils::add_empty_batches;
 
     /// Return randomly sized record batches with:
@@ -1982,7 +1981,7 @@ mod test_linear_partition_by {
             ("x", Arc::new(input3) as ArrayRef),
             ("y", Arc::new(input4) as ArrayRef),
         ])
-            .unwrap();
+        .unwrap();
 
         let mut batches = vec![];
         if STREAM {
@@ -2023,7 +2022,7 @@ mod test_linear_partition_by {
         // let n_batches = vec![100];
         let modes = [true, false];
         for (n_trial, n_row, distinct, n_batch, n_partition, is_linear) in
-        iproduct!(n_trials, n_rows, distincts, n_batches, n_partitions, modes)
+            iproduct!(n_trials, n_rows, distincts, n_batches, n_partitions, modes)
         {
             let mut elapsed = vec![];
             for i in 0..n_trial {
@@ -2058,7 +2057,7 @@ mod test_linear_partition_by {
         distinct: usize,
         n_batch: usize,
         linear_mode_on: bool,
-        n_partition: usize
+        n_partition: usize,
     ) -> Result<Duration> {
         // in_data is ordered by column a
         let in_data =
@@ -2070,7 +2069,10 @@ mod test_linear_partition_by {
         // println!("n_rows:{:?}", in_data[0].num_rows());
         let in_exec =
             Arc::new(MemoryExec::try_new(&[in_data], schema.clone(), None).unwrap());
-        let in_exec = Arc::new(RepartitionExec::try_new(in_exec, Partitioning::Hash(vec![col("x", &schema)?], n_partition))?) as _;
+        let in_exec = Arc::new(RepartitionExec::try_new(
+            in_exec,
+            Partitioning::Hash(vec![col("x", &schema)?], n_partition),
+        )?) as _;
 
         let window_fn = WindowFunction::AggregateFunction(AggregateFunction::Sum);
         let fn_name = "sum".to_string();
@@ -2111,16 +2113,19 @@ mod test_linear_partition_by {
                         Arc::new(window_frame.clone()),
                         schema.as_ref(),
                     )
-                        .unwrap()],
+                    .unwrap()],
                     in_exec,
                     schema.clone(),
                     vec![],
                     Some(sort_keys.clone()),
                     PartitionSearchMode::Linear,
                 )
-                    .unwrap(),
+                .unwrap(),
             ) as _;
-            let final_plan = Arc::new(SortPreservingMergeExec::new(sort_keys.clone(), running_window_exec)) as _;
+            let final_plan = Arc::new(SortPreservingMergeExec::new(
+                sort_keys.clone(),
+                running_window_exec,
+            )) as _;
 
             // let final_plan = running_window_exec;
             final_plan
@@ -2137,8 +2142,12 @@ mod test_linear_partition_by {
             }
 
             // println!("window sort_keys: {:?}", sort_keys);
-            let sort_exec =
-                Arc::new(SortExec::new_with_partitioning(sort_keys.clone(), in_exec, true, None)) as _;
+            let sort_exec = Arc::new(SortExec::new_with_partitioning(
+                sort_keys.clone(),
+                in_exec,
+                true,
+                None,
+            )) as _;
             // let sort_exec = in_exec;
 
             // let running_window_exec = sort_exec;
@@ -2154,16 +2163,19 @@ mod test_linear_partition_by {
                         Arc::new(window_frame.clone()),
                         schema.as_ref(),
                     )
-                        .unwrap()],
+                    .unwrap()],
                     sort_exec,
                     schema.clone(),
                     vec![],
                     Some(sort_keys.clone()),
                     PartitionSearchMode::Sorted,
                 )
-                    .unwrap(),
+                .unwrap(),
             ) as _;
-            let final_plan = Arc::new(SortPreservingMergeExec::new(sort_keys.clone(), running_window_exec)) as _;
+            let final_plan = Arc::new(SortPreservingMergeExec::new(
+                sort_keys.clone(),
+                running_window_exec,
+            )) as _;
             // let final_plan = in_exec;
             final_plan
         };

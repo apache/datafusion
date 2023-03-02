@@ -24,6 +24,7 @@ use arrow::compute::kernels::sort::SortColumn;
 use arrow::compute::{concat, SortOptions};
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
+use arrow::row::{OwnedRow, Row};
 use arrow_schema::DataType;
 use datafusion_common::{reverse_sort_options, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame};
@@ -32,7 +33,6 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
-use arrow::row::{OwnedRow, Row};
 
 /// A window expression that:
 /// * knows its resulting field

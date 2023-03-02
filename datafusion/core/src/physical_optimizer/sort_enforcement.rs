@@ -937,7 +937,7 @@ where
 }
 
 // Create a new vector from the elements at the `indices` of `searched` vector
-fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec<T>> {
+pub fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec<T>> {
     let mut result = vec![];
     for idx in indices {
         result.push(searched[*idx].clone());

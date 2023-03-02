@@ -52,7 +52,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+use crate::physical_optimizer::sort_enforcement::get_at_indices;
 use arrow::array::UInt64Builder;
+use arrow::datatypes::DataType;
 use arrow::row::{OwnedRow, Row, RowConverter, Rows, SortField};
 use datafusion_common::utils::get_row_at_idx;
 use datafusion_expr::ColumnarValue;
@@ -567,12 +569,18 @@ impl BoundedWindowAggStream {
         let empty_batch = RecordBatch::new_empty(schema.clone());
         let partition_by = window_expr[0].partition_by();
         // let res = partition_by[0].data_type(&schema)?;
-        let row_converter = RowConverter::new(
-            partition_by
-                .iter()
-                .map(|f| SortField::new(f.data_type(&schema).unwrap()))
-                .collect(),
-        ).unwrap();
+        let row_converter = if partition_by.is_empty() {
+            // If empty create dummy converted with datatype null.
+            RowConverter::new(vec![SortField::new(DataType::Null)]).unwrap()
+        } else {
+            RowConverter::new(
+                partition_by
+                    .iter()
+                    .map(|f| SortField::new(f.data_type(&schema).unwrap()))
+                    .collect(),
+            )
+            .unwrap()
+        };
         Self {
             schema,
             input,
@@ -627,10 +635,22 @@ impl BoundedWindowAggStream {
             println!("elapsed_calculate_out: {:?}", self.elapsed_calculate_out);
             println!("elapsed_prune_out: {:?}", self.elapsed_prune_out);
             println!("elapsed_is_end_check: {:?}", self.elapsed_is_end_check);
-            println!("elapsed_evaluate_partition: {:?}", self.elapsed_evaluate_partition);
-            println!("elapsed_evaluate_stateful: {:?}", self.elapsed_evaluate_stateful);
-            println!("elapsed_prune_partition_batches: {:?}", self.elapsed_prune_partition_batches);
-            println!("elapsed_prune_input_batch: {:?}", self.elapsed_prune_input_batch);
+            println!(
+                "elapsed_evaluate_partition: {:?}",
+                self.elapsed_evaluate_partition
+            );
+            println!(
+                "elapsed_evaluate_stateful: {:?}",
+                self.elapsed_evaluate_stateful
+            );
+            println!(
+                "elapsed_prune_partition_batches: {:?}",
+                self.elapsed_prune_partition_batches
+            );
+            println!(
+                "elapsed_prune_input_batch: {:?}",
+                self.elapsed_prune_input_batch
+            );
             return Poll::Ready(None);
         }
 
@@ -865,22 +885,30 @@ impl BoundedWindowAggStream {
                     self.ordered_partition_by_indices.len()
                 );
                 let partition_columns = self
-                    .ordered_partition_by_indices
+                    .partition_by_sort_keys
                     .iter()
-                    .map(|idx| {
-                        self.partition_by_sort_keys[*idx]
-                            .evaluate_to_sort_column(record_batch)
-                    })
+                    .map(|elem| elem.evaluate_to_sort_column(record_batch))
                     .collect::<Result<Vec<_>>>()?;
+                let partition_columns_ordered = get_at_indices(
+                    &partition_columns,
+                    &self.ordered_partition_by_indices,
+                )?;
                 let partition_points =
-                    self.evaluate_partition_points(num_rows, &partition_columns)?;
+                    self.evaluate_partition_points(num_rows, &partition_columns_ordered)?;
                 let partition_bys = partition_columns
                     .into_iter()
                     .map(|arr| arr.values)
                     .collect::<Vec<ArrayRef>>();
-                let rows = self.row_converter.convert_columns(&partition_bys)?;
+                let rows = if partition_bys.is_empty() {
+                    let null_arr = ScalarValue::iter_to_array(vec![ScalarValue::Null])?;
+                    self.row_converter.convert_columns(&[null_arr])?
+                } else {
+                    self.row_converter.convert_columns(&partition_bys)?
+                };
+                // let rows = self.row_converter.convert_columns(&partition_bys)?;
                 // let def_row = rows.row(0).owned();
-                // let def_row = Row::new();
+                // let def_row = Row::try_from([])?;
+
                 println!("row num rows:{:?}", rows.num_rows());
                 for range in partition_points {
                     // let partition_row = get_row_at_idx(&partition_bys, range.start)?;
@@ -901,7 +929,8 @@ impl BoundedWindowAggStream {
                 let rows = self.row_converter.convert_columns(&partition_bys)?;
                 for idx in 0..rows.num_rows() {
                     let row = rows.row(idx);
-                    let indices: &mut Vec<usize> = indices_map.entry(row.owned()).or_default();
+                    let indices: &mut Vec<usize> =
+                        indices_map.entry(row.owned()).or_default();
                     indices.push(idx);
                 }
                 // for idx in 0..num_rows {
@@ -911,7 +940,8 @@ impl BoundedWindowAggStream {
                 // }
                 // Construct new record batch from the rows at the calculated indices for each partition.
                 for (partition_row, indices) in indices_map {
-                    let partition_batch = get_at_indices(record_batch, &indices)?;
+                    let partition_batch =
+                        get_record_batch_at_indices(record_batch, &indices)?;
                     res.insert(partition_row, (partition_batch, indices));
                 }
             }
@@ -949,7 +979,10 @@ impl RecordBatchStream for BoundedWindowAggStream {
     }
 }
 
-fn get_at_indices(record_batch: &RecordBatch, indices: &[usize]) -> Result<RecordBatch> {
+fn get_record_batch_at_indices(
+    record_batch: &RecordBatch,
+    indices: &[usize],
+) -> Result<RecordBatch> {
     let mut batch_indices: UInt64Builder = UInt64Builder::with_capacity(0);
     let casted_indices = indices.iter().map(|elem| *elem as u64).collect::<Vec<_>>();
     batch_indices.append_slice(&casted_indices);
