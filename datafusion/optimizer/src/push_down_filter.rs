@@ -1085,6 +1085,10 @@ mod tests {
             self
         }
 
+        fn name(&self) -> &str {
+            "NoopPlan"
+        }
+
         fn inputs(&self) -> Vec<&LogicalPlan> {
             self.input.iter().collect()
         }

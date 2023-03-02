@@ -30,6 +30,9 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// Return a reference to self as Any, to support dynamic downcasting
     fn as_any(&self) -> &dyn Any;
 
+    /// Return the plan's name
+    fn name(&self) -> &str;
+
     /// Return the logical plan's inputs
     fn inputs(&self) -> Vec<&LogicalPlan>;
 
