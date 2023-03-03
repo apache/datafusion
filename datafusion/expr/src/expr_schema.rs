@@ -252,8 +252,7 @@ impl ExprSchemable for Expr {
                 self.get_type(input_schema)?,
                 self.nullable(input_schema)?,
             )),
-            _ => Ok(DFField::new::<&str>(
-                None,
+            _ => Ok(DFField::new_unqualified(
                 &self.display_name()?,
                 self.get_type(input_schema)?,
                 self.nullable(input_schema)?,

@@ -178,8 +178,7 @@ impl LogicalPlanBuilder {
             .map(|(j, data_type)| {
                 // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
                 let name = &format!("column{}", j + 1);
-                DFField::new::<&str>(
-                    None,
+                DFField::new_unqualified(
                     name,
                     data_type.clone().unwrap_or(DataType::Utf8),
                     true,
@@ -1116,8 +1115,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
                 ))
                     })?;
 
-            Ok(DFField::new::<&str>(
-                None,
+            Ok(DFField::new_unqualified(
                 left_field.name(),
                 data_type,
                 nullable,

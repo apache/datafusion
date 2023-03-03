@@ -1758,10 +1758,10 @@ mod tests {
         Arc::new(
             DFSchema::new_with_metadata(
                 vec![
-                    DFField::new::<&str>(None, "c1", DataType::Utf8, true),
-                    DFField::new::<&str>(None, "c2", DataType::Boolean, true),
-                    DFField::new::<&str>(None, "c1_non_null", DataType::Utf8, false),
-                    DFField::new::<&str>(None, "c2_non_null", DataType::Boolean, false),
+                    DFField::new_unqualified("c1", DataType::Utf8, true),
+                    DFField::new_unqualified("c2", DataType::Boolean, true),
+                    DFField::new_unqualified("c1_non_null", DataType::Utf8, false),
+                    DFField::new_unqualified("c2_non_null", DataType::Boolean, false),
                 ],
                 HashMap::new(),
             )

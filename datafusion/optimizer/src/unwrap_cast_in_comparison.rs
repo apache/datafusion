@@ -695,20 +695,18 @@ mod tests {
         Arc::new(
             DFSchema::new_with_metadata(
                 vec![
-                    DFField::new::<&str>(None, "c1", DataType::Int32, false),
-                    DFField::new::<&str>(None, "c2", DataType::Int64, false),
-                    DFField::new::<&str>(None, "c3", DataType::Decimal128(18, 2), false),
-                    DFField::new::<&str>(None, "c4", DataType::Decimal128(38, 37), false),
-                    DFField::new::<&str>(None, "c5", DataType::Float32, false),
-                    DFField::new::<&str>(None, "c6", DataType::UInt32, false),
-                    DFField::new::<&str>(
-                        None,
+                    DFField::new_unqualified("c1", DataType::Int32, false),
+                    DFField::new_unqualified("c2", DataType::Int64, false),
+                    DFField::new_unqualified("c3", DataType::Decimal128(18, 2), false),
+                    DFField::new_unqualified("c4", DataType::Decimal128(38, 37), false),
+                    DFField::new_unqualified("c5", DataType::Float32, false),
+                    DFField::new_unqualified("c6", DataType::UInt32, false),
+                    DFField::new_unqualified(
                         "ts_nano_none",
                         timestamp_nano_none_type(),
                         false,
                     ),
-                    DFField::new::<&str>(
-                        None,
+                    DFField::new_unqualified(
                         "ts_nano_utf",
                         timestamp_nano_utc_type(),
                         false,

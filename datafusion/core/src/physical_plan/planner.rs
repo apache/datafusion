@@ -2382,7 +2382,7 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
             Self {
                 schema: DFSchemaRef::new(
                     DFSchema::new_with_metadata(
-                        vec![DFField::new::<&str>(None, "a", DataType::Int32, false)],
+                        vec![DFField::new_unqualified("a", DataType::Int32, false)],
                         HashMap::new(),
                     )
                     .unwrap(),

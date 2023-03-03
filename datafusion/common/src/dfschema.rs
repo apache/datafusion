@@ -616,6 +616,14 @@ impl DFField {
         }
     }
 
+    /// Convenience method for creating new `DFField` without a qualifier
+    pub fn new_unqualified(name: &str, data_type: DataType, nullable: bool) -> Self {
+        DFField {
+            qualifier: None,
+            field: Field::new(name, data_type, nullable),
+        }
+    }
+
     /// Create an unqualified field from an existing Arrow field
     pub fn from(field: Field) -> Self {
         Self {
@@ -1117,7 +1125,7 @@ mod tests {
         let arrow_schema_ref = Arc::new(arrow_schema.clone());
 
         let df_schema = DFSchema::new_with_metadata(
-            vec![DFField::new::<&str>(None, "c0", DataType::Int64, true)],
+            vec![DFField::new_unqualified("c0", DataType::Int64, true)],
             metadata,
         )
         .unwrap();
