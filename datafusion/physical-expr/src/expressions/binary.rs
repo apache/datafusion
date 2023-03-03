@@ -60,11 +60,12 @@ use kernels::{
 use kernels_arrow::{
     add_decimal_dyn_scalar, add_dyn_decimal, divide_decimal_dyn_scalar,
     divide_dyn_opt_decimal, is_distinct_from, is_distinct_from_bool,
-    is_distinct_from_decimal, is_distinct_from_null, is_distinct_from_utf8,
-    is_not_distinct_from, is_not_distinct_from_bool, is_not_distinct_from_decimal,
-    is_not_distinct_from_null, is_not_distinct_from_utf8, modulus_decimal,
-    modulus_decimal_scalar, multiply_decimal_dyn_scalar, multiply_dyn_decimal,
-    subtract_decimal_dyn_scalar, subtract_dyn_decimal,
+    is_distinct_from_decimal, is_distinct_from_f32, is_distinct_from_f64,
+    is_distinct_from_null, is_distinct_from_utf8, is_not_distinct_from,
+    is_not_distinct_from_bool, is_not_distinct_from_decimal, is_not_distinct_from_f32,
+    is_not_distinct_from_f64, is_not_distinct_from_null, is_not_distinct_from_utf8,
+    modulus_decimal, modulus_decimal_scalar, multiply_decimal_dyn_scalar,
+    multiply_dyn_decimal, subtract_decimal_dyn_scalar, subtract_dyn_decimal,
 };
 
 use arrow::datatypes::{DataType, Schema, TimeUnit};
@@ -183,16 +184,44 @@ macro_rules! compute_decimal_op {
     }};
 }
 
+macro_rules! compute_f32_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast left side array");
+        let rr = $RIGHT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast right side array");
+        Ok(Arc::new(paste::expr! {[<$OP _f32>]}(ll, rr)?))
+    }};
+}
+
+macro_rules! compute_f64_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast left side array");
+        let rr = $RIGHT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast right side array");
+        Ok(Arc::new(paste::expr! {[<$OP _f64>]}(ll, rr)?))
+    }};
+}
+
 macro_rules! compute_null_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast left side array");
         let rr = $RIGHT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast right side array");
         Ok(Arc::new(paste::expr! {[<$OP _null>]}(&ll, &rr)?))
     }};
 }
@@ -203,11 +232,11 @@ macro_rules! compute_utf8_op {
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast left side array");
         let rr = $RIGHT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast right side array");
         Ok(Arc::new(paste::expr! {[<$OP _utf8>]}(&ll, &rr)?))
     }};
 }
@@ -218,7 +247,7 @@ macro_rules! compute_utf8_op_scalar {
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast left side array");
         if let ScalarValue::Utf8(Some(string_value)) = $RIGHT {
             Ok(Arc::new(paste::expr! {[<$OP _utf8_scalar>]}(
                 &ll,
@@ -317,7 +346,7 @@ macro_rules! compute_op_scalar {
             let ll = $LEFT
                 .as_any()
                 .downcast_ref::<$DT>()
-                .expect("compute_op failed to downcast array");
+                .expect("compute_op failed to downcast left side array");
             Ok(Arc::new(paste::expr! {[<$OP _scalar>]}(
                 &ll,
                 $RIGHT.try_into()?,
@@ -391,11 +420,11 @@ macro_rules! compute_op {
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast left side array");
         let rr = $RIGHT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast right side array");
         Ok(Arc::new($OP(&ll, &rr)?))
     }};
     // invoke unary operator
@@ -539,8 +568,8 @@ macro_rules! binary_array_op {
             DataType::UInt16 => compute_op!($LEFT, $RIGHT, $OP, UInt16Array),
             DataType::UInt32 => compute_op!($LEFT, $RIGHT, $OP, UInt32Array),
             DataType::UInt64 => compute_op!($LEFT, $RIGHT, $OP, UInt64Array),
-            DataType::Float32 => compute_op!($LEFT, $RIGHT, $OP, Float32Array),
-            DataType::Float64 => compute_op!($LEFT, $RIGHT, $OP, Float64Array),
+            DataType::Float32 => compute_f32_op!($LEFT, $RIGHT, $OP, Float32Array),
+            DataType::Float64 => compute_f64_op!($LEFT, $RIGHT, $OP, Float64Array),
             DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampNanosecondArray)
