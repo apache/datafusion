@@ -117,14 +117,18 @@ impl TestParquetFile {
 }
 
 impl TestParquetFile {
-    /// return a `ParquetExec` and `FilterExec` with the specified options to scan this parquet file.
+    /// Return a `ParquetExec` with the specified options.
     ///
-    /// This returns the same plan that DataFusion will make with a pushed down predicate followed by a filter:
+    /// If `maybe_filter` is non-None, the ParquetExec will be filtered using
+    /// the given expression, and this method will return the same plan that DataFusion
+    /// will make with a pushed down predicate followed by a filter:
     ///
     /// ```text
     /// (FilterExec)
     ///   (ParquetExec)
     /// ```
+    ///
+    /// Otherwise if `maybe_filter` is None, return just a `ParquetExec`
     pub async fn create_scan(
         &self,
         maybe_filter: Option<Expr>,
