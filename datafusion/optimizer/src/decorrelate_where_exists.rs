@@ -172,7 +172,7 @@ fn optimize_exists(
                 let using_cols: Vec<Column> = expr
                     .to_columns()?
                     .into_iter()
-                    .filter(|col| input_schema.field_from_column(col).is_ok())
+                    .filter(|col| input_schema.has_column(col))
                     .collect::<_>();
 
                 cols.extend(using_cols);
