@@ -1596,10 +1596,9 @@ mod roundtrip_tests {
         let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(DistinctCount::new(
-            vec![DataType::Int64],
-            vec![col("b", &schema)?],
-            "COUNT(DISTINCT b)".to_string(),
             DataType::Int64,
+            col("b", &schema)?,
+            "COUNT(DISTINCT b)".to_string(),
         ))];
 
         let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
