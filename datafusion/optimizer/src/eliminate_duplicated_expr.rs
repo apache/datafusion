@@ -41,12 +41,20 @@ impl OptimizerRule for EliminateDuplicatedExpr {
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Sort(sort) => {
-                let new_expr = sort.expr.iter().collect::<HashSet<_>>();
-                if new_expr.len() == sort.expr.len() {
+                // dedup sort.expr and keep order
+                let mut dedup_expr = Vec::new();
+                let mut dedup_set = HashSet::new();
+                for expr in &sort.expr {
+                    if !dedup_set.contains(expr) {
+                        dedup_expr.push(expr);
+                        dedup_set.insert(expr.clone());
+                    }
+                }
+                if dedup_expr.len() == sort.expr.len() {
                     Ok(None)
                 } else {
                     Ok(Some(LogicalPlan::Sort(Sort {
-                        expr: new_expr.into_iter().cloned().collect::<Vec<_>>(),
+                        expr: dedup_expr.into_iter().cloned().collect::<Vec<_>>(),
                         input: sort.input.clone(),
                         fetch: sort.fetch,
                     })))
@@ -84,11 +92,11 @@ mod tests {
     fn eliminate_sort_expr() -> Result<()> {
         let table_scan = test_table_scan().unwrap();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(vec![col("a"), col("a")])?
+            .sort(vec![col("a"), col("a"), col("b"), col("c")])?
             .limit(5, Some(10))?
             .build()?;
         let expected = "Limit: skip=5, fetch=10\
-        \n  Sort: test.a\
+        \n  Sort: test.a, test.b, test.c\
         \n    TableScan: test";
         assert_optimized_plan_eq(&plan, expected)
     }
