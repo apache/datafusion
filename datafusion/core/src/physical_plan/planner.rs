@@ -2373,6 +2373,7 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
         }
     }
     /// An example extension node that doesn't do anything
+    #[derive(PartialEq, Eq, Hash)]
     struct NoOpExtensionNode {
         schema: DFSchemaRef,
     }
@@ -2424,6 +2425,19 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
             _inputs: &[LogicalPlan],
         ) -> Arc<dyn UserDefinedLogicalNode> {
             unimplemented!("NoOp");
+        }
+
+        fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool {
+            match other.as_any().downcast_ref::<Self>() {
+                Some(o) => self == o,
+                None => false,
+            }
+        }
+
+        fn dyn_hash(&self, state: &mut dyn std::hash::Hasher) {
+            use std::hash::Hash;
+            let mut s = state;
+            self.hash(&mut s);
         }
     }
 
