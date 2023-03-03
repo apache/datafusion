@@ -87,25 +87,25 @@ impl<'a> TableReference<'a> {
 
     /// Convenience method for creating a `Partial` variant of `TableReference`
     pub fn partial(
-        table: impl Into<Cow<'a, str>>,
         schema: impl Into<Cow<'a, str>>,
+        table: impl Into<Cow<'a, str>>,
     ) -> TableReference<'a> {
         TableReference::Partial {
-            table: table.into(),
             schema: schema.into(),
+            table: table.into(),
         }
     }
 
     /// Convenience method for creating a `Full` variant of `TableReference`
     pub fn full(
-        table: impl Into<Cow<'a, str>>,
-        schema: impl Into<Cow<'a, str>>,
         catalog: impl Into<Cow<'a, str>>,
+        schema: impl Into<Cow<'a, str>>,
+        table: impl Into<Cow<'a, str>>,
     ) -> TableReference<'a> {
         TableReference::Full {
-            table: table.into(),
-            schema: schema.into(),
             catalog: catalog.into(),
+            schema: schema.into(),
+            table: table.into(),
         }
     }
 
