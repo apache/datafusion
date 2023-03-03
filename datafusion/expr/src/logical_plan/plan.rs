@@ -24,7 +24,7 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::plan;
 use crate::utils::{
-    self, expand_wildcard, exprlist_to_fields, from_plan, grouping_set_expr_count,
+    self, exprlist_to_fields, from_plan, grouping_set_expr_count,
     grouping_set_to_exprlist,
 };
 use crate::{
@@ -1777,21 +1777,21 @@ impl Aggregate {
         }
     }
 
-    pub fn is_distinct(&self) -> datafusion_common::Result<bool> {
-        let group_expr_size = self.group_expr.len();
-        if !self.aggr_expr.is_empty() || group_expr_size != self.schema.fields().len() {
-            return Ok(false);
-        }
+    // pub fn is_distinct(&self) -> datafusion_common::Result<bool> {
+    //     let group_expr_size = self.group_expr.len();
+    //     if !self.aggr_expr.is_empty() || group_expr_size != self.schema.fields().len() {
+    //         return Ok(false);
+    //     }
 
-        let expected_group_exprs = expand_wildcard(&self.schema, self.input.as_ref())?;
-        let expected_expr_set = expected_group_exprs.iter().collect::<HashSet<&Expr>>();
-        let group_expr_set = self.group_expr.iter().collect::<HashSet<&Expr>>();
-        Ok(group_expr_set
-            .intersection(&expected_expr_set)
-            .collect::<HashSet<_>>()
-            .len()
-            == group_expr_size)
-    }
+    //     let expected_group_exprs = expand_wildcard(&self.schema, self.input.as_ref())?;
+    //     let expected_expr_set = expected_group_exprs.iter().collect::<HashSet<&Expr>>();
+    //     let group_expr_set = self.group_expr.iter().collect::<HashSet<&Expr>>();
+    //     Ok(group_expr_set
+    //         .intersection(&expected_expr_set)
+    //         .collect::<HashSet<_>>()
+    //         .len()
+    //         == group_expr_size)
+    // }
 }
 
 /// Sorts its input according to a list of sort expressions.

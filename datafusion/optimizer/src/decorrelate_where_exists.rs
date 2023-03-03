@@ -21,9 +21,8 @@ use crate::utils::{
 };
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DataFusionError, Result};
-use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{
-    logical_plan::{Aggregate, Distinct, Filter, JoinType, Subquery},
+    logical_plan::{Distinct, Filter, JoinType, Subquery},
     Expr, LogicalPlan, LogicalPlanBuilder,
 };
 
@@ -146,7 +145,7 @@ fn optimize_exists(
     outer_input: &LogicalPlan,
 ) -> Result<Option<LogicalPlan>> {
     let subquery = query_info.query.subquery.as_ref();
-    if let Some((join_filter, optimized_subquery)) = optimize_subquery(subquery, false)? {
+    if let Some((join_filter, optimized_subquery)) = optimize_subquery(subquery)? {
         // join our sub query into the main plan
         let join_type = match query_info.negated {
             true => JoinType::LeftAnti,
@@ -169,18 +168,12 @@ fn optimize_exists(
 }
 /// Optimize the subquery and extract the possible join filter.
 /// This function can't optimize non-correlated subquery, and will return None.
-///
-/// `keep_original_project` means if we should keep the exprs of the original project in the optimized plan.
-/// Except for `DISTINCT`, other plan nodes will ignore these exprs.
-fn optimize_subquery(
-    subquery: &LogicalPlan,
-    keep_original_project: bool,
-) -> Result<Option<(Expr, LogicalPlan)>> {
+fn optimize_subquery(subquery: &LogicalPlan) -> Result<Option<(Expr, LogicalPlan)>> {
     match subquery {
         LogicalPlan::Distinct(subqry_distinct) => {
             let distinct_input = &subqry_distinct.input;
             let optimized_plan =
-                optimize_subquery(distinct_input, true)?.map(|(filters, right)| {
+                optimize_subquery(distinct_input)?.map(|(filters, right)| {
                     (
                         filters,
                         LogicalPlan::Distinct(Distinct {
@@ -189,27 +182,6 @@ fn optimize_subquery(
                     )
                 });
             Ok(optimized_plan)
-        } // Aggregate may be a distinct
-        LogicalPlan::Aggregate(aggregate) => {
-            if !aggregate.is_distinct()? {
-                return Ok(None);
-            }
-
-            if let Some((join_filter, plan)) =
-                optimize_subquery(aggregate.input.as_ref(), true)?
-            {
-                let input_schema = plan.schema().clone();
-                let group_expr = expand_wildcard(&input_schema, &plan)?;
-                let aggregate = LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
-                    Arc::new(plan),
-                    group_expr,
-                    vec![],
-                    input_schema,
-                )?);
-                Ok(Some((join_filter, aggregate)))
-            } else {
-                Ok(None)
-            }
         }
         LogicalPlan::Projection(projection) => {
             // extract join filters
@@ -220,24 +192,11 @@ fn optimize_subquery(
             }
 
             let input_schema = subquery_input.schema();
-            let mut project_exprs: Vec<Expr> =
+            let project_exprs: Vec<Expr> =
                 collect_subquery_cols(&join_filters, input_schema.clone())?
                     .into_iter()
                     .map(Expr::Column)
                     .collect();
-            let original_project_exprs = &projection.expr;
-            if keep_original_project && !original_project_exprs.is_empty() {
-                let exprs = original_project_exprs
-                    .iter()
-                    .filter(|expr| !matches!(expr, Expr::Literal(_)));
-                // merge
-                project_exprs = project_exprs
-                    .into_iter()
-                    .chain(exprs.cloned())
-                    .collect::<Vec<_>>();
-
-                project_exprs.dedup();
-            }
 
             let right = LogicalPlanBuilder::from(subquery_input)
                 .project(project_exprs)?
@@ -734,8 +693,32 @@ mod tests {
         let expected = "Projection: test.b [b:UInt32]\
                         \n  LeftSemi Join:  Filter: UInt32(1) + sq.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]\
                         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-                        \n    Distinct: [a:UInt32, c:UInt32]\
-                        \n      Projection: sq.a, sq.c [a:UInt32, c:UInt32]\
+                        \n    Distinct: [a:UInt32]\
+                        \n      Projection: sq.a [a:UInt32]\
+                        \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn exists_distinct_expr_subquery() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let subquery_scan = test_table_scan_with_name("sq")?;
+        let subquery = LogicalPlanBuilder::from(subquery_scan)
+            .filter((lit(1u32) + col("sq.a")).gt(col("test.a") * lit(2u32)))?
+            .project(vec![col("sq.b") + col("sq.c")])?
+            .distinct()?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(exists(Arc::new(subquery)))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        let expected = "Projection: test.b [b:UInt32]\
+                        \n  LeftSemi Join:  Filter: UInt32(1) + sq.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]\
+                        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+                        \n    Distinct: [a:UInt32]\
+                        \n      Projection: sq.a [a:UInt32]\
                         \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_plan_eq(&plan, expected)
@@ -758,58 +741,8 @@ mod tests {
         let expected = "Projection: test.b [b:UInt32]\
                         \n  LeftSemi Join:  Filter: UInt32(1) + sq.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]\
                         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-                        \n    Distinct: [a:UInt32, c:UInt32]\
-                        \n      Projection: sq.a, sq.c [a:UInt32, c:UInt32]\
-                        \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
-
-        assert_plan_eq(&plan, expected)
-    }
-
-    #[test]
-    fn exists_distinct_subquery_dedup_cols() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let subquery_scan = test_table_scan_with_name("sq")?;
-        // "sq.a" both in projection and filter
-        let subquery = LogicalPlanBuilder::from(subquery_scan)
-            .filter((lit(1u32) + col("sq.a")).gt(col("test.a") * lit(2u32)))?
-            .project(vec![lit("sq.a"), col("sq.c")])?
-            .distinct()?
-            .build()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(exists(Arc::new(subquery)))?
-            .project(vec![col("test.b")])?
-            .build()?;
-
-        let expected = "Projection: test.b [b:UInt32]\
-                        \n  LeftSemi Join:  Filter: UInt32(1) + sq.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]\
-                        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-                        \n    Distinct: [a:UInt32, c:UInt32]\
-                        \n      Projection: sq.a, sq.c [a:UInt32, c:UInt32]\
-                        \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
-
-        assert_plan_eq(&plan, expected)
-    }
-
-    #[test]
-    fn exists_subquery_infer_distinct() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let subquery_scan = test_table_scan_with_name("sq")?;
-
-        let subquery = LogicalPlanBuilder::from(subquery_scan)
-            .filter(col("sq.a").gt(col("test.b")))?
-            .project(vec![col("sq.a"), col("sq.c")])?
-            .aggregate(vec![col("a"), col("c")], Vec::<Expr>::new())?
-            .build()?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(exists(Arc::new(subquery)))?
-            .project(vec![col("test.b")])?
-            .build()?;
-
-        let expected = "Projection: test.b [b:UInt32]\
-                        \n  LeftSemi Join:  Filter: sq.a > test.b [a:UInt32, b:UInt32, c:UInt32]\
-                        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-                        \n    Aggregate: groupBy=[[sq.a, sq.c]], aggr=[[]] [a:UInt32, c:UInt32]\
-                        \n      Projection: sq.a, sq.c [a:UInt32, c:UInt32]\
+                        \n    Distinct: [a:UInt32]\
+                        \n      Projection: sq.a [a:UInt32]\
                         \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_plan_eq(&plan, expected)
