@@ -190,14 +190,12 @@ fn optimize_subquery(subquery: &LogicalPlan) -> Result<Option<(Expr, LogicalPlan
             if join_filters.is_empty() {
                 return Ok(None);
             }
-
             let input_schema = subquery_input.schema();
             let project_exprs: Vec<Expr> =
                 collect_subquery_cols(&join_filters, input_schema.clone())?
                     .into_iter()
                     .map(Expr::Column)
                     .collect();
-
             let right = LogicalPlanBuilder::from(subquery_input)
                 .project(project_exprs)?
                 .build()?;
