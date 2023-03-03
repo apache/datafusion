@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::error::{DataFusionError, Result, SchemaError};
+use crate::error::{unqualified_field_not_found, DataFusionError, Result, SchemaError};
 use crate::utils::quote_identifier;
 use crate::{field_not_found, Column, OwnedTableReference, TableReference};
 
@@ -185,7 +185,7 @@ impl DFSchema {
             }
         }
 
-        Err(field_not_found::<&str>(None, name, self))
+        Err(unqualified_field_not_found(name, self))
     }
 
     pub fn index_of_column_by_name(
@@ -284,7 +284,7 @@ impl DFSchema {
     pub fn field_with_unqualified_name(&self, name: &str) -> Result<&DFField> {
         let matches = self.fields_with_unqualified_name(name);
         match matches.len() {
-            0 => Err(field_not_found::<&str>(None, name, self)),
+            0 => Err(unqualified_field_not_found(name, self)),
             1 => Ok(matches[0]),
             _ => {
                 // When `matches` size > 1, it doesn't necessarily mean an `ambiguous name` problem.

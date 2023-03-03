@@ -51,6 +51,14 @@ impl Column {
         }
     }
 
+    /// Convenience method for when there is no qualifier
+    pub fn new_unqualified(name: impl Into<String>) -> Self {
+        Self {
+            relation: None,
+            name: name.into(),
+        }
+    }
+
     /// Create Column from unqualified name.
     pub fn from_name(name: impl Into<String>) -> Self {
         Self {

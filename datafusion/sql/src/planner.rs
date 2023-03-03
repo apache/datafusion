@@ -21,13 +21,14 @@ use std::sync::Arc;
 use std::vec;
 
 use arrow_schema::*;
+use datafusion_common::field_not_found;
 use sqlparser::ast::ExactNumberInfo;
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{field_not_found, DFSchema, DataFusionError, Result};
+use datafusion_common::{unqualified_field_not_found, DFSchema, DataFusionError, Result};
 use datafusion_common::{OwnedTableReference, TableReference};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::utils::find_column_exprs;
@@ -204,7 +205,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         if !schema.fields_with_unqualified_name(&col.name).is_empty() {
                             Ok(())
                         } else {
-                            Err(field_not_found::<&str>(None, col.name.as_str(), schema))
+                            Err(unqualified_field_not_found(col.name.as_str(), schema))
                         }
                     }
                 }

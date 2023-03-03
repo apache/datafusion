@@ -152,6 +152,18 @@ pub fn field_not_found<R: Into<OwnedTableReference>>(
     })
 }
 
+/// Convenience wrapper over [`field_not_found`] for when there is no qualifier
+pub fn unqualified_field_not_found(name: &str, schema: &DFSchema) -> DataFusionError {
+    DataFusionError::SchemaError(SchemaError::FieldNotFound {
+        field: Box::new(Column::new_unqualified(name)),
+        valid_fields: schema
+            .fields()
+            .iter()
+            .map(|f| f.qualified_column())
+            .collect(),
+    })
+}
+
 impl Display for SchemaError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
