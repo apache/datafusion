@@ -18,14 +18,15 @@
 //! This module defines the interface for logical nodes
 use crate::{Expr, LogicalPlan};
 use datafusion_common::DFSchemaRef;
-use std::{any::Any, collections::HashSet, fmt, sync::Arc};
+use std::hash::{Hash, Hasher};
+use std::{any::Any, cmp::Eq, collections::HashSet, fmt, sync::Arc};
 
 /// This defines the interface for `LogicalPlan` nodes that can be
 /// used to extend DataFusion with custom relational operators.
 ///
 /// See the example in
 /// [user_defined_plan.rs](../../tests/user_defined_plan.rs) for an
-/// example of how to use this extension API
+/// example of how to use this extension API.
 pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// Return a reference to self as Any, to support dynamic downcasting
     fn as_any(&self) -> &dyn Any;
@@ -77,4 +78,26 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
         exprs: &[Expr],
         inputs: &[LogicalPlan],
     ) -> Arc<dyn UserDefinedLogicalNode>;
+
+    /// Hashing respecting requirements from [std::hash::Hash].
+    fn dyn_hash(&self, state: &mut dyn Hasher);
+
+    /// Comparison respecting requirements from [std::cmp::Eq].
+    ///
+    /// When `other` has an another type than `self`, then the values are *not* equal.
+    fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool;
 }
+
+impl Hash for dyn UserDefinedLogicalNode {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.dyn_hash(state);
+    }
+}
+
+impl std::cmp::PartialEq for dyn UserDefinedLogicalNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.dyn_eq(other)
+    }
+}
+
+impl Eq for dyn UserDefinedLogicalNode {}
