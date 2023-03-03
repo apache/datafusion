@@ -32,7 +32,7 @@ use crate::window::{
 };
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 use arrow::array::{new_empty_array, Array, ArrayRef};
-use arrow::compute::{concat, SortOptions};
+use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
@@ -158,7 +158,6 @@ impl WindowExpr for BuiltInWindowExpr {
                 _ => unreachable!(),
             };
             let mut state = &mut window_state.state;
-            state.is_end = partition_batch_state.is_end;
 
             let (values, order_bys) =
                 self.get_values_orderbys(&partition_batch_state.record_batch)?;
@@ -180,7 +179,6 @@ impl WindowExpr for BuiltInWindowExpr {
                 vec![]
             };
             let mut row_wise_results: Vec<ScalarValue> = vec![];
-            let mut last_range = state.window_frame_range.clone();
             for idx in state.last_calculated_index..num_rows {
                 state.window_frame_range = if self.expr.uses_window_frame() {
                     window_frame_ctx.calculate_range(&order_bys, num_rows, idx)
@@ -191,22 +189,19 @@ impl WindowExpr for BuiltInWindowExpr {
 
                 let frame_range = &state.window_frame_range;
                 // Exit if the range extends all the way:
-                if frame_range.end == num_rows && !state.is_end {
+                if frame_range.end == num_rows && !partition_batch_state.is_end {
                     break;
                 }
                 row_wise_results.push(evaluator.evaluate_stateful(&values)?);
-                last_range.clone_from(frame_range);
                 state.last_calculated_index += 1;
             }
-            state.window_frame_range = last_range;
             let out_col = if row_wise_results.is_empty() {
                 new_empty_array(out_type)
             } else {
                 ScalarValue::iter_to_array(row_wise_results.into_iter())?
             };
 
-            state.out_col = concat(&[&state.out_col, &out_col])?;
-            state.n_row_result_missing = num_rows - state.last_calculated_index;
+            state.update(&out_col, partition_batch_state)?;
             if self.window_frame.start_bound.is_unbounded() {
                 let mut evaluator_state = evaluator.state()?;
                 if let BuiltinWindowState::NthValue(nth_value_state) =
