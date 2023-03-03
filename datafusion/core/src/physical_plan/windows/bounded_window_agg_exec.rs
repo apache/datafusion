@@ -44,7 +44,7 @@ use datafusion_common::{DataFusionError, ScalarValue};
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use std::any::Any;
-use std::cmp::min;
+use std::cmp::{min, Ordering};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::pin::Pin;
@@ -462,7 +462,7 @@ impl BoundedWindowAggStream {
     // first `n_out` rows from `self.input_buffer_record_batch`.
     fn prune_state(&mut self, n_out: usize) -> Result<()> {
         // Prune `self.window_agg_states`:
-        self.prune_out_columns(n_out)?;
+        self.prune_out_columns()?;
         // Prune `self.partition_batches`:
         self.prune_partition_batches()?;
         // Prune `self.input_buffer_record_batch`:
@@ -644,10 +644,12 @@ impl BoundedWindowAggStream {
 
     /// Calculates how many rows [SortedPartitionByBoundedWindowStream]
     /// can produce as output.
-    fn calculate_n_out_row(&self) -> usize {
+    fn calculate_n_out_row(&mut self) -> usize {
         // Different window aggregators may produce results with different rates.
         // We produce the overall batch result with the same speed as slowest one.
-        self.window_agg_states
+        let mut counts = vec![];
+        let out_col_counts = self
+            .window_agg_states
             .iter()
             .map(|window_agg_state| {
                 // Store how many elements are generated for the current
@@ -656,8 +658,13 @@ impl BoundedWindowAggStream {
                 // We iterate over `window_agg_state`, which is an IndexMap.
                 // Iterations follow the insertion order, hence we preserve
                 // sorting when partition columns are sorted.
-                for (_, WindowState { state, .. }) in window_agg_state.iter() {
+                let mut per_partition_out_results = HashMap::new();
+                for (row, WindowState { state, .. }) in window_agg_state.iter() {
                     cur_window_expr_out_result_len += state.out_col.len();
+                    let count = per_partition_out_results.entry(row.clone()).or_insert(0);
+                    if *count < state.out_col.len() {
+                        *count = state.out_col.len();
+                    }
                     // If we do not generate all results for the current
                     // partition, we do not generate results for next
                     // partition --  otherwise we will lose input ordering.
@@ -665,10 +672,28 @@ impl BoundedWindowAggStream {
                         break;
                     }
                 }
+                counts.push(per_partition_out_results);
                 cur_window_expr_out_result_len
             })
-            .min()
-            .unwrap_or(0)
+            .collect::<Vec<_>>();
+        if let Some(min_idx) = out_col_counts
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(Ordering::Equal))
+            .map(|(index, _)| index)
+        {
+            let err =
+                || DataFusionError::Execution("Expects to have partition".to_string());
+            let per_partition_out_results = &counts[min_idx];
+            for (row, count) in per_partition_out_results.iter() {
+                let partition_batch =
+                    self.partition_buffers.get_mut(row).ok_or_else(err).unwrap();
+                partition_batch.n_out_row = *count;
+            }
+            out_col_counts[min_idx]
+        } else {
+            0
+        }
     }
 
     /// Prunes the sections of the record batch (for each partition)
@@ -759,68 +784,35 @@ impl BoundedWindowAggStream {
     }
 
     /// Prunes emitted parts from WindowAggState `out_col` field.
-    fn prune_out_columns(&mut self, n_out: usize) -> Result<()> {
-        match &self.search_mode {
-            PartitionSearchMode::Sorted => {
-                // We store generated columns for each window expression in the `out_col`
-                // field of `WindowAggState`. Given how many rows are emitted, we remove
-                // these sections from state.
-                for partition_window_agg_states in self.window_agg_states.iter_mut() {
-                    let mut running_length = 0;
-                    // Remove `n_out` entries from the `out_col` field of `WindowAggState`.
-                    // Preserve per partition ordering by iterating in the order of insertion.
-                    // Do not generate a result for a new partition without emitting all results
-                    // for the current partition.
-                    for (
-                        _,
-                        WindowState {
-                            state: WindowAggState { out_col, .. },
-                            ..
-                        },
-                    ) in partition_window_agg_states
-                    {
-                        if running_length < n_out {
-                            let n_to_del = min(out_col.len(), n_out - running_length);
-                            let n_to_keep = out_col.len() - n_to_del;
-                            *out_col = out_col.slice(n_to_del, n_to_keep);
-                            running_length += n_to_del;
-                        }
-                    }
-                }
-            }
-            PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted => {
-                let err = || {
-                    DataFusionError::Execution("Expects to have partition".to_string())
-                };
-                // We store generated columns for each window expression in the `out_col`
-                // field of `WindowAggState`. Given how many rows are emitted, we remove
-                // these sections from state.
-                for partition_window_agg_states in self.window_agg_states.iter_mut() {
-                    // Remove `n_out` entries from the `out_col` field of `WindowAggState`.
-                    // Preserve per partition ordering by iterating in the order of insertion.
-                    // Do not generate a result for a new partition without emitting all results
-                    // for the current partition.
-                    for (
-                        partition_key,
-                        WindowState {
-                            state: WindowAggState { out_col, .. },
-                            ..
-                        },
-                    ) in partition_window_agg_states
-                    {
-                        let partition_batch = self
-                            .partition_buffers
-                            .get_mut(partition_key)
-                            .ok_or_else(err)?;
-                        assert_eq!(
-                            partition_batch.record_batch.num_rows(),
-                            partition_batch.indices.len()
-                        );
-                        let n_to_del = partition_batch.n_out_row;
-                        let n_to_keep = out_col.len() - n_to_del;
-                        *out_col = out_col.slice(n_to_del, n_to_keep);
-                    }
-                }
+    fn prune_out_columns(&mut self) -> Result<()> {
+        let err = || DataFusionError::Execution("Expects to have partition".to_string());
+        // We store generated columns for each window expression in the `out_col`
+        // field of `WindowAggState`. Given how many rows are emitted, we remove
+        // these sections from state.
+        for partition_window_agg_states in self.window_agg_states.iter_mut() {
+            // Remove `n_out` entries from the `out_col` field of `WindowAggState`.
+            // Preserve per partition ordering by iterating in the order of insertion.
+            // Do not generate a result for a new partition without emitting all results
+            // for the current partition.
+            for (
+                partition_key,
+                WindowState {
+                    state: WindowAggState { out_col, .. },
+                    ..
+                },
+            ) in partition_window_agg_states
+            {
+                let partition_batch = self
+                    .partition_buffers
+                    .get_mut(partition_key)
+                    .ok_or_else(err)?;
+                assert_eq!(
+                    partition_batch.record_batch.num_rows(),
+                    partition_batch.indices.len()
+                );
+                let n_to_del = partition_batch.n_out_row;
+                let n_to_keep = out_col.len() - n_to_del;
+                *out_col = out_col.slice(n_to_del, n_to_keep);
             }
         }
         Ok(())
