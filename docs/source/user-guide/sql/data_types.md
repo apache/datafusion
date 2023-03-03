@@ -77,12 +77,12 @@ For example, to cast the output of `now()` to a `Timestamp` with second precisio
 
 ## Date/Time Types
 
-| SQL DataType | Arrow DataType                                                           |
-| ------------ | :----------------------------------------------------------------------- |
-| `DATE`       | `Date32`                                                                 |
-| `TIME`       | `Time64(Nanosecond)`                                                     |
-| `TIMESTAMP`  | `Timestamp(Nanosecond, None)`                                            |
-| `INTERVAL`   | `Interval(IntervalUnit)` or `Interval(DayTime)`                          |
+| SQL DataType | Arrow DataType                                  |
+| ------------ | :---------------------------------------------- |
+| `DATE`       | `Date32`                                        |
+| `TIME`       | `Time64(Nanosecond)`                            |
+| `TIMESTAMP`  | `Timestamp(Nanosecond, None)`                   |
+| `INTERVAL`   | `Interval(IntervalUnit)` or `Interval(DayTime)` |
 
 ## Boolean Types
 
@@ -117,38 +117,38 @@ For example, to cast the output of `now()` to a `Timestamp` with second precisio
 
 The following types are supported by the `arrow_typeof` function:
 
-| Arrow Type                     |
-|--------------------------------|
-| `Null`                         |
-| `Boolean`                      |
-| `Int8`                         |
-| `Int16`                        |
-| `Int32`                        |
-| `Int64`                        |
-| `UInt8`                        |
-| `UInt16`                       |
-| `UInt32`                       |
-| `UInt64`                       |
-| `Float16`                      |
-| `Float32`                      |
-| `Float64`                      |
-| `Utf8`                         |
-| `LargeUtf8`                    |
-| `Binary`                       |
-| `Timestamp(Second, None)`      |
-| `Timestamp(Millisecond, None)` |
-| `Timestamp(Microsecond, None)` |
-| `Timestamp(Nanosecond, None)`  |
-| `Time32`                       |
-| `Time64`                       |
-| `Duration(Second)`             |
-| `Duration(Millisecond)`             |
-| `Duration(Microsecond)`             |
-| `Duration(Nanosecond)`             |
-| `Interval(YearMonth)`             |
-| `Interval(DayTime)`             |
-| `Interval(MonthDayNano)`             |
-| `Interval(MonthDayNano)`             |
-| `FixedSizeBinary(<len>)` (e.g. `FixedSizeBinary(16)`)             |
-| `Decimal128(<precision>, <scale>)` e.g. `Decimal128(3, 10)`             |
-| `Decimal256(<precision>, <scale>)` e.g. `Decimal256(3, 10)`             |
+| Arrow Type                                                  |
+| ----------------------------------------------------------- |
+| `Null`                                                      |
+| `Boolean`                                                   |
+| `Int8`                                                      |
+| `Int16`                                                     |
+| `Int32`                                                     |
+| `Int64`                                                     |
+| `UInt8`                                                     |
+| `UInt16`                                                    |
+| `UInt32`                                                    |
+| `UInt64`                                                    |
+| `Float16`                                                   |
+| `Float32`                                                   |
+| `Float64`                                                   |
+| `Utf8`                                                      |
+| `LargeUtf8`                                                 |
+| `Binary`                                                    |
+| `Timestamp(Second, None)`                                   |
+| `Timestamp(Millisecond, None)`                              |
+| `Timestamp(Microsecond, None)`                              |
+| `Timestamp(Nanosecond, None)`                               |
+| `Time32`                                                    |
+| `Time64`                                                    |
+| `Duration(Second)`                                          |
+| `Duration(Millisecond)`                                     |
+| `Duration(Microsecond)`                                     |
+| `Duration(Nanosecond)`                                      |
+| `Interval(YearMonth)`                                       |
+| `Interval(DayTime)`                                         |
+| `Interval(MonthDayNano)`                                    |
+| `Interval(MonthDayNano)`                                    |
+| `FixedSizeBinary(<len>)` (e.g. `FixedSizeBinary(16)`)       |
+| `Decimal128(<precision>, <scale>)` e.g. `Decimal128(3, 10)` |
+| `Decimal256(<precision>, <scale>)` e.g. `Decimal256(3, 10)` |
