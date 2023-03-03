@@ -50,6 +50,7 @@ cargo run --release --bin tpch -- benchmark datafusion --iterations 3 --path ./d
 ```
 
 If you omit `--query=<query_id>` argument, then all benchmarks will be run one by one (from query 1 to query 22).
+
 ```bash
 cargo run --release --bin tpch -- benchmark datafusion --iterations 1 --path ./data --format tbl --batch-size 4096
 ```
@@ -61,6 +62,7 @@ cargo run --release --features "simd mimalloc" --bin tpch -- benchmark datafusio
 ```
 
 If you want to disable collection of statistics (and thus cost based optimizers), you can pass `--disable-statistics` flag.
+
 ```bash
 cargo run --release --bin tpch -- benchmark datafusion --iterations 3 --path /mnt/tpch-parquet --format parquet --query 17 --disable-statistics
 ```
@@ -143,13 +145,15 @@ h2o groupby query 1 took 1669 ms
 [1]: http://www.tpc.org/tpch/
 [2]: https://www1.nyc.gov/site/tlc/about/tlc-trip-record-data.page
 
-## Parquet filter pushdown benchmarks
+## Parquet benchmarks
 
-This is a set of benchmarks for testing and verifying performance of parquet filter pushdown. The queries are executed on
-a synthetic dataset generated during the benchmark execution and designed to simulate web server access logs.
+This is a set of benchmarks for testing and verifying performance of parquet filtering and sorting.
+The queries are executed on a synthetic dataset generated during the benchmark execution and designed to simulate web server access logs.
+
+To run filter benchmarks, run:
 
 ```base
-cargo run --release --bin parquet_filter_pushdown --  --path ./data --scale-factor 1.0
+cargo run --release --bin parquet -- filter  --path ./data --scale-factor 1.0
 ```
 
 This will generate the synthetic dataset at `./data/logs.parquet`. The size of the dataset can be controlled through the `size_factor`
@@ -158,6 +162,7 @@ This will generate the synthetic dataset at `./data/logs.parquet`. The size of t
 For each filter we will run the query using different `ParquetScanOption` settings.
 
 Example run:
+
 ```
 Running benchmarks with the following options: Opt { debug: false, iterations: 3, partitions: 2, path: "./data", batch_size: 8192, scale_factor: 1.0 }
 Generated test dataset with 10699521 rows
@@ -176,3 +181,13 @@ Iteration 1 returned 1781686 rows in 1986 ms
 Iteration 2 returned 1781686 rows in 1947 ms
 ...
 ```
+
+Similarly, to run sorting benchmarks, run:
+
+```base
+cargo run --release --bin parquet -- sort  --path ./data --scale-factor 1.0
+```
+
+This proceeds in the same way as the filter benchmarks: each sort expression
+combination will be run using the same set of `ParquetScanOption` as the
+filter benchmarks.
