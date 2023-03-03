@@ -11832,15 +11832,15 @@ impl serde::Serialize for ParquetScanExecNode {
         if self.base_conf.is_some() {
             len += 1;
         }
-        if self.pruning_predicate.is_some() {
+        if self.predicate.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.ParquetScanExecNode", len)?;
         if let Some(v) = self.base_conf.as_ref() {
             struct_ser.serialize_field("baseConf", v)?;
         }
-        if let Some(v) = self.pruning_predicate.as_ref() {
-            struct_ser.serialize_field("pruningPredicate", v)?;
+        if let Some(v) = self.predicate.as_ref() {
+            struct_ser.serialize_field("predicate", v)?;
         }
         struct_ser.end()
     }
@@ -11854,14 +11854,13 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
         const FIELDS: &[&str] = &[
             "base_conf",
             "baseConf",
-            "pruning_predicate",
-            "pruningPredicate",
+            "predicate",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             BaseConf,
-            PruningPredicate,
+            Predicate,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -11884,7 +11883,7 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
                     {
                         match value {
                             "baseConf" | "base_conf" => Ok(GeneratedField::BaseConf),
-                            "pruningPredicate" | "pruning_predicate" => Ok(GeneratedField::PruningPredicate),
+                            "predicate" => Ok(GeneratedField::Predicate),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -11905,7 +11904,7 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut base_conf__ = None;
-                let mut pruning_predicate__ = None;
+                let mut predicate__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::BaseConf => {
@@ -11914,17 +11913,17 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
                             }
                             base_conf__ = map.next_value()?;
                         }
-                        GeneratedField::PruningPredicate => {
-                            if pruning_predicate__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("pruningPredicate"));
+                        GeneratedField::Predicate => {
+                            if predicate__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("predicate"));
                             }
-                            pruning_predicate__ = map.next_value()?;
+                            predicate__ = map.next_value()?;
                         }
                     }
                 }
                 Ok(ParquetScanExecNode {
                     base_conf: base_conf__,
-                    pruning_predicate: pruning_predicate__,
+                    predicate: predicate__,
                 })
             }
         }

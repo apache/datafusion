@@ -1680,8 +1680,8 @@ pub struct FileScanExecConf {
 pub struct ParquetScanExecNode {
     #[prost(message, optional, tag = "1")]
     pub base_conf: ::core::option::Option<FileScanExecConf>,
-    #[prost(message, optional, tag = "2")]
-    pub pruning_predicate: ::core::option::Option<LogicalExprNode>,
+    #[prost(message, optional, tag = "3")]
+    pub predicate: ::core::option::Option<PhysicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
