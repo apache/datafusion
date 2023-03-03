@@ -791,9 +791,10 @@ impl BoundedWindowAggStream {
         // these sections from state.
         for partition_window_agg_states in self.window_agg_states.iter_mut() {
             // Remove `n_out` entries from the `out_col` field of `WindowAggState`.
-            // Preserve per partition ordering by iterating in the order of insertion.
-            // Do not generate a result for a new partition without emitting all results
-            // for the current partition.
+            // `n_out` is stored in `self.partition_buffers` for each partition.
+            // If is_end is set directly remove them. This decreases map hash map size.
+            partition_window_agg_states
+                .retain(|_, partition_batch_state| !partition_batch_state.state.is_end);
             for (
                 partition_key,
                 WindowState {
