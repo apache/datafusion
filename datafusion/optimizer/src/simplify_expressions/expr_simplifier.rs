@@ -925,7 +925,12 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: BitwiseXor,
                 right,
             }) if expr_contains(&left, &right, BitwiseXor) => {
-                delete_xor_in_complex_expr(&left, &right)
+                let expr = delete_xor_in_complex_expr(&left, &right, false);
+                if expr == *right {
+                    new_int_by_expr_data_type(0, &info.get_data_type(&right))
+                } else {
+                    expr
+                }
             }
 
             // A ^ (..A..) --> (the expression without A, if number of A is odd, otherwise one A)
@@ -934,7 +939,12 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: BitwiseXor,
                 right,
             }) if expr_contains(&right, &left, BitwiseXor) => {
-                delete_xor_in_complex_expr(&right, &left)
+                let expr = delete_xor_in_complex_expr(&right, &left, true);
+                if expr == *left {
+                    new_int_by_expr_data_type(0, &info.get_data_type(&left))
+                } else {
+                    expr
+                }
             }
 
             //
@@ -1895,6 +1905,64 @@ mod tests {
         );
 
         assert_eq!(simplify(expr), expected);
+
+        // with an even number of the column "c2"
+        // ((c2 ^ (c2 | c1)) ^ (c1 & c2)) ^ c2 --> (c2 | c1) ^ (c1 & c2)
+
+        let expr = binary_expr(
+            binary_expr(
+                binary_expr(
+                    col("c2"),
+                    Operator::BitwiseXor,
+                    binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
+                ),
+                Operator::BitwiseXor,
+                binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
+            ),
+            Operator::BitwiseXor,
+            col("c2"),
+        );
+
+        let expected = binary_expr(
+            binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
+            Operator::BitwiseXor,
+            binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
+        );
+
+        assert_eq!(simplify(expr), expected);
+
+        // with an odd number of the column "c2"
+        // (c2 ^ (c2 | c1)) ^ ((c1 & c2) ^ c2) ^ c2 --> ((c2 | c1) ^ (c1 & c2)) ^ c2
+
+        let expr = binary_expr(
+            binary_expr(
+                binary_expr(
+                    col("c2"),
+                    Operator::BitwiseXor,
+                    binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
+                ),
+                Operator::BitwiseXor,
+                binary_expr(
+                    binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
+                    Operator::BitwiseXor,
+                    col("c2"),
+                ),
+            ),
+            Operator::BitwiseXor,
+            col("c2"),
+        );
+
+        let expected = binary_expr(
+            binary_expr(
+                binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
+                Operator::BitwiseXor,
+                binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
+            ),
+            Operator::BitwiseXor,
+            col("c2"),
+        );
+
+        assert_eq!(simplify(expr), expected);
     }
 
     #[test]
@@ -2080,7 +2148,13 @@ mod tests {
     fn test_simplify_simple_bitwise_xor() {
         // (c2 > 5) ^ (c2 > 5) -> 0
         let expr = (col("c2").gt(lit(5))).bitwise_xor(col("c2").gt(lit(5)));
-        let expected = lit(0);
+        let expected = Expr::Literal(ScalarValue::Int32(Some(0)));
+
+        assert_eq!(simplify(expr), expected);
+
+        // c3 ^ c3 -> 0
+        let expr = col("c3").bitwise_xor(col("c3"));
+        let expected = Expr::Literal(ScalarValue::Int64(Some(0)));
 
         assert_eq!(simplify(expr), expected);
     }

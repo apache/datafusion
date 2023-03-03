@@ -24,7 +24,6 @@ use datafusion_expr::{
     expr_fn::{and, concat_ws, or},
     lit, BuiltinScalarFunction, Expr, Like, Operator,
 };
-use std::collections::VecDeque;
 
 pub static POWS_OF_TEN: [i128; 38] = [
     1,
@@ -79,76 +78,57 @@ pub fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
     }
 }
 
-/// This enum is needed for the function "delete_xor_in_complex_expr" for
-/// creating a postfix notation vector
-#[derive(PartialEq)]
-enum SyntaxTreeItem {
-    Operator(Operator),
-    Expr(Expr),
-}
-
-/// Deletes all 'needles' or remain one 'needle' that are found in a chain of search_op
-/// expressions for XOR optimization. Such as: A ^ (A ^ (B ^ A))
-pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr) -> Expr {
-    let mut postfix_notation: VecDeque<SyntaxTreeItem> = VecDeque::new();
-    /// Creates postfix notation
-    fn create_postfix_notation(
-        postfix_notation: &mut VecDeque<SyntaxTreeItem>,
+/// Deletes all 'needles' or remains one 'needle' that are found in a chain of xor
+/// expressions. Such as: A ^ (A ^ (B ^ A))
+pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> Expr {
+    /// Deletes recursively 'needles' in a chain of xor expressions
+    fn recursive_delete_xor_in_expr(
         expr: &Expr,
-    ) {
+        needle: &Expr,
+        xor_counter: &mut i32,
+    ) -> Expr {
         match expr {
             Expr::BinaryExpr(BinaryExpr { left, op, right })
                 if *op == Operator::BitwiseXor =>
             {
-                postfix_notation.push_back(SyntaxTreeItem::Operator(*op));
-                create_postfix_notation(postfix_notation, left);
-                create_postfix_notation(postfix_notation, right);
-            }
-            _ => postfix_notation.push_back(SyntaxTreeItem::Expr(expr.clone())),
-        }
-    }
-    let mut xor_counter: i32 = 0;
-    create_postfix_notation(&mut postfix_notation, expr);
-
-    /// Restores expression from postfix notation
-    fn restore_expr(
-        postfix_notation: &mut VecDeque<SyntaxTreeItem>,
-        xor_counter: &mut i32,
-        needle: &Expr,
-    ) -> Expr {
-        let item = postfix_notation.pop_front().unwrap();
-
-        match item {
-            SyntaxTreeItem::Operator(operator) => {
-                let left = restore_expr(postfix_notation, xor_counter, needle);
-                let right = restore_expr(postfix_notation, xor_counter, needle);
-                if left == *needle {
+                let left_expr = recursive_delete_xor_in_expr(left, needle, xor_counter);
+                let right_expr = recursive_delete_xor_in_expr(right, needle, xor_counter);
+                if left_expr == *needle {
                     *xor_counter += 1;
-                    return right;
-                } else if right == *needle {
+                    return right_expr;
+                } else if right_expr == *needle {
                     *xor_counter += 1;
-                    return left;
+                    return left_expr;
                 }
 
                 Expr::BinaryExpr(BinaryExpr::new(
-                    Box::new(left),
-                    operator,
-                    Box::new(right),
+                    Box::new(left_expr),
+                    *op,
+                    Box::new(right_expr),
                 ))
             }
-            SyntaxTreeItem::Expr(expr) => expr,
+            _ => expr.clone(),
         }
     }
 
-    let result_expr = restore_expr(&mut postfix_notation, &mut xor_counter, needle);
+    let mut xor_counter: i32 = 0;
+    let result_expr = recursive_delete_xor_in_expr(expr, needle, &mut xor_counter);
     if result_expr == *needle {
-        return Expr::Literal(ScalarValue::Int32(Some(0)));
+        return needle.clone();
     } else if xor_counter % 2 == 0 {
-        return Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(needle.clone()),
-            Operator::BitwiseXor,
-            Box::new(result_expr),
-        ));
+        if is_left {
+            return Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(needle.clone()),
+                Operator::BitwiseXor,
+                Box::new(result_expr),
+            ));
+        } else {
+            return Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(result_expr),
+                Operator::BitwiseXor,
+                Box::new(needle.clone()),
+            ));
+        }
     }
     result_expr
 }
