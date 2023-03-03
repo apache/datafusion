@@ -343,7 +343,11 @@ impl DFSchema {
     }
 
     /// Find if the field exists with the given qualified name
-    pub fn has_column_with_qualified_name(&self, qualifier: &str, name: &str) -> bool {
+    pub fn has_column_with_qualified_name(
+        &self,
+        qualifier: &TableReference,
+        name: &str,
+    ) -> bool {
         self.fields().iter().any(|field| {
             field.qualifier().map(|q| q.eq(qualifier)).unwrap_or(false)
                 && field.name() == name
@@ -353,7 +357,9 @@ impl DFSchema {
     /// Find if the field exists with the given qualified column
     pub fn has_column(&self, column: &Column) -> bool {
         match &column.relation {
-            Some(r) => self.has_column_with_qualified_name(r, &column.name),
+            Some(r) => {
+                self.has_column_with_qualified_name(&r.as_table_reference(), &column.name)
+            }
             None => self.has_column_with_unqualified_name(&column.name),
         }
     }
