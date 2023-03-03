@@ -960,6 +960,7 @@ pub fn can_hash(data_type: &DataType) -> bool {
         DataType::Decimal128(_, _) => true,
         DataType::Date32 => true,
         DataType::Date64 => true,
+        DataType::FixedSizeBinary(_) => true,
         DataType::Dictionary(key_type, value_type)
             if *value_type.as_ref() == DataType::Utf8 =>
         {

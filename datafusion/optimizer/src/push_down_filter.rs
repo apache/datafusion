@@ -1074,7 +1074,7 @@ mod tests {
         assert_optimized_plan_eq(&plan, expected)
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct NoopPlan {
         input: Vec<LogicalPlan>,
         schema: DFSchemaRef,
@@ -1117,6 +1117,19 @@ mod tests {
                 input: inputs.to_vec(),
                 schema: self.schema.clone(),
             })
+        }
+
+        fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool {
+            match other.as_any().downcast_ref::<Self>() {
+                Some(o) => self == o,
+                None => false,
+            }
+        }
+
+        fn dyn_hash(&self, state: &mut dyn std::hash::Hasher) {
+            use std::hash::Hash;
+            let mut s = state;
+            self.hash(&mut s);
         }
     }
 
