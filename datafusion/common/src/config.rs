@@ -644,6 +644,28 @@ trait Visit {
 /// - [`Default`]
 /// - [`ExtensionOptions`]
 ///
+/// # Usage
+/// The syntax is:
+///
+/// ```text
+/// extensions_options! {
+///      /// Struct docs (optional).
+///     [<vis>] struct <StructName> {
+///         /// Field docs (optional)
+///         [<vis>] <field_name>: <field_type>, default = <default_value>
+///
+///         ... more fields
+///     }
+/// }
+/// ```
+///
+/// The placeholders are:
+/// - `[<vis>]`: Optional visibility modifier like `pub` or `pub(crate)`.
+/// - `<StructName>`: Struct name like `MyStruct`.
+/// - `<field_name>`: Field name like `my_field`.
+/// - `<field_type>`: Field type like `u8`.
+/// - `<default_value>`: Default value matching the field type like `42`.
+///
 /// # Example
 /// ```
 /// use datafusion_common::extensions_options;
