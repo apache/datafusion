@@ -151,9 +151,8 @@ impl std::fmt::Display for BinaryExpr {
 
 macro_rules! compute_decimal_op_dyn_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
-        let ll = as_decimal128_array($LEFT).unwrap();
         if let ScalarValue::Decimal128(Some(v_i128), _, _) = $RIGHT {
-            Ok(Arc::new(paste::expr! {[<$OP _dyn_scalar>]}(ll, v_i128)?))
+            Ok(Arc::new(paste::expr! {[<$OP _dyn_scalar>]}($LEFT, v_i128)?))
         } else {
             // when the $RIGHT is a NULL, generate a NULL array of $OP_TYPE type
             Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
@@ -3314,6 +3313,97 @@ mod tests {
             .finish()
             .with_precision_and_scale(precision, scale)
             .unwrap()
+    }
+
+    #[test]
+    fn comparison_dict_decimal_scalar_expr_test() -> Result<()> {
+        // scalar of decimal compare with dictionary decimal array
+        let value_i128 = 123;
+        let decimal_scalar = ScalarValue::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(ScalarValue::Decimal128(Some(value_i128), 25, 3)),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Decimal128(25, 3)),
+            ),
+            true,
+        )]));
+        let decimal_array = Arc::new(create_decimal_array(
+            &[
+                Some(value_i128),
+                None,
+                Some(value_i128 - 1),
+                Some(value_i128 + 1),
+            ],
+            25,
+            3,
+        )) as ArrayRef;
+
+        let keys = Int8Array::from(vec![Some(0), None, Some(2), Some(3)]);
+        let dictionary =
+            Arc::new(DictionaryArray::try_new(&keys, &decimal_array)?) as ArrayRef;
+
+        // array = scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &dictionary,
+            &decimal_scalar,
+            Operator::Eq,
+            &BooleanArray::from(vec![Some(true), None, Some(false), Some(false)]),
+        )
+        .unwrap();
+        // array != scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &dictionary,
+            &decimal_scalar,
+            Operator::NotEq,
+            &BooleanArray::from(vec![Some(false), None, Some(true), Some(true)]),
+        )
+        .unwrap();
+        //  array < scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &dictionary,
+            &decimal_scalar,
+            Operator::Lt,
+            &BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+        )
+        .unwrap();
+
+        //  array <= scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &dictionary,
+            &decimal_scalar,
+            Operator::LtEq,
+            &BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
+        )
+        .unwrap();
+        // array > scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &dictionary,
+            &decimal_scalar,
+            Operator::Gt,
+            &BooleanArray::from(vec![Some(false), None, Some(false), Some(true)]),
+        )
+        .unwrap();
+
+        // array >= scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &dictionary,
+            &decimal_scalar,
+            Operator::GtEq,
+            &BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+        )
+        .unwrap();
+
+        Ok(())
     }
 
     #[test]
