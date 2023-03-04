@@ -132,17 +132,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(move || case.run())
     });
 
-    c.bench_function(
-        "sort utf8 tuple preserve partitioning data skewed to first",
-        |b| {
-            let case = SortBenchCasePreservePartitioning::new_all_data_in_first_partition(
-                &UTF8_TUPLE_STREAMS,
-            );
-
-            b.iter(move || case.run())
-        },
-    );
-
     c.bench_function("sort utf8 dictionary", |b| {
         let case = SortBenchCase::new(&DICTIONARY_STREAMS);
 
@@ -162,15 +151,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         let case = SortBenchCasePreservePartitioning::new(&DICTIONARY_TUPLE_STREAMS);
         b.iter(move || case.run())
     });
-    c.bench_function(
-        "sort utf8 dictionary tuple preserve partitioning data skewed to first",
-        |b| {
-            let case = SortBenchCasePreservePartitioning::new_all_data_in_first_partition(
-                &DICTIONARY_TUPLE_STREAMS,
-            );
-            b.iter(move || case.run())
-        },
-    );
 
     c.bench_function("sort mixed utf8 dictionary tuple", |b| {
         let case = SortBenchCase::new(&MIXED_DICTIONARY_TUPLE_STREAMS);
@@ -185,15 +165,6 @@ fn criterion_benchmark(c: &mut Criterion) {
             b.iter(move || case.run())
         },
     );
-    c.bench_function(
-        "sort mixed utf8 dictionary tuple preserve partitioning data skewed to first",
-        |b| {
-            let case = SortBenchCasePreservePartitioning::new_all_data_in_first_partition(
-                &MIXED_DICTIONARY_TUPLE_STREAMS,
-            );
-            b.iter(move || case.run())
-        },
-    );
 
     c.bench_function("sort mixed tuple", |b| {
         let case = SortBenchCase::new(&MIXED_TUPLE_STREAMS);
@@ -205,16 +176,6 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(move || case.run())
     });
-    c.bench_function(
-        "sort mixed tuple preserve partitioning data skewed to first",
-        |b| {
-            let case = SortBenchCasePreservePartitioning::new_all_data_in_first_partition(
-                &MIXED_TUPLE_STREAMS,
-            );
-
-            b.iter(move || case.run())
-        },
-    );
 }
 
 /// Encapsulates running a test case where input partitioning is not preserved.
@@ -302,22 +263,6 @@ impl SortBenchCasePreservePartitioning {
             plan,
             partition_count,
         }
-    }
-    /// This case preserves partitioning but all the data is in the first partition.
-    fn new_all_data_in_first_partition(partitions: &[Vec<RecordBatch>]) -> Self {
-        // modify partitions to move all the data into the first partition.
-        // still keeping same number of total partitions.
-        let partitions = (0..partitions.len())
-            .map(|i| {
-                if i == 0 {
-                    partitions.iter().flatten().cloned().collect::<Vec<_>>()
-                } else {
-                    vec![]
-                }
-            })
-            .collect::<Vec<_>>();
-        // rest of bench case is the exact same
-        Self::new(&partitions)
     }
 
     /// runs the specified plan to completion, draining all input and
