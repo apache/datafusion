@@ -1169,6 +1169,7 @@ async fn do_sort(
         context.session_id(),
         context.task_id()
     );
+    let n_sort_cols = expr.len();
     let schema = input.schema();
     let tracking_metrics =
         metrics_set.new_intermediate_tracking(partition_id, context.memory_pool());
@@ -1184,8 +1185,29 @@ async fn do_sort(
     if preserve_rows {
         sorter.set_preserve_output_rows(true);
     }
+    sorter.set_use_row_encoding(match (n_sort_cols, fetch) {
+        // if single column or there's a limit, fallback to regular sort
+        (1, None) | (_, Some(_)) => false,
+        _ => true,
+    });
+    // single batch case has a different code path (no merging required) and
+    // row encoding seems to hurt performance on that path.
+    // dont immediately insert first batch
+    // if its the only batch seen, then we dont use row encoding
+    let mut first_batch = None as Option<RecordBatch>;
     while let Some(batch) = input.next().await {
         let batch = batch?;
+        // sorter.insert_batch(batch, &tracking_metrics).await?;
+        if first_batch.is_none() {
+            first_batch = Some(batch);
+        } else {
+            sorter.insert_batch(batch, &tracking_metrics).await?;
+        }
+    }
+    if let Some(batch) = first_batch {
+        if sorter.in_mem_batches.is_empty() && !sorter.spilled_before() {
+            sorter.set_use_row_encoding(false);
+        }
         sorter.insert_batch(batch, &tracking_metrics).await?;
     }
     let result = sorter.sort();
