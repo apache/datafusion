@@ -440,7 +440,10 @@ fn get_sorted_iter(
                 .flat_map(|r| r.iter())
                 .enumerate()
                 .collect::<Vec<_>>();
-            to_sort.sort_unstable_by(|(_, row_a), (_, row_b)| row_a.cmp(row_b));
+            // NB: according to the rust docs, `sort` is a mergesort (while
+            // `sort_unstable` is quicksort.) so right here, `sort` should be faster
+            // since we are sorting a bunch of concatenated sorted sequences.
+            to_sort.sort_by(|(_, row_a), (_, row_b)| row_a.cmp(row_b));
             let limit = match fetch {
                 Some(lim) => lim.min(to_sort.len()),
                 None => to_sort.len(),
