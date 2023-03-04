@@ -496,10 +496,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                 };
 
                 let file_type = create_extern_table.file_type.as_str();
-                let env = ctx.runtime_env();
-                if !env.table_factories.contains_key(file_type) {
+                if ctx.table_factory(file_type).is_none() {
                     Err(DataFusionError::Internal(format!(
-                        "No TableProvider for file type: {file_type}"
+                        "No TableProviderFactory for file type: {file_type}"
                     )))?
                 }
 
@@ -1377,6 +1376,7 @@ mod roundtrip_tests {
     };
     use datafusion::datasource::datasource::TableProviderFactory;
     use datafusion::datasource::TableProvider;
+    use datafusion::execution::context::SessionState;
     use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::prelude::{
@@ -1523,10 +1523,13 @@ mod roundtrip_tests {
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
             HashMap::new();
         table_factories.insert("TESTTABLE".to_string(), Arc::new(TestTableFactory {}));
-        let cfg = RuntimeConfig::new().with_table_factories(table_factories);
+        let cfg = RuntimeConfig::new();
         let env = RuntimeEnv::new(cfg).unwrap();
         let ses = SessionConfig::new();
-        let ctx = SessionContext::with_config_rt(ses, Arc::new(env));
+        let mut state = SessionState::with_config_rt(ses, Arc::new(env));
+        // replace factories
+        *state.table_factories_mut() = table_factories;
+        let ctx = SessionContext::with_state(state);
 
         let sql = "CREATE EXTERNAL TABLE t STORED AS testtable LOCATION 's3://bucket/schema/table';";
         ctx.sql(sql).await.unwrap();

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::test_util::TestTableFactory;
 
@@ -106,12 +107,14 @@ async fn sql_create_table_exists() -> Result<()> {
 
 #[tokio::test]
 async fn create_custom_table() -> Result<()> {
-    let mut cfg = RuntimeConfig::new();
-    cfg.table_factories
-        .insert("DELTATABLE".to_string(), Arc::new(TestTableFactory {}));
+    let cfg = RuntimeConfig::new();
     let env = RuntimeEnv::new(cfg).unwrap();
     let ses = SessionConfig::new();
-    let ctx = SessionContext::with_config_rt(ses, Arc::new(env));
+    let mut state = SessionState::with_config_rt(ses, Arc::new(env));
+    state
+        .table_factories_mut()
+        .insert("DELTATABLE".to_string(), Arc::new(TestTableFactory {}));
+    let ctx = SessionContext::with_state(state);
 
     let sql = "CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';";
     ctx.sql(sql).await.unwrap();
@@ -126,12 +129,14 @@ async fn create_custom_table() -> Result<()> {
 
 #[tokio::test]
 async fn create_external_table_with_ddl() -> Result<()> {
-    let mut cfg = RuntimeConfig::new();
-    cfg.table_factories
-        .insert("MOCKTABLE".to_string(), Arc::new(TestTableFactory {}));
+    let cfg = RuntimeConfig::new();
     let env = RuntimeEnv::new(cfg).unwrap();
     let ses = SessionConfig::new();
-    let ctx = SessionContext::with_config_rt(ses, Arc::new(env));
+    let mut state = SessionState::with_config_rt(ses, Arc::new(env));
+    state
+        .table_factories_mut()
+        .insert("MOCKTABLE".to_string(), Arc::new(TestTableFactory {}));
+    let ctx = SessionContext::with_state(state);
 
     let sql = "CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS MOCKTABLE LOCATION 'mockprotocol://path/to/table';";
     ctx.sql(sql).await.unwrap();
