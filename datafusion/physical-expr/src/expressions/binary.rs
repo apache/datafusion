@@ -1664,16 +1664,28 @@ mod tests {
             vec![0i64, 0i64, 1i64],
         );
         test_coercion!(
-            Int16Array,
-            DataType::Int16,
-            vec![1i16, 2i16, 3i16],
-            Int64Array,
-            DataType::Int64,
-            vec![10i64, 4i64, 5i64],
+            UInt16Array,
+            DataType::UInt16,
+            vec![1u16, 2u16, 3u16],
+            UInt64Array,
+            DataType::UInt64,
+            vec![10u64, 4u64, 5u64],
+            Operator::BitwiseAnd,
+            UInt64Array,
+            DataType::UInt64,
+            vec![0u64, 0u64, 1u64],
+        );
+        test_coercion!(
+            UInt16Array,
+            DataType::UInt16,
+            vec![1u16, 2u16, 3u16],
+            UInt64Array,
+            DataType::UInt64,
+            vec![10u64, 4u64, 5u64],
             Operator::BitwiseOr,
-            Int64Array,
-            DataType::Int64,
-            vec![11i64, 6i64, 7i64],
+            UInt64Array,
+            DataType::UInt64,
+            vec![11u64, 6u64, 7u64],
         );
         test_coercion!(
             Int16Array,
@@ -1686,6 +1698,18 @@ mod tests {
             Int64Array,
             DataType::Int64,
             vec![9i64, 4i64, 6i64],
+        );
+        test_coercion!(
+            UInt16Array,
+            DataType::UInt16,
+            vec![3u16, 2u16, 3u16],
+            UInt64Array,
+            DataType::UInt64,
+            vec![10u64, 6u64, 5u64],
+            Operator::BitwiseXor,
+            UInt64Array,
+            DataType::UInt64,
+            vec![9u64, 4u64, 6u64],
         );
         Ok(())
     }
@@ -4003,6 +4027,22 @@ mod tests {
         let expected = Int32Array::from(vec![Some(13), None, Some(12)]);
         assert_eq!(result.as_ref(), &expected);
 
+        let left =
+            Arc::new(UInt32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
+        let right =
+            Arc::new(UInt32Array::from(vec![Some(1), Some(3), Some(7)])) as ArrayRef;
+        let mut result = bitwise_and(left.clone(), right.clone())?;
+        let expected = UInt32Array::from(vec![Some(0), None, Some(3)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_or(left.clone(), right.clone())?;
+        let expected = UInt32Array::from(vec![Some(13), None, Some(15)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_xor(left.clone(), right.clone())?;
+        let expected = UInt32Array::from(vec![Some(13), None, Some(12)]);
+        assert_eq!(result.as_ref(), &expected);
+
         Ok(())
     }
 
@@ -4019,6 +4059,17 @@ mod tests {
         result = bitwise_shift_right(result.clone(), modules.clone())?;
         assert_eq!(result.as_ref(), &input);
 
+        let input =
+            Arc::new(UInt32Array::from(vec![Some(2), None, Some(10)])) as ArrayRef;
+        let modules =
+            Arc::new(UInt32Array::from(vec![Some(2), Some(4), Some(8)])) as ArrayRef;
+        let mut result = bitwise_shift_left(input.clone(), modules.clone())?;
+
+        let expected = UInt32Array::from(vec![Some(8), None, Some(2560)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_shift_right(result.clone(), modules.clone())?;
+        assert_eq!(result.as_ref(), &input);
         Ok(())
     }
 
@@ -4031,6 +4082,12 @@ mod tests {
         let expected = Int32Array::from(vec![Some(32)]);
         assert_eq!(result.as_ref(), &expected);
 
+        let input = Arc::new(UInt32Array::from(vec![Some(2)])) as ArrayRef;
+        let modules = Arc::new(UInt32Array::from(vec![Some(100)])) as ArrayRef;
+        let result = bitwise_shift_left(input.clone(), modules.clone())?;
+
+        let expected = UInt32Array::from(vec![Some(32)]);
+        assert_eq!(result.as_ref(), &expected);
         Ok(())
     }
 
@@ -4049,6 +4106,21 @@ mod tests {
         result = bitwise_xor_scalar(&left, right).unwrap()?;
         let expected = Int32Array::from(vec![Some(15), None, Some(8)]);
         assert_eq!(result.as_ref(), &expected);
+
+        let left =
+            Arc::new(UInt32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
+        let right = ScalarValue::from(3u32);
+        let mut result = bitwise_and_scalar(&left, right.clone()).unwrap()?;
+        let expected = UInt32Array::from(vec![Some(0), None, Some(3)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_or_scalar(&left, right.clone()).unwrap()?;
+        let expected = UInt32Array::from(vec![Some(15), None, Some(11)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_xor_scalar(&left, right).unwrap()?;
+        let expected = UInt32Array::from(vec![Some(15), None, Some(8)]);
+        assert_eq!(result.as_ref(), &expected);
         Ok(())
     }
 
@@ -4064,6 +4136,15 @@ mod tests {
         result = bitwise_shift_right_scalar(&result, module).unwrap()?;
         assert_eq!(result.as_ref(), &input);
 
+        let input = Arc::new(UInt32Array::from(vec![Some(2), None, Some(4)])) as ArrayRef;
+        let module = ScalarValue::from(10u32);
+        let mut result = bitwise_shift_left_scalar(&input, module.clone()).unwrap()?;
+
+        let expected = UInt32Array::from(vec![Some(2048), None, Some(4096)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_shift_right_scalar(&result, module).unwrap()?;
+        assert_eq!(result.as_ref(), &input);
         Ok(())
     }
 
