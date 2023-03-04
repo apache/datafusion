@@ -87,6 +87,7 @@ struct ExternalSorter {
     fetch: Option<usize>,
     reservation: MemoryReservation,
     partition_id: usize,
+    use_row_encoding: bool,
     // if this flag is true, the output of the sort will
     // have non-None `RowBatch`
     preserve_output_rows: bool,
@@ -125,11 +126,15 @@ impl ExternalSorter {
             reservation,
             partition_id,
             preserve_output_rows: false,
+            use_row_encoding: false,
         }
     }
 
     pub fn set_preserve_output_rows(&mut self, val: bool) {
         self.preserve_output_rows = val;
+    }
+    fn set_use_row_encoding(&mut self, val: bool) {
+        self.use_row_encoding = val;
     }
 
     async fn insert_batch(
@@ -148,7 +153,13 @@ impl ExternalSorter {
             // NB timer records time taken on drop, so there are no
             // calls to `timer.done()` below.
             let _timer = tracking_metrics.elapsed_compute().timer();
-            let partial = sort_batch(input, self.schema.clone(), &self.expr, self.fetch)?;
+            let partial = sort_batch(
+                input,
+                self.schema.clone(),
+                &self.expr,
+                self.fetch,
+                self.use_row_encoding,
+            )?;
 
             // The resulting batch might be smaller (or larger, see #3747) than the input
             // batch due to either a propagated limit or the re-construction of arrays. So
@@ -1067,14 +1078,15 @@ fn sort_batch(
     schema: SchemaRef,
     expr: &[PhysicalSortExpr],
     fetch: Option<usize>,
+    use_row_encoding: bool,
 ) -> Result<BatchWithSortArray> {
     let sort_columns = expr
         .iter()
         .map(|e| e.evaluate_to_sort_column(&batch))
         .collect::<Result<Vec<SortColumn>>>()?;
-    let (indices, rows) = match (sort_columns.len(), fetch) {
+    let (indices, rows) = match use_row_encoding {
         // if single column or there's a limit, fallback to regular sort
-        (1, None) | (_, Some(_)) => (lexsort_to_indices(&sort_columns, fetch)?, None),
+        false => (lexsort_to_indices(&sort_columns, fetch)?, None),
         _ => {
             let sort_fields = sort_columns
                 .iter()
