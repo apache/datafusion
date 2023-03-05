@@ -1019,7 +1019,7 @@ impl ScalarValue {
         Self::List(scalars, Box::new(Field::new("item", child_type, true)))
     }
 
-    // Create a zero value in the given type.
+    /// Create a zero value in the given type.
     pub fn new_zero(datatype: &DataType) -> Result<ScalarValue> {
         assert!(datatype.is_primitive());
         Ok(match datatype {
@@ -1042,17 +1042,14 @@ impl ScalarValue {
         })
     }
 
+    /// Create a negative one value in the given type.
     pub fn new_negative_one(datatype: &DataType) -> Result<ScalarValue> {
         assert!(datatype.is_primitive());
         Ok(match datatype {
-            DataType::Int8 => ScalarValue::Int8(Some(-1)),
-            DataType::Int16 => ScalarValue::Int16(Some(-1)),
-            DataType::Int32 => ScalarValue::Int32(Some(-1)),
-            DataType::Int64 => ScalarValue::Int64(Some(-1)),
-            DataType::UInt8 => ScalarValue::UInt8(Some(-1)),
-            DataType::UInt16 => ScalarValue::UInt16(Some(-1)),
-            DataType::UInt32 => ScalarValue::UInt32(Some(-1)),
-            DataType::UInt64 => ScalarValue::UInt64(Some(-1)),
+            DataType::Int8 | DataType::UInt8 => ScalarValue::Int8(Some(-1)),
+            DataType::Int16 | DataType::UInt16 => ScalarValue::Int16(Some(-1)),
+            DataType::Int32 | DataType::UInt32 => ScalarValue::Int32(Some(-1)),
+            DataType::Int64 | DataType::UInt64 => ScalarValue::Int64(Some(-1)),
             DataType::Float32 => ScalarValue::Float32(Some(-1.0)),
             DataType::Float64 => ScalarValue::Float64(Some(-1.0)),
             _ => {

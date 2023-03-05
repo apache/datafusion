@@ -17,7 +17,6 @@
 
 //! Utility functions for expression simplification
 
-use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     expr::{Between, BinaryExpr},
