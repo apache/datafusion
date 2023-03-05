@@ -50,10 +50,10 @@ impl SimplifyInfo for MyInfo {
         &self.execution_props
     }
 
-    fn get_data_type(&self, expr: &Expr) -> DataType {
+    fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
         match expr.get_type(&self.schema) {
-            Ok(expr_data_type) => expr_data_type,
-            Err(_) => DataType::Int32,
+            Ok(expr_data_type) => Ok(expr_data_type),
+            Err(e) => Err(e),
         }
     }
 }

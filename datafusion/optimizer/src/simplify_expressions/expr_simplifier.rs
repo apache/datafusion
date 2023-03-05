@@ -93,8 +93,8 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///   fn execution_props(&self) -> &ExecutionProps {
     ///     &self.execution_props
     ///   }
-    ///   fn get_data_type(&self, expr: &Expr) -> DataType {
-    ///     DataType::Int32
+    ///   fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
+    ///     Ok(DataType::Int32)
     ///   }
     /// }
     ///
@@ -743,7 +743,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: BitwiseAnd,
                 right,
             }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
-                Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&left))?)
+                Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&left)?)?)
             }
 
             // A & !A -> 0 (if A not nullable)
@@ -752,7 +752,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: BitwiseAnd,
                 right,
             }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
-                Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&left))?)
+                Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&left)?)?)
             }
 
             // (..A..) & A --> (..A..)
@@ -825,7 +825,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: BitwiseOr,
                 right,
             }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
-                Expr::Literal(ScalarValue::new_negative_one(&info.get_data_type(&left))?)
+                Expr::Literal(ScalarValue::new_negative_one(&info.get_data_type(&left)?)?)
             }
 
             // A | !A -> -1 (if A not nullable)
@@ -834,7 +834,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: BitwiseOr,
                 right,
             }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
-                Expr::Literal(ScalarValue::new_negative_one(&info.get_data_type(&left))?)
+                Expr::Literal(ScalarValue::new_negative_one(&info.get_data_type(&left)?)?)
             }
 
             // (..A..) | A --> (..A..)
@@ -907,7 +907,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: BitwiseXor,
                 right,
             }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
-                Expr::Literal(ScalarValue::new_negative_one(&info.get_data_type(&left))?)
+                Expr::Literal(ScalarValue::new_negative_one(&info.get_data_type(&left)?)?)
             }
 
             // A ^ !A -> -1 (if A not nullable)
@@ -916,7 +916,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: BitwiseXor,
                 right,
             }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
-                Expr::Literal(ScalarValue::new_negative_one(&info.get_data_type(&left))?)
+                Expr::Literal(ScalarValue::new_negative_one(&info.get_data_type(&left)?)?)
             }
 
             // (..A..) ^ A --> (the expression without A, if number of A is odd, otherwise one A)
@@ -927,7 +927,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             }) if expr_contains(&left, &right, BitwiseXor) => {
                 let expr = delete_xor_in_complex_expr(&left, &right, false);
                 if expr == *right {
-                    Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&right))?)
+                    Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&right)?)?)
                 } else {
                     expr
                 }
@@ -941,7 +941,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             }) if expr_contains(&right, &left, BitwiseXor) => {
                 let expr = delete_xor_in_complex_expr(&right, &left, true);
                 if expr == *left {
-                    Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&left))?)
+                    Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&left)?)?)
                 } else {
                     expr
                 }
@@ -1967,22 +1967,22 @@ mod tests {
 
     #[test]
     fn test_simplify_negated_bitwise_and() {
-        // !(c2 > 5) & (c2 > 5) --> 0
+        // !c4 & c4 --> 0
         let expr = binary_expr(
-            Expr::Negative(Box::new(col("c2_non_null").gt(lit(5)))),
+            Expr::Negative(Box::new(col("c4_non_null"))),
             Operator::BitwiseAnd,
-            col("c2_non_null").gt(lit(5)),
+            col("c4_non_null"),
         );
-        let expected = Expr::Literal(ScalarValue::Int32(Some(0)));
+        let expected = Expr::Literal(ScalarValue::UInt32(Some(0)));
 
         assert_eq!(simplify(expr), expected);
-        // (c2 > 5) & !(c2 > 5) --> 0
+        // c4 & !c4 --> 0
         let expr = binary_expr(
-            col("c2_non_null").gt(lit(5)),
+            col("c4_non_null"),
             Operator::BitwiseAnd,
-            Expr::Negative(Box::new(col("c2_non_null").gt(lit(5)))),
+            Expr::Negative(Box::new(col("c4_non_null"))),
         );
-        let expected = Expr::Literal(ScalarValue::Int32(Some(0)));
+        let expected = Expr::Literal(ScalarValue::UInt32(Some(0)));
 
         assert_eq!(simplify(expr), expected);
 
@@ -2008,21 +2008,21 @@ mod tests {
 
     #[test]
     fn test_simplify_negated_bitwise_or() {
-        // !(c2 > 5) | (c2 > 5) --> -1
+        // !c4 | c4 --> -1
         let expr = binary_expr(
-            Expr::Negative(Box::new(col("c2_non_null").gt(lit(5)))),
+            Expr::Negative(Box::new(col("c4_non_null"))),
             Operator::BitwiseOr,
-            col("c2_non_null").gt(lit(5)),
+            col("c4_non_null"),
         );
         let expected = Expr::Literal(ScalarValue::Int32(Some(-1)));
 
         assert_eq!(simplify(expr), expected);
 
-        // (c2 > 5) | !(c2 > 5) --> -1
+        // c4 | !c4 --> -1
         let expr = binary_expr(
-            col("c2_non_null").gt(lit(5)),
+            col("c4_non_null"),
             Operator::BitwiseOr,
-            Expr::Negative(Box::new(col("c2_non_null").gt(lit(5)))),
+            Expr::Negative(Box::new(col("c4_non_null"))),
         );
         let expected = Expr::Literal(ScalarValue::Int32(Some(-1)));
 
@@ -2051,21 +2051,21 @@ mod tests {
 
     #[test]
     fn test_simplify_negated_bitwise_xor() {
-        // !(c2 > 5) ^ (c2 > 5) --> -1
+        // !c4 ^ c4 --> -1
         let expr = binary_expr(
-            Expr::Negative(Box::new(col("c2_non_null").gt(lit(5)))),
+            Expr::Negative(Box::new(col("c4_non_null"))),
             Operator::BitwiseXor,
-            col("c2_non_null").gt(lit(5)),
+            col("c4_non_null"),
         );
         let expected = Expr::Literal(ScalarValue::Int32(Some(-1)));
 
         assert_eq!(simplify(expr), expected);
 
-        // (c2 > 5) ^ !(c2 > 5) --> -1
+        // c4 ^ !c4 --> -1
         let expr = binary_expr(
-            col("c2_non_null").gt(lit(5)),
+            col("c4_non_null"),
             Operator::BitwiseXor,
-            Expr::Negative(Box::new(col("c2_non_null").gt(lit(5)))),
+            Expr::Negative(Box::new(col("c4_non_null"))),
         );
         let expected = Expr::Literal(ScalarValue::Int32(Some(-1)));
 
@@ -2146,9 +2146,9 @@ mod tests {
 
     #[test]
     fn test_simplify_simple_bitwise_xor() {
-        // (c2 > 5) ^ (c2 > 5) -> 0
-        let expr = (col("c2").gt(lit(5))).bitwise_xor(col("c2").gt(lit(5)));
-        let expected = Expr::Literal(ScalarValue::Int32(Some(0)));
+        // c4 ^ c4 -> 0
+        let expr = (col("c4")).bitwise_xor(col("c4"));
+        let expected = Expr::Literal(ScalarValue::UInt32(Some(0)));
 
         assert_eq!(simplify(expr), expected);
 
@@ -2574,9 +2574,11 @@ mod tests {
                     DFField::new(None, "c1", DataType::Utf8, true),
                     DFField::new(None, "c2", DataType::Boolean, true),
                     DFField::new(None, "c3", DataType::Int64, true),
+                    DFField::new(None, "c4", DataType::UInt32, true),
                     DFField::new(None, "c1_non_null", DataType::Utf8, false),
                     DFField::new(None, "c2_non_null", DataType::Boolean, false),
                     DFField::new(None, "c3_non_null", DataType::Int64, false),
+                    DFField::new(None, "c4_non_null", DataType::UInt32, false),
                 ],
                 HashMap::new(),
             )

@@ -40,7 +40,7 @@ pub trait SimplifyInfo {
     fn execution_props(&self) -> &ExecutionProps;
 
     /// Returns data type of this expr needed for determining optimized int type of a value
-    fn get_data_type(&self, expr: &Expr) -> DataType;
+    fn get_data_type(&self, expr: &Expr) -> Result<DataType>;
 }
 
 /// Provides simplification information based on DFSchema and
@@ -127,14 +127,16 @@ impl<'a> SimplifyInfo for SimplifyContext<'a> {
     }
 
     /// Returns data type of this expr needed for determining optimized int type of a value
-    fn get_data_type(&self, expr: &Expr) -> DataType {
+    fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
         if self.schemas.len() == 1 {
             match expr.get_type(&self.schemas[0]) {
-                Ok(expr_data_type) => expr_data_type,
-                Err(_) => DataType::Int32,
+                Ok(expr_data_type) => Ok(expr_data_type),
+                Err(e) => Err(e),
             }
         } else {
-            DataType::Int32
+            Err(DataFusionError::Internal(format!(
+                "The expr has more than one schema, could not determine data type"
+            )))
         }
     }
 
