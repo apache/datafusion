@@ -71,35 +71,35 @@ select log(0) a, log(1, 64) b
 ----
 -Infinity Infinity
 
-# bitwise and with UInt types
+# bitwise and with column and scalar
 select c & 856 from t1;
 ----
 528
 88
 848
 
-# bitwise or with UInt types
+# bitwise or with column and scalar
 select c | 856 from t1;
 ----
 895
 891
 986
 
-# bitwise xor with UInt types
+# bitwise xor with column and scalar
 select c # 856 from t1;
 ----
 367
 803
 138
 
-# right shift with UInt types
+# right shift with column and scalar
 select d >> 2 from t1;
 ----
 256
 64
 512
 
-# left shift with UInt types
+# left shift with column and scalar
 select d << 2 from t1;
 ----
 4096
