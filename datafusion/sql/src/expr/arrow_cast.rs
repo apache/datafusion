@@ -100,7 +100,7 @@ pub fn parse_data_type(val: &str) -> Result<DataType> {
 
 fn make_error(val: &str, msg: &str) -> DataFusionError {
     DataFusionError::Plan(
-        format!("Unsupported type '{val}'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(Nanoseconds, None)'. Error {msg}" )
+        format!("Unsupported type '{val}'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(Nanosecond, None)'. Error {msg}" )
     )
 }
 
@@ -336,7 +336,7 @@ fn is_separator(c: char) -> bool {
 ///
 /// * Token::Timestamp
 /// * Token::Lparen
-/// * Token::IntervalUnit(IntervalUnit::Nanoseconds)
+/// * Token::IntervalUnit(IntervalUnit::Nanosecond)
 /// * Token::Comma,
 /// * Token::None,
 /// * Token::Rparen,
@@ -664,7 +664,7 @@ mod test {
                         "\n\ndid not find expected in actual.\n\nexpected: {expected_message}\nactual:{message}\n"
                     );
                     // errors should also contain  a help message
-                    assert!(message.contains("Must be a supported arrow type name such as 'Int32' or 'Timestamp(Nanoseconds, None)'"));
+                    assert!(message.contains("Must be a supported arrow type name such as 'Int32' or 'Timestamp(Nanosecond, None)'"));
                 }
             }
             println!(" Ok");
