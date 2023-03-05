@@ -68,3 +68,53 @@ query RR rowsort
 select log(0) a, log(1, 64) b
 ----
 -Infinity Infinity
+
+# bitwise and with UInt8 types
+select UInt8(567) & UInt8(856);
+----
+528
+
+# bitwise or with UInt8 types
+select UInt8(567) | UInt8(856);
+----
+895
+
+# bitwise xor with UInt8 types
+select UInt8(567) ^ UInt8(856);
+----
+367
+
+# right shift with UInt8 types
+select UInt8(1024) >> UInt8(2);
+----
+256
+
+# left shift with UInt8 types
+select UInt8(1024) << UInt8(2);
+----
+4096
+
+# bitwise and with UInt64 types
+select UInt64(567) & UInt64(856);
+----
+528
+
+# bitwise or with UInt64 types
+select UInt64(567) | UInt64(856);
+----
+895
+
+# bitwise xor with UInt64 types
+select UInt64(567) ^ UInt64(856);
+----
+367
+
+# right shift with UInt64 types
+select UInt64(1024) >> UInt64(2);
+----
+256
+
+# left shift with UInt64 types
+select UInt64(1024) << UInt64(2);
+----
+4096
