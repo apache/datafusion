@@ -805,19 +805,19 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 right: _,
             }) if is_null(&left) => *left,
 
-            // A | 0 -> A (if A not nullable)
+            // A | 0 -> A (even if A is null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: BitwiseOr,
                 right,
-            }) if !info.nullable(&left)? && is_zero(&right) => *left,
+            }) if is_zero(&right) => *left,
 
-            // 0 | A -> A (if A not nullable)
+            // 0 | A -> A (even if A is null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: BitwiseOr,
                 right,
-            }) if !info.nullable(&right)? && is_zero(&left) => *right,
+            }) if is_zero(&left) => *right,
 
             // !A | A -> -1 (if A not nullable)
             Expr::BinaryExpr(BinaryExpr {
@@ -965,12 +965,12 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 right: _,
             }) if is_null(&left) => *left,
 
-            // A >> 0 -> A (if A not nullable)
+            // A >> 0 -> A (even if A is null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: BitwiseShiftRight,
                 right,
-            }) if !info.nullable(&left)? && is_zero(&right) => *left,
+            }) if is_zero(&right) => *left,
 
             //
             // Rules for BitwiseShiftRight
@@ -990,12 +990,12 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 right: _,
             }) if is_null(&left) => *left,
 
-            // A << 0 -> A (if A not nullable)
+            // A << 0 -> A (even if A is null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: BitwiseShiftLeft,
                 right,
-            }) if !info.nullable(&left)? && is_zero(&right) => *left,
+            }) if is_zero(&right) => *left,
 
             //
             // Rules for Not
