@@ -38,10 +38,7 @@ macro_rules! binary_bitwise_array_op {
                 if left.is_null(i) || right.is_null(i) {
                     None
                 } else {
-                    Some($METHOD(
-                        left.value(i).try_into().unwrap(),
-                        right.value(i).try_into().unwrap(),
-                    ))
+                    Some($METHOD(left.value(i), right.value(i)))
                 }
             })
             .collect::<$ARRAY_TYPE>();
@@ -140,7 +137,7 @@ pub(crate) fn bitwise_shift_right(left: ArrayRef, right: ArrayRef) -> Result<Arr
             binary_bitwise_array_op!(
                 left,
                 right,
-                |a: i64, b: i64| a.wrapping_shr((b as u64).try_into().unwrap()),
+                |a: i64, b: i64| a.wrapping_shr(b as u32),
                 Int64Array
             )
         }
@@ -246,7 +243,7 @@ pub(crate) fn bitwise_shift_left(left: ArrayRef, right: ArrayRef) -> Result<Arra
             binary_bitwise_array_op!(
                 left,
                 right,
-                |a: u64, b: u64| a.wrapping_shl(b.try_into().unwrap()),
+                |a: u64, b: u64| a.wrapping_shr(b.try_into().unwrap()),
                 UInt64Array
             )
         }
@@ -656,9 +653,9 @@ pub(crate) fn bitwise_shift_right_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u64, b: u64| a.wrapping_shr(b.try_into().unwrap()),
+                |a: u64, b: u32| a.wrapping_shr(b),
                 UInt64Array,
-                u64
+                u32
             )
         }
         other => Err(DataFusionError::Internal(format!(
@@ -742,9 +739,9 @@ pub(crate) fn bitwise_shift_left_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u64, b: u64| a.wrapping_shl(b.try_into().unwrap()),
+                |a: u64, b: u32| a.wrapping_shr(b),
                 UInt64Array,
-                u64
+                u32
             )
         }
         other => Err(DataFusionError::Internal(format!(
