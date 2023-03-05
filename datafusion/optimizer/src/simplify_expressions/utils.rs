@@ -220,21 +220,6 @@ pub fn is_negative_of(not_expr: &Expr, expr: &Expr) -> bool {
     matches!(not_expr, Expr::Negative(inner) if expr == inner.as_ref())
 }
 
-/// Returns a new int type based on data type of an expression
-pub fn new_int_by_expr_data_type(val: i64, expr_data_type: &DataType) -> Expr {
-    match expr_data_type {
-        DataType::Int8 => Expr::Literal(ScalarValue::Int8(Some(val.try_into().unwrap()))),
-        DataType::Int16 => {
-            Expr::Literal(ScalarValue::Int16(Some(val.try_into().unwrap())))
-        }
-        DataType::Int32 => {
-            Expr::Literal(ScalarValue::Int32(Some(val.try_into().unwrap())))
-        }
-        DataType::Int64 => Expr::Literal(ScalarValue::Int64(Some(val))),
-        _ => Expr::Literal(ScalarValue::Int32(Some(val.try_into().unwrap()))),
-    }
-}
-
 /// returns the contained boolean value in `expr` as
 /// `Expr::Literal(ScalarValue::Boolean(v))`.
 pub fn as_bool_lit(expr: Expr) -> Result<Option<bool>> {

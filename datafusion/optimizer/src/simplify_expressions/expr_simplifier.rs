@@ -743,7 +743,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: BitwiseAnd,
                 right,
             }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
-                new_int_by_expr_data_type(0, &info.get_data_type(&left))
+                ScalarValue::new_zero(&info.get_data_type(&left))
             }
 
             // A & !A -> 0 (if A not nullable)
@@ -752,7 +752,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: BitwiseAnd,
                 right,
             }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
-                new_int_by_expr_data_type(0, &info.get_data_type(&left))
+                ScalarValue::new_zero(&info.get_data_type(&left))
             }
 
             // (..A..) & A --> (..A..)
@@ -825,7 +825,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: BitwiseOr,
                 right,
             }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
-                new_int_by_expr_data_type(-1, &info.get_data_type(&left))
+                ScalarValue::new_negative_one(&info.get_data_type(&left))
             }
 
             // A | !A -> -1 (if A not nullable)
@@ -834,7 +834,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: BitwiseOr,
                 right,
             }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
-                new_int_by_expr_data_type(-1, &info.get_data_type(&left))
+                ScalarValue::new_negative_one(&info.get_data_type(&left))
             }
 
             // (..A..) | A --> (..A..)
@@ -907,7 +907,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: BitwiseXor,
                 right,
             }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
-                new_int_by_expr_data_type(-1, &info.get_data_type(&left))
+                ScalarValue::new_negative_one(&info.get_data_type(&left))
             }
 
             // A ^ !A -> -1 (if A not nullable)
@@ -916,7 +916,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: BitwiseXor,
                 right,
             }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
-                new_int_by_expr_data_type(-1, &info.get_data_type(&left))
+                ScalarValue::new_negative_one(&info.get_data_type(&left))
             }
 
             // (..A..) ^ A --> (the expression without A, if number of A is odd, otherwise one A)
@@ -927,7 +927,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             }) if expr_contains(&left, &right, BitwiseXor) => {
                 let expr = delete_xor_in_complex_expr(&left, &right, false);
                 if expr == *right {
-                    new_int_by_expr_data_type(0, &info.get_data_type(&right))
+                    ScalarValue::new_zero(&info.get_data_type(&right))
                 } else {
                     expr
                 }
@@ -941,7 +941,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             }) if expr_contains(&right, &left, BitwiseXor) => {
                 let expr = delete_xor_in_complex_expr(&right, &left, true);
                 if expr == *left {
-                    new_int_by_expr_data_type(0, &info.get_data_type(&left))
+                    ScalarValue::new_zero(&info.get_data_type(&left))
                 } else {
                     expr
                 }
