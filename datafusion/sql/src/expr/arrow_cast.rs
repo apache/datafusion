@@ -216,7 +216,7 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::LParen)?;
         let time_unit = self.parse_time_unit("Timestamp")?;
         self.expect_token(Token::Comma)?;
-        // TODO Support timezones other than Non
+        // TODO Support timezones other than None
         self.expect_token(Token::None)?;
         let timezone = None;
 
