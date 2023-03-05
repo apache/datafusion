@@ -29,6 +29,13 @@ CREATE TABLE t1(
   (3, 10000)
 ;
 
+CREATE TABLE t2(
+  c INT,
+  d INT
+) as VALUES
+  (567, 1024)
+;
+
 # log scalar function
 query RR rowsort
 select log(2, 64) a, log(100) b union all select log(2, 8), log(10);
@@ -69,52 +76,27 @@ select log(0) a, log(1, 64) b
 ----
 -Infinity Infinity
 
-# bitwise and with UInt8 types
-select UInt8(567) & UInt8(856);
+# bitwise and with UInt types
+select c & 856 from t2;
 ----
 528
 
-# bitwise or with UInt8 types
-select UInt8(567) | UInt8(856);
+# bitwise or with UInt types
+select c | 856 from t2;
 ----
 895
 
-# bitwise xor with UInt8 types
-select UInt8(567) ^ UInt8(856);
+# bitwise xor with UInt types
+select c # 856 from t2;
 ----
 367
 
-# right shift with UInt8 types
-select UInt8(1024) >> UInt8(2);
+# right shift with UInt types
+select d >> 2 from t2;
 ----
 256
 
-# left shift with UInt8 types
-select UInt8(1024) << UInt8(2);
-----
-4096
-
-# bitwise and with UInt64 types
-select UInt64(567) & UInt64(856);
-----
-528
-
-# bitwise or with UInt64 types
-select UInt64(567) | UInt64(856);
-----
-895
-
-# bitwise xor with UInt64 types
-select UInt64(567) ^ UInt64(856);
-----
-367
-
-# right shift with UInt64 types
-select UInt64(1024) >> UInt64(2);
-----
-256
-
-# left shift with UInt64 types
-select UInt64(1024) << UInt64(2);
+# left shift with UInt types
+select d << 2 from t2;
 ----
 4096
