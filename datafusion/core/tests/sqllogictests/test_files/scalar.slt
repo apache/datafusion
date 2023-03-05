@@ -72,36 +72,41 @@ select log(0) a, log(1, 64) b
 -Infinity Infinity
 
 # bitwise and with column and scalar
+query I rowsort
 select c & 856 from t1;
 ----
 528
-88
 848
+88
 
 # bitwise or with column and scalar
+query I rowsort
 select c | 856 from t1;
 ----
-895
 891
+895
 986
 
 # bitwise xor with column and scalar
-select c # 856 from t1;
+query I rowsort
+select c ^ 856 from t1;
 ----
+138
 367
 803
-138
 
 # right shift with column and scalar
+query I rowsort
 select d >> 2 from t1;
 ----
 256
-64
 512
+64
 
 # left shift with column and scalar
+query I rowsort
 select d << 2 from t1;
 ----
-4096
 1024
+4096
 8192
