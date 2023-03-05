@@ -634,3 +634,129 @@ trait Visit {
 
     fn none(&mut self, key: &str, description: &'static str);
 }
+
+/// Convenience macro to create [`ExtensionsOptions`].
+///
+/// The created structure implements the following traits:
+///
+/// - [`Clone`]
+/// - [`Debug`]
+/// - [`Default`]
+/// - [`ExtensionOptions`]
+///
+/// # Usage
+/// The syntax is:
+///
+/// ```text
+/// extensions_options! {
+///      /// Struct docs (optional).
+///     [<vis>] struct <StructName> {
+///         /// Field docs (optional)
+///         [<vis>] <field_name>: <field_type>, default = <default_value>
+///
+///         ... more fields
+///     }
+/// }
+/// ```
+///
+/// The placeholders are:
+/// - `[<vis>]`: Optional visibility modifier like `pub` or `pub(crate)`.
+/// - `<StructName>`: Struct name like `MyStruct`.
+/// - `<field_name>`: Field name like `my_field`.
+/// - `<field_type>`: Field type like `u8`.
+/// - `<default_value>`: Default value matching the field type like `42`.
+///
+/// # Example
+/// ```
+/// use datafusion_common::extensions_options;
+///
+/// extensions_options! {
+///     /// My own config options.
+///     pub struct MyConfig {
+///         /// Should "foo" be replaced by "bar"?
+///         pub foo_to_bar: bool, default = true
+///
+///         /// How many "baz" should be created?
+///         pub baz_count: usize, default = 1337
+///     }
+/// }
+/// ```
+///
+///
+/// [`Debug`]: std::fmt::Debug
+/// [`ExtensionsOptions`]: crate::config::ExtensionsOptions
+#[macro_export]
+macro_rules! extensions_options {
+    (
+     $(#[doc = $struct_d:tt])*
+     $vis:vis struct $struct_name:ident {
+        $(
+        $(#[doc = $d:tt])*
+        $field_vis:vis $field_name:ident : $field_type:ty, default = $default:expr
+        )*$(,)*
+    }
+    ) => {
+        $(#[doc = $struct_d])*
+        #[derive(Debug, Clone)]
+        #[non_exhaustive]
+        $vis struct $struct_name{
+            $(
+            $(#[doc = $d])*
+            $field_vis $field_name : $field_type,
+            )*
+        }
+
+        impl Default for $struct_name {
+            fn default() -> Self {
+                Self {
+                    $($field_name: $default),*
+                }
+            }
+        }
+
+        impl $crate::config::ExtensionOptions for $struct_name {
+            fn as_any(&self) -> &dyn ::std::any::Any {
+                self
+            }
+
+            fn as_any_mut(&mut self) -> &mut dyn ::std::any::Any {
+                self
+            }
+
+            fn cloned(&self) -> Box<dyn $crate::config::ExtensionOptions> {
+                Box::new(self.clone())
+            }
+
+            fn set(&mut self, key: &str, value: &str) -> $crate::Result<()> {
+                match key {
+                    $(
+                       stringify!($field_name) => {
+                        self.$field_name = value.parse().map_err(|e| {
+                            $crate::DataFusionError::Context(
+                                format!(concat!("Error parsing {} as ", stringify!($t),), value),
+                                Box::new($crate::DataFusionError::External(Box::new(e))),
+                            )
+                        })?;
+                        Ok(())
+                       }
+                    )*
+                    _ => Err($crate::DataFusionError::Internal(
+                        format!(concat!("Config value \"{}\" not found on ", stringify!($struct_name)), key)
+                    ))
+                }
+            }
+
+            fn entries(&self) -> Vec<$crate::config::ConfigEntry> {
+                vec![
+                    $(
+                        $crate::config::ConfigEntry {
+                            key: stringify!($field_name).to_owned(),
+                            value: (self.$field_name != $default).then(|| self.$field_name.to_string()),
+                            description: concat!($($d),*).trim(),
+                        },
+                    )*
+                ]
+            }
+        }
+    }
+}

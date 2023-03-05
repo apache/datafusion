@@ -115,7 +115,7 @@ async fn get_exec(
                 output_ordering: None,
                 infinite_source: false,
             },
-            &[],
+            None,
         )
         .await?;
     Ok(exec)

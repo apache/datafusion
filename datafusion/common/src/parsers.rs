@@ -26,7 +26,7 @@ const SECONDS_PER_HOUR: f64 = 3_600_f64;
 const NANOS_PER_SECOND: f64 = 1_000_000_000_f64;
 
 /// Readable file compression type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CompressionTypeVariant {
     /// Gzip-ed file
     GZIP,
@@ -34,6 +34,8 @@ pub enum CompressionTypeVariant {
     BZIP2,
     /// Xz-ed file (liblzma)
     XZ,
+    /// Zstd-ed file,
+    ZSTD,
     /// Uncompressed file
     UNCOMPRESSED,
 }
@@ -47,6 +49,7 @@ impl FromStr for CompressionTypeVariant {
             "GZIP" | "GZ" => Ok(Self::GZIP),
             "BZIP2" | "BZ2" => Ok(Self::BZIP2),
             "XZ" => Ok(Self::XZ),
+            "ZST" | "ZSTD" => Ok(Self::ZSTD),
             "" => Ok(Self::UNCOMPRESSED),
             _ => Err(ParserError::ParserError(format!(
                 "Unsupported file compression type {s}"
@@ -61,6 +64,7 @@ impl ToString for CompressionTypeVariant {
             Self::GZIP => "GZIP",
             Self::BZIP2 => "BZIP2",
             Self::XZ => "XZ",
+            Self::ZSTD => "ZSTD",
             Self::UNCOMPRESSED => "",
         }
         .to_string()

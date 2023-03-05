@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
+use crate::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_common::{DataFusionError, Result};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};

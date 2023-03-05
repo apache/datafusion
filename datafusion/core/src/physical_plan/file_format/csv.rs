@@ -345,7 +345,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn csv_exec_with_projection(
@@ -400,7 +401,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn csv_exec_with_mixed_order_projection(
@@ -455,7 +457,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn csv_exec_with_limit(
@@ -510,7 +513,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn csv_exec_with_missing_column(
@@ -553,7 +557,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn csv_exec_with_partition(
@@ -688,7 +693,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn test_chunked_csv(

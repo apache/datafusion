@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 use std::{any::Any, vec};
 
 use crate::error::{DataFusionError, Result};
-use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use crate::execution::memory_pool::MemoryConsumer;
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::repartition::distributor_channels::channels;
 use crate::physical_plan::{
@@ -37,7 +37,7 @@ use log::debug;
 
 use self::distributor_channels::{DistributionReceiver, DistributionSender};
 
-use super::common::{AbortOnDropMany, AbortOnDropSingle};
+use super::common::{AbortOnDropMany, AbortOnDropSingle, SharedMemoryReservation};
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream};
@@ -53,7 +53,6 @@ use tokio::task::JoinHandle;
 mod distributor_channels;
 
 type MaybeBatch = Option<Result<RecordBatch>>;
-type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
 
 /// Inner state of [`RepartitionExec`].
 #[derive(Debug)]
