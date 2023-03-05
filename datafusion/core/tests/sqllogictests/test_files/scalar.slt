@@ -22,18 +22,13 @@
 statement ok
 CREATE TABLE t1(
   a INT,
-  b INT
-) as VALUES
-  (1, 100), 
-  (2, 1000), 
-  (3, 10000)
-;
-
-CREATE TABLE t2(
+  b INT,
   c INT,
   d INT
 ) as VALUES
-  (567, 1024)
+  (1, 100, 567, 1024), 
+  (2, 1000, 123, 256), 
+  (3, 10000, 978, 2048)
 ;
 
 # log scalar function
@@ -77,26 +72,36 @@ select log(0) a, log(1, 64) b
 -Infinity Infinity
 
 # bitwise and with UInt types
-select c & 856 from t2;
+select c & 856 from t1;
 ----
 528
+88
+848
 
 # bitwise or with UInt types
-select c | 856 from t2;
+select c | 856 from t1;
 ----
 895
+891
+986
 
 # bitwise xor with UInt types
-select c # 856 from t2;
+select c # 856 from t1;
 ----
 367
+803
+138
 
 # right shift with UInt types
-select d >> 2 from t2;
+select d >> 2 from t1;
 ----
 256
+64
+512
 
 # left shift with UInt types
-select d << 2 from t2;
+select d << 2 from t1;
 ----
 4096
+1024
+8192
