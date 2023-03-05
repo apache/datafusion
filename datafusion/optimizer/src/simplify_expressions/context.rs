@@ -134,9 +134,10 @@ impl<'a> SimplifyInfo for SimplifyContext<'a> {
                 Err(e) => Err(e),
             }
         } else {
-            Err(DataFusionError::Internal(format!(
+            Err(DataFusionError::Internal(
                 "The expr has more than one schema, could not determine data type"
-            )))
+                    .to_string(),
+            ))
         }
     }
 
