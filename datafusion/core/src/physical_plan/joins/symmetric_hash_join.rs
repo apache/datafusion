@@ -249,7 +249,7 @@ impl SymmetricHashJoinExec {
         on: JoinOn,
         filter: JoinFilter,
         join_type: &JoinType,
-        null_equals_null: &bool,
+        null_equals_null: bool,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
@@ -349,7 +349,7 @@ impl SymmetricHashJoinExec {
             random_state,
             metrics: ExecutionPlanMetricsSet::new(),
             column_indices,
-            null_equals_null: *null_equals_null,
+            null_equals_null: null_equals_null,
         })
     }
 
@@ -379,8 +379,8 @@ impl SymmetricHashJoinExec {
     }
 
     /// Get null_equals_null
-    pub fn null_equals_null(&self) -> &bool {
-        &self.null_equals_null
+    pub fn null_equals_null(&self) -> bool {
+        self.null_equals_null
     }
 }
 
@@ -472,7 +472,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             self.on.clone(),
             self.filter.clone(),
             &self.join_type,
-            &self.null_equals_null,
+            self.null_equals_null,
         )?))
     }
 
@@ -1054,7 +1054,7 @@ impl OneSideHashJoiner {
         probe_offset: usize,
         column_indices: &[ColumnIndex],
         random_state: &RandomState,
-        null_equals_null: &bool,
+        null_equals_null: bool,
     ) -> Result<Option<RecordBatch>> {
         if self.input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
             return Ok(Some(RecordBatch::new_empty(schema.clone())));
@@ -1371,7 +1371,7 @@ impl SymmetricHashJoinStream {
                         probe_hash_joiner.offset,
                         &self.column_indices,
                         &self.random_state,
-                        &self.null_equals_null,
+                        self.null_equals_null,
                     )?;
                     // Increment the offset for the probe hash joiner:
                     probe_hash_joiner.offset += probe_batch.num_rows();
@@ -1504,7 +1504,7 @@ mod tests {
             on,
             filter,
             join_type,
-            &null_equals_null,
+            null_equals_null,
         )?;
 
         let mut batches = vec![];
@@ -1551,7 +1551,7 @@ mod tests {
             Some(filter),
             join_type,
             PartitionMode::Partitioned,
-            &null_equals_null,
+            null_equals_null,
         )?;
 
         let mut batches = vec![];

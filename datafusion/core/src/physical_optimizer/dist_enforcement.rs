@@ -171,7 +171,7 @@ fn adjust_input_keys_ordering(
                             filter.clone(),
                             join_type,
                             PartitionMode::Partitioned,
-                            null_equals_null,
+                            *null_equals_null,
                         )?) as Arc<dyn ExecutionPlan>)
                     };
                 Ok(Some(reorder_partitioned_join_keys(
@@ -606,7 +606,7 @@ fn reorder_join_keys_to_inputs(
                             filter.clone(),
                             join_type,
                             PartitionMode::Partitioned,
-                            null_equals_null,
+                            *null_equals_null,
                         )?))
                     } else {
                         Ok(plan)

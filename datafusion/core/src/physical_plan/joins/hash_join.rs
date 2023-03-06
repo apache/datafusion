@@ -201,7 +201,7 @@ impl HashJoinExec {
         filter: Option<JoinFilter>,
         join_type: &JoinType,
         partition_mode: PartitionMode,
-        null_equals_null: &bool,
+        null_equals_null: bool,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
@@ -230,7 +230,7 @@ impl HashJoinExec {
             mode: partition_mode,
             metrics: ExecutionPlanMetricsSet::new(),
             column_indices,
-            null_equals_null: *null_equals_null,
+            null_equals_null,
         })
     }
 
@@ -265,8 +265,8 @@ impl HashJoinExec {
     }
 
     /// Get null_equals_null
-    pub fn null_equals_null(&self) -> &bool {
-        &self.null_equals_null
+    pub fn null_equals_null(&self) -> bool {
+        self.null_equals_null
     }
 }
 
@@ -402,7 +402,7 @@ impl ExecutionPlan for HashJoinExec {
             self.filter.clone(),
             &self.join_type,
             self.mode,
-            &self.null_equals_null,
+            self.null_equals_null,
         )?))
     }
 
@@ -691,7 +691,7 @@ pub fn build_join_indices(
     on_probe: &[Column],
     filter: Option<&JoinFilter>,
     random_state: &RandomState,
-    null_equals_null: &bool,
+    null_equals_null: bool,
     hashes_buffer: &mut Vec<u64>,
     offset: Option<usize>,
     build_side: JoinSide,
@@ -762,7 +762,7 @@ pub fn build_equal_condition_join_indices(
     build_on: &[Column],
     probe_on: &[Column],
     random_state: &RandomState,
-    null_equals_null: &bool,
+    null_equals_null: bool,
     hashes_buffer: &mut Vec<u64>,
     offset: Option<usize>,
 ) -> Result<(UInt64Array, UInt32Array)> {
@@ -804,7 +804,7 @@ pub fn build_equal_condition_join_indices(
                     row,
                     &build_join_values,
                     &keys_values,
-                    *null_equals_null,
+                    null_equals_null,
                 )? {
                     build_indices.append(offset_build_index as u64);
                     probe_indices.append(row as u32);
@@ -1207,7 +1207,7 @@ impl HashJoinStream {
                         &self.on_right,
                         self.filter.as_ref(),
                         &self.random_state,
-                        &self.null_equals_null,
+                        self.null_equals_null,
                         &mut hashes_buffer,
                         None,
                         JoinSide::Left,
