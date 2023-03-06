@@ -536,7 +536,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     filter,
                     &join_type.into(),
                     partition_mode,
-                    &hashjoin.null_equals_null,
+                    hashjoin.null_equals_null,
                 )?))
             }
             PhysicalPlanType::Union(union) => {
@@ -827,7 +827,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         on,
                         join_type: join_type.into(),
                         partition_mode: partition_mode.into(),
-                        null_equals_null: *exec.null_equals_null(),
+                        null_equals_null: exec.null_equals_null(),
                         filter,
                     },
                 ))),
