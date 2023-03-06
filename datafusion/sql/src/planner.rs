@@ -319,6 +319,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // precision is not supported
             | SQLDataType::Time(Some(_), _)
             | SQLDataType::Dec(_)
+            | SQLDataType::BigNumeric(_)
+            | SQLDataType::BigDecimal(_)
             | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL type {sql_type:?}"
             ))),
