@@ -1296,7 +1296,7 @@ impl ScalarValue {
         }
 
         macro_rules! build_array_primitive_tz {
-            ($ARRAY_TY:ident, $SCALAR_TY:ident) => {{
+            ($ARRAY_TY:ident, $SCALAR_TY:ident, $TZ:expr) => {{
                 {
                     let array = scalars.map(|sv| {
                         if let ScalarValue::$SCALAR_TY(v, _) = sv {
@@ -1310,7 +1310,7 @@ impl ScalarValue {
                         }
                     })
                     .collect::<Result<$ARRAY_TY>>()?;
-                    Arc::new(array)
+                    Arc::new(array.with_timezone_opt($TZ.clone()))
                 }
             }};
         }
@@ -1444,17 +1444,29 @@ impl ScalarValue {
             DataType::Time64(TimeUnit::Nanosecond) => {
                 build_array_primitive!(Time64NanosecondArray, Time64Nanosecond)
             }
-            DataType::Timestamp(TimeUnit::Second, _) => {
-                build_array_primitive_tz!(TimestampSecondArray, TimestampSecond)
+            DataType::Timestamp(TimeUnit::Second, tz) => {
+                build_array_primitive_tz!(TimestampSecondArray, TimestampSecond, tz)
             }
-            DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                build_array_primitive_tz!(TimestampMillisecondArray, TimestampMillisecond)
+            DataType::Timestamp(TimeUnit::Millisecond, tz) => {
+                build_array_primitive_tz!(
+                    TimestampMillisecondArray,
+                    TimestampMillisecond,
+                    tz
+                )
             }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                build_array_primitive_tz!(TimestampMicrosecondArray, TimestampMicrosecond)
+            DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+                build_array_primitive_tz!(
+                    TimestampMicrosecondArray,
+                    TimestampMicrosecond,
+                    tz
+                )
             }
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                build_array_primitive_tz!(TimestampNanosecondArray, TimestampNanosecond)
+            DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+                build_array_primitive_tz!(
+                    TimestampNanosecondArray,
+                    TimestampNanosecond,
+                    tz
+                )
             }
             DataType::Interval(IntervalUnit::DayTime) => {
                 build_array_primitive!(IntervalDayTimeArray, IntervalDayTime)
