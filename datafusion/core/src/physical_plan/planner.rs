@@ -2403,6 +2403,10 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
             self
         }
 
+        fn name(&self) -> &str {
+            "NoOp"
+        }
+
         fn inputs(&self) -> Vec<&LogicalPlan> {
             vec![]
         }
