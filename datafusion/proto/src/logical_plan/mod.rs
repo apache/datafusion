@@ -1665,6 +1665,10 @@ mod roundtrip_tests {
             self
         }
 
+        fn name(&self) -> &str {
+            "TopK"
+        }
+
         fn inputs(&self) -> Vec<&LogicalPlan> {
             vec![&self.input]
         }
