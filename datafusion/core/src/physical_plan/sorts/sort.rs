@@ -1190,25 +1190,47 @@ async fn do_sort(
         (1, None) | (_, Some(_)) => false,
         _ => true,
     });
-    // single batch case has a different code path (no merging required) and
-    // row encoding seems to hurt performance on that path.
-    // dont immediately insert first batch
-    // if its the only batch seen, then we dont use row encoding
-    let mut first_batch = None as Option<RecordBatch>;
-    while let Some(batch) = input.next().await {
-        let batch = batch?;
-        // sorter.insert_batch(batch, &tracking_metrics).await?;
-        if first_batch.is_none() {
-            first_batch = Some(batch);
-        } else {
+    if sorter.use_row_encoding {
+        // wait til more than 1 batch is seen before inserting the first batch
+        // (still maintains the order, just inserts first 2 batches together).
+        // then if theres only a single batch to sort, we dont use row encoding
+        let mut first_batch = Vec::with_capacity(1);
+        let mut inserted_first = false;
+        while let Some(batch) = input.next().await {
+            let batch = batch?;
+            match (inserted_first, first_batch.is_empty()) {
+                (false, true) => {
+                    first_batch.push(batch);
+                }
+                (false, false) => {
+                    // maintain batch insertion order
+                    sorter
+                        .insert_batch(first_batch.pop().unwrap(), &tracking_metrics)
+                        .await?;
+                    sorter.insert_batch(batch, &tracking_metrics).await?;
+                    inserted_first = true;
+                }
+                (true, true) => {
+                    sorter.insert_batch(batch, &tracking_metrics).await?;
+                }
+                (true, false) => {
+                    unreachable!()
+                }
+            }
+        }
+        if !inserted_first && !first_batch.is_empty() {
+            // only one batch was inserted, dont use row encoding
+            sorter.set_use_row_encoding(false);
+            assert!(!sorter.spilled_before());
+            assert!(sorter.in_mem_batches.is_empty());
+            let batch = first_batch.pop().unwrap();
             sorter.insert_batch(batch, &tracking_metrics).await?;
         }
-    }
-    if let Some(batch) = first_batch {
-        if sorter.in_mem_batches.is_empty() && !sorter.spilled_before() {
-            sorter.set_use_row_encoding(false);
+    } else {
+        while let Some(batch) = input.next().await {
+            let batch = batch?;
+            sorter.insert_batch(batch, &tracking_metrics).await?;
         }
-        sorter.insert_batch(batch, &tracking_metrics).await?;
     }
     let result = sorter.sort();
 
