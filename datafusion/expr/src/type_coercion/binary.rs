@@ -17,7 +17,7 @@
 
 //! Coercion rules for matching argument types for binary operators
 
-use crate::type_coercion::{is_date, is_numeric, is_timestamp};
+use crate::type_coercion::{is_date, is_interval, is_numeric, is_timestamp};
 use crate::Operator;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
@@ -114,22 +114,12 @@ pub fn coerce_types(
         | Operator::GtEq
         | Operator::LtEq => comparison_coercion(lhs_type, rhs_type),
         Operator::Plus | Operator::Minus
-            if is_date(lhs_type) || is_timestamp(lhs_type) =>
+            if is_date(lhs_type)
+                || is_date(rhs_type)
+                || is_timestamp(lhs_type)
+                || is_timestamp(rhs_type) =>
         {
-            match rhs_type {
-                // timestamp/date +/- interval returns timestamp/date
-                DataType::Interval(_) => Some(lhs_type.clone()),
-                // providing more helpful error message
-                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
-                    return Err(DataFusionError::Plan(
-                        format!(
-                            "'{lhs_type:?} {op} {rhs_type:?}' is an unsupported operation. \
-                                addition/subtraction on dates/timestamps only supported with interval types"
-                        ),
-                    ));
-                }
-                _ => None,
-            }
+            temporal_add_sub_coercion(lhs_type, rhs_type, op)?
         }
         // for math expressions, the final value of the coercion is also the return type
         // because coercion favours higher information types
@@ -197,6 +187,35 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
         .or_else(|| string_numeric_coercion(lhs_type, rhs_type))
+}
+
+/// Return the output type from performing addition or subtraction operations on temporal data types
+pub fn temporal_add_sub_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    op: &Operator,
+) -> Result<Option<DataType>> {
+    // interval +  date or timestamp
+    if is_interval(lhs_type) && (is_date(rhs_type) || is_timestamp(rhs_type)) {
+        return Ok(Some(rhs_type.clone()));
+    }
+
+    // date or timestamp + interval
+    if is_interval(rhs_type) && (is_date(lhs_type) || is_timestamp(lhs_type)) {
+        return Ok(Some(lhs_type.clone()));
+    }
+
+    // date or timestamp + date or timestamp
+    if (is_date(lhs_type) || is_timestamp(lhs_type))
+        && (is_date(rhs_type) || is_timestamp(rhs_type))
+    {
+        return Err(DataFusionError::Plan(
+                        format!(
+                            "'{lhs_type:?} {op} {rhs_type:?}' is an unsupported operation. \
+                                addition/subtraction on dates/timestamps only supported with interval types"
+                        ),));
+    }
+    Ok(None)
 }
 
 /// Returns the output type of applying numeric operations such as `=`
