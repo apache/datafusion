@@ -397,11 +397,10 @@ impl ConfigOptions {
         Self::default()
     }
 
-    /// Creates a new [`ConfigOptions`] with extensions set to provided value
-    pub fn with_extensions(extensions: Extensions) -> Self {
-        let mut config = Self::new();
-        config.extensions = extensions;
-        config
+    /// Set extensions to provided value
+    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions = extensions;
+        self
     }
 
     /// Set a configuration option
