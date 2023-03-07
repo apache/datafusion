@@ -318,7 +318,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/tpch-csv/customer.csv", CsvReadOptions::new()).await?;    
+    /// let df = ctx.read_csv("tests/tpch-csv/customer.csv", CsvReadOptions::new()).await?;
     /// df.describe().await.unwrap();
     ///
     /// # Ok(())
@@ -942,7 +942,8 @@ impl DataFrame {
     /// Write a `DataFrame` to a CSV file.
     pub async fn write_csv(self, path: &str) -> Result<()> {
         let plan = self.session_state.create_physical_plan(&self.plan).await?;
-        plan_to_csv(&self.session_state, plan, path).await
+        let task_ctx = Arc::new(self.task_ctx());
+        plan_to_csv(task_ctx, plan, path).await
     }
 
     /// Write a `DataFrame` to a Parquet file.
@@ -952,13 +953,15 @@ impl DataFrame {
         writer_properties: Option<WriterProperties>,
     ) -> Result<()> {
         let plan = self.session_state.create_physical_plan(&self.plan).await?;
-        plan_to_parquet(&self.session_state, plan, path, writer_properties).await
+        let task_ctx = Arc::new(self.task_ctx());
+        plan_to_parquet(task_ctx, plan, path, writer_properties).await
     }
 
     /// Executes a query and writes the results to a partitioned JSON file.
     pub async fn write_json(self, path: impl AsRef<str>) -> Result<()> {
         let plan = self.session_state.create_physical_plan(&self.plan).await?;
-        plan_to_json(&self.session_state, plan, path).await
+        let task_ctx = Arc::new(self.task_ctx());
+        plan_to_json(task_ctx, plan, path).await
     }
 
     /// Add an additional column to the DataFrame.

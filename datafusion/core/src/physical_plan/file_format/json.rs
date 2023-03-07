@@ -18,7 +18,6 @@
 //! Execution plan for reading line-delimited JSON files
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::error::{DataFusionError, Result};
-use crate::execution::context::SessionState;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::file_format::file_stream::{
@@ -224,7 +223,7 @@ impl FileOpener for JsonOpener {
 }
 
 pub async fn plan_to_json(
-    state: &SessionState,
+    task_ctx: Arc<TaskContext>,
     plan: Arc<dyn ExecutionPlan>,
     path: impl AsRef<str>,
 ) -> Result<()> {
@@ -244,8 +243,7 @@ pub async fn plan_to_json(
         let path = fs_path.join(filename);
         let file = fs::File::create(path)?;
         let mut writer = json::LineDelimitedWriter::new(file);
-        let task_ctx = Arc::new(TaskContext::from(state));
-        let stream = plan.execute(i, task_ctx)?;
+        let stream = plan.execute(i, task_ctx.clone())?;
         let handle: JoinHandle<Result<()>> = task::spawn(async move {
             stream
                 .map(|batch| writer.write(batch?))
@@ -277,6 +275,7 @@ mod tests {
     use crate::datasource::file_format::{json::JsonFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::execution::context::SessionState;
     use crate::physical_plan::file_format::chunked_store::ChunkedStore;
     use crate::prelude::NdJsonReadOptions;
     use crate::prelude::*;
