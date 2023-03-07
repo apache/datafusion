@@ -18,7 +18,11 @@
 //! SessionContext contains methods for registering data sources and executing queries
 use crate::{
     catalog::catalog::{CatalogList, MemoryCatalogList},
-    datasource::listing::{ListingOptions, ListingTable},
+    datasource::{
+        datasource::TableProviderFactory,
+        listing::{ListingOptions, ListingTable},
+        listing_table_factory::ListingTableFactory,
+    },
     datasource::{MemTable, ViewTable},
     logical_expr::{PlanType, ToStringifiedPlan},
     optimizer::optimizer::Optimizer,
@@ -276,6 +280,15 @@ impl SessionContext {
     /// Return the `session_id` of this Session
     pub fn session_id(&self) -> String {
         self.session_id.clone()
+    }
+
+    /// Return the [`TableFactoryProvider`] that is registered for the
+    /// specified file type, if any.
+    pub fn table_factory(
+        &self,
+        file_type: &str,
+    ) -> Option<Arc<dyn TableProviderFactory>> {
+        self.state.read().table_factories().get(file_type).cloned()
     }
 
     /// Return the `enable_ident_normalization` of this Session
@@ -579,16 +592,16 @@ impl SessionContext {
     ) -> Result<Arc<dyn TableProvider>> {
         let state = self.state.read().clone();
         let file_type = cmd.file_type.to_uppercase();
-        let factory = &state
-            .runtime_env
-            .table_factories
-            .get(file_type.as_str())
-            .ok_or_else(|| {
-                DataFusionError::Execution(format!(
-                    "Unable to find factory for {}",
-                    cmd.file_type
-                ))
-            })?;
+        let factory =
+            &state
+                .table_factories
+                .get(file_type.as_str())
+                .ok_or_else(|| {
+                    DataFusionError::Execution(format!(
+                        "Unable to find factory for {}",
+                        cmd.file_type
+                    ))
+                })?;
         let table = (*factory).create(&state, cmd).await?;
         Ok(table)
     }
@@ -1507,6 +1520,14 @@ pub struct SessionState {
     config: SessionConfig,
     /// Execution properties
     execution_props: ExecutionProps,
+    /// TableProviderFactories for different file formats.
+    ///
+    /// Maps strings like "JSON" to an instance of  [`TableProviderFactory`]
+    ///
+    /// This is used to create [`TableProvider`] instances for the
+    /// `CREATE EXTERNAL TABLE ... STORED AS <FORMAT>` for custom file
+    /// formats other than those built into DataFusion
+    table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
 }
@@ -1540,6 +1561,15 @@ impl SessionState {
     ) -> Self {
         let session_id = Uuid::new_v4().to_string();
 
+        // Create table_factories for all default formats
+        let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
+            HashMap::new();
+        table_factories.insert("PARQUET".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("CSV".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("JSON".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("NDJSON".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("AVRO".into(), Arc::new(ListingTableFactory::new()));
+
         if config.create_default_catalog_and_schema() {
             let default_catalog = MemoryCatalogProvider::new();
 
@@ -1550,7 +1580,12 @@ impl SessionState {
                 )
                 .expect("memory catalog provider can register schema");
 
-            Self::register_default_schema(&config, &runtime, &default_catalog);
+            Self::register_default_schema(
+                &config,
+                &table_factories,
+                &runtime,
+                &default_catalog,
+            );
 
             catalog_list.register_catalog(
                 config.config_options().catalog.default_catalog.clone(),
@@ -1619,11 +1654,13 @@ impl SessionState {
             config,
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
+            table_factories,
         }
     }
 
     fn register_default_schema(
         config: &SessionConfig,
+        table_factories: &HashMap<String, Arc<dyn TableProviderFactory>>,
         runtime: &Arc<RuntimeEnv>,
         default_catalog: &MemoryCatalogProvider,
     ) {
@@ -1650,7 +1687,7 @@ impl SessionState {
             Ok(store) => store,
             _ => return,
         };
-        let factory = match runtime.table_factories.get(format.as_str()) {
+        let factory = match table_factories.get(format.as_str()) {
             Some(factory) => factory,
             _ => return,
         };
@@ -1754,6 +1791,18 @@ impl SessionState {
     ) -> Self {
         self.physical_optimizers.push(optimizer_rule);
         self
+    }
+
+    /// Get the table factories
+    pub fn table_factories(&self) -> &HashMap<String, Arc<dyn TableProviderFactory>> {
+        &self.table_factories
+    }
+
+    /// Get the table factories
+    pub fn table_factories_mut(
+        &mut self,
+    ) -> &mut HashMap<String, Arc<dyn TableProviderFactory>> {
+        &mut self.table_factories
     }
 
     /// Convert a SQL string into an AST Statement
