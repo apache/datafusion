@@ -351,7 +351,13 @@ pub struct BoundedWindowAggStream {
     window_expr: Vec<Arc<dyn WindowExpr>>,
     partition_by_sort_keys: Vec<PhysicalSortExpr>,
     baseline_metrics: BaselineMetrics,
+    // Keeps the search mode for partition columns. this determines algorithm
+    // for how to group each partition.
     search_mode: PartitionSearchMode,
+    // Input ordering and partition by key ordering may not always same
+    // this vector stores the mapping between them.
+    // For instance, if input is ordered by a,b and window expression is
+    // PARTITION BY b,a this stores (1, 0).
     ordered_partition_by_indices: Vec<usize>,
     row_converter: RowConverter,
     random_state: RandomState,
@@ -362,6 +368,8 @@ fn convert_row_to_vec(
     row_converter: &RowConverter,
     last_row: &OwnedRow,
 ) -> Result<Vec<ScalarValue>> {
+    // TODO: Replace this with a more direct method. As far as I am aware this is not possible
+    //       with current API.
     let last_row_col = row_converter.convert_rows(vec![last_row.row()])?;
     get_row_at_idx(&last_row_col, 0)
 }
