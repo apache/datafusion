@@ -39,7 +39,7 @@ ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] 
 arrow = { version = "34.0.0", default-features = false }
 datafusion-common = { path = "../common", version = "19.0.0" }
 log = "^0.4"
-sqlparser = "0.30"
+sqlparser = "0.32"
 
 [dev-dependencies]
 ctor = "0.1.22"
