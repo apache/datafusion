@@ -1513,7 +1513,7 @@ mod tests {
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
             )?
-            .filter(col("a").lt_eq(lit(1i64)))?
+            .filter(col("test.a").lt_eq(lit(1i64)))?
             .build()?;
 
         // not part of the test, just good to know:
