@@ -30,6 +30,7 @@ use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
+use ahash::RandomState;
 use arrow::array::Array;
 use arrow::compute::{
     concat, concat_batches, lexicographical_partition_ranges, SortColumn,
@@ -54,15 +55,17 @@ use std::task::{Context, Poll};
 use crate::physical_optimizer::sort_enforcement::get_at_indices;
 use arrow::array::UInt64Builder;
 use arrow::datatypes::DataType;
-use arrow::row::{OwnedRow, RowConverter, SortField};
+use arrow::row::{OwnedRow, Row, RowConverter, Rows, SortField};
 use datafusion_common::utils::get_row_at_idx;
 use datafusion_expr::ColumnarValue;
+use datafusion_physical_expr::hash_utils::create_hashes;
 use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 use datafusion_physical_expr::window::{
     PartitionBatchState, PartitionBatches, PartitionWindowAggStates, WindowAggState,
     WindowState,
 };
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
+use hashbrown::raw::RawTable;
 use indexmap::IndexMap;
 use log::debug;
 
@@ -351,6 +354,7 @@ pub struct BoundedWindowAggStream {
     search_mode: PartitionSearchMode,
     ordered_partition_by_indices: Vec<usize>,
     row_converter: RowConverter,
+    random_state: RandomState,
 }
 
 // This functions converts OwnedRow to Vec<ScalarValue>.
@@ -594,6 +598,7 @@ impl BoundedWindowAggStream {
             search_mode,
             ordered_partition_by_indices,
             row_converter,
+            random_state: Default::default(),
         })
     }
 
@@ -882,22 +887,20 @@ impl BoundedWindowAggStream {
             PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted => {
                 let partition_bys =
                     self.evaluate_partition_by_column_values(record_batch)?;
-                // In PartiallySorted implementation we expect indices_map to remember insertion order
-                // hence we use IndexMap.
-                let mut indices_map = IndexMap::new();
-                // Calculate indices for each partition
+                // Convert columns to row format for efficient processing
                 let rows = self.row_converter.convert_columns(&partition_bys)?;
-                for idx in 0..rows.num_rows() {
-                    let row = rows.row(idx);
-                    let indices: &mut Vec<usize> =
-                        indices_map.entry(row.owned()).or_default();
-                    indices.push(idx);
-                }
+                // Calculate indices for each partition
+                let per_partition_indices = get_per_partition_indices(
+                    &partition_bys,
+                    record_batch,
+                    &rows,
+                    &self.random_state,
+                )?;
                 // Construct new record batch from the rows at the calculated indices for each partition.
-                for (partition_row, indices) in indices_map {
+                for (row, indices) in per_partition_indices.into_iter() {
                     let partition_batch =
                         get_record_batch_at_indices(record_batch, &indices)?;
-                    res.insert(partition_row, (partition_batch, indices));
+                    res.insert(row.owned(), (partition_batch, indices));
                 }
             }
         }
@@ -923,6 +926,31 @@ impl BoundedWindowAggStream {
             })
             .collect::<Result<Vec<ArrayRef>>>()
     }
+}
+
+fn get_per_partition_indices<'a>(
+    columns: &[ArrayRef],
+    batch: &RecordBatch,
+    rows: &'a Rows,
+    random_state: &RandomState,
+) -> Result<Vec<(Row<'a>, Vec<usize>)>> {
+    let mut batch_hashes = vec![0; batch.num_rows()];
+    create_hashes(columns, random_state, &mut batch_hashes)?;
+    let mut row_map: RawTable<(u64, usize)> = RawTable::with_capacity(0);
+    let mut res: Vec<(Row, Vec<usize>)> = vec![];
+    for (row_idx, hash) in batch_hashes.into_iter().enumerate() {
+        let entry = row_map.get_mut(hash, |(_hash, group_idx)| {
+            rows.row(row_idx) == res[*group_idx].0
+        });
+        match entry {
+            Some((_hash, group_idx)) => res[*group_idx].1.push(row_idx),
+            None => {
+                row_map.insert(hash, (hash, res.len()), |(hash, _group_index)| *hash);
+                res.push((rows.row(row_idx), vec![row_idx]));
+            }
+        }
+    }
+    Ok(res)
 }
 
 impl RecordBatchStream for BoundedWindowAggStream {
