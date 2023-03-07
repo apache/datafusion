@@ -26,7 +26,7 @@ use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ExprSchema,
-    OwnedTableReference, Result, TableReference, ToDFSchema,
+    Result, TableReference, ToDFSchema,
 };
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::logical_plan::builder::project;
@@ -415,7 +415,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let table_source = self
             .schema_provider
-            .get_table_provider((&table_ref).into())?;
+            .get_table_provider(table_ref)?;
 
         let schema = table_source.schema();
 
@@ -463,7 +463,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let schema = self.build_schema(columns)?;
 
         // External tables do not support schemas at the moment, so the name is just a table name
-        let name = OwnedTableReference::Bare { table: name };
+        let name = TableReference::Bare { table: name.into() };
 
         Ok(LogicalPlan::CreateExternalTable(PlanCreateExternalTable {
             schema: schema.to_dfschema_ref()?,
@@ -633,7 +633,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
         let provider = self
             .schema_provider
-            .get_table_provider((&table_ref).into())?;
+            .get_table_provider(table_ref.to_borrow())?;
         let schema = (*provider.schema()).clone();
         let schema = DFSchema::try_from(schema)?;
         let scan =
@@ -682,10 +682,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // Do a table lookup to verify the table exists
-        let table_name = self.object_name_to_table_reference(table_name)?;
+        let table_ref = self.object_name_to_table_reference(table_name)?;
         let provider = self
             .schema_provider
-            .get_table_provider((&table_name).into())?;
+            .get_table_provider(table_ref.to_borrow())?;
         let arrow_schema = (*provider.schema()).clone();
         let table_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
         let values = table_schema.fields().iter().map(|f| {
@@ -769,7 +769,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let source = project(source, exprs)?;
 
         let plan = LogicalPlan::Dml(DmlStatement {
-            table_name,
+            table_name: table_ref,
             table_schema,
             op: WriteOp::Update,
             input: Arc::new(source),
@@ -784,10 +784,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         source: Box<Query>,
     ) -> Result<LogicalPlan> {
         // Do a table lookup to verify the table exists
-        let table_name = self.object_name_to_table_reference(table_name)?;
+        let table_ref = self.object_name_to_table_reference(table_name)?;
         let provider = self
             .schema_provider
-            .get_table_provider((&table_name).into())?;
+            .get_table_provider(table_ref.to_borrow())?;
         let arrow_schema = (*provider.schema()).clone();
         let table_schema = DFSchema::try_from(arrow_schema)?;
 
@@ -858,7 +858,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let source = project(source, exprs)?;
 
         let plan = LogicalPlan::Dml(DmlStatement {
-            table_name,
+            table_name: table_ref,
             table_schema: Arc::new(table_schema),
             op: WriteOp::Insert,
             input: Arc::new(source),
@@ -895,7 +895,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let table_ref = self.object_name_to_table_reference(sql_table_name)?;
         let _ = self
             .schema_provider
-            .get_table_provider((&table_ref).into())?;
+            .get_table_provider(table_ref)?;
 
         // treat both FULL and EXTENDED as the same
         let select_list = if full || extended {
@@ -933,7 +933,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let table_ref = self.object_name_to_table_reference(sql_table_name)?;
         let _ = self
             .schema_provider
-            .get_table_provider((&table_ref).into())?;
+            .get_table_provider(table_ref)?;
 
         let query = format!(
             "SELECT table_catalog, table_schema, table_name, definition FROM information_schema.views WHERE {where_clause}"
@@ -946,12 +946,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Return true if there is a table provider available for "schema.table"
     fn has_table(&self, schema: &str, table: &str) -> bool {
-        let tables_reference = TableReference::Partial {
+        let table_ref = TableReference::Partial {
             schema: schema.into(),
             table: table.into(),
         };
         self.schema_provider
-            .get_table_provider(tables_reference)
+            .get_table_provider(table_ref)
             .is_ok()
     }
 }

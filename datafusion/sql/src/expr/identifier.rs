@@ -20,7 +20,7 @@ use crate::planner::{
 };
 use crate::utils::normalize_ident;
 use datafusion_common::{
-    Column, DFSchema, DataFusionError, OwnedTableReference, Result, ScalarValue,
+    Column, DFSchema, DataFusionError, TableReference, Result, ScalarValue,
 };
 use datafusion_expr::{Case, Expr, GetIndexedField};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
@@ -74,9 +74,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ids,
                 self.options.enable_ident_normalization,
             )? {
-                OwnedTableReference::Partial { schema, table } => (table, schema),
-                r @ OwnedTableReference::Bare { .. }
-                | r @ OwnedTableReference::Full { .. } => {
+                TableReference::Partial { schema, table } => (table, schema),
+                r @ TableReference::Bare { .. }
+                | r @ TableReference::Full { .. } => {
                     return Err(DataFusionError::Plan(format!(
                         "Unsupported compound identifier '{r:?}'",
                     )));
@@ -88,8 +88,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(_) => {
                     // found an exact match on a qualified name so this is a table.column identifier
                     Ok(Expr::Column(Column {
-                        relation: Some(relation),
-                        name,
+                        relation: Some(relation.into()),
+                        name: name.into(),
                     }))
                 }
                 Err(_) => {
@@ -99,13 +99,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         // Access to a field of a column which is a structure, example: SELECT my_struct.key
                         Ok(Expr::GetIndexedField(GetIndexedField::new(
                             Box::new(Expr::Column(field.qualified_column())),
-                            ScalarValue::Utf8(Some(name)),
+                            ScalarValue::Utf8(Some(name.into())),
                         )))
                     } else {
                         // table.column identifier
                         Ok(Expr::Column(Column {
-                            relation: Some(relation),
-                            name,
+                            relation: Some(relation.into()),
+                            name: name.into(),
                         }))
                     }
                 }

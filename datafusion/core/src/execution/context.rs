@@ -83,7 +83,7 @@ use crate::physical_plan::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_common::{OwnedTableReference, ScalarValue};
+use datafusion_common::ScalarValue;
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -1779,7 +1779,7 @@ impl SessionState {
     pub fn resolve_table_references(
         &self,
         statement: &datafusion_sql::parser::Statement,
-    ) -> Result<Vec<OwnedTableReference>> {
+    ) -> Result<Vec<TableReference<'static>>> {
         use crate::catalog::information_schema::INFORMATION_SCHEMA_TABLES;
         use datafusion_sql::parser::Statement as DFStatement;
         use sqlparser::ast::*;

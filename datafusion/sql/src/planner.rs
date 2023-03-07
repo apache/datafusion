@@ -28,7 +28,7 @@ use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{field_not_found, DFSchema, DataFusionError, Result};
-use datafusion_common::{OwnedTableReference, TableReference};
+use datafusion_common::{TableReference};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::utils::find_column_exprs;
 use datafusion_expr::TableSource;
@@ -327,7 +327,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn object_name_to_table_reference(
         &self,
         object_name: ObjectName,
-    ) -> Result<OwnedTableReference> {
+    ) -> Result<TableReference<'static>> {
         object_name_to_table_reference(
             object_name,
             self.options.enable_ident_normalization,
@@ -335,7 +335,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 }
 
-/// Create a [`OwnedTableReference`] after normalizing the specified ObjectName
+/// Create a [`TableReference`] after normalizing the specified ObjectName
 ///
 /// Examples
 /// ```text
@@ -348,7 +348,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 pub fn object_name_to_table_reference(
     object_name: ObjectName,
     enable_normalization: bool,
-) -> Result<OwnedTableReference> {
+) -> Result<TableReference<'static>> {
     // use destructure to make it clear no fields on ObjectName are ignored
     let ObjectName(idents) = object_name;
     idents_to_table_reference(idents, enable_normalization)
@@ -358,7 +358,7 @@ pub fn object_name_to_table_reference(
 pub(crate) fn idents_to_table_reference(
     idents: Vec<Ident>,
     enable_normalization: bool,
-) -> Result<OwnedTableReference> {
+) -> Result<TableReference<'static>> {
     struct IdentTaker(Vec<Ident>);
     /// take the next identifier from the back of idents, panic'ing if
     /// there are none left
@@ -374,21 +374,21 @@ pub(crate) fn idents_to_table_reference(
     match taker.0.len() {
         1 => {
             let table = taker.take(enable_normalization);
-            Ok(OwnedTableReference::Bare { table })
+            Ok(TableReference::Bare { table: table.into()})
         }
         2 => {
             let table = taker.take(enable_normalization);
             let schema = taker.take(enable_normalization);
-            Ok(OwnedTableReference::Partial { schema, table })
+            Ok(TableReference::Partial { schema: schema.into(), table: table.into() })
         }
         3 => {
             let table = taker.take(enable_normalization);
             let schema = taker.take(enable_normalization);
             let catalog = taker.take(enable_normalization);
-            Ok(OwnedTableReference::Full {
-                catalog,
-                schema,
-                table,
+            Ok(TableReference::Full {
+                catalog: catalog.into(),
+                schema: schema.into(),
+                table: table.into(),
             })
         }
         _ => Err(DataFusionError::Plan(format!(

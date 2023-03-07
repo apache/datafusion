@@ -33,8 +33,8 @@ use crate::{
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
-    ScalarValue,
+    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError,
+    ScalarValue, TableReference,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -1283,7 +1283,7 @@ pub struct CreateCatalogSchema {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DropTable {
     /// The table name
-    pub name: OwnedTableReference,
+    pub name: TableReference<'static>,
     /// If the table exists
     pub if_exists: bool,
     /// Dummy schema
@@ -1294,7 +1294,7 @@ pub struct DropTable {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DropView {
     /// The view name
-    pub name: OwnedTableReference,
+    pub name: TableReference<'static>,
     /// If the view exists
     pub if_exists: bool,
     /// Dummy schema
@@ -1570,7 +1570,7 @@ pub struct Union {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CreateMemoryTable {
     /// The table name
-    pub name: OwnedTableReference,
+    pub name: TableReference<'static>,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists
@@ -1583,7 +1583,7 @@ pub struct CreateMemoryTable {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CreateView {
     /// The table name
-    pub name: OwnedTableReference,
+    pub name: TableReference<'static>,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists
@@ -1598,7 +1598,7 @@ pub struct CreateExternalTable {
     /// The table schema
     pub schema: DFSchemaRef,
     /// The table name
-    pub name: OwnedTableReference,
+    pub name: TableReference<'static>,
     /// The physical location
     pub location: String,
     /// The file type of physical file
@@ -1660,7 +1660,7 @@ impl Display for WriteOp {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DmlStatement {
     /// The table name
-    pub table_name: OwnedTableReference,
+    pub table_name: TableReference<'static>,
     /// The schema of the table (must align with Rel input)
     pub table_schema: DFSchemaRef,
     /// The type of operation to perform

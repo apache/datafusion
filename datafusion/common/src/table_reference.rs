@@ -42,7 +42,7 @@ impl<'a> std::fmt::Display for ResolvedTableReference<'a> {
 }
 
 /// Represents a path to a table that may require further resolution
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TableReference<'a> {
     /// An unqualified table reference, e.g. "table"
     Bare {
@@ -67,74 +67,15 @@ pub enum TableReference<'a> {
     },
 }
 
-/// Represents a path to a table that may require further resolution
-/// that owns the underlying names
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum OwnedTableReference {
-    /// An unqualified table reference, e.g. "table"
-    Bare {
-        /// The table name
-        table: String,
-    },
-    /// A partially resolved table reference, e.g. "schema.table"
-    Partial {
-        /// The schema containing the table
-        schema: String,
-        /// The table name
-        table: String,
-    },
-    /// A fully resolved table reference, e.g. "catalog.schema.table"
-    Full {
-        /// The catalog (aka database) containing the table
-        catalog: String,
-        /// The schema containing the table
-        schema: String,
-        /// The table name
-        table: String,
-    },
-}
 
-impl OwnedTableReference {
-    /// Return a `TableReference` view of this `OwnedTableReference`
-    pub fn as_table_reference(&self) -> TableReference<'_> {
-        match self {
-            Self::Bare { table } => TableReference::Bare {
-                table: table.into(),
-            },
-            Self::Partial { schema, table } => TableReference::Partial {
-                schema: schema.into(),
-                table: table.into(),
-            },
-            Self::Full {
-                catalog,
-                schema,
-                table,
-            } => TableReference::Full {
-                catalog: catalog.into(),
-                schema: schema.into(),
-                table: table.into(),
-            },
-        }
-    }
-
-    /// Retrieve the actual table name, regardless of qualification
-    pub fn table(&self) -> &str {
-        match self {
-            Self::Full { table, .. }
-            | Self::Partial { table, .. }
-            | Self::Bare { table } => table,
-        }
-    }
-}
-
-impl std::fmt::Display for OwnedTableReference {
+impl <'a> std::fmt::Display for TableReference<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            OwnedTableReference::Bare { table } => write!(f, "{table}"),
-            OwnedTableReference::Partial { schema, table } => {
+            Self::Bare { table } => write!(f, "{table}"),
+            Self::Partial { schema, table } => {
                 write!(f, "{schema}.{table}")
             }
-            OwnedTableReference::Full {
+            Self::Full {
                 catalog,
                 schema,
                 table,
@@ -143,13 +84,6 @@ impl std::fmt::Display for OwnedTableReference {
     }
 }
 
-/// Convert `OwnedTableReference` into a `TableReference`. Somewhat
-/// awkward to use but 'idiomatic': `(&table_ref).into()`
-impl<'a> From<&'a OwnedTableReference> for TableReference<'a> {
-    fn from(r: &'a OwnedTableReference) -> Self {
-        r.as_table_reference()
-    }
-}
 
 impl<'a> TableReference<'a> {
     /// Retrieve the actual table name, regardless of qualification
@@ -160,6 +94,27 @@ impl<'a> TableReference<'a> {
             | Self::Bare { table } => table,
         }
     }
+
+    /// converts this table reference to a borrowed one
+    pub fn to_borrow<'b: 'a>(&'b self) -> Self {
+        match self {
+            Self::Bare { table } =>
+                Self::Bare {
+                    table: Cow::from(table.as_ref()),
+                },
+            Self::Partial { schema, table } => Self::Partial {
+                schema: Cow::from(schema.as_ref()),
+                table: Cow::from(table.as_ref()),
+            },
+            Self::Full { schema, table, catalog } => Self::Full {
+                schema: Cow::from(schema.as_ref()),
+                table: Cow::from(table.as_ref()),
+                catalog: Cow::from(catalog.as_ref()),
+            },
+
+        }
+    }
+
 
     /// Given a default catalog and schema, ensure this table reference is fully resolved
     pub fn resolve(
