@@ -36,7 +36,7 @@ use crate::physical_plan::file_format::FileMeta;
 use crate::{
     datasource::listing::FileRange,
     error::{DataFusionError, Result},
-    execution::context::{SessionState, TaskContext},
+    execution::context::TaskContext,
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
         expressions::PhysicalSortExpr,
@@ -704,7 +704,7 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
 
 /// Executes a query and writes the results to a partitioned Parquet file.
 pub async fn plan_to_parquet(
-    state: &SessionState,
+    task_ctx: Arc<TaskContext>,
     plan: Arc<dyn ExecutionPlan>,
     path: impl AsRef<str>,
     writer_properties: Option<WriterProperties>,
@@ -726,8 +726,7 @@ pub async fn plan_to_parquet(
         let file = fs::File::create(path)?;
         let mut writer =
             ArrowWriter::try_new(file, plan.schema(), writer_properties.clone())?;
-        let task_ctx = Arc::new(TaskContext::from(state));
-        let stream = plan.execute(i, task_ctx)?;
+        let stream = plan.execute(i, task_ctx.clone())?;
         let handle: tokio::task::JoinHandle<Result<()>> =
             tokio::task::spawn(async move {
                 stream
@@ -803,6 +802,7 @@ mod tests {
     use crate::datasource::file_format::test_util::scan_format;
     use crate::datasource::listing::{FileRange, PartitionedFile};
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::execution::context::SessionState;
     use crate::execution::options::CsvReadOptions;
     use crate::physical_plan::displayable;
     use crate::physical_plan::file_format::partition_type_wrap;
