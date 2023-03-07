@@ -28,6 +28,7 @@ use futures::TryStreamExt;
 use itertools::Itertools;
 use object_store::ObjectStore;
 use std::any::Any;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -129,7 +130,7 @@ impl ListingSchemaProvider {
                 let table_url = format!("{}/{}", self.authority, table_path);
 
                 let name = TableReference::Bare {
-                    table: table_name.into(),
+                    table: Cow::from(table_name.to_string()),
                 };
                 let provider = self
                     .factory
