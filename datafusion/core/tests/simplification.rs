@@ -51,10 +51,7 @@ impl SimplifyInfo for MyInfo {
     }
 
     fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
-        match expr.get_type(&self.schema) {
-            Ok(expr_data_type) => Ok(expr_data_type),
-            Err(e) => Err(e),
-        }
+        expr.get_type(&self.schema)
     }
 }
 
