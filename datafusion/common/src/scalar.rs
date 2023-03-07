@@ -645,14 +645,12 @@ fn ts_nanosec_sub_to_interval(
 ) -> Result<ScalarValue, DataFusionError> {
     // Conversion of integer and string-typed timestamps to NaiveDateTime objects
     // Timezone offsets are added also if applicable.
-    let (naive_date_time2_unchecked, naive_date_time1_unchecked);
-    if let (Some(l), Some(r)) = (lhs_tz, rhs_tz) {
-        (naive_date_time2_unchecked, naive_date_time1_unchecked) =
-            integer_w_timezone_to_naive_datetime(lhs_ts, rhs_ts, l, r)?;
-    } else {
-        (naive_date_time2_unchecked, naive_date_time1_unchecked) =
-            integer_to_naive_datetime(lhs_ts, rhs_ts)?;
-    }
+    let (naive_date_time2_unchecked, naive_date_time1_unchecked) =
+        if let (Some(l), Some(r)) = (lhs_tz, rhs_tz) {
+            integer_w_timezone_to_naive_datetime(lhs_ts, rhs_ts, l, r)?
+        } else {
+            integer_to_naive_datetime(lhs_ts, rhs_ts)?
+        };
 
     // Check whether we will find a negative interval or not
     let (naive_date_time2, naive_date_time1, sign) =
@@ -662,18 +660,13 @@ fn ts_nanosec_sub_to_interval(
     let (mut months, mut months_residual) =
         datetime_month_sub_with_rem(naive_date_time2, naive_date_time1)?;
 
+    let err = || {
+        DataFusionError::NotImplemented(String::from("months_residual nanosec overflow"))
+    };
     // Check whether we can return an IntervalYearMonth variant without losing information
-    match months_residual.num_nanoseconds() {
-        Some(value) => {
-            if value == 0 {
-                return Ok(ScalarValue::IntervalYearMonth(Some(sign * months)));
-            }
-        }
-        None => {
-            return Err(DataFusionError::NotImplemented(String::from(
-                "months_residual nanosec overflow",
-            )))
-        }
+    let value = months_residual.num_nanoseconds().ok_or_else(err)?;
+    if value == 0 {
+        return Ok(ScalarValue::IntervalYearMonth(Some(sign * months)));
     }
 
     // If months_residual is negative, take one month from months and
@@ -686,12 +679,12 @@ fn ts_nanosec_sub_to_interval(
     }
 
     // Check whether we can return an IntervalDayTime variant without losing information
-    let months_residual_in_ns = months_residual.num_nanoseconds().unwrap();
+    let months_residual_in_ns = months_residual.num_nanoseconds().ok_or_else(err)?;
     if months_residual_in_ns % 1_000_000 == 0 {
         let delta_secs = naive_date_time2
             .signed_duration_since(naive_date_time1)
             .num_milliseconds();
-
+        // 60 * 60 * 24 * 1000 = 86_400_000, number of millisecs in a day
         return Ok(ScalarValue::IntervalDayTime(Some(
             IntervalDayTimeType::make_value(
                 sign * (delta_secs / 86_400_000) as i32,
@@ -700,6 +693,7 @@ fn ts_nanosec_sub_to_interval(
         )));
     }
 
+    // 60 * 60 * 24 * 1000 * 1000 * 1000 = 86_400_000_000_000, number of nanosecs in a day
     Ok(ScalarValue::IntervalMonthDayNano(Some(
         IntervalMonthDayNanoType::make_value(
             sign * months,
@@ -739,7 +733,7 @@ fn integer_w_timezone_to_naive_datetime(
     let (naive_lhs, naive_rhs) = integer_to_naive_datetime(lhs_ts_ns, rhs_ts_ns)?;
 
     match (parse_tz_to_offset(lhs_tz), parse_tz_to_offset(rhs_tz)) {
-        (Some(l), Some(r)) => Ok((
+        (Ok(l), Ok(r)) => Ok((
             DateTime::<FixedOffset>::from_utc(naive_lhs, l).naive_local(),
             DateTime::<FixedOffset>::from_utc(naive_rhs, r).naive_local(),
         )),
@@ -748,31 +742,39 @@ fn integer_w_timezone_to_naive_datetime(
 }
 // This function parses as the format of "+HH:MM", for example, "+05:30"
 #[inline]
-fn parse_tz_to_offset(tz: &String) -> Option<FixedOffset> {
-    let sign = tz.chars().next().unwrap();
-    let hours = tz[1..3].parse::<i32>().unwrap();
-    let minutes = tz[4..6].parse::<i32>().unwrap();
+fn parse_tz_to_offset(tz: &String) -> Result<FixedOffset, DataFusionError> {
+    let err_str = &String::from("error while parsing timezone");
+    let err = || DataFusionError::NotImplemented(err_str.to_string());
+
+    let sign = tz.chars().next().ok_or_else(err)?;
+    let hours = tz[1..3]
+        .parse::<i32>()
+        .map_err(|_e| DataFusionError::NotImplemented(err_str.to_string()))?;
+    let minutes = tz[4..6]
+        .parse::<i32>()
+        .map_err(|_e| DataFusionError::NotImplemented(err_str.to_string()))?;
     let timezone_offset = match sign {
-        '-' => FixedOffset::east_opt(hours * 3600 + minutes * 60).unwrap(),
-        '+' => FixedOffset::west_opt(hours * 3600 + minutes * 60).unwrap(),
-        _ => panic!("Invalid timezone string: {}", tz),
+        '-' => FixedOffset::east_opt(hours * 3600 + minutes * 60).ok_or_else(err)?,
+        '+' => FixedOffset::west_opt(hours * 3600 + minutes * 60).ok_or_else(err)?,
+        _ => {
+            return Err(DataFusionError::NotImplemented(err_str.to_string()));
+        }
     };
-    Some(timezone_offset)
+    Ok(timezone_offset)
 }
 #[inline]
 fn find_interval_sign(
     ndt2: NaiveDateTime,
     ndt1: NaiveDateTime,
 ) -> (NaiveDateTime, NaiveDateTime, i32) {
-    let sign;
     if ndt2.timestamp_nanos() < ndt1.timestamp_nanos() {
-        sign = -1;
-        (ndt1, ndt2, sign)
+        (ndt1, ndt2, -1)
     } else {
-        sign = 1;
-        (ndt2, ndt1, sign)
+        (ndt2, ndt1, 1)
     }
 }
+// This function assumes 'date_time2' is greater than 'date_time1',
+// therefore; resulting 'months' cannot be negative.
 #[inline]
 fn datetime_month_sub_with_rem(
     date_time2: NaiveDateTime,
@@ -825,11 +827,13 @@ fn normalize_duration(
 // It gives the day count of the corresponding month at that year.
 fn days_in_month(year: i32, month: u32) -> Result<u32, DataFusionError> {
     if let Some(first_day) = NaiveDate::from_ymd_opt(year, month, 1) {
-        let last_day = first_day
-            .with_month(month + 1)
-            .unwrap_or_else(|| NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap())
-            .pred_opt();
-        if let Some(days) = last_day {
+        let last_day = match first_day.with_month(month + 1) {
+            Some(day) => day,
+            None => NaiveDate::from_ymd_opt(year + 1, 1, 1).ok_or_else(|| {
+                DataFusionError::NotImplemented(format!("out-of-range year",))
+            })?,
+        };
+        if let Some(days) = last_day.pred_opt() {
             return Ok(days.day());
         }
     }
@@ -1323,8 +1327,8 @@ impl ScalarValue {
             DataType::UInt16 => ScalarValue::UInt16(Some(0)),
             DataType::UInt32 => ScalarValue::UInt32(Some(0)),
             DataType::UInt64 => ScalarValue::UInt64(Some(0)),
-            DataType::Float32 => ScalarValue::UInt64(Some(0)),
-            DataType::Float64 => ScalarValue::UInt64(Some(0)),
+            DataType::Float32 => ScalarValue::Float32(Some(0.0)),
+            DataType::Float64 => ScalarValue::Float64(Some(0.0)),
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Can't create a zero scalar from data_type \"{datatype:?}\""
@@ -1587,7 +1591,7 @@ impl ScalarValue {
         }
 
         macro_rules! build_array_primitive_tz {
-            ($ARRAY_TY:ident, $SCALAR_TY:ident) => {{
+            ($ARRAY_TY:ident, $SCALAR_TY:ident, $TZ:expr) => {{
                 {
                     let array = scalars.map(|sv| {
                         if let ScalarValue::$SCALAR_TY(v, _) = sv {
@@ -1601,7 +1605,7 @@ impl ScalarValue {
                         }
                     })
                     .collect::<Result<$ARRAY_TY>>()?;
-                    Arc::new(array)
+                    Arc::new(array.with_timezone_opt($TZ.clone()))
                 }
             }};
         }
@@ -1735,17 +1739,29 @@ impl ScalarValue {
             DataType::Time64(TimeUnit::Nanosecond) => {
                 build_array_primitive!(Time64NanosecondArray, Time64Nanosecond)
             }
-            DataType::Timestamp(TimeUnit::Second, _) => {
-                build_array_primitive_tz!(TimestampSecondArray, TimestampSecond)
+            DataType::Timestamp(TimeUnit::Second, tz) => {
+                build_array_primitive_tz!(TimestampSecondArray, TimestampSecond, tz)
             }
-            DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                build_array_primitive_tz!(TimestampMillisecondArray, TimestampMillisecond)
+            DataType::Timestamp(TimeUnit::Millisecond, tz) => {
+                build_array_primitive_tz!(
+                    TimestampMillisecondArray,
+                    TimestampMillisecond,
+                    tz
+                )
             }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                build_array_primitive_tz!(TimestampMicrosecondArray, TimestampMicrosecond)
+            DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+                build_array_primitive_tz!(
+                    TimestampMicrosecondArray,
+                    TimestampMicrosecond,
+                    tz
+                )
             }
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                build_array_primitive_tz!(TimestampNanosecondArray, TimestampNanosecond)
+            DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+                build_array_primitive_tz!(
+                    TimestampNanosecondArray,
+                    TimestampNanosecond,
+                    tz
+                )
             }
             DataType::Interval(IntervalUnit::DayTime) => {
                 build_array_primitive!(IntervalDayTimeArray, IntervalDayTime)
@@ -2938,7 +2954,7 @@ impl TryFrom<&DataType> for ScalarValue {
 macro_rules! format_option {
     ($F:expr, $EXPR:expr) => {{
         match $EXPR {
-            Some(e) => write!($F, "{}", e),
+            Some(e) => write!($F, "{e}"),
             None => write!($F, "NULL"),
         }
     }};
