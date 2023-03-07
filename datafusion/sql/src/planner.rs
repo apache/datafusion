@@ -27,8 +27,8 @@ use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::TableReference;
 use datafusion_common::{field_not_found, DFSchema, DataFusionError, Result};
-use datafusion_common::{TableReference};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::utils::find_column_exprs;
 use datafusion_expr::TableSource;
@@ -374,12 +374,17 @@ pub(crate) fn idents_to_table_reference(
     match taker.0.len() {
         1 => {
             let table = taker.take(enable_normalization);
-            Ok(TableReference::Bare { table: table.into()})
+            Ok(TableReference::Bare {
+                table: table.into(),
+            })
         }
         2 => {
             let table = taker.take(enable_normalization);
             let schema = taker.take(enable_normalization);
-            Ok(TableReference::Partial { schema: schema.into(), table: table.into() })
+            Ok(TableReference::Partial {
+                schema: schema.into(),
+                table: table.into(),
+            })
         }
         3 => {
             let table = taker.take(enable_normalization);

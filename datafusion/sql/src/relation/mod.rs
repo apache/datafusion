@@ -35,10 +35,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let table_name = table_ref.to_string();
                 let cte = planner_context.ctes.get(&table_name);
                 (
-                    match (
-                        cte,
-                        self.schema_provider.get_table_provider(table_ref),
-                    ) {
+                    match (cte, self.schema_provider.get_table_provider(table_ref)) {
                         (Some(cte_plan), _) => Ok(cte_plan.clone()),
                         (_, Ok(provider)) => {
                             LogicalPlanBuilder::scan(&table_name, provider, None)?.build()

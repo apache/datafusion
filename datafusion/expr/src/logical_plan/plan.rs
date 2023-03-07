@@ -33,8 +33,7 @@ use crate::{
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError,
-    ScalarValue, TableReference,
+    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, ScalarValue, TableReference,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};

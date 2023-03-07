@@ -316,19 +316,19 @@ impl SessionContext {
                 or_replace,
             }) => {
                 let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
-                let table = self.table(&name).await;
+                let table = self.table(name.as_borrowed()).await;
 
                 match (if_not_exists, or_replace, table) {
                     (true, false, Ok(_)) => self.return_empty_dataframe(),
                     (false, true, Ok(_)) => {
-                        self.deregister_table(&name)?;
+                        self.deregister_table(name.as_borrowed())?;
                         let schema = Arc::new(input.schema().as_ref().into());
                         let physical = DataFrame::new(self.state(), input);
 
                         let batches: Vec<_> = physical.collect_partitioned().await?;
                         let table = Arc::new(MemTable::try_new(schema, batches)?);
 
-                        self.register_table(&name, table)?;
+                        self.register_table(name.as_borrowed(), table)?;
                         self.return_empty_dataframe()
                     }
                     (true, true, Ok(_)) => Err(DataFusionError::Execution(
@@ -341,7 +341,7 @@ impl SessionContext {
                         let batches: Vec<_> = physical.collect_partitioned().await?;
                         let table = Arc::new(MemTable::try_new(schema, batches)?);
 
-                        self.register_table(&name, table)?;
+                        self.register_table(name.as_borrowed(), table)?;
                         self.return_empty_dataframe()
                     }
                     (false, false, Ok(_)) => Err(DataFusionError::Execution(format!(
@@ -356,22 +356,22 @@ impl SessionContext {
                 or_replace,
                 definition,
             }) => {
-                let view = self.table(&name).await;
+                let view = self.table(name.as_borrowed()).await;
 
                 match (or_replace, view) {
                     (true, Ok(_)) => {
-                        self.deregister_table(&name)?;
+                        self.deregister_table(name.as_borrowed())?;
                         let table =
                             Arc::new(ViewTable::try_new((*input).clone(), definition)?);
 
-                        self.register_table(&name, table)?;
+                        self.register_table(name.as_borrowed(), table)?;
                         self.return_empty_dataframe()
                     }
                     (_, Err(_)) => {
                         let table =
                             Arc::new(ViewTable::try_new((*input).clone(), definition)?);
 
-                        self.register_table(&name, table)?;
+                        self.register_table(name.as_borrowed(), table)?;
                         self.return_empty_dataframe()
                     }
                     (false, Ok(_)) => Err(DataFusionError::Execution(format!(
@@ -383,7 +383,9 @@ impl SessionContext {
             LogicalPlan::DropTable(DropTable {
                 name, if_exists, ..
             }) => {
-                let result = self.find_and_deregister(&name, TableType::Base).await;
+                let result = self
+                    .find_and_deregister(name.as_borrowed(), TableType::Base)
+                    .await;
                 match (result, if_exists) {
                     (Ok(true), _) => self.return_empty_dataframe(),
                     (_, true) => self.return_empty_dataframe(),
@@ -396,7 +398,9 @@ impl SessionContext {
             LogicalPlan::DropView(DropView {
                 name, if_exists, ..
             }) => {
-                let result = self.find_and_deregister(&name, TableType::View).await;
+                let result = self
+                    .find_and_deregister(name.as_borrowed(), TableType::View)
+                    .await;
                 match (result, if_exists) {
                     (Ok(true), _) => self.return_empty_dataframe(),
                     (_, true) => self.return_empty_dataframe(),
@@ -554,7 +558,7 @@ impl SessionContext {
         &self,
         cmd: &CreateExternalTable,
     ) -> Result<DataFrame> {
-        let exist = self.table_exist(&cmd.name)?;
+        let exist = self.table_exist(cmd.name.as_borrowed())?;
         if exist {
             match cmd.if_not_exists {
                 true => return self.return_empty_dataframe(),
@@ -569,7 +573,7 @@ impl SessionContext {
 
         let table_provider: Arc<dyn TableProvider> =
             self.create_custom_table(cmd).await?;
-        self.register_table(&cmd.name, table_provider)?;
+        self.register_table(cmd.name.as_borrowed(), table_provider)?;
         self.return_empty_dataframe()
     }
 
@@ -1865,7 +1869,7 @@ impl SessionState {
             self.config.options.sql_parser.parse_float_as_decimal;
         for reference in references {
             let table = reference.table();
-            let resolved = self.resolve_table_ref(reference.as_table_reference());
+            let resolved = self.resolve_table_ref(reference.as_borrowed());
             if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
                 if let Ok(schema) = self.schema_for_ref(resolved) {
                     if let Some(table) = schema.table(table).await {

@@ -67,8 +67,7 @@ pub enum TableReference<'a> {
     },
 }
 
-
-impl <'a> std::fmt::Display for TableReference<'a> {
+impl<'a> std::fmt::Display for TableReference<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Bare { table } => write!(f, "{table}"),
@@ -84,7 +83,6 @@ impl <'a> std::fmt::Display for TableReference<'a> {
     }
 }
 
-
 impl<'a> TableReference<'a> {
     /// Retrieve the actual table name, regardless of qualification
     pub fn table(&self) -> &str {
@@ -95,26 +93,49 @@ impl<'a> TableReference<'a> {
         }
     }
 
-    /// converts this table reference to a borrowed one
-    pub fn to_borrow<'b: 'a>(&'b self) -> Self {
+    /// converts this table reference to a new TableReference borrowed from `self`
+    pub fn as_borrowed<'b: 'a>(&'b self) -> Self {
         match self {
-            Self::Bare { table } =>
-                Self::Bare {
-                    table: Cow::from(table.as_ref()),
-                },
+            Self::Bare { table } => Self::Bare {
+                table: Cow::from(table.as_ref()),
+            },
             Self::Partial { schema, table } => Self::Partial {
                 schema: Cow::from(schema.as_ref()),
                 table: Cow::from(table.as_ref()),
             },
-            Self::Full { schema, table, catalog } => Self::Full {
+            Self::Full {
+                schema,
+                table,
+                catalog,
+            } => Self::Full {
                 schema: Cow::from(schema.as_ref()),
                 table: Cow::from(table.as_ref()),
                 catalog: Cow::from(catalog.as_ref()),
             },
-
         }
     }
 
+    /// converts this table reference to an owned table reference (with `'static` lifetime)
+    pub fn to_owned(&self) -> TableReference<'static> {
+        match self {
+            Self::Bare { table } => TableReference::Bare {
+                table: Cow::from(table.to_string()),
+            },
+            Self::Partial { schema, table } => TableReference::Partial {
+                table: Cow::from(table.to_string()),
+                schema: Cow::from(schema.to_string()),
+            },
+            Self::Full {
+                schema,
+                table,
+                catalog,
+            } => TableReference::Full {
+                table: Cow::from(table.to_string()),
+                schema: Cow::from(schema.to_string()),
+                catalog: Cow::from(catalog.to_string()),
+            },
+        }
+    }
 
     /// Given a default catalog and schema, ensure this table reference is fully resolved
     pub fn resolve(

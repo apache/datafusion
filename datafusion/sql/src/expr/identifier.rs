@@ -20,7 +20,7 @@ use crate::planner::{
 };
 use crate::utils::normalize_ident;
 use datafusion_common::{
-    Column, DFSchema, DataFusionError, TableReference, Result, ScalarValue,
+    Column, DFSchema, DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::{Case, Expr, GetIndexedField};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
@@ -75,8 +75,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.options.enable_ident_normalization,
             )? {
                 TableReference::Partial { schema, table } => (table, schema),
-                r @ TableReference::Bare { .. }
-                | r @ TableReference::Full { .. } => {
+                r @ TableReference::Bare { .. } | r @ TableReference::Full { .. } => {
                     return Err(DataFusionError::Plan(format!(
                         "Unsupported compound identifier '{r:?}'",
                     )));
