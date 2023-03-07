@@ -478,7 +478,7 @@ impl BoundedWindowAggStream {
         let num_rows = record_batch.num_rows();
         if num_rows > 0 {
             let partition_batches = self.evaluate_partition_batches(&record_batch)?;
-            for (partition_row, (partition_batch, indices)) in partition_batches {
+            for (partition_row, partition_batch) in partition_batches {
                 if let Some(partition_batch_state) =
                     self.partition_buffers.get_mut(&partition_row)
                 {
@@ -486,12 +486,10 @@ impl BoundedWindowAggStream {
                         &self.input.schema(),
                         [&partition_batch_state.record_batch, &partition_batch],
                     )?;
-                    partition_batch_state.indices.extend(indices);
                 } else {
                     let partition_batch_state = PartitionBatchState {
                         record_batch: partition_batch,
                         is_end: false,
-                        indices,
                         n_out_row: 0,
                     };
                     self.partition_buffers
@@ -543,8 +541,6 @@ impl BoundedWindowAggStream {
         Ok(())
     }
 }
-
-type PartitionRecordBatchIndices = IndexMap<OwnedRow, (RecordBatch, Vec<usize>)>;
 
 impl Stream for BoundedWindowAggStream {
     type Item = Result<RecordBatch>;
@@ -750,9 +746,7 @@ impl BoundedWindowAggStream {
             let batch = &partition_batch_state.record_batch;
             partition_batch_state.record_batch =
                 batch.slice(*n_prune, batch.num_rows() - n_prune);
-
-            // Remove first n_prune elements from the indices. Since they are pruned.
-            partition_batch_state.indices.drain(0..*n_prune);
+            // reset n_out_row
             partition_batch_state.n_out_row = 0;
 
             // Update state indices since we have pruned some rows from the beginning:
@@ -812,10 +806,6 @@ impl BoundedWindowAggStream {
                     .partition_buffers
                     .get_mut(partition_key)
                     .ok_or_else(err)?;
-                assert_eq!(
-                    partition_batch.record_batch.num_rows(),
-                    partition_batch.indices.len()
-                );
                 let n_to_del = partition_batch.n_out_row;
                 let n_to_keep = out_col.len() - n_to_del;
                 *out_col = out_col.slice(n_to_del, n_to_keep);
@@ -844,7 +834,7 @@ impl BoundedWindowAggStream {
     fn evaluate_partition_batches(
         &mut self,
         record_batch: &RecordBatch,
-    ) -> Result<PartitionRecordBatchIndices> {
+    ) -> Result<IndexMap<OwnedRow, RecordBatch>> {
         let mut res = IndexMap::new();
         let num_rows = record_batch.num_rows();
         match &self.search_mode {
@@ -880,8 +870,7 @@ impl BoundedWindowAggStream {
                     let partition_row = rows.row(range.start).owned();
                     let len = range.end - range.start;
                     let slice = record_batch.slice(range.start, len);
-                    let indices = (range.start..range.end).collect();
-                    res.insert(partition_row, (slice, indices));
+                    res.insert(partition_row, slice);
                 }
             }
             PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted => {
@@ -900,7 +889,7 @@ impl BoundedWindowAggStream {
                 for (row, indices) in per_partition_indices.into_iter() {
                     let partition_batch =
                         get_record_batch_at_indices(record_batch, &indices)?;
-                    res.insert(row.owned(), (partition_batch, indices));
+                    res.insert(row.owned(), partition_batch);
                 }
             }
         }
