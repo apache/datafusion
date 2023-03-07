@@ -29,11 +29,42 @@ use std::sync::Arc;
 use datafusion::dataframe::DataFrame;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
-use datafusion::prelude::CsvReadOptions;
 use datafusion::prelude::JoinType;
+use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::{avg, col, count, lit, sum, Expr, ExprSchemable};
+
+#[tokio::test]
+async fn describe() -> Result<()> {
+    let ctx = SessionContext::new();
+    let testdata = datafusion::test_util::parquet_test_data();
+
+    let df = ctx
+        .read_parquet(
+            &format!("{testdata}/alltypes_tiny_pages.parquet"),
+            ParquetReadOptions::default(),
+        )
+        .await?;
+    let describe_record_batch = df.describe().await.unwrap().collect().await.unwrap();
+    #[rustfmt::skip]
+        let expected = vec![
+        "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
+        "| describe   | id                | bool_col | tinyint_col        | smallint_col       | int_col            | bigint_col         | float_col          | double_col         | date_string_col | string_col | timestamp_col           | year               | month             |",
+        "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
+        "| count      | 7300.0            | 7300     | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300            | 7300       | 7300                    | 7300.0             | 7300.0            |",
+        "| null_count | 7300.0            | 7300     | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300            | 7300       | 7300                    | 7300.0             | 7300.0            |",
+        "| mean       | 3649.5            | null     | 4.5                | 4.5                | 4.5                | 45.0               | 4.949999964237213  | 45.45000000000001  | null            | null       | null                    | 2009.5             | 6.526027397260274 |",
+        "| std        | 2107.472815166704 | null     | 2.8724780750809518 | 2.8724780750809518 | 2.8724780750809518 | 28.724780750809533 | 3.1597258182544645 | 29.012028558317645 | null            | null       | null                    | 0.5000342500942125 | 3.44808750051728  |",
+        "| min        | 0.0               | null     | 0.0                | 0.0                | 0.0                | 0.0                | 0.0                | 0.0                | 01/01/09        | 0          | 2008-12-31T23:00:00     | 2009.0             | 1.0               |",
+        "| max        | 7299.0            | null     | 9.0                | 9.0                | 9.0                | 90.0               | 9.899999618530273  | 90.89999999999999  | 12/31/10        | 9          | 2010-12-31T04:09:13.860 | 2010.0             | 12.0              |",
+        "| median     | 3649.0            | null     | 4.0                | 4.0                | 4.0                | 45.0               | 4.949999809265137  | 45.45              | null            | null       | null                    | 2009.0             | 7.0               |",
+        "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
+    ];
+    assert_batches_eq!(expected, &describe_record_batch);
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn join() -> Result<()> {
@@ -503,8 +534,9 @@ async fn right_semi_with_alias_filter() -> Result<()> {
     let optimized_plan = df.clone().into_optimized_plan()?;
     let expected = vec![
         "RightSemi Join: t1.a = t2.a [a:UInt32, b:Utf8, c:Int32]",
-        "  Filter: t1.c > Int32(1) [a:UInt32, c:Int32]",
-        "    TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]",
+        "  Projection: t1.a [a:UInt32]",
+        "    Filter: t1.c > Int32(1) [a:UInt32, c:Int32]",
+        "      TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]",
         "  Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]",
         "    TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
     ];
@@ -547,8 +579,9 @@ async fn right_anti_filter_push_down() -> Result<()> {
     let optimized_plan = df.clone().into_optimized_plan()?;
     let expected = vec![
         "RightAnti Join: t1.a = t2.a Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]",
-        "  Filter: t1.c > Int32(1) [a:UInt32, c:Int32]",
-        "    TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]",
+        "  Projection: t1.a [a:UInt32]",
+        "    Filter: t1.c > Int32(1) [a:UInt32, c:Int32]",
+        "      TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]",
         "  TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
     ];
 

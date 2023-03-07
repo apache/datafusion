@@ -20,6 +20,7 @@
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
+use crate::execution::memory_pool::MemoryReservation;
 use crate::physical_plan::metrics::MemTrackingMetrics;
 use crate::physical_plan::{displayable, ColumnStatistics, ExecutionPlan, Statistics};
 use arrow::datatypes::{Schema, SchemaRef};
@@ -28,6 +29,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_physical_expr::PhysicalSortExpr;
 use futures::{Future, Stream, StreamExt, TryStreamExt};
 use log::debug;
+use parking_lot::Mutex;
 use pin_project_lite::pin_project;
 use std::fs;
 use std::fs::{metadata, File};
@@ -36,6 +38,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+
+pub(crate) type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
 
 /// Stream of record batches
 pub struct SizedRecordBatchStream {

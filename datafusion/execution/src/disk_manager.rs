@@ -18,7 +18,7 @@
 //! Manages files generated during query execution, files are
 //! hashed among the directories listed in RuntimeConfig::local_dirs.
 
-use crate::error::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 use log::debug;
 use parking_lot::Mutex;
 use rand::{thread_rng, Rng};
@@ -155,7 +155,6 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::error::Result;
     use tempfile::TempDir;
 
     #[test]

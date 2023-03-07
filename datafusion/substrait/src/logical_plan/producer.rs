@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, mem, sync::Arc};
 
 use datafusion::{
     error::{DataFusionError, Result},
@@ -580,10 +580,17 @@ pub fn to_substrait_rex(
         Expr::Literal(value) => {
             let literal_type = match value {
                 ScalarValue::Int8(Some(n)) => Some(LiteralType::I8(*n as i32)),
+                ScalarValue::UInt8(Some(n)) => Some(LiteralType::I8(*n as i32)),
                 ScalarValue::Int16(Some(n)) => Some(LiteralType::I16(*n as i32)),
+                ScalarValue::UInt16(Some(n)) => Some(LiteralType::I16(*n as i32)),
                 ScalarValue::Int32(Some(n)) => Some(LiteralType::I32(*n)),
+                ScalarValue::UInt32(Some(n)) => Some(LiteralType::I32(unsafe {
+                    mem::transmute_copy::<u32, i32>(n)
+                })),
                 ScalarValue::Int64(Some(n)) => Some(LiteralType::I64(*n)),
-                ScalarValue::UInt8(Some(n)) => Some(LiteralType::I16(*n as i32)), // Substrait currently does not support unsigned integer
+                ScalarValue::UInt64(Some(n)) => Some(LiteralType::I64(unsafe {
+                    mem::transmute_copy::<u64, i64>(n)
+                })),
                 ScalarValue::Boolean(Some(b)) => Some(LiteralType::Boolean(*b)),
                 ScalarValue::Float32(Some(f)) => Some(LiteralType::Fp32(*f)),
                 ScalarValue::Float64(Some(f)) => Some(LiteralType::Fp64(*f)),
@@ -601,10 +608,13 @@ pub fn to_substrait_rex(
                 ScalarValue::Date32(Some(d)) => Some(LiteralType::Date(*d)),
                 _ => Some(try_to_substrait_null(value)?),
             };
+
+            let type_variation_reference = if value.is_unsigned() { 1 } else { 0 };
+
             Ok(Expression {
                 rex_type: Some(RexType::Literal(Literal {
                     nullable: true,
-                    type_variation_reference: 0,
+                    type_variation_reference,
                     literal_type,
                 })),
             })

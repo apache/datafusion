@@ -20,19 +20,25 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::Int64Array;
+use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
+use arrow::compute::{cast, concat};
+use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
 use parquet::file::properties::WriterProperties;
 
+use datafusion_common::from_slice::FromSlice;
 use datafusion_common::{Column, DFSchema, ScalarValue};
-use datafusion_expr::TableProviderFilterPushDown;
+use datafusion_expr::{
+    avg, count, is_null, max, median, min, stddev, TableProviderFilterPushDown,
+    UNNAMED_TABLE,
+};
 
 use crate::arrow::datatypes::Schema;
 use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
-use crate::datasource::{MemTable, TableProvider};
+use crate::datasource::{provider_as_source, MemTable, TableProvider};
 use crate::error::Result;
 use crate::execution::{
     context::{SessionState, TaskContext},
@@ -299,6 +305,201 @@ impl DataFrame {
         Ok(DataFrame::new(
             self.session_state,
             LogicalPlanBuilder::from(self.plan).distinct()?.build()?,
+        ))
+    }
+
+    /// Summary statistics for a DataFrame. Only summarizes numeric datatypes at the moment and
+    /// returns nulls for non numeric datatypes. Try in keep output similar to pandas
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use arrow::util::pretty;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/tpch-csv/customer.csv", CsvReadOptions::new()).await?;
+    /// df.describe().await.unwrap();
+    ///
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn describe(self) -> Result<Self> {
+        //the functions now supported
+        let supported_describe_functions =
+            vec!["count", "null_count", "mean", "std", "min", "max", "median"];
+
+        let original_schema_fields = self.schema().fields().iter();
+
+        //define describe column
+        let mut describe_schemas = original_schema_fields
+            .clone()
+            .map(|field| {
+                if field.data_type().is_numeric() {
+                    Field::new(field.name(), DataType::Float64, true)
+                } else {
+                    Field::new(field.name(), DataType::Utf8, true)
+                }
+            })
+            .collect::<Vec<_>>();
+        describe_schemas.insert(0, Field::new("describe", DataType::Utf8, false));
+
+        //count aggregation
+        let cnt = self.clone().aggregate(
+            vec![],
+            original_schema_fields
+                .clone()
+                .map(|f| count(col(f.name())))
+                .collect::<Vec<_>>(),
+        )?;
+        // The optimization of AggregateStatistics will rewrite the physical plan
+        // for the count function and ignore alias functions,
+        // as shown in https://github.com/apache/arrow-datafusion/issues/5444.
+        // This logic should be removed when #5444 is fixed.
+        let cnt = cnt.clone().select(
+            cnt.schema()
+                .fields()
+                .iter()
+                .zip(original_schema_fields.clone())
+                .map(|(count_field, orgin_field)| {
+                    col(count_field.name()).alias(orgin_field.name())
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        //should be removed when #5444 is fixed
+        //collect recordBatch
+        let describe_record_batch = vec![
+            // count aggregation
+            cnt.collect().await?,
+            // null_count aggregation
+            self.clone()
+                .aggregate(
+                    vec![],
+                    original_schema_fields
+                        .clone()
+                        .map(|f| count(is_null(col(f.name()))).alias(f.name()))
+                        .collect::<Vec<_>>(),
+                )?
+                .collect()
+                .await?,
+            // mean aggregation
+            self.clone()
+                .aggregate(
+                    vec![],
+                    original_schema_fields
+                        .clone()
+                        .filter(|f| f.data_type().is_numeric())
+                        .map(|f| avg(col(f.name())).alias(f.name()))
+                        .collect::<Vec<_>>(),
+                )?
+                .collect()
+                .await?,
+            // std aggregation
+            self.clone()
+                .aggregate(
+                    vec![],
+                    original_schema_fields
+                        .clone()
+                        .filter(|f| f.data_type().is_numeric())
+                        .map(|f| stddev(col(f.name())).alias(f.name()))
+                        .collect::<Vec<_>>(),
+                )?
+                .collect()
+                .await?,
+            // min aggregation
+            self.clone()
+                .aggregate(
+                    vec![],
+                    original_schema_fields
+                        .clone()
+                        .filter(|f| {
+                            !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
+                        })
+                        .map(|f| min(col(f.name())).alias(f.name()))
+                        .collect::<Vec<_>>(),
+                )?
+                .collect()
+                .await?,
+            // max aggregation
+            self.clone()
+                .aggregate(
+                    vec![],
+                    original_schema_fields
+                        .clone()
+                        .filter(|f| {
+                            !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
+                        })
+                        .map(|f| max(col(f.name())).alias(f.name()))
+                        .collect::<Vec<_>>(),
+                )?
+                .collect()
+                .await?,
+            // median aggregation
+            self.clone()
+                .aggregate(
+                    vec![],
+                    original_schema_fields
+                        .clone()
+                        .filter(|f| f.data_type().is_numeric())
+                        .map(|f| median(col(f.name())).alias(f.name()))
+                        .collect::<Vec<_>>(),
+                )?
+                .collect()
+                .await?,
+        ];
+
+        let mut array_ref_vec: Vec<ArrayRef> = vec![];
+        for field in original_schema_fields {
+            let mut array_datas = vec![];
+            for record_batch in describe_record_batch.iter() {
+                let column = record_batch.get(0).unwrap().column_by_name(field.name());
+                match column {
+                    Some(c) => {
+                        if field.data_type().is_numeric() {
+                            array_datas.push(cast(c, &DataType::Float64)?);
+                        } else {
+                            array_datas.push(cast(c, &DataType::Utf8)?);
+                        }
+                    }
+                    //if None mean the column cannot be min/max aggregation
+                    None => {
+                        array_datas.push(Arc::new(StringArray::from_slice(["null"])));
+                    }
+                }
+            }
+
+            array_ref_vec.push(concat(
+                array_datas
+                    .iter()
+                    .map(|af| af.as_ref())
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            )?);
+        }
+
+        //insert first column with function names
+        array_ref_vec.insert(
+            0,
+            Arc::new(StringArray::from_slice(
+                supported_describe_functions.clone(),
+            )),
+        );
+
+        let describe_record_batch =
+            RecordBatch::try_new(Arc::new(Schema::new(describe_schemas)), array_ref_vec)?;
+
+        let provider = MemTable::try_new(
+            describe_record_batch.schema(),
+            vec![vec![describe_record_batch]],
+        )?;
+        Ok(DataFrame::new(
+            self.session_state,
+            LogicalPlanBuilder::scan(
+                UNNAMED_TABLE,
+                provider_as_source(Arc::new(provider)),
+                None,
+            )?
+            .build()?,
         ))
     }
 
@@ -741,7 +942,8 @@ impl DataFrame {
     /// Write a `DataFrame` to a CSV file.
     pub async fn write_csv(self, path: &str) -> Result<()> {
         let plan = self.session_state.create_physical_plan(&self.plan).await?;
-        plan_to_csv(&self.session_state, plan, path).await
+        let task_ctx = Arc::new(self.task_ctx());
+        plan_to_csv(task_ctx, plan, path).await
     }
 
     /// Write a `DataFrame` to a Parquet file.
@@ -751,13 +953,15 @@ impl DataFrame {
         writer_properties: Option<WriterProperties>,
     ) -> Result<()> {
         let plan = self.session_state.create_physical_plan(&self.plan).await?;
-        plan_to_parquet(&self.session_state, plan, path, writer_properties).await
+        let task_ctx = Arc::new(self.task_ctx());
+        plan_to_parquet(task_ctx, plan, path, writer_properties).await
     }
 
     /// Executes a query and writes the results to a partitioned JSON file.
     pub async fn write_json(self, path: impl AsRef<str>) -> Result<()> {
         let plan = self.session_state.create_physical_plan(&self.plan).await?;
-        plan_to_json(&self.session_state, plan, path).await
+        let task_ctx = Arc::new(self.task_ctx());
+        plan_to_json(task_ctx, plan, path).await
     }
 
     /// Add an additional column to the DataFrame.

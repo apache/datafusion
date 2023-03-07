@@ -324,6 +324,7 @@ impl OptimizerRule for TopKOptimizerRule {
     }
 }
 
+#[derive(PartialEq, Eq, Hash)]
 struct TopKPlanNode {
     k: usize,
     input: LogicalPlan,
@@ -343,6 +344,10 @@ impl Debug for TopKPlanNode {
 impl UserDefinedLogicalNode for TopKPlanNode {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn name(&self) -> &str {
+        "TopK"
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -375,6 +380,19 @@ impl UserDefinedLogicalNode for TopKPlanNode {
             input: inputs[0].clone(),
             expr: exprs[0].clone(),
         })
+    }
+
+    fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool {
+        match other.as_any().downcast_ref::<Self>() {
+            Some(o) => self == o,
+            None => false,
+        }
+    }
+
+    fn dyn_hash(&self, state: &mut dyn std::hash::Hasher) {
+        use std::hash::Hash;
+        let mut s = state;
+        self.hash(&mut s);
     }
 }
 

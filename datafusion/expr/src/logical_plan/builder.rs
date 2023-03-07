@@ -377,10 +377,7 @@ impl LogicalPlanBuilder {
                 input,
                 mut expr,
                 schema: _,
-            }) if missing_cols
-                .iter()
-                .all(|c| input.schema().field_from_column(c).is_ok()) =>
-            {
+            }) if missing_cols.iter().all(|c| input.schema().has_column(c)) => {
                 let mut missing_exprs = missing_cols
                     .iter()
                     .map(|c| normalize_col(Expr::Column(c.clone()), &input))
@@ -723,13 +720,13 @@ impl LogicalPlanBuilder {
         let mut join_on: Vec<(Expr, Expr)> = vec![];
         let mut filters: Option<Expr> = None;
         for (l, r) in &on {
-            if self.plan.schema().field_from_column(l).is_ok()
-                && right.schema().field_from_column(r).is_ok()
+            if self.plan.schema().has_column(l)
+                && right.schema().has_column(r)
                 && can_hash(self.plan.schema().field_from_column(l)?.data_type())
             {
                 join_on.push((Expr::Column(l.clone()), Expr::Column(r.clone())));
-            } else if self.plan.schema().field_from_column(r).is_ok()
-                && right.schema().field_from_column(l).is_ok()
+            } else if self.plan.schema().has_column(l)
+                && right.schema().has_column(r)
                 && can_hash(self.plan.schema().field_from_column(r)?.data_type())
             {
                 join_on.push((Expr::Column(r.clone()), Expr::Column(l.clone())));
@@ -1101,7 +1098,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
                     })?;
 
             Ok(DFField::new(
-                None,
+                left_field.qualifier().map(|x| x.as_ref()),
                 left_field.name(),
                 data_type,
                 nullable,
@@ -1781,5 +1778,25 @@ mod tests {
         ]);
 
         table_scan(Some(table_name), &schema, None)
+    }
+
+    #[test]
+    fn test_union_after_join() -> Result<()> {
+        let values = vec![vec![lit(1)]];
+
+        let left = LogicalPlanBuilder::values(values.clone())?
+            .alias("left")?
+            .build()?;
+        let right = LogicalPlanBuilder::values(values)?
+            .alias("right")?
+            .build()?;
+
+        let join = LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
+
+        let _ = LogicalPlanBuilder::from(join.clone())
+            .union(join)?
+            .build()?;
+
+        Ok(())
     }
 }

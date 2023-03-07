@@ -32,6 +32,14 @@ use std::sync::Arc;
 // Simple (low performance) kernels until optimized kernels are added to arrow
 // See https://github.com/apache/arrow-rs/issues/960
 
+macro_rules! distinct_float {
+    ($LEFT:expr, $RIGHT:expr, $LEFT_ISNULL:expr, $RIGHT_ISNULL:expr) => {{
+        $LEFT_ISNULL != $RIGHT_ISNULL
+            || $LEFT.is_nan() != $RIGHT.is_nan()
+            || (!$LEFT.is_nan() && !$RIGHT.is_nan() && $LEFT != $RIGHT)
+    }};
+}
+
 pub(crate) fn is_distinct_from_bool(
     left: &BooleanArray,
     right: &BooleanArray,
@@ -62,22 +70,13 @@ pub(crate) fn is_distinct_from<T>(
 where
     T: ArrowNumericType,
 {
-    let left_data = left.data();
-    let right_data = right.data();
-    let array_len = left_data.len().min(right_data.len());
-
-    let left_values = left.values();
-    let right_values = right.values();
-
-    let distinct = arrow_buffer::MutableBuffer::collect_bool(array_len, |i| {
-        left_data.is_null(i) != right_data.is_null(i) || left_values[i] != right_values[i]
-    });
-
-    let array_data = ArrayData::builder(arrow_schema::DataType::Boolean)
-        .len(array_len)
-        .add_buffer(distinct.into());
-
-    Ok(BooleanArray::from(unsafe { array_data.build_unchecked() }))
+    distinct(
+        left,
+        right,
+        |left_value, right_value, left_isnull, right_isnull| {
+            left_isnull != right_isnull || left_value != right_value
+        },
+    )
 }
 
 pub(crate) fn is_not_distinct_from<T>(
@@ -87,23 +86,102 @@ pub(crate) fn is_not_distinct_from<T>(
 where
     T: ArrowNumericType,
 {
-    let left_data = left.data();
-    let right_data = right.data();
-    let array_len = left_data.len().min(right_data.len());
+    distinct(
+        left,
+        right,
+        |left_value, right_value, left_isnull, right_isnull| {
+            !(left_isnull != right_isnull || left_value != right_value)
+        },
+    )
+}
 
+fn distinct<
+    T,
+    F: FnMut(
+        <T as ArrowPrimitiveType>::Native,
+        <T as ArrowPrimitiveType>::Native,
+        bool,
+        bool,
+    ) -> bool,
+>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+    mut op: F,
+) -> Result<BooleanArray>
+where
+    T: ArrowNumericType,
+{
     let left_values = left.values();
     let right_values = right.values();
+    let left_data = left.data();
+    let right_data = right.data();
 
+    let array_len = left_data.len().min(right_data.len());
     let distinct = arrow_buffer::MutableBuffer::collect_bool(array_len, |i| {
-        !(left_data.is_null(i) != right_data.is_null(i)
-            || left_values[i] != right_values[i])
+        op(
+            left_values[i],
+            right_values[i],
+            left_data.is_null(i),
+            right_data.is_null(i),
+        )
     });
-
     let array_data = ArrayData::builder(arrow_schema::DataType::Boolean)
         .len(array_len)
         .add_buffer(distinct.into());
 
     Ok(BooleanArray::from(unsafe { array_data.build_unchecked() }))
+}
+
+pub(crate) fn is_distinct_from_f32(
+    left: &Float32Array,
+    right: &Float32Array,
+) -> Result<BooleanArray> {
+    distinct(
+        left,
+        right,
+        |left_value, right_value, left_isnull, right_isnull| {
+            distinct_float!(left_value, right_value, left_isnull, right_isnull)
+        },
+    )
+}
+
+pub(crate) fn is_not_distinct_from_f32(
+    left: &Float32Array,
+    right: &Float32Array,
+) -> Result<BooleanArray> {
+    distinct(
+        left,
+        right,
+        |left_value, right_value, left_isnull, right_isnull| {
+            !(distinct_float!(left_value, right_value, left_isnull, right_isnull))
+        },
+    )
+}
+
+pub(crate) fn is_distinct_from_f64(
+    left: &Float64Array,
+    right: &Float64Array,
+) -> Result<BooleanArray> {
+    distinct(
+        left,
+        right,
+        |left_value, right_value, left_isnull, right_isnull| {
+            distinct_float!(left_value, right_value, left_isnull, right_isnull)
+        },
+    )
+}
+
+pub(crate) fn is_not_distinct_from_f64(
+    left: &Float64Array,
+    right: &Float64Array,
+) -> Result<BooleanArray> {
+    distinct(
+        left,
+        right,
+        |left_value, right_value, left_isnull, right_isnull| {
+            !(distinct_float!(left_value, right_value, left_isnull, right_isnull))
+        },
+    )
 }
 
 pub(crate) fn is_distinct_from_utf8<OffsetSize: OffsetSizeTrait>(
