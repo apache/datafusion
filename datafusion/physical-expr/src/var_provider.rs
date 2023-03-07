@@ -30,7 +30,7 @@ pub enum VarType {
 }
 
 /// A var provider for @variable
-pub trait VarProvider {
+pub trait VarProvider: std::fmt::Debug {
     /// Get variable value
     fn get_value(&self, var_names: Vec<String>) -> Result<ScalarValue>;
 
