@@ -101,6 +101,35 @@ SELECT arrow_cast('1', 43)
 query error Error unrecognized word: unknown
 SELECT arrow_cast('1', 'unknown')
 
+# Round Trip tests:
+query TTTTTTTTTTTTTTTTTTT
+SELECT
+  arrow_typeof(arrow_cast(1, 'Int8')) as col_i8,
+  arrow_typeof(arrow_cast(1, 'Int16')) as col_i16,
+  arrow_typeof(arrow_cast(1, 'Int32')) as col_i32,
+  arrow_typeof(arrow_cast(1, 'Int64')) as col_i64,
+  arrow_typeof(arrow_cast(1, 'UInt8')) as col_u8,
+  arrow_typeof(arrow_cast(1, 'UInt16')) as col_u16,
+  arrow_typeof(arrow_cast(1, 'UInt32')) as col_u32,
+  arrow_typeof(arrow_cast(1, 'UInt64')) as col_u64,
+  -- can't seem to cast to Float16 for some reason
+  -- arrow_typeof(arrow_cast(1, 'Float16')) as col_f16,
+  arrow_typeof(arrow_cast(1, 'Float32')) as col_f32,
+  arrow_typeof(arrow_cast(1, 'Float64')) as col_f64,
+  arrow_typeof(arrow_cast('foo', 'Utf8')) as col_utf8,
+  arrow_typeof(arrow_cast('foo', 'LargeUtf8')) as col_large_utf8,
+  arrow_typeof(arrow_cast('foo', 'Binary')) as col_binary,
+  arrow_typeof(arrow_cast('foo', 'LargeBinary')) as col_large_binary,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, None)')) as col_ts_s,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Millisecond, None)')) as col_ts_ms,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Microsecond, None)')) as col_ts_us,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Nanosecond, None)')) as col_ts_ns,
+  arrow_typeof(arrow_cast('foo', 'Dictionary(Int32, Utf8)')) as col_dict
+----
+Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float32 Float64 Utf8 LargeUtf8 Binary LargeBinary Timestamp(Second, None) Timestamp(Millisecond, None) Timestamp(Microsecond, None) Timestamp(Nanosecond, None) Dictionary(Int32, Utf8)
+
+
+
 
 ## Basic Types: Create a table
 
@@ -115,6 +144,7 @@ create table foo as select
   arrow_cast(1, 'UInt32') as col_u32,
   arrow_cast(1, 'UInt64') as col_u64,
   -- can't seem to cast to Float16 for some reason
+  -- arrow_cast(1.0, 'Float16') as col_f16,
   arrow_cast(1.0, 'Float32') as col_f32,
   arrow_cast(1.0, 'Float64') as col_f64
 ;
@@ -131,6 +161,7 @@ SELECT
   arrow_typeof(col_u16),
   arrow_typeof(col_u32),
   arrow_typeof(col_u64),
+  -- arrow_typeof(col_f16),
   arrow_typeof(col_f32),
   arrow_typeof(col_f64)
   FROM foo;
@@ -219,28 +250,23 @@ Timestamp(Second, None) Timestamp(Millisecond, None) Timestamp(Microsecond, None
 statement ok
 drop table foo
 
-
-## Durations: Create a table
+## Dictionaries
 
 statement ok
 create table foo as select
-  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, None)') as col_ts_s,
-  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Millisecond, None)') as col_ts_ms,
-  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Microsecond, None)') as col_ts_us,
-  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Nanosecond, None)') as col_ts_ns
+  arrow_cast('foo', 'Dictionary(Int32, Utf8)') as col_dict_int32_utf8,
+  arrow_cast('foo', 'Dictionary(Int8, LargeUtf8)') as col_dict_int8_largeutf8
 ;
 
 ## Ensure each column in the table has the expected type
 
-query TTTT
+query TT
 SELECT
-  arrow_typeof(col_ts_s),
-  arrow_typeof(col_ts_ms),
-  arrow_typeof(col_ts_us),
-  arrow_typeof(col_ts_ns)
+  arrow_typeof(col_dict_int32_utf8),
+  arrow_typeof(col_dict_int8_largeutf8)
   FROM foo;
 ----
-Timestamp(Second, None) Timestamp(Millisecond, None) Timestamp(Microsecond, None) Timestamp(Nanosecond, None)
+Dictionary(Int32, Utf8) Dictionary(Int8, LargeUtf8)
 
 
 statement ok
