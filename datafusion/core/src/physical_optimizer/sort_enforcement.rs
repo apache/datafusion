@@ -574,9 +574,13 @@ fn analyze_window_sort_removal(
             orderby_sort_keys.push(elem.clone());
         }
     }
-    let (should_reverse, partition_search_mode) = if let Some(res) =
-        can_skip_ordering(sort_tree, window_expr[0].partition_by(), &orderby_sort_keys)?
-    {
+    let is_unbounded = is_res_unbounded(window_exec)?;
+    let (should_reverse, partition_search_mode) = if let Some(res) = can_skip_ordering(
+        sort_tree,
+        window_expr[0].partition_by(),
+        &orderby_sort_keys,
+        is_unbounded,
+    )? {
         res
     } else {
         // cannot skip sort
@@ -648,6 +652,7 @@ fn can_skip_ordering(
     sort_tree: &ExecTree,
     partitionby_exprs: &[Arc<dyn PhysicalExpr>],
     orderby_keys: &[PhysicalSortExpr],
+    is_unbounded: bool,
 ) -> Result<Option<(bool, PartitionSearchMode)>> {
     let mut res = None;
     for sort_any in sort_tree.get_leaves() {
@@ -758,6 +763,12 @@ fn can_skip_ordering(
             } else {
                 PartitionSearchMode::Linear
             };
+
+            // Linear and PartitallySorted implementations are not beneficial for finite source cases
+            // (e.g non-streaming). Hence use these implementations only in streaming case to not break pipeline.
+            if !is_unbounded && !matches!(mode, PartitionSearchMode::Sorted) {
+                return Ok(None);
+            }
 
             if let Some((first_should_reverse, first_mode)) = &res {
                 if *first_should_reverse != should_reverse || first_mode != &mode {
@@ -1005,6 +1016,22 @@ fn calc_ordering_range(in1: &[usize]) -> usize {
         }
     }
     count
+}
+
+// Calculate whether the plan is unbounded by recursively calculating
+// whether its children are unbounded or not.
+fn is_res_unbounded(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
+    if plan.children().is_empty() {
+        // Executor is at the bottom
+        plan.unbounded_output(&[])
+    } else {
+        let children_unbounded = plan
+            .children()
+            .iter()
+            .map(is_res_unbounded)
+            .collect::<Result<Vec<_>>>()?;
+        plan.unbounded_output(&children_unbounded)
+    }
 }
 
 #[cfg(test)]
