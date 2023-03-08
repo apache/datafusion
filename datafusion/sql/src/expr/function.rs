@@ -29,6 +29,8 @@ use sqlparser::ast::{
 };
 use std::str::FromStr;
 
+use super::arrow_cast::ARROW_CAST_NAME;
+
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(super) fn sql_function_to_expr(
         &self,
@@ -110,24 +112,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // finally, user-defined functions (UDF) and UDAF
-        match self.schema_provider.get_function_meta(&name) {
-            Some(fm) => {
-                let args = self.function_args_to_expr(function.args, schema)?;
-
-                Ok(Expr::ScalarUDF { fun: fm, args })
-            }
-            None => match self.schema_provider.get_aggregate_meta(&name) {
-                Some(fm) => {
-                    let args = self.function_args_to_expr(function.args, schema)?;
-                    Ok(Expr::AggregateUDF {
-                        fun: fm,
-                        args,
-                        filter: None,
-                    })
-                }
-                _ => Err(DataFusionError::Plan(format!("Invalid function '{name}'"))),
-            },
+        if let Some(fm) = self.schema_provider.get_function_meta(&name) {
+            let args = self.function_args_to_expr(function.args, schema)?;
+            return Ok(Expr::ScalarUDF { fun: fm, args });
         }
+
+        // User defined aggregate functions
+        if let Some(fm) = self.schema_provider.get_aggregate_meta(&name) {
+            let args = self.function_args_to_expr(function.args, schema)?;
+            return Ok(Expr::AggregateUDF {
+                fun: fm,
+                args,
+                filter: None,
+            });
+        }
+
+        // Special case arrow_cast (as its type is dependent on its argument value)
+        if name == ARROW_CAST_NAME {
+            let args = self.function_args_to_expr(function.args, schema)?;
+            return super::arrow_cast::create_arrow_cast(args, schema);
+        }
+
+        // Could not find the relevant function, so return an error
+        Err(DataFusionError::Plan(format!("Invalid function '{name}'")))
     }
 
     pub(super) fn sql_named_function_to_expr(
