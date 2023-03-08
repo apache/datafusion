@@ -684,7 +684,7 @@ trait Visit {
 ///
 ///
 /// [`Debug`]: std::fmt::Debug
-/// [`ExtensionsOptions`]: crate::config::ExtensionsOptions
+/// [`ExtensionsOptions`]: crate::config::ExtensionOptions
 #[macro_export]
 macro_rules! extensions_options {
     (
