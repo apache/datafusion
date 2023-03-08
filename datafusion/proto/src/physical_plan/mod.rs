@@ -956,15 +956,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )),
             })
         } else if let Some(exec) = plan.downcast_ref::<ParquetExec>() {
-            let pruning_expr = exec
-                .pruning_predicate()
-                .map(|pred| pred.orig_expr().clone().try_into())
+            let predicate = exec
+                .predicate()
+                .map(|pred| pred.clone().try_into())
                 .transpose()?;
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ParquetScan(
                     protobuf::ParquetScanExecNode {
                         base_conf: Some(exec.base_config().try_into()?),
-                        predicate: pruning_expr,
+                        predicate,
                     },
                 )),
             })

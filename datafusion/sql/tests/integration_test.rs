@@ -1927,7 +1927,7 @@ fn union_with_multiply_cols() {
 #[test]
 fn sorted_union_with_different_types_and_group_by() {
     let sql = "SELECT a FROM (select 1 a) x GROUP BY 1 UNION ALL (SELECT a FROM (select 1.1 a) x GROUP BY 1) ORDER BY 1";
-    let expected = "Sort: a ASC NULLS LAST\
+    let expected = "Sort: x.a ASC NULLS LAST\
         \n  Union\
         \n    Projection: CAST(x.a AS Float64) AS a\
         \n      Aggregate: groupBy=[[x.a]], aggr=[[]]\
