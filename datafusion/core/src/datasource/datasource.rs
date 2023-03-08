@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion_common::Statistics;
+use datafusion_common::{DataFusionError, Statistics};
 use datafusion_expr::{CreateExternalTable, LogicalPlan};
 pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
@@ -96,6 +96,15 @@ pub trait TableProvider: Sync + Send {
     /// Get statistics for this table, if available
     fn statistics(&self) -> Option<Statistics> {
         None
+    }
+
+    /// Insert API
+    async fn insert_into_table(
+        &self,
+        _state: &SessionState,
+        _input: &LogicalPlan,
+    ) -> Result<()> {
+        Err(DataFusionError::Internal("Not implemented".to_owned()))
     }
 }
 

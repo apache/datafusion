@@ -31,7 +31,7 @@ use crate::{
         optimizer::PhysicalOptimizerRule,
     },
 };
-use datafusion_expr::{DescribeTable, StringifiedPlan};
+use datafusion_expr::{DescribeTable, DmlStatement, StringifiedPlan, WriteOp};
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
@@ -318,6 +318,20 @@ impl SessionContext {
         let plan = self.state().create_logical_plan(sql).await?;
 
         match plan {
+            LogicalPlan::Dml(DmlStatement {
+                table_name,
+                op: WriteOp::Insert,
+                input,
+                ..
+            }) => {
+                let exist = self.table_exist(&table_name)?;
+                if exist {
+                    let name = table_name.table();
+                    let provider = self.table_provider(name).await?;
+                    provider.insert_into_table(&self.state(), &input).await?;
+                }
+                self.return_empty_dataframe()
+            }
             LogicalPlan::CreateExternalTable(cmd) => {
                 self.create_external_table(&cmd).await
             }
@@ -2711,6 +2725,46 @@ mod tests {
         let results = ctx.sql("SELECT * FROM information_schema.tables WHERE table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
 
         assert_eq!(results[0].num_rows(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sql_table_insert() -> Result<()> {
+        let session_ctx = SessionContext::with_config(SessionConfig::new());
+
+        session_ctx
+            .sql("CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)")
+            .await?
+            .collect()
+            .await?;
+        session_ctx
+            .sql("CREATE TABLE xyz AS VALUES (1,3,3), (5,5,6)")
+            .await?
+            .collect()
+            .await?;
+
+        let sql = "INSERT INTO abc SELECT * FROM xyz";
+        session_ctx.sql(sql).await?.collect().await?;
+
+        let results = session_ctx
+            .sql("SELECT * FROM abc")
+            .await?
+            .collect()
+            .await?;
+
+        let expected = vec![
+            "+---------+---------+---------+",
+            "| column1 | column2 | column3 |",
+            "+---------+---------+---------+",
+            "| 1       | 2       | 3       |",
+            "| 4       | 5       | 6       |",
+            "| 1       | 3       | 3       |",
+            "| 5       | 5       | 6       |",
+            "+---------+---------+---------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+
         Ok(())
     }
 
