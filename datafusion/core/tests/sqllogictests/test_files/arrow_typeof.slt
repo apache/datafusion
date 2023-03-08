@@ -84,12 +84,14 @@ Utf8
 
 #### arrow_cast (in some ways opposite of arrow_typeof)
 
+# Basic tests
 
 query I
 SELECT arrow_cast('1', 'Int16')
 ----
 1
 
+# Basic error test
 query error Error during planning: arrow_cast needs 2 arguments, 1 provided
 SELECT arrow_cast('1')
 
@@ -100,7 +102,7 @@ query error Error unrecognized word: unknown
 SELECT arrow_cast('1', 'unknown')
 
 
-## Basic types
+## Basic Types: Create a table
 
 statement ok
 create table foo as select
@@ -117,6 +119,7 @@ create table foo as select
   arrow_cast(1.0, 'Float64') as col_f64
 ;
 
+## Ensure each column in the table has the expected type
 
 query TTTTTTTTTT
 SELECT
@@ -135,11 +138,10 @@ SELECT
 Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float32 Float64
 
 
-
 statement ok
 drop table foo
 
-## Decimals
+## Decimals: Create a table
 
 statement ok
 create table foo as select
@@ -149,6 +151,8 @@ create table foo as select
   --arrow_cast(100, 'Decimal256(3,2)') as col_d256
 ;
 
+
+## Ensure each column in the table has the expected type
 
 query T
 SELECT
@@ -162,7 +166,7 @@ Decimal128(3, 2)
 statement ok
 drop table foo
 
-## strings, large strings
+## Strings, Binary: Create a table
 
 statement ok
 create table foo as select
@@ -172,6 +176,7 @@ create table foo as select
   arrow_cast('foo', 'LargeBinary') as col_large_binary
 ;
 
+## Ensure each column in the table has the expected type
 
 query TTTT
 SELECT
@@ -188,7 +193,7 @@ statement ok
 drop table foo
 
 
-## timestamps
+## Timestamps: Create a table
 
 statement ok
 create table foo as select
@@ -198,6 +203,7 @@ create table foo as select
   arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Nanosecond, None)') as col_ts_ns
 ;
 
+## Ensure each column in the table has the expected type
 
 query TTTT
 SELECT
@@ -214,7 +220,7 @@ statement ok
 drop table foo
 
 
-## durations
+## Durations: Create a table
 
 statement ok
 create table foo as select
@@ -224,6 +230,7 @@ create table foo as select
   arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Nanosecond, None)') as col_ts_ns
 ;
 
+## Ensure each column in the table has the expected type
 
 query TTTT
 SELECT
@@ -240,14 +247,14 @@ statement ok
 drop table foo
 
 
-## intervals
+## Intervals:
 
 query error Cannot automatically convert Interval\(DayTime\) to Interval\(MonthDayNano\)
 ---
 select arrow_cast(interval '30 minutes', 'Interval(MonthDayNano)');
 
 
-## duration
+## Duration
 
 query error Cannot automatically convert Interval\(DayTime\) to Duration\(Second\)
 ---
