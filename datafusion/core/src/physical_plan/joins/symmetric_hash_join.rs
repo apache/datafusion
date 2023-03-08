@@ -349,7 +349,7 @@ impl SymmetricHashJoinExec {
             random_state,
             metrics: ExecutionPlanMetricsSet::new(),
             column_indices,
-            null_equals_null: null_equals_null,
+            null_equals_null,
         })
     }
 
