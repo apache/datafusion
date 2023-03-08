@@ -1356,7 +1356,7 @@ mod tests {
             None,
             join_type,
             PartitionMode::CollectLeft,
-            &null_equals_null,
+            null_equals_null,
         )
     }
 
@@ -1375,7 +1375,7 @@ mod tests {
             Some(filter),
             join_type,
             PartitionMode::CollectLeft,
-            &null_equals_null,
+            null_equals_null,
         )
     }
 
@@ -1429,7 +1429,7 @@ mod tests {
             None,
             join_type,
             PartitionMode::Partitioned,
-            &null_equals_null,
+            null_equals_null,
         )?;
 
         let columns = columns(&join.schema());
@@ -2680,7 +2680,7 @@ mod tests {
             &[Column::new("a", 0)],
             &[Column::new("a", 0)],
             &random_state,
-            &false,
+            false,
             &mut vec![0; right.num_rows()],
             None,
         )?;

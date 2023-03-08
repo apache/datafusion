@@ -1367,7 +1367,7 @@ mod roundtrip_tests {
                     None,
                     join_type,
                     *partition_mode,
-                    &false,
+                    false,
                 )?))?;
             }
         }

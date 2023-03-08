@@ -1086,7 +1086,7 @@ mod tests {
                 None,
                 join_type,
                 PartitionMode::Partitioned,
-                &false,
+                false,
             )
             .unwrap(),
         )

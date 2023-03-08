@@ -2465,7 +2465,7 @@ mod tests {
             right_side_joiner.offset,
             &join_column_indices,
             &random_state,
-            &false,
+            false,
         )?;
         assert_eq!(left_side_joiner.visited_rows.is_empty(), should_be_empty);
         Ok(())
