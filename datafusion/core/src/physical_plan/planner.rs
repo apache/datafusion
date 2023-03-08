@@ -860,6 +860,8 @@ impl DefaultPhysicalPlanner {
                     schema: join_schema,
                     ..
                 }) => {
+                    let null_equals_null = *null_equals_null;
+
                     // If join has expression equijoin keys, add physical projecton.
                     let has_expr_join_key = keys.iter().any(|(l, r)| {
                         !(matches!(l, Expr::Column(_))
@@ -1030,7 +1032,7 @@ impl DefaultPhysicalPlanner {
                                 join_on,
                                 *join_type,
                                 vec![SortOptions::default(); join_on_len],
-                                *null_equals_null,
+                                null_equals_null,
                             )?))
                         }
                     } else if session_state.config().target_partitions() > 1
@@ -2401,6 +2403,10 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
     impl UserDefinedLogicalNode for NoOpExtensionNode {
         fn as_any(&self) -> &dyn Any {
             self
+        }
+
+        fn name(&self) -> &str {
+            "NoOp"
         }
 
         fn inputs(&self) -> Vec<&LogicalPlan> {

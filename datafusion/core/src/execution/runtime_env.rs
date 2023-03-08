@@ -22,10 +22,7 @@ use crate::{
     error::Result,
     execution::disk_manager::{DiskManager, DiskManagerConfig},
 };
-use std::collections::HashMap;
 
-use crate::datasource::datasource::TableProviderFactory;
-use crate::datasource::listing_table_factory::ListingTableFactory;
 use datafusion_common::DataFusionError;
 use datafusion_execution::{
     memory_pool::{GreedyMemoryPool, MemoryPool, UnboundedMemoryPool},
@@ -46,8 +43,6 @@ pub struct RuntimeEnv {
     pub disk_manager: Arc<DiskManager>,
     /// Object Store Registry
     pub object_store_registry: Arc<ObjectStoreRegistry>,
-    /// TableProviderFactories
-    pub table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
 }
 
 impl Debug for RuntimeEnv {
@@ -63,7 +58,6 @@ impl RuntimeEnv {
             memory_pool,
             disk_manager,
             object_store_registry,
-            table_factories,
         } = config;
 
         let memory_pool =
@@ -73,7 +67,6 @@ impl RuntimeEnv {
             memory_pool,
             disk_manager: DiskManager::try_new(disk_manager)?,
             object_store_registry,
-            table_factories,
         })
     }
 
@@ -94,14 +87,6 @@ impl RuntimeEnv {
     ) -> Option<Arc<dyn ObjectStore>> {
         self.object_store_registry
             .register_store(scheme, host, object_store)
-    }
-
-    /// Registers TableFactories
-    pub fn register_table_factories(
-        &mut self,
-        table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
-    ) {
-        self.table_factories.extend(table_factories)
     }
 
     /// Retrieves a `ObjectStore` instance for a url by consulting the
@@ -131,24 +116,12 @@ pub struct RuntimeConfig {
     pub memory_pool: Option<Arc<dyn MemoryPool>>,
     /// ObjectStoreRegistry to get object store based on url
     pub object_store_registry: Arc<ObjectStoreRegistry>,
-    /// Custom table factories for things like deltalake that are not part of core datafusion
-    pub table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
 }
 
 impl RuntimeConfig {
     /// New with default values
     pub fn new() -> Self {
-        let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
-            HashMap::new();
-        table_factories.insert("PARQUET".into(), Arc::new(ListingTableFactory::new()));
-        table_factories.insert("CSV".into(), Arc::new(ListingTableFactory::new()));
-        table_factories.insert("JSON".into(), Arc::new(ListingTableFactory::new()));
-        table_factories.insert("NDJSON".into(), Arc::new(ListingTableFactory::new()));
-        table_factories.insert("AVRO".into(), Arc::new(ListingTableFactory::new()));
-        Self {
-            table_factories,
-            ..Default::default()
-        }
+        Default::default()
     }
 
     /// Customize disk manager
@@ -169,15 +142,6 @@ impl RuntimeConfig {
         object_store_registry: Arc<ObjectStoreRegistry>,
     ) -> Self {
         self.object_store_registry = object_store_registry;
-        self
-    }
-
-    /// Customize object store registry
-    pub fn with_table_factories(
-        mut self,
-        table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
-    ) -> Self {
-        self.table_factories = table_factories;
         self
     }
 

@@ -29,7 +29,24 @@ use std::{any::Any, cmp::Eq, collections::HashSet, fmt, sync::Arc};
 /// example of how to use this extension API.
 pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// Return a reference to self as Any, to support dynamic downcasting
+    ///
+    /// Typically this will look like:
+    ///
+    /// ```
+    /// # use std::any::Any;
+    /// # struct Dummy { }
+    ///
+    /// # impl Dummy {
+    ///   // canonical boiler plate
+    ///   fn as_any(&self) -> &dyn Any {
+    ///      self
+    ///   }
+    /// # }
+    /// ```
     fn as_any(&self) -> &dyn Any;
+
+    /// Return the plan's name
+    fn name(&self) -> &str;
 
     /// Return the logical plan's inputs
     fn inputs(&self) -> Vec<&LogicalPlan>;
@@ -79,12 +96,72 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
         inputs: &[LogicalPlan],
     ) -> Arc<dyn UserDefinedLogicalNode>;
 
-    /// Hashing respecting requirements from [std::hash::Hash].
+    /// Update the hash `state` with this node requirements from
+    /// [`Hash`].
+    ///
+    /// This method is required to support hashing [`LogicalPlan`]s.  To
+    /// implement it, typically the type implementing
+    /// [`UserDefinedLogicalNode`] typically implements [`Hash`] and
+    /// then the following boiler plate is used:
+    ///
+    /// # Example:
+    /// ```
+    /// // User defined node that derives Hash
+    /// #[derive(Hash, Debug, PartialEq, Eq)]
+    /// struct MyNode {
+    ///   val: u64
+    /// }
+    ///
+    /// // impl UserDefinedLogicalNode {
+    /// // ...
+    /// # impl MyNode {
+    ///   // Boiler plate to call the derived Hash impl
+    ///   fn dyn_hash(&self, state: &mut dyn std::hash::Hasher) {
+    ///     use std::hash::Hash;
+    ///     let mut s = state;
+    ///     self.hash(&mut s);
+    ///   }
+    /// // }
+    /// # }
+    /// ```
+    /// Note: [`UserDefinedLogicalNode`] is not constrained by [`Hash`]
+    /// directly because it must remain object safe.
     fn dyn_hash(&self, state: &mut dyn Hasher);
 
-    /// Comparison respecting requirements from [std::cmp::Eq].
+    /// Compare `other`, respecting requirements from [std::cmp::Eq].
     ///
-    /// When `other` has an another type than `self`, then the values are *not* equal.
+    /// When `other` has an another type than `self`, then the values
+    /// are *not* equal.
+    ///
+    /// This method is required to support Eq on [`LogicalPlan`]s.  To
+    /// implement it, typically the type implementing
+    /// [`UserDefinedLogicalNode`] typically implements [`Eq`] and
+    /// then the following boiler plate is used:
+    ///
+    /// # Example:
+    /// ```
+    /// # use datafusion_expr::UserDefinedLogicalNode;
+    /// // User defined node that derives Eq
+    /// #[derive(Hash, Debug, PartialEq, Eq)]
+    /// struct MyNode {
+    ///   val: u64
+    /// }
+    ///
+    /// // impl UserDefinedLogicalNode {
+    /// // ...
+    /// # impl MyNode {
+    ///   // Boiler plate to call the derived Eq impl
+    ///   fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool {
+    ///     match other.as_any().downcast_ref::<Self>() {
+    ///       Some(o) => self == o,
+    ///       None => false,
+    ///     }
+    ///   }
+    /// // }
+    /// # }
+    /// ```
+    /// Note: [`UserDefinedLogicalNode`] is not constrained by [`Eq`]
+    /// directly because it must remain object safe.
     fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool;
 }
 

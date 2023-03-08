@@ -111,7 +111,7 @@ async fn test_union_upcast_types() -> Result<()> {
 
     let expected_logical_plan = vec![
         "Limit: skip=0, fetch=5 [c1:Utf8, c9:Int64]",
-        "  Sort: c9 DESC NULLS FIRST [c1:Utf8, c9:Int64]",
+        "  Sort: aggregate_test_100.c9 DESC NULLS FIRST [c1:Utf8, c9:Int64]",
         "    Union [c1:Utf8, c9:Int64]",
         "      Projection: aggregate_test_100.c1, CAST(aggregate_test_100.c9 AS Int64) AS c9 [c1:Utf8, c9:Int64]",
         "        TableScan: aggregate_test_100 [c1:Utf8, c2:UInt32, c3:Int8, c4:Int16, c5:Int32, c6:Int64, c7:UInt8, c8:UInt16, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8]",
