@@ -126,7 +126,7 @@ impl<'a> Parser<'a> {
     fn parse(mut self) -> Result<DataType> {
         let data_type = self.parse_next_type()?;
         // ensure that there is no trailing content
-        if self.tokenizer.peek_next_char().is_some() {
+        if self.tokenizer.next().is_some() {
             return Err(make_error(
                 self.val,
                 &format!("checking trailing content after parsing '{data_type}'"),
@@ -615,6 +615,10 @@ mod test {
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             DataType::Dictionary(
                 Box::new(DataType::Int8),
+                Box::new(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+            ),
+            DataType::Dictionary(
+                Box::new(DataType::Int8),
                 Box::new(DataType::FixedSizeBinary(23)),
             ),
             DataType::Dictionary(
@@ -629,6 +633,36 @@ mod test {
             ),
             // TODO support more structured types (List, LargeList, Struct, Union, Map, RunEndEncoded, etc)
         ]
+    }
+
+    #[test]
+    fn test_parse_data_type_whitespace_tolerance() {
+        // (string to parse, expected DataType)
+        let cases = [
+            ("Int8", DataType::Int8),
+            (
+                "Timestamp        (Nanosecond,      None)",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ),
+            (
+                "Timestamp        (Nanosecond,      None)  ",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ),
+            (
+                "          Timestamp        (Nanosecond,      None               )",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ),
+            (
+                "Timestamp        (Nanosecond,      None               )  ",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ),
+        ];
+
+        for (data_type_string, expected_data_type) in cases {
+            println!("Parsing '{data_type_string}', expecting '{expected_data_type:?}'");
+            let parsed_data_type = parse_data_type(data_type_string).unwrap();
+            assert_eq!(parsed_data_type, expected_data_type);
+        }
     }
 
     #[test]
