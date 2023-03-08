@@ -93,7 +93,7 @@ pub fn create_arrow_cast(mut args: Vec<Expr>, schema: &DFSchema) -> Result<Expr>
 /// assert_eq!(data_type, DataType::Int32);
 /// ```
 ///
-/// TODO file a ticket about bringing this into arrow possibly
+/// Remove if added to arrow: https://github.com/apache/arrow-rs/issues/3821
 pub fn parse_data_type(val: &str) -> Result<DataType> {
     Parser::new(val).parse()
 }
