@@ -580,17 +580,11 @@ fn ts_microsec_sub_to_interval(
     lhs_tz: &Option<String>,
     rhs_tz: &Option<String>,
 ) -> Result<ScalarValue, DataFusionError> {
-    match (lhs_ts.checked_mul(1_000), rhs_ts.checked_mul(1_000)) {
-        (Some(lhs_ns), Some(rhs_ns)) => {
-            ts_nanosec_sub_to_interval(&lhs_ns, &rhs_ns, lhs_tz, rhs_tz)
-        }
-        (None, _) => Err(DataFusionError::NotImplemented(format!(
-            "overflow while conversion of {lhs_ts:?}"
-        ))),
-        (_, None) => Err(DataFusionError::NotImplemented(format!(
-            "overflow while conversion of {rhs_ts:?}"
-        ))),
-    }
+    let err_msg = "Overflow while conversion to microseconds";
+    let err = || DataFusionError::Execution(err_msg.to_string());
+    let lhs_ns = lhs_ts.checked_mul(1_000).ok_or_else(err)?;
+    let rhs_ns = rhs_ts.checked_mul(1_000).ok_or_else(err)?;
+    ts_nanosec_sub_to_interval(&lhs_ns, &rhs_ns, lhs_tz, rhs_tz)
 }
 #[inline]
 fn ts_millisec_sub_to_interval(
@@ -599,17 +593,11 @@ fn ts_millisec_sub_to_interval(
     lhs_tz: &Option<String>,
     rhs_tz: &Option<String>,
 ) -> Result<ScalarValue, DataFusionError> {
-    match (lhs_ts.checked_mul(1_000_000), rhs_ts.checked_mul(1_000_000)) {
-        (Some(lhs_ns), Some(rhs_ns)) => {
-            ts_nanosec_sub_to_interval(&lhs_ns, &rhs_ns, lhs_tz, rhs_tz)
-        }
-        (None, _) => Err(DataFusionError::NotImplemented(format!(
-            "overflow while conversion of {lhs_ts:?}"
-        ))),
-        (_, None) => Err(DataFusionError::NotImplemented(format!(
-            "overflow while conversion of {rhs_ts:?}"
-        ))),
-    }
+    let err_msg = "Overflow while conversion to microseconds";
+    let err = || DataFusionError::Execution(err_msg.to_string());
+    let lhs_ns = lhs_ts.checked_mul(1_000_000).ok_or_else(err)?;
+    let rhs_ns = rhs_ts.checked_mul(1_000_000).ok_or_else(err)?;
+    ts_nanosec_sub_to_interval(&lhs_ns, &rhs_ns, lhs_tz, rhs_tz)
 }
 #[inline]
 fn ts_sec_sub_to_interval(
@@ -618,20 +606,11 @@ fn ts_sec_sub_to_interval(
     lhs_tz: &Option<String>,
     rhs_tz: &Option<String>,
 ) -> Result<ScalarValue, DataFusionError> {
-    match (
-        lhs_ts.checked_mul(1_000_000_000),
-        rhs_ts.checked_mul(1_000_000_000),
-    ) {
-        (Some(lhs_ns), Some(rhs_ns)) => {
-            ts_nanosec_sub_to_interval(&lhs_ns, &rhs_ns, lhs_tz, rhs_tz)
-        }
-        (None, _) => Err(DataFusionError::NotImplemented(format!(
-            "overflow while conversion of {lhs_ts:?}"
-        ))),
-        (_, None) => Err(DataFusionError::NotImplemented(format!(
-            "overflow while conversion of {rhs_ts:?}"
-        ))),
-    }
+    let err_msg = "Overflow while conversion to microseconds";
+    let err = || DataFusionError::Execution(err_msg.to_string());
+    let lhs_ns = lhs_ts.checked_mul(1_000_000_000).ok_or_else(err)?;
+    let rhs_ns = rhs_ts.checked_mul(1_000_000_000).ok_or_else(err)?;
+    ts_nanosec_sub_to_interval(&lhs_ns, &rhs_ns, lhs_tz, rhs_tz)
 }
 
 // This function will be removed once the result format is clarified.
@@ -641,7 +620,7 @@ fn ts_nanosec_sub_to_interval(
     lhs_tz: &Option<String>,
     rhs_tz: &Option<String>,
 ) -> Result<ScalarValue, DataFusionError> {
-    let round_up_to_month = true;
+    let round_up_to_month = false;
 
     if round_up_to_month {
         ts_nanosec_sub_to_interval_months(lhs_ts, rhs_ts, lhs_tz, rhs_tz)
@@ -676,9 +655,8 @@ fn ts_nanosec_sub_to_interval_months(
     let (mut months, mut months_residual) =
         datetime_month_sub_with_rem(naive_date_time2, naive_date_time1)?;
 
-    let err = || {
-        DataFusionError::NotImplemented(String::from("months_residual nanosec overflow"))
-    };
+    let err =
+        || DataFusionError::Execution(String::from("months_residual nanosec overflow"));
     // Check whether we can return an IntervalYearMonth variant without losing information
     let value = months_residual.num_nanoseconds().ok_or_else(err)?;
     if value == 0 {
@@ -779,7 +757,7 @@ fn integer_to_naive_datetime(
         ),
     ) {
         (Some(x), Some(y)) => Ok((x, y)),
-        (x, y) => Err(DataFusionError::NotImplemented(format!(
+        (x, y) => Err(DataFusionError::Execution(format!(
             "timestamps {x:?} or {y:?} cannot be converted to datetimes",
         ))),
     }
@@ -805,20 +783,20 @@ fn integer_w_timezone_to_naive_datetime(
 #[inline]
 fn parse_tz_to_offset(tz: &str) -> Result<FixedOffset, DataFusionError> {
     let err_str = &String::from("error while parsing timezone");
-    let err = || DataFusionError::NotImplemented(err_str.to_string());
+    let err = || DataFusionError::Execution(err_str.to_string());
 
     let sign = tz.chars().next().ok_or_else(err)?;
     let hours = tz[1..3]
         .parse::<i32>()
-        .map_err(|_e| DataFusionError::NotImplemented(err_str.to_string()))?;
+        .map_err(|_e| DataFusionError::Execution(err_str.to_string()))?;
     let minutes = tz[4..6]
         .parse::<i32>()
-        .map_err(|_e| DataFusionError::NotImplemented(err_str.to_string()))?;
+        .map_err(|_e| DataFusionError::Execution(err_str.to_string()))?;
     let timezone_offset = match sign {
         '-' => FixedOffset::east_opt(hours * 3600 + minutes * 60).ok_or_else(err)?,
         '+' => FixedOffset::west_opt(hours * 3600 + minutes * 60).ok_or_else(err)?,
         _ => {
-            return Err(DataFusionError::NotImplemented(err_str.to_string()));
+            return Err(DataFusionError::Execution(err_str.to_string()));
         }
     };
     Ok(timezone_offset)
@@ -871,7 +849,7 @@ fn datetime_day_sub(
     date_time2
         .signed_duration_since(date_time1)
         .num_nanoseconds()
-        .ok_or(DataFusionError::NotImplemented(String::from(
+        .ok_or(DataFusionError::Execution(String::from(
             "datetime subtraction overflow",
         )))
 }
@@ -891,7 +869,7 @@ fn normalize_duration(
     let months_residual_new = match months_residual.checked_add(added_days) {
         Some(value) => value,
         None => {
-            return Err(DataFusionError::NotImplemented(format!(
+            return Err(DataFusionError::Execution(format!(
                 "normalize duration error, cannot add {added_days:?} days to {months_residual:?}",
             )))
         }
@@ -906,14 +884,14 @@ fn days_in_month(year: i32, month: u32) -> Result<u32, DataFusionError> {
         let last_day = match first_day.with_month(month + 1) {
             Some(day) => day,
             None => NaiveDate::from_ymd_opt(year + 1, 1, 1).ok_or_else(|| {
-                DataFusionError::NotImplemented(format!("out of range year: 1+{year}"))
+                DataFusionError::Execution(format!("out of range year: 1+{year}"))
             })?,
         };
         if let Some(days) = last_day.pred_opt() {
             return Ok(days.day());
         }
     }
-    Err(DataFusionError::NotImplemented(format!(
+    Err(DataFusionError::Execution(format!(
         "invalid date parameters, year: {year:?} & month: {month:?}",
     )))
 }
@@ -4805,39 +4783,44 @@ mod tests {
 
     #[test]
     fn timestamp_op_tests() {
-        let round_up_to_month = true;
+        let round_up_to_month = false;
         // positive interval, edge cases
-        let timestamps_next = new_timestamps_next();
-        let timestamps_prev = new_timestamps_prev();
+        let vec_timestamps_next = timestamps_next();
+        let vec_timestamps_prev = timestamps_prev();
         let expected_results = if round_up_to_month {
-            new_expected_results_months(1)
+            expected_results_months(1)
         } else {
-            new_expected_results_days(1)
+            expected_results_days(1)
         };
         for (idx, exp) in expected_results.iter().enumerate() {
             assert_eq!(
                 *exp,
-                timestamps_next[idx].sub(&timestamps_prev[idx]).unwrap()
+                vec_timestamps_next[idx]
+                    .sub(&vec_timestamps_prev[idx])
+                    .unwrap()
             )
         }
 
         // negative interval, edge cases
-        let timestamps_next = new_timestamps_prev();
-        let timestamps_prev = new_timestamps_next();
+        let vec_timestamps_next = timestamps_prev();
+        let vec_timestamps_prev = timestamps_next();
         let expected_results = if round_up_to_month {
-            new_expected_results_months(-1)
+            expected_results_months(-1)
         } else {
-            new_expected_results_days(-1)
+            expected_results_days(-1)
         };
         for (idx, exp) in expected_results.iter().enumerate() {
             assert_eq!(
                 *exp,
-                timestamps_next[idx].sub(&timestamps_prev[idx]).unwrap()
+                vec_timestamps_next[idx]
+                    .sub(&vec_timestamps_prev[idx])
+                    .unwrap()
             );
         }
-
-        // RANDOM-VALUED TESTS
-
+    }
+    #[test]
+    fn timestamp_op_random_tests() {
+        let round_up_to_month = false;
         // timestamp1 + (or -) interval = timestamp2
         // timestamp2 - timestamp1 (or timestamp1 - timestamp2) = interval ?
         let sample_size = 100000;
@@ -4862,7 +4845,7 @@ mod tests {
         }
     }
 
-    fn new_timestamps_next() -> Vec<ScalarValue> {
+    fn timestamps_next() -> Vec<ScalarValue> {
         vec![
             ScalarValue::TimestampNanosecond(
                 Some(
@@ -4957,7 +4940,7 @@ mod tests {
         ]
     }
 
-    fn new_timestamps_prev() -> Vec<ScalarValue> {
+    fn timestamps_prev() -> Vec<ScalarValue> {
         vec![
             ScalarValue::TimestampNanosecond(
                 Some(
@@ -5052,7 +5035,7 @@ mod tests {
         ]
     }
 
-    fn new_expected_results_months(sign: i32) -> Vec<ScalarValue> {
+    fn expected_results_months(sign: i32) -> Vec<ScalarValue> {
         vec![
             ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, 0))),
             ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
@@ -5087,7 +5070,7 @@ mod tests {
             ))),
         ]
     }
-    fn new_expected_results_days(sign: i32) -> Vec<ScalarValue> {
+    fn expected_results_days(sign: i32) -> Vec<ScalarValue> {
         vec![
             ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 0))),
             ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
@@ -5192,8 +5175,8 @@ mod tests {
         let mut rng = rand::thread_rng();
         for i in 0..vector_size {
             if i % 3 == 2 && i % 4 == 3 {
-                let month = rng.gen_range(0..=100);
-                // there is an test issue for the days 28(29).
+                let month = rng.gen_range(0..100);
+                // there is a complex test issue for the days 28(29).
                 // for example, if we have an expected interval 2 months 28(29) days,
                 // the subtractor finds it as 3 months if the previous timestamp
                 // is at february.
@@ -5203,14 +5186,14 @@ mod tests {
                     IntervalMonthDayNanoType::make_value(month, day, nanosec),
                 )));
             } else if i % 3 == 1 && i % 4 != 0 {
-                let day = rng.gen_range(0..=5000);
+                let day = rng.gen_range(0..5000);
                 let millisec = rng.gen_range(0..86_400_000);
                 intervals.push(ScalarValue::IntervalDayTime(Some(
                     IntervalDayTimeType::make_value(day, millisec),
                 )))
             } else {
-                let year = rng.gen_range(0..=20);
-                let month = rng.gen_range(0..=50);
+                let year = rng.gen_range(0..20);
+                let month = rng.gen_range(0..50);
                 intervals.push(ScalarValue::IntervalYearMonth(Some(
                     IntervalYearMonthType::make_value(year, month),
                 )))
@@ -5224,24 +5207,24 @@ mod tests {
         let mut rng = rand::thread_rng();
         for i in 0..vector_size {
             if i % 4 == 0 {
-                let days = rng.gen_range(0..=1000);
+                let days = rng.gen_range(0..1000);
                 intervals.push(ScalarValue::IntervalDayTime(Some(
                     IntervalDayTimeType::make_value(days, 0),
                 )))
             } else if i % 4 == 1 {
-                let days = rng.gen_range(0..=1000);
+                let days = rng.gen_range(0..1000);
                 let millis = rng.gen_range(0..=86_400_000);
                 intervals.push(ScalarValue::IntervalDayTime(Some(
                     IntervalDayTimeType::make_value(days, millis),
                 )))
             } else if i % 4 == 2 {
-                let days = rng.gen_range(0..=1000);
+                let days = rng.gen_range(0..1000);
                 let millis = rng.gen_range(0..=86_400_000);
                 intervals.push(ScalarValue::IntervalDayTime(Some(
                     IntervalDayTimeType::make_value(days, millis),
                 )))
             } else {
-                let days = rng.gen_range(0..=1000);
+                let days = rng.gen_range(0..1000);
                 let nanosecs = rng.gen_range(1..86_400_000_000_000);
                 intervals.push(ScalarValue::IntervalMonthDayNano(Some(
                     IntervalMonthDayNanoType::make_value(0, days, nanosecs),
