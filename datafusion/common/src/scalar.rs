@@ -508,26 +508,57 @@ macro_rules! impl_op {
             (
                 ScalarValue::TimestampNanosecond(Some(ts_lhs), tz_lhs),
                 ScalarValue::TimestampNanosecond(Some(ts_rhs), tz_rhs),
-            ) => Ok(ts_nanosec_sub_to_interval(
-                &ts_lhs, &ts_rhs, &tz_lhs, &tz_rhs,
-            )?),
+            ) => match get_sign!($OPERATION) {
+                -1 => Ok(ts_nanosec_sub_to_interval(
+                    &ts_lhs, &ts_rhs, &tz_lhs, &tz_rhs,
+                )?),
+                _ => Err(DataFusionError::Internal(format!(
+                    "Operator {} is not implemented for types {:?} and {:?}",
+                    stringify!($OPERATION),
+                    $LHS,
+                    $RHS
+                ))),
+            },
             (
                 ScalarValue::TimestampMicrosecond(Some(ts_lhs), tz_lhs),
                 ScalarValue::TimestampMicrosecond(Some(ts_rhs), tz_rhs),
-            ) => Ok(ts_microsec_sub_to_interval(
-                &ts_lhs, &ts_rhs, &tz_lhs, &tz_rhs,
-            )?),
+            ) => match get_sign!($OPERATION) {
+                -1 => Ok(ts_microsec_sub_to_interval(
+                    &ts_lhs, &ts_rhs, &tz_lhs, &tz_rhs,
+                )?),
+                _ => Err(DataFusionError::Internal(format!(
+                    "Operator {} is not implemented for types {:?} and {:?}",
+                    stringify!($OPERATION),
+                    $LHS,
+                    $RHS
+                ))),
+            },
             (
                 ScalarValue::TimestampMillisecond(Some(ts_lhs), tz_lhs),
                 ScalarValue::TimestampMillisecond(Some(ts_rhs), tz_rhs),
-            ) => Ok(ts_millisec_sub_to_interval(
-                &ts_lhs, &ts_rhs, &tz_lhs, &tz_rhs,
-            )?),
+            ) => match get_sign!($OPERATION) {
+                -1 => Ok(ts_millisec_sub_to_interval(
+                    &ts_lhs, &ts_rhs, &tz_lhs, &tz_rhs,
+                )?),
+                _ => Err(DataFusionError::Internal(format!(
+                    "Operator {} is not implemented for types {:?} and {:?}",
+                    stringify!($OPERATION),
+                    $LHS,
+                    $RHS
+                ))),
+            },
             (
                 ScalarValue::TimestampSecond(Some(ts_lhs), tz_lhs),
                 ScalarValue::TimestampSecond(Some(ts_rhs), tz_rhs),
-            ) => Ok(ts_sec_sub_to_interval(&ts_lhs, &ts_rhs, &tz_lhs, &tz_rhs)?),
-
+            ) => match get_sign!($OPERATION) {
+                -1 => Ok(ts_sec_sub_to_interval(&ts_lhs, &ts_rhs, &tz_lhs, &tz_rhs)?),
+                _ => Err(DataFusionError::Internal(format!(
+                    "Operator {} is not implemented for types {:?} and {:?}",
+                    stringify!($OPERATION),
+                    $LHS,
+                    $RHS
+                ))),
+            },
             // Binary operations on arguments with different types:
             (ScalarValue::Date32(Some(days)), _) => {
                 let value = date32_add(*days, $RHS, get_sign!($OPERATION))?;
