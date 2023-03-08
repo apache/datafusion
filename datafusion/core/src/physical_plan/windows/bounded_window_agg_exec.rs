@@ -371,7 +371,7 @@ impl BoundedWindowAggStream {
     fn calculate_out_columns(&mut self) -> Result<Option<Vec<ArrayRef>>> {
         match &self.search_mode {
             PartitionSearchMode::Sorted => {
-                let n_out = self.calculate_n_out_row();
+                let n_out = self.calculate_n_out_row()?;
                 if n_out == 0 {
                     Ok(None)
                 } else {
@@ -600,14 +600,13 @@ impl BoundedWindowAggStream {
         search_mode: PartitionSearchMode,
         ordered_partition_by_indices: Vec<usize>,
     ) -> Result<Self> {
-        // TODO: make this function return Result. remove unwraps.
         let state = window_expr.iter().map(|_| IndexMap::new()).collect();
         let empty_batch = RecordBatch::new_empty(schema.clone());
         let partition_by = window_expr[0].partition_by();
         // let res = partition_by[0].data_type(&schema)?;
         let row_converter = if partition_by.is_empty() {
             // If empty create dummy converted with datatype null.
-            RowConverter::new(vec![SortField::new(DataType::Null)]).unwrap()
+            RowConverter::new(vec![SortField::new(DataType::Null)])?
         } else {
             RowConverter::new(
                 partition_by
@@ -681,7 +680,7 @@ impl BoundedWindowAggStream {
 
     /// Calculates how many rows [SortedPartitionByBoundedWindowStream]
     /// can produce as output.
-    fn calculate_n_out_row(&mut self) -> usize {
+    fn calculate_n_out_row(&mut self) -> Result<usize> {
         // Different window aggregators may produce results with different rates.
         // We produce the overall batch result with the same speed as slowest one.
         let mut counts = vec![];
@@ -724,12 +723,12 @@ impl BoundedWindowAggStream {
             let per_partition_out_results = &counts[min_idx];
             for (row, count) in per_partition_out_results.iter() {
                 let partition_batch =
-                    self.partition_buffers.get_mut(row).ok_or_else(err).unwrap();
+                    self.partition_buffers.get_mut(row).ok_or_else(err)?;
                 partition_batch.n_out_row = *count;
             }
-            out_col_counts[min_idx]
+            Ok(out_col_counts[min_idx])
         } else {
-            0
+            Ok(0)
         }
     }
 

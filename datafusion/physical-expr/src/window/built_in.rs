@@ -179,6 +179,7 @@ impl WindowExpr for BuiltInWindowExpr {
                 vec![]
             };
             let mut row_wise_results: Vec<ScalarValue> = vec![];
+            let mut last_range = state.window_frame_range.clone();
             for idx in state.last_calculated_index..num_rows {
                 state.window_frame_range = if self.expr.uses_window_frame() {
                     window_frame_ctx.calculate_range(&order_bys, num_rows, idx)
@@ -193,8 +194,10 @@ impl WindowExpr for BuiltInWindowExpr {
                     break;
                 }
                 row_wise_results.push(evaluator.evaluate_stateful(&values)?);
+                last_range.clone_from(frame_range);
                 state.last_calculated_index += 1;
             }
+            state.window_frame_range = last_range;
             let out_col = if row_wise_results.is_empty() {
                 new_empty_array(out_type)
             } else {

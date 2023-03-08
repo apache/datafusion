@@ -180,7 +180,7 @@ fn write_test_data_to_csv(
     let n_chunk = batch.num_rows() / n_file;
     for i in 0..n_file {
         let target_file = tmpdir.path().join(format!("{i}.csv"));
-        let file = File::create(target_file).unwrap();
+        let file = File::create(target_file)?;
         let chunks_start = i * n_chunk;
         let cur_batch = batch.slice(chunks_start, n_chunk);
         let mut writer = arrow::csv::Writer::new(file);
@@ -246,7 +246,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_source_sorted_aggregate() -> Result<()> {
-        let tmpdir = TempDir::new().unwrap();
+        let tmpdir = TempDir::new()?;
         let ctx = get_test_context(&tmpdir).await?;
 
         let sql = "SELECT
@@ -321,7 +321,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_source_sorted_builtin() -> Result<()> {
-        let tmpdir = TempDir::new().unwrap();
+        let tmpdir = TempDir::new()?;
         let ctx = get_test_context(&tmpdir).await?;
 
         let sql = "SELECT
@@ -395,7 +395,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_source_sorted_unbounded_preceding() -> Result<()> {
-        let tmpdir = TempDir::new().unwrap();
+        let tmpdir = TempDir::new()?;
         let ctx = get_test_context(&tmpdir).await?;
 
         let sql = "SELECT
@@ -454,7 +454,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_source_sorted_unbounded_preceding_builtin() -> Result<()> {
-        let tmpdir = TempDir::new().unwrap();
+        let tmpdir = TempDir::new()?;
         let ctx = get_test_context(&tmpdir).await?;
 
         let sql = "SELECT
@@ -508,7 +508,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_source_partially_sorted_partition_by() -> Result<()> {
-        let tmpdir = TempDir::new().unwrap();
+        let tmpdir = TempDir::new()?;
         // Source is ordered by low_card_col1, low_card_col2, inc_col
         let ctx = get_test_context2(&tmpdir).await?;
 
