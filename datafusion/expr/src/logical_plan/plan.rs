@@ -201,13 +201,13 @@ impl LogicalPlan {
             | LogicalPlan::Values(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Union(_)
+            | LogicalPlan::Extension(_)
             | LogicalPlan::TableScan(_) => {
                 vec![self.schema()]
             }
             // return children schemas
             LogicalPlan::Limit(_)
             | LogicalPlan::Subquery(_)
-            | LogicalPlan::Extension(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Sort(_)
             | LogicalPlan::CreateMemoryTable(_)
