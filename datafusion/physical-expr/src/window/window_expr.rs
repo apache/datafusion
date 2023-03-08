@@ -24,7 +24,6 @@ use arrow::compute::kernels::sort::SortColumn;
 use arrow::compute::{concat, SortOptions};
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
-use arrow::row::OwnedRow;
 use arrow_schema::DataType;
 use datafusion_common::{reverse_sort_options, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame};
@@ -387,10 +386,10 @@ pub struct WindowState {
     pub state: WindowAggState,
     pub window_fn: WindowFn,
 }
-pub type PartitionWindowAggStates = IndexMap<OwnedRow, WindowState>;
+pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowState>;
 
 /// The IndexMap (i.e. an ordered HashMap) where record batches are separated for each partition.
-pub type PartitionBatches = IndexMap<OwnedRow, PartitionBatchState>;
+pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState>;
 
 impl WindowAggState {
     pub fn new(out_type: &DataType) -> Result<Self> {
