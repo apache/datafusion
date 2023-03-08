@@ -105,6 +105,11 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn u32_literal() -> Result<()> {
+        roundtrip("SELECT * FROM data WHERE e > 4294967295").await
+    }
+
+    #[tokio::test]
     async fn simple_distinct() -> Result<()> {
         test_alias(
             "SELECT distinct a FROM data",
@@ -226,7 +231,7 @@ mod tests {
     async fn simple_intersect() -> Result<()> {
         assert_expected_plan(
             "SELECT COUNT(*) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
-            "Aggregate: groupBy=[[]], aggr=[[COUNT(Int16(1))]]\
+            "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
             \n  LeftSemi Join: data.a = data2.a\
             \n    Aggregate: groupBy=[[data.a]], aggr=[[]]\
             \n      TableScan: data projection=[a]\
@@ -335,6 +340,7 @@ mod tests {
             Field::new("b", DataType::Decimal128(5, 2), true),
             Field::new("c", DataType::Date32, true),
             Field::new("d", DataType::Boolean, true),
+            Field::new("e", DataType::UInt32, true),
         ]);
         explicit_options.schema = Some(&schema);
         ctx.register_csv("data", "tests/testdata/data.csv", explicit_options)

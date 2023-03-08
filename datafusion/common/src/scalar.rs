@@ -1019,7 +1019,7 @@ impl ScalarValue {
         Self::List(scalars, Box::new(Field::new("item", child_type, true)))
     }
 
-    // Create a zero value in the given type.
+    /// Create a zero value in the given type.
     pub fn new_zero(datatype: &DataType) -> Result<ScalarValue> {
         assert!(datatype.is_primitive());
         Ok(match datatype {
@@ -1037,6 +1037,24 @@ impl ScalarValue {
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Can't create a zero scalar from data_type \"{datatype:?}\""
+                )));
+            }
+        })
+    }
+
+    /// Create a negative one value in the given type.
+    pub fn new_negative_one(datatype: &DataType) -> Result<ScalarValue> {
+        assert!(datatype.is_primitive());
+        Ok(match datatype {
+            DataType::Int8 | DataType::UInt8 => ScalarValue::Int8(Some(-1)),
+            DataType::Int16 | DataType::UInt16 => ScalarValue::Int16(Some(-1)),
+            DataType::Int32 | DataType::UInt32 => ScalarValue::Int32(Some(-1)),
+            DataType::Int64 | DataType::UInt64 => ScalarValue::Int64(Some(-1)),
+            DataType::Float32 => ScalarValue::Float32(Some(-1.0)),
+            DataType::Float64 => ScalarValue::Float64(Some(-1.0)),
+            _ => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Can't create a negative one scalar from data_type \"{datatype:?}\""
                 )));
             }
         })
@@ -1296,7 +1314,7 @@ impl ScalarValue {
         }
 
         macro_rules! build_array_primitive_tz {
-            ($ARRAY_TY:ident, $SCALAR_TY:ident) => {{
+            ($ARRAY_TY:ident, $SCALAR_TY:ident, $TZ:expr) => {{
                 {
                     let array = scalars.map(|sv| {
                         if let ScalarValue::$SCALAR_TY(v, _) = sv {
@@ -1310,7 +1328,7 @@ impl ScalarValue {
                         }
                     })
                     .collect::<Result<$ARRAY_TY>>()?;
-                    Arc::new(array)
+                    Arc::new(array.with_timezone_opt($TZ.clone()))
                 }
             }};
         }
@@ -1444,17 +1462,29 @@ impl ScalarValue {
             DataType::Time64(TimeUnit::Nanosecond) => {
                 build_array_primitive!(Time64NanosecondArray, Time64Nanosecond)
             }
-            DataType::Timestamp(TimeUnit::Second, _) => {
-                build_array_primitive_tz!(TimestampSecondArray, TimestampSecond)
+            DataType::Timestamp(TimeUnit::Second, tz) => {
+                build_array_primitive_tz!(TimestampSecondArray, TimestampSecond, tz)
             }
-            DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                build_array_primitive_tz!(TimestampMillisecondArray, TimestampMillisecond)
+            DataType::Timestamp(TimeUnit::Millisecond, tz) => {
+                build_array_primitive_tz!(
+                    TimestampMillisecondArray,
+                    TimestampMillisecond,
+                    tz
+                )
             }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                build_array_primitive_tz!(TimestampMicrosecondArray, TimestampMicrosecond)
+            DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+                build_array_primitive_tz!(
+                    TimestampMicrosecondArray,
+                    TimestampMicrosecond,
+                    tz
+                )
             }
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                build_array_primitive_tz!(TimestampNanosecondArray, TimestampNanosecond)
+            DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+                build_array_primitive_tz!(
+                    TimestampNanosecondArray,
+                    TimestampNanosecond,
+                    tz
+                )
             }
             DataType::Interval(IntervalUnit::DayTime) => {
                 build_array_primitive!(IntervalDayTimeArray, IntervalDayTime)

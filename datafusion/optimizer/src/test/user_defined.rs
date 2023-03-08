@@ -50,6 +50,10 @@ impl UserDefinedLogicalNode for TestUserDefinedPlanNode {
         self
     }
 
+    fn name(&self) -> &str {
+        "TestUserDefined"
+    }
+
     fn inputs(&self) -> Vec<&LogicalPlan> {
         vec![&self.input]
     }
