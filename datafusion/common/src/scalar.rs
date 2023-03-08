@@ -4836,26 +4836,29 @@ mod tests {
             );
         }
 
-        // RANDOM-VALUED TESTS, these are not applicable for day format
-        if round_up_to_month {
-            // timestamp1 + (or -) interval = timestamp2
-            // timestamp2 - timestamp1 (or timestamp1 - timestamp2) = interval ?
-            let sample_size = 100000;
-            let timestamps1 = get_random_timestamps1(sample_size);
-            let intervals = get_random_intervals(sample_size);
-            // ts(sec) + interval(ns) = ts(sec); however,
-            // ts(sec) - ts(sec) cannot be = interval(ns). Therefore,
-            // timestamps are more precise than intervals in tests.
-            let mut timestamp2: ScalarValue;
-            for (idx, ts1) in timestamps1.iter().enumerate() {
-                if idx % 2 == 0 {
-                    timestamp2 = ts1.add(intervals[idx].clone()).unwrap();
-                    assert_eq!(intervals[idx], timestamp2.sub(ts1).unwrap());
-                } else {
-                    timestamp2 = ts1.sub(intervals[idx].clone()).unwrap();
-                    assert_eq!(intervals[idx], ts1.sub(timestamp2).unwrap());
-                };
-            }
+        // RANDOM-VALUED TESTS
+
+        // timestamp1 + (or -) interval = timestamp2
+        // timestamp2 - timestamp1 (or timestamp1 - timestamp2) = interval ?
+        let sample_size = 100000;
+        let timestamps1 = get_random_timestamps1(sample_size);
+        let intervals = if round_up_to_month {
+            get_random_intervals_months(sample_size)
+        } else {
+            get_random_intervals_days(sample_size)
+        };
+        // ts(sec) + interval(ns) = ts(sec); however,
+        // ts(sec) - ts(sec) cannot be = interval(ns). Therefore,
+        // timestamps are more precise than intervals in tests.
+        let mut timestamp2: ScalarValue;
+        for (idx, ts1) in timestamps1.iter().enumerate() {
+            if idx % 2 == 0 {
+                timestamp2 = ts1.add(intervals[idx].clone()).unwrap();
+                assert_eq!(intervals[idx], timestamp2.sub(ts1).unwrap());
+            } else {
+                timestamp2 = ts1.sub(intervals[idx].clone()).unwrap();
+                assert_eq!(intervals[idx], ts1.sub(timestamp2).unwrap());
+            };
         }
     }
 
@@ -5183,7 +5186,7 @@ mod tests {
         timestamp
     }
 
-    fn get_random_intervals(sample_size: u64) -> Vec<ScalarValue> {
+    fn get_random_intervals_months(sample_size: u64) -> Vec<ScalarValue> {
         let vector_size = sample_size;
         let mut intervals = vec![];
         let mut rng = rand::thread_rng();
@@ -5211,6 +5214,38 @@ mod tests {
                 intervals.push(ScalarValue::IntervalYearMonth(Some(
                     IntervalYearMonthType::make_value(year, month),
                 )))
+            }
+        }
+        intervals
+    }
+    fn get_random_intervals_days(sample_size: u64) -> Vec<ScalarValue> {
+        let vector_size = sample_size;
+        let mut intervals = vec![];
+        let mut rng = rand::thread_rng();
+        for i in 0..vector_size {
+            if i % 4 == 0 {
+                let days = rng.gen_range(0..=1000);
+                intervals.push(ScalarValue::IntervalDayTime(Some(
+                    IntervalDayTimeType::make_value(days, 0),
+                )))
+            } else if i % 4 == 1 {
+                let days = rng.gen_range(0..=1000);
+                let millis = rng.gen_range(0..=86_400_000);
+                intervals.push(ScalarValue::IntervalDayTime(Some(
+                    IntervalDayTimeType::make_value(days, millis),
+                )))
+            } else if i % 4 == 2 {
+                let days = rng.gen_range(0..=1000);
+                let millis = rng.gen_range(0..=86_400_000);
+                intervals.push(ScalarValue::IntervalDayTime(Some(
+                    IntervalDayTimeType::make_value(days, millis),
+                )))
+            } else {
+                let days = rng.gen_range(0..=1000);
+                let nanosecs = rng.gen_range(1..86_400_000_000_000);
+                intervals.push(ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(0, days, nanosecs),
+                )));
             }
         }
         intervals
