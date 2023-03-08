@@ -20,7 +20,7 @@
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     expr::{Between, BinaryExpr},
-    expr_fn::{and, concat_ws, or},
+    expr_fn::{and, concat_ws, or, bitwise_or, bitwise_and},
     lit, BuiltinScalarFunction, Expr, Like, Operator,
 };
 
@@ -308,6 +308,38 @@ pub fn negate_clause(expr: Expr) -> Expr {
         )),
         // use not clause
         _ => Expr::Not(Box::new(expr)),
+    }
+}
+
+/// bitwise negate a Negative clause
+/// input is the clause to be bitwise negated.(args for Negative clause)
+/// For BinaryExpr:
+///    ~(A & B) ===> ~A | ~B
+///    ~(A | B) ===> ~A & ~B
+///    ~(~A) ===> A
+/// For others, use Negative clause
+pub fn negative_clause(expr: Expr) -> Expr {
+    match expr {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+            match op {
+                Operator::BitwiseAnd => {
+                    let left = negative_clause(*left);
+                    let right = negative_clause(*right);
+
+                    bitwise_or(left, right);
+                }
+                Operator::BitwiseOr => {
+                    let left = negative_clause(*left);
+                    let right = negative_clause(*right);
+
+                    bitwise_and(left, right);
+                }
+                _ => Expr::Negative(Box::new(Expr::BinaryExpr(BinaryExpr::new(
+                    left, op, right,
+                )))),
+            }
+        },
+        _ => Expr::Negative(Box::new(expr)),
     }
 }
 

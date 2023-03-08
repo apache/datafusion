@@ -1003,6 +1003,11 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             Expr::Not(inner) => negate_clause(*inner),
 
             //
+            // Rules for Negative
+            //
+            Expr::Negative(inner) => negative_clause(*inner),
+
+            //
             // Rules for Case
             //
 
