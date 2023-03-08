@@ -225,7 +225,10 @@ impl LogicalPlanBuilder {
                 DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
-                            DFField::from_qualified(&table_name, schema.field(*i).clone())
+                            DFField::from_qualified(
+                                table_name.to_string(),
+                                schema.field(*i).clone(),
+                            )
                         })
                         .collect(),
                     schema.metadata().clone(),
@@ -608,22 +611,14 @@ impl LogicalPlanBuilder {
 
                     match (&l.relation, &r.relation) {
                         (Some(lr), Some(rr)) => {
-                            let l_is_left = self.plan.schema().field_with_qualified_name(
-                                &lr.as_table_reference(),
-                                &l.name,
-                            );
-                            let l_is_right = right.schema().field_with_qualified_name(
-                                &lr.as_table_reference(),
-                                &l.name,
-                            );
-                            let r_is_left = self.plan.schema().field_with_qualified_name(
-                                &rr.as_table_reference(),
-                                &r.name,
-                            );
-                            let r_is_right = right.schema().field_with_qualified_name(
-                                &rr.as_table_reference(),
-                                &r.name,
-                            );
+                            let l_is_left =
+                                self.plan.schema().field_with_qualified_name(lr, &l.name);
+                            let l_is_right =
+                                right.schema().field_with_qualified_name(lr, &l.name);
+                            let r_is_left =
+                                self.plan.schema().field_with_qualified_name(rr, &r.name);
+                            let r_is_right =
+                                right.schema().field_with_qualified_name(rr, &r.name);
 
                             match (l_is_left, l_is_right, r_is_left, r_is_right) {
                                 (_, Ok(_), Ok(_), _) => (Ok(r), Ok(l)),
@@ -635,14 +630,10 @@ impl LogicalPlanBuilder {
                             }
                         }
                         (Some(lr), None) => {
-                            let l_is_left = self.plan.schema().field_with_qualified_name(
-                                &lr.as_table_reference(),
-                                &l.name,
-                            );
-                            let l_is_right = right.schema().field_with_qualified_name(
-                                &lr.as_table_reference(),
-                                &l.name,
-                            );
+                            let l_is_left =
+                                self.plan.schema().field_with_qualified_name(lr, &l.name);
+                            let l_is_right =
+                                right.schema().field_with_qualified_name(lr, &l.name);
 
                             match (l_is_left, l_is_right) {
                                 (Ok(_), _) => (Ok(l), Self::normalize(&right, r)),
@@ -654,14 +645,10 @@ impl LogicalPlanBuilder {
                             }
                         }
                         (None, Some(rr)) => {
-                            let r_is_left = self.plan.schema().field_with_qualified_name(
-                                &rr.as_table_reference(),
-                                &r.name,
-                            );
-                            let r_is_right = right.schema().field_with_qualified_name(
-                                &rr.as_table_reference(),
-                                &r.name,
-                            );
+                            let r_is_left =
+                                self.plan.schema().field_with_qualified_name(rr, &r.name);
+                            let r_is_right =
+                                right.schema().field_with_qualified_name(rr, &r.name);
 
                             match (r_is_left, r_is_right) {
                                 (Ok(_), _) => (Ok(r), Self::normalize(&right, l)),
@@ -1113,7 +1100,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
                     })?;
 
             Ok(DFField::new(
-                left_field.qualifier(),
+                left_field.qualifier().cloned(),
                 left_field.name(),
                 data_type,
                 nullable,
@@ -1299,7 +1286,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
         DataType::List(field)
         | DataType::FixedSizeList(field, _)
         | DataType::LargeList(field) => DFField::new(
-            unnest_field.qualifier(),
+            unnest_field.qualifier().cloned(),
             unnest_field.name(),
             field.data_type().clone(),
             unnest_field.is_nullable(),
@@ -1621,7 +1608,7 @@ mod tests {
                         name,
                     },
             })) => {
-                assert_eq!("employee_csv", table.as_str());
+                assert_eq!("employee_csv", table);
                 assert_eq!("id", &name);
                 Ok(())
             }
@@ -1650,7 +1637,7 @@ mod tests {
                         name,
                     },
             })) => {
-                assert_eq!("employee_csv", table.as_str());
+                assert_eq!("employee_csv", table);
                 assert_eq!("state", &name);
                 Ok(())
             }

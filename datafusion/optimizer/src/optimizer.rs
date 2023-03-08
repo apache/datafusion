@@ -521,7 +521,7 @@ mod tests {
 
                 let new_arrow_field = f.field().clone().with_metadata(metadata);
                 if let Some(qualifier) = f.qualifier() {
-                    DFField::from_qualified(qualifier, new_arrow_field)
+                    DFField::from_qualified(qualifier.clone(), new_arrow_field)
                 } else {
                     DFField::from(new_arrow_field)
                 }

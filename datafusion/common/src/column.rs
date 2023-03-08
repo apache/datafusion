@@ -76,22 +76,22 @@ impl Column {
             1 => (None, idents.remove(0)),
             2 => (
                 Some(OwnedTableReference::Bare {
-                    table: idents.remove(0),
+                    table: idents.remove(0).into(),
                 }),
                 idents.remove(0),
             ),
             3 => (
                 Some(OwnedTableReference::Partial {
-                    schema: idents.remove(0),
-                    table: idents.remove(0),
+                    schema: idents.remove(0).into(),
+                    table: idents.remove(0).into(),
                 }),
                 idents.remove(0),
             ),
             4 => (
                 Some(OwnedTableReference::Full {
-                    catalog: idents.remove(0),
-                    schema: idents.remove(0),
-                    table: idents.remove(0),
+                    catalog: idents.remove(0).into(),
+                    schema: idents.remove(0).into(),
+                    table: idents.remove(0).into(),
                 }),
                 idents.remove(0),
             ),

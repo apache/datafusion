@@ -71,7 +71,7 @@ impl DFSchema {
                 if !qualified_names.insert((qualifier, field.name())) {
                     return Err(DataFusionError::SchemaError(
                         SchemaError::DuplicateQualifiedField {
-                            qualifier: qualifier.clone(),
+                            qualifier: Box::new(qualifier.clone()),
                             name: field.name().to_string(),
                         },
                     ));
@@ -114,7 +114,7 @@ impl DFSchema {
             schema
                 .fields()
                 .iter()
-                .map(|f| DFField::from_qualified(qualifier, f.clone()))
+                .map(|f| DFField::from_qualified(qualifier.to_string(), f.clone()))
                 .collect(),
             schema.metadata().clone(),
         )
@@ -139,9 +139,7 @@ impl DFSchema {
         for field in other_schema.fields() {
             // skip duplicate columns
             let duplicated_field = match field.qualifier() {
-                Some(q) => self
-                    .field_with_name(Some(&q.as_table_reference()), field.name())
-                    .is_ok(),
+                Some(q) => self.field_with_name(Some(q), field.name()).is_ok(),
                 // for unqualified columns, check as unqualified name
                 None => self.field_with_unqualified_name(field.name()).is_ok(),
             };
@@ -203,7 +201,7 @@ impl DFSchema {
                 // current field is qualified and not shared between relations, compare both
                 // qualifier and name.
                 (Some(q), Some(field_q)) => {
-                    q.resolved_eq(&field_q.as_table_reference()) && field.name() == name
+                    q.resolved_eq(field_q) && field.name() == name
                 }
                 // field to lookup is qualified but current field is unqualified.
                 (Some(qq), None) => {
@@ -240,15 +238,13 @@ impl DFSchema {
 
     /// Find the index of the column with the given qualifier and name
     pub fn index_of_column(&self, col: &Column) -> Result<usize> {
-        let tr = col.relation.as_ref().map(|r| r.as_table_reference());
-        self.index_of_column_by_name(tr.as_ref(), &col.name)?
+        self.index_of_column_by_name(col.relation.as_ref(), &col.name)?
             .ok_or_else(|| field_not_found(col.relation.clone(), &col.name, self))
     }
 
     /// Check if the column is in the current schema
     pub fn is_column_from_schema(&self, col: &Column) -> Result<bool> {
-        let tr = col.relation.as_ref().map(|r| r.as_table_reference());
-        self.index_of_column_by_name(tr.as_ref(), &col.name)
+        self.index_of_column_by_name(col.relation.as_ref(), &col.name)
             .map(|idx| idx.is_some())
     }
 
@@ -331,9 +327,7 @@ impl DFSchema {
     /// Find the field with the given qualified column
     pub fn field_from_column(&self, column: &Column) -> Result<&DFField> {
         match &column.relation {
-            Some(r) => {
-                self.field_with_qualified_name(&r.as_table_reference(), &column.name)
-            }
+            Some(r) => self.field_with_qualified_name(r, &column.name),
             None => self.field_with_unqualified_name(&column.name),
         }
     }
@@ -358,9 +352,7 @@ impl DFSchema {
     /// Find if the field exists with the given qualified column
     pub fn has_column(&self, column: &Column) -> bool {
         match &column.relation {
-            Some(r) => {
-                self.has_column_with_qualified_name(&r.as_table_reference(), &column.name)
-            }
+            Some(r) => self.has_column_with_qualified_name(r, &column.name),
             None => self.has_column_with_unqualified_name(&column.name),
         }
     }

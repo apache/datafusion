@@ -187,7 +187,7 @@ impl TryFrom<&protobuf::DfField> for DFField {
         let field = df_field.field.as_ref().required("field")?;
 
         Ok(match &df_field.qualifier {
-            Some(q) => DFField::from_qualified(&q.relation, field),
+            Some(q) => DFField::from_qualified(q.relation.clone(), field),
             None => DFField::from(field),
         })
     }
@@ -214,21 +214,17 @@ impl TryFrom<protobuf::OwnedTableReference> for OwnedTableReference {
 
         match table_reference_enum {
             TableReferenceEnum::Bare(protobuf::BareTableReference { table }) => {
-                Ok(OwnedTableReference::Bare { table })
+                Ok(OwnedTableReference::bare(table))
             }
             TableReferenceEnum::Partial(protobuf::PartialTableReference {
                 schema,
                 table,
-            }) => Ok(OwnedTableReference::Partial { schema, table }),
+            }) => Ok(OwnedTableReference::partial(schema, table)),
             TableReferenceEnum::Full(protobuf::FullTableReference {
                 catalog,
                 schema,
                 table,
-            }) => Ok(OwnedTableReference::Full {
-                catalog,
-                schema,
-                table,
-            }),
+            }) => Ok(OwnedTableReference::full(catalog, schema, table)),
         }
     }
 }

@@ -36,11 +36,11 @@ pub async fn create_table(
 ) -> Result<DFOutput> {
     let table_reference =
         object_name_to_table_reference(name, ctx.enable_ident_normalization())?;
-    let existing_table = ctx.table(&table_reference).await;
+    let existing_table = ctx.table(table_reference.clone()).await;
     match (if_not_exists, or_replace, existing_table) {
         (true, false, Ok(_)) => Ok(DBOutput::StatementComplete(0)),
         (false, true, Ok(_)) => {
-            ctx.deregister_table(&table_reference)?;
+            ctx.deregister_table(table_reference.clone())?;
             create_new_table(ctx, table_reference, columns)
         }
         (true, true, Ok(_)) => {
@@ -78,6 +78,6 @@ fn create_new_table(
     );
     let schema = Arc::new(sql_to_rel.build_schema(columns)?);
     let table_provider = Arc::new(MemTable::try_new(schema, vec![])?);
-    ctx.register_table(&table_reference, table_provider)?;
+    ctx.register_table(table_reference.clone(), table_provider)?;
     Ok(DBOutput::StatementComplete(0))
 }

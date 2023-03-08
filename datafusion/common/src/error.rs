@@ -124,7 +124,7 @@ pub enum SchemaError {
     AmbiguousReference { field: Column },
     /// Schema contains duplicate qualified field name
     DuplicateQualifiedField {
-        qualifier: OwnedTableReference,
+        qualifier: Box<OwnedTableReference>,
         name: String,
     },
     /// Schema contains duplicate unqualified field name

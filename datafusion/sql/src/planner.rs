@@ -195,10 +195,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .try_for_each(|col| match col {
                 Expr::Column(col) => match &col.relation {
                     Some(r) => {
-                        schema.field_with_qualified_name(
-                            &r.as_table_reference(),
-                            &col.name,
-                        )?;
+                        schema.field_with_qualified_name(r, &col.name)?;
                         Ok(())
                     }
                     None => {
@@ -374,22 +371,18 @@ pub(crate) fn idents_to_table_reference(
     match taker.0.len() {
         1 => {
             let table = taker.take(enable_normalization);
-            Ok(OwnedTableReference::Bare { table })
+            Ok(OwnedTableReference::bare(table))
         }
         2 => {
             let table = taker.take(enable_normalization);
             let schema = taker.take(enable_normalization);
-            Ok(OwnedTableReference::Partial { schema, table })
+            Ok(OwnedTableReference::partial(schema, table))
         }
         3 => {
             let table = taker.take(enable_normalization);
             let schema = taker.take(enable_normalization);
             let catalog = taker.take(enable_normalization);
-            Ok(OwnedTableReference::Full {
-                catalog,
-                schema,
-                table,
-            })
+            Ok(OwnedTableReference::full(catalog, schema, table))
         }
         _ => Err(DataFusionError::Plan(format!(
             "Unsupported compound identifier '{:?}'",

@@ -538,7 +538,9 @@ fn push_down_scan(
     // create the projected schema
     let projected_fields: Vec<DFField> = projection
         .iter()
-        .map(|i| DFField::from_qualified(&scan.table_name, schema.fields()[*i].clone()))
+        .map(|i| {
+            DFField::from_qualified(scan.table_name.clone(), schema.fields()[*i].clone())
+        })
         .collect();
 
     let projected_schema = projected_fields.to_dfschema_ref()?;

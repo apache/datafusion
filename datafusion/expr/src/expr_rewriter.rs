@@ -660,7 +660,7 @@ mod test {
     }
 
     fn make_field(relation: &str, column: &str) -> DFField {
-        DFField::new(Some(relation), column, DataType::Int8, false)
+        DFField::new(Some(relation.to_string()), column, DataType::Int8, false)
     }
 
     #[test]

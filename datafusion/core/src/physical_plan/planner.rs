@@ -2539,7 +2539,7 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
                         .projected_schema
                         .as_ref()
                         .clone()
-                        .replace_qualifier(name);
+                        .replace_qualifier(name.to_string());
                     scan.projected_schema = Arc::new(new_schema);
                     LogicalPlan::TableScan(scan)
                 }
