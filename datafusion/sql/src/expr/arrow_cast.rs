@@ -343,6 +343,8 @@ fn is_separator(c: char) -> bool {
 struct Tokenizer<'a> {
     val: &'a str,
     chars: Peekable<Chars<'a>>,
+    // temporary buffer for parsing words
+    word: String,
 }
 
 impl<'a> Tokenizer<'a> {
@@ -350,6 +352,7 @@ impl<'a> Tokenizer<'a> {
         Self {
             val,
             chars: val.chars().peekable(),
+            word: String::new(),
         }
     }
 
@@ -366,30 +369,34 @@ impl<'a> Tokenizer<'a> {
     /// parse the characters in val starting at pos, until the next
     /// `,`, `(`, or `)` or end of line
     fn parse_word(&mut self) -> Result<Token> {
-        let mut word = String::new();
+        // reset temp space
+        self.word.clear();
         loop {
             match self.peek_next_char() {
                 None => break,
                 Some(c) if is_separator(c) => break,
                 Some(c) => {
                     self.next_char();
-                    word.push(c);
+                    self.word.push(c);
                 }
             }
         }
 
         // if it started with a number, try parsing it as an integer
-        if let Some(c) = word.chars().next() {
+        if let Some(c) = self.word.chars().next() {
             if c == '-' || c.is_numeric() {
-                let val: i64 = word.parse().map_err(|e| {
-                    make_error(self.val, &format!("parsing {word} as integer: {e}"))
+                let val: i64 = self.word.parse().map_err(|e| {
+                    make_error(
+                        self.val,
+                        &format!("parsing {} as integer: {e}", self.word),
+                    )
                 })?;
                 return Ok(Token::Integer(val));
             }
         }
 
         // figure out what the word was
-        let token = match word.as_str() {
+        let token = match self.word.as_str() {
             "Null" => Token::SimpleType(DataType::Null),
             "Boolean" => Token::SimpleType(DataType::Boolean),
 
@@ -437,7 +444,12 @@ impl<'a> Tokenizer<'a> {
 
             "None" => Token::None,
 
-            _ => return Err(make_error(self.val, &format!("unrecognized word: {word}"))),
+            _ => {
+                return Err(make_error(
+                    self.val,
+                    &format!("unrecognized word: {}", self.word),
+                ))
+            }
         };
         Ok(token)
     }
