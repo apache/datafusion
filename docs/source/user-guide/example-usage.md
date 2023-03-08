@@ -118,9 +118,12 @@ async fn main() -> datafusion::error::Result<()> {
   let ctx = SessionContext::new();
   let df = ctx.read_csv("tests/data/capitalized_example.csv", CsvReadOptions::new()).await?;
 
-  let df = df.filter(col("\"A\"").lt_eq(col("c")))?
-           .aggregate(vec![col("\"A\"")], vec![min(col("b"))])?
-           .limit(0, Some(100))?;
+  let df = df
+      // col will parse the input string, hence requiring double quotes to maintain the capitalization
+      .filter(col("\"A\"").lt_eq(col("c")))?
+      // alternatively use ident to pass in an unqualified column name directly without parsing
+      .aggregate(vec![ident("A")], vec![min(col("b"))])?
+      .limit(0, Some(100))?;
 
   // execute and print results
   df.show().await?;

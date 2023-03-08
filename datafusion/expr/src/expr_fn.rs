@@ -39,6 +39,12 @@ pub fn col(ident: impl Into<Column>) -> Expr {
     Expr::Column(ident.into())
 }
 
+/// Create an unqualified column expression from the provided name, without normalizing
+/// the column
+pub fn ident(name: impl Into<String>) -> Expr {
+    Expr::Column(Column::from_name(name))
+}
+
 /// Return a new expression `left <op> right`
 pub fn binary_expr(left: Expr, op: Operator, right: Expr) -> Expr {
     Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
@@ -652,7 +658,7 @@ mod test {
     #[test]
     fn filter_is_null_and_is_not_null() {
         let col_null = col("col1");
-        let col_not_null = col("col2");
+        let col_not_null = ident("col2");
         assert_eq!(format!("{:?}", col_null.is_null()), "col1 IS NULL");
         assert_eq!(
             format!("{:?}", col_not_null.is_not_null()),
