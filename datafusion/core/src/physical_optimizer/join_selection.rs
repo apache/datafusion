@@ -488,7 +488,7 @@ mod tests {
             None,
             &JoinType::Left,
             PartitionMode::CollectLeft,
-            &false,
+            false,
         )
         .unwrap();
 
@@ -536,7 +536,7 @@ mod tests {
             None,
             &JoinType::Left,
             PartitionMode::CollectLeft,
-            &false,
+            false,
         )
         .unwrap();
 
@@ -587,7 +587,7 @@ mod tests {
                 None,
                 &join_type,
                 PartitionMode::Partitioned,
-                &false,
+                false,
             )
             .unwrap();
 
@@ -652,7 +652,7 @@ mod tests {
             None,
             &JoinType::Inner,
             PartitionMode::CollectLeft,
-            &false,
+            false,
         )
         .unwrap();
         let child_schema = child_join.schema();
@@ -668,7 +668,7 @@ mod tests {
             None,
             &JoinType::Left,
             PartitionMode::CollectLeft,
-            &false,
+            false,
         )
         .unwrap();
 
@@ -705,7 +705,7 @@ mod tests {
             None,
             &JoinType::Inner,
             PartitionMode::CollectLeft,
-            &false,
+            false,
         )
         .unwrap();
 
@@ -930,7 +930,7 @@ mod tests {
             None,
             &JoinType::Inner,
             PartitionMode::Auto,
-            &false,
+            false,
         )
         .unwrap();
 

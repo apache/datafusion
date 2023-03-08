@@ -191,3 +191,44 @@ query P
 SELECT DATE_TRUNC('second', '2022-08-03 14:38:50Z');
 ----
 2022-08-03T14:38:50
+
+# Test that interval can add a timestamp
+query P
+SELECT timestamp '2013-07-01 12:00:00' + INTERVAL '8' DAY;
+----
+2013-07-09T12:00:00
+
+query P
+SELECT '2000-01-01T00:00:00'::timestamp + INTERVAL '8' DAY;
+----
+2000-01-09T00:00:00
+
+query P
+SELECT '2000-01-01T00:00:00'::timestamp + INTERVAL '8' YEAR;
+----
+2008-01-01T00:00:00
+
+query P
+SELECT '2000-01-01T00:00:00'::timestamp + INTERVAL '8' MONTH;
+----
+2000-09-01T00:00:00
+
+query P
+SELECT INTERVAL '8' DAY + timestamp '2013-07-01 12:00:00';
+----
+2013-07-09T12:00:00
+
+query P
+SELECT INTERVAL '8' DAY + '2000-01-01T00:00:00'::timestamp;
+----
+2000-01-09T00:00:00
+
+query P
+SELECT INTERVAL '8' YEAR + '2000-01-01T00:00:00'::timestamp;
+----
+2008-01-01T00:00:00
+
+query P
+SELECT INTERVAL '8' MONTH + '2000-01-01T00:00:00'::timestamp;
+----
+2000-09-01T00:00:00
