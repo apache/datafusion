@@ -326,7 +326,7 @@ impl ExprIntervalGraph {
     // ```
 
     /// This function associates stable node indices with [PhysicalExpr]s so
-    /// that we can match Arc<dyn PhysicalExpr> and NodeIndex objects during
+    /// that we can match `Arc<dyn PhysicalExpr>` and NodeIndex objects during
     /// membership tests.
     pub fn gather_node_indices(
         &mut self,

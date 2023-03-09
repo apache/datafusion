@@ -282,7 +282,7 @@ impl SessionContext {
         self.session_id.clone()
     }
 
-    /// Return the [`TableFactoryProvider`] that is registered for the
+    /// Return the [`TableProviderFactory`] that is registered for the
     /// specified file type, if any.
     pub fn table_factory(
         &self,
