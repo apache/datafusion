@@ -1620,7 +1620,7 @@ pub struct CreateExternalTable {
 }
 
 // Hashing refers to a subset of fields considered in PartialEq.
-#[allow(clippy::derive_hash_xor_eq)]
+#[allow(clippy::derived_hash_with_manual_eq)]
 impl Hash for CreateExternalTable {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.schema.hash(state);
@@ -1719,7 +1719,7 @@ pub struct Analyze {
 }
 
 /// Extension operator defined outside of DataFusion
-#[allow(clippy::derive_hash_xor_eq)] // see impl PartialEq for explanation
+#[allow(clippy::derived_hash_with_manual_eq)] // see impl PartialEq for explanation
 #[derive(Clone, Eq, Hash)]
 pub struct Extension {
     /// The runtime extension operator
