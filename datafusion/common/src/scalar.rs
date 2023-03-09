@@ -686,12 +686,12 @@ fn ts_nanosec_sub_to_interval(
     if months_residual_in_ns % 1_000_000 == 0 {
         // 60 * 60 * 24 * 1000 = 86_400_000, number of millisecs in a day
         let as_millisec = delta_secs.num_milliseconds();
-        return Ok(ScalarValue::IntervalDayTime(Some(
+        Ok(ScalarValue::IntervalDayTime(Some(
             IntervalDayTimeType::make_value(
                 sign * (as_millisec / 86_400_000) as i32,
                 sign * (as_millisec % 86_400_000) as i32,
             ),
-        )));
+        )))
     } else {
         // 60 * 60 * 24 * 1000 * 1000 * 1000 = 86_400_000_000_000, number of nanosecs in a day
         // To show similar behaviour with Postgre, we do not use month field, and collect
