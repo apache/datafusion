@@ -1878,7 +1878,10 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::assert_contains;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
-    use datafusion_expr::{col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder};
+    use datafusion_expr::{
+        col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder,
+        UserDefinedLogicalNodeCore,
+    };
     use fmt::Debug;
     use std::collections::HashMap;
     use std::convert::TryFrom;
@@ -2400,11 +2403,7 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
         }
     }
 
-    impl UserDefinedLogicalNode for NoOpExtensionNode {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
+    impl UserDefinedLogicalNodeCore for NoOpExtensionNode {
         fn name(&self) -> &str {
             "NoOp"
         }
@@ -2425,25 +2424,8 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
             write!(f, "NoOp")
         }
 
-        fn from_template(
-            &self,
-            _exprs: &[Expr],
-            _inputs: &[LogicalPlan],
-        ) -> Arc<dyn UserDefinedLogicalNode> {
+        fn from_template(&self, _exprs: &[Expr], _inputs: &[LogicalPlan]) -> Self {
             unimplemented!("NoOp");
-        }
-
-        fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool {
-            match other.as_any().downcast_ref::<Self>() {
-                Some(o) => self == o,
-                None => false,
-            }
-        }
-
-        fn dyn_hash(&self, state: &mut dyn std::hash::Hasher) {
-            use std::hash::Hash;
-            let mut s = state;
-            self.hash(&mut s);
         }
     }
 
