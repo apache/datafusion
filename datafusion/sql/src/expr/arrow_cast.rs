@@ -127,10 +127,10 @@ impl<'a> Parser<'a> {
         let data_type = self.parse_next_type()?;
         // ensure that there is no trailing content
         if self.tokenizer.next().is_some() {
-            return Err(make_error(
+            Err(make_error(
                 self.val,
                 &format!("checking trailing content after parsing '{data_type}'"),
-            ));
+            ))
         } else {
             Ok(data_type)
         }
