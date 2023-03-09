@@ -226,6 +226,8 @@ pub trait UserDefinedLogicalNodeCore:
     fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self;
 }
 
+/// Automatically derive UserDefinedLogicalNode to `UserDefinedLogicalNode` 
+/// to avoid boiler plate for implementing `as_any`, `Hash` and `PartialEq` 
 impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
     fn as_any(&self) -> &dyn Any {
         self
