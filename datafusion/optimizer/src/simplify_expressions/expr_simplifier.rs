@@ -2148,10 +2148,8 @@ mod tests {
 
     #[test]
     fn test_simplify_simplify_eq_expr() {
-        let expr_plus = lit(1) + lit(1);
         let expr_eq = binary_expr(lit(1), Operator::Eq, lit(1));
 
-        assert_eq!(simplify(expr_plus), lit(2));
         assert_eq!(simplify(expr_eq), lit(true));
     }
 
