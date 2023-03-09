@@ -161,7 +161,7 @@ impl TableProvider for MemTable {
     /// # Arguments
     ///
     /// * `state` - The [SessionState] containing the context for executing the plan.
-    /// * `input` - The `LogicalPlan` to execute and insert.
+    /// * `input` - The [LogicalPlan] to execute and insert.
     ///
     /// # Returns
     ///
