@@ -67,6 +67,11 @@ pub fn is_timestamp(dt: &DataType) -> bool {
     matches!(dt, DataType::Timestamp(_, _))
 }
 
+/// Determine whether the given data type 'dt' is a `Interval`.
+pub fn is_interval(dt: &DataType) -> bool {
+    matches!(dt, DataType::Interval(_))
+}
+
 /// Determine whether the given data type `dt` is a `Date`.
 pub fn is_date(dt: &DataType) -> bool {
     matches!(dt, DataType::Date32 | DataType::Date64)

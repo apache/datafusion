@@ -41,7 +41,7 @@ arrow-schema = "34.0.0"
 datafusion-common = { path = "../common", version = "19.0.0" }
 datafusion-expr = { path = "../expr", version = "19.0.0" }
 log = "^0.4"
-sqlparser = "0.30"
+sqlparser = "0.32"
 
 [dev-dependencies]
 ctor = "0.1.22"

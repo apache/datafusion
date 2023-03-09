@@ -434,11 +434,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             opt_exclude,
             opt_except,
             opt_rename,
+            opt_replace,
         } = options;
 
-        if opt_exclude.is_some() || opt_except.is_some() || opt_rename.is_some() {
+        if opt_exclude.is_some()
+            || opt_except.is_some()
+            || opt_rename.is_some()
+            || opt_replace.is_some()
+        {
             Err(DataFusionError::NotImplemented(
-                "wildcard * with EXCLUDE, EXCEPT or RENAME not supported ".to_string(),
+                "wildcard * with EXCLUDE, EXCEPT, RENAME or REPLACE not supported "
+                    .to_string(),
             ))
         } else {
             Ok(())

@@ -18,7 +18,11 @@
 //! SessionContext contains methods for registering data sources and executing queries
 use crate::{
     catalog::catalog::{CatalogList, MemoryCatalogList},
-    datasource::listing::{ListingOptions, ListingTable},
+    datasource::{
+        datasource::TableProviderFactory,
+        listing::{ListingOptions, ListingTable},
+        listing_table_factory::ListingTableFactory,
+    },
     datasource::{MemTable, ViewTable},
     logical_expr::{PlanType, ToStringifiedPlan},
     optimizer::optimizer::Optimizer,
@@ -83,7 +87,7 @@ use crate::physical_plan::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_common::{OwnedTableReference, ScalarValue};
+use datafusion_common::{config::Extensions, OwnedTableReference, ScalarValue};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -276,6 +280,15 @@ impl SessionContext {
     /// Return the `session_id` of this Session
     pub fn session_id(&self) -> String {
         self.session_id.clone()
+    }
+
+    /// Return the [`TableFactoryProvider`] that is registered for the
+    /// specified file type, if any.
+    pub fn table_factory(
+        &self,
+        file_type: &str,
+    ) -> Option<Arc<dyn TableProviderFactory>> {
+        self.state.read().table_factories().get(file_type).cloned()
     }
 
     /// Return the `enable_ident_normalization` of this Session
@@ -579,16 +592,16 @@ impl SessionContext {
     ) -> Result<Arc<dyn TableProvider>> {
         let state = self.state.read().clone();
         let file_type = cmd.file_type.to_uppercase();
-        let factory = &state
-            .runtime_env
-            .table_factories
-            .get(file_type.as_str())
-            .ok_or_else(|| {
-                DataFusionError::Execution(format!(
-                    "Unable to find factory for {}",
-                    cmd.file_type
-                ))
-            })?;
+        let factory =
+            &state
+                .table_factories
+                .get(file_type.as_str())
+                .ok_or_else(|| {
+                    DataFusionError::Execution(format!(
+                        "Unable to find factory for {}",
+                        cmd.file_type
+                    ))
+                })?;
         let table = (*factory).create(&state, cmd).await?;
         Ok(table)
     }
@@ -1059,8 +1072,7 @@ impl SessionContext {
         plan: Arc<dyn ExecutionPlan>,
         path: impl AsRef<str>,
     ) -> Result<()> {
-        let state = self.state.read().clone();
-        plan_to_csv(&state, plan, path).await
+        plan_to_csv(self.task_ctx(), plan, path).await
     }
 
     /// Executes a query and writes the results to a partitioned JSON file.
@@ -1069,8 +1081,7 @@ impl SessionContext {
         plan: Arc<dyn ExecutionPlan>,
         path: impl AsRef<str>,
     ) -> Result<()> {
-        let state = self.state.read().clone();
-        plan_to_json(&state, plan, path).await
+        plan_to_json(self.task_ctx(), plan, path).await
     }
 
     /// Executes a query and writes the results to a partitioned Parquet file.
@@ -1080,8 +1091,7 @@ impl SessionContext {
         path: impl AsRef<str>,
         writer_properties: Option<WriterProperties>,
     ) -> Result<()> {
-        let state = self.state.read().clone();
-        plan_to_parquet(&state, plan, path, writer_properties).await
+        plan_to_parquet(self.task_ctx(), plan, path, writer_properties).await
     }
 
     /// Get a new TaskContext to run in this session
@@ -1510,6 +1520,14 @@ pub struct SessionState {
     config: SessionConfig,
     /// Execution properties
     execution_props: ExecutionProps,
+    /// TableProviderFactories for different file formats.
+    ///
+    /// Maps strings like "JSON" to an instance of  [`TableProviderFactory`]
+    ///
+    /// This is used to create [`TableProvider`] instances for the
+    /// `CREATE EXTERNAL TABLE ... STORED AS <FORMAT>` for custom file
+    /// formats other than those built into DataFusion
+    table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
 }
@@ -1543,6 +1561,15 @@ impl SessionState {
     ) -> Self {
         let session_id = Uuid::new_v4().to_string();
 
+        // Create table_factories for all default formats
+        let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
+            HashMap::new();
+        table_factories.insert("PARQUET".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("CSV".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("JSON".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("NDJSON".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("AVRO".into(), Arc::new(ListingTableFactory::new()));
+
         if config.create_default_catalog_and_schema() {
             let default_catalog = MemoryCatalogProvider::new();
 
@@ -1553,7 +1580,12 @@ impl SessionState {
                 )
                 .expect("memory catalog provider can register schema");
 
-            Self::register_default_schema(&config, &runtime, &default_catalog);
+            Self::register_default_schema(
+                &config,
+                &table_factories,
+                &runtime,
+                &default_catalog,
+            );
 
             catalog_list.register_catalog(
                 config.config_options().catalog.default_catalog.clone(),
@@ -1622,11 +1654,13 @@ impl SessionState {
             config,
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
+            table_factories,
         }
     }
 
     fn register_default_schema(
         config: &SessionConfig,
+        table_factories: &HashMap<String, Arc<dyn TableProviderFactory>>,
         runtime: &Arc<RuntimeEnv>,
         default_catalog: &MemoryCatalogProvider,
     ) {
@@ -1653,7 +1687,7 @@ impl SessionState {
             Ok(store) => store,
             _ => return,
         };
-        let factory = match runtime.table_factories.get(format.as_str()) {
+        let factory = match table_factories.get(format.as_str()) {
             Some(factory) => factory,
             _ => return,
         };
@@ -1757,6 +1791,18 @@ impl SessionState {
     ) -> Self {
         self.physical_optimizers.push(optimizer_rule);
         self
+    }
+
+    /// Get the table factories
+    pub fn table_factories(&self) -> &HashMap<String, Arc<dyn TableProviderFactory>> {
+        &self.table_factories
+    }
+
+    /// Get the table factories
+    pub fn table_factories_mut(
+        &mut self,
+    ) -> &mut HashMap<String, Arc<dyn TableProviderFactory>> {
+        &mut self.table_factories
     }
 
     /// Convert a SQL string into an AST Statement
@@ -2097,27 +2143,28 @@ pub struct TaskContext {
 
 impl TaskContext {
     /// Create a new task context instance
-    pub fn new(
+    pub fn try_new(
         task_id: String,
         session_id: String,
         task_props: HashMap<String, String>,
         scalar_functions: HashMap<String, Arc<ScalarUDF>>,
         aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
         runtime: Arc<RuntimeEnv>,
-    ) -> Self {
-        let mut config = ConfigOptions::new();
+        extensions: Extensions,
+    ) -> Result<Self> {
+        let mut config = ConfigOptions::new().with_extensions(extensions);
         for (k, v) in task_props {
-            let _ = config.set(&k, &v);
+            config.set(&k, &v)?;
         }
 
-        Self {
+        Ok(Self {
             task_id: Some(task_id),
             session_id,
             session_config: config.into(),
             scalar_functions,
             aggregate_functions,
             runtime,
-        }
+        })
     }
 
     /// Return the SessionConfig associated with the Task
@@ -2212,6 +2259,8 @@ mod tests {
     use arrow::array::ArrayRef;
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
+    use datafusion_common::config::ConfigExtension;
+    use datafusion_common::extensions_options;
     use datafusion_expr::{create_udaf, create_udf, Expr, Volatility};
     use datafusion_physical_expr::functions::make_scalar_function;
     use std::fs::File;
@@ -2878,5 +2927,44 @@ mod tests {
                 .await
                 .unwrap()
         }
+    }
+
+    extensions_options! {
+        struct TestExtension {
+            value: usize, default = 42
+        }
+    }
+
+    impl ConfigExtension for TestExtension {
+        const PREFIX: &'static str = "test";
+    }
+
+    #[test]
+    fn task_context_extensions() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
+        let task_props = HashMap::from([("test.value".to_string(), "24".to_string())]);
+        let mut extensions = Extensions::default();
+        extensions.insert(TestExtension::default());
+
+        let task_context = TaskContext::try_new(
+            "task_id".to_string(),
+            "session_id".to_string(),
+            task_props,
+            HashMap::default(),
+            HashMap::default(),
+            runtime,
+            extensions,
+        )?;
+
+        let test = task_context
+            .session_config()
+            .config_options()
+            .extensions
+            .get::<TestExtension>();
+        assert!(test.is_some());
+
+        assert_eq!(test.unwrap().value, 24);
+
+        Ok(())
     }
 }
