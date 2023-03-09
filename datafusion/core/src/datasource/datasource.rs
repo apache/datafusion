@@ -98,13 +98,14 @@ pub trait TableProvider: Sync + Send {
         None
     }
 
-    /// Insert API
-    async fn insert_into_table(
+    /// Insert into this table
+    async fn insert_into(
         &self,
         _state: &SessionState,
         _input: &LogicalPlan,
     ) -> Result<()> {
-        Err(DataFusionError::Internal("Not implemented".to_owned()))
+        let msg = "Insertion not implemented for this table".to_owned();
+        Err(DataFusionError::NotImplemented(msg))
     }
 }
 

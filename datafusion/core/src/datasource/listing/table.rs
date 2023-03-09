@@ -32,7 +32,6 @@ use futures::{future, stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
-use super::PartitionedFile;
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::datasource::{
     file_format::{
@@ -55,6 +54,8 @@ use crate::{
         Statistics,
     },
 };
+
+use super::PartitionedFile;
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 

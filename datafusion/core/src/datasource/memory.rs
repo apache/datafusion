@@ -29,7 +29,6 @@ use async_trait::async_trait;
 use datafusion_expr::LogicalPlan;
 use tokio::sync::RwLock;
 use tokio::task;
-use tokio::task::JoinHandle;
 
 use crate::datasource::{TableProvider, TableType};
 use crate::error::{DataFusionError, Result};
@@ -156,29 +155,25 @@ impl TableProvider for MemTable {
         )?))
     }
 
-    /// Inserts the results of executing a given `LogicalPlan` into this `Table`.
-    /// The `LogicalPlan` must have the same schema as this `Table`.
+    /// Inserts the execution results of a given [LogicalPlan] into this [MemTable].
+    /// The `LogicalPlan` must have the same schema as this `MemTable`.
     ///
     /// # Arguments
     ///
-    /// * `state` - The `SessionState` containing the context for executing the plan.
+    /// * `state` - The [SessionState] containing the context for executing the plan.
     /// * `input` - The `LogicalPlan` to execute and insert.
     ///
     /// # Returns
     ///
     /// * A `Result` indicating success or failure.
-    async fn insert_into_table(
-        &self,
-        state: &SessionState,
-        input: &LogicalPlan,
-    ) -> Result<()> {
+    async fn insert_into(&self, state: &SessionState, input: &LogicalPlan) -> Result<()> {
         // Create a physical plan from the logical plan.
         let plan = state.create_physical_plan(input).await?;
 
         // Check that the schema of the plan matches the schema of this table.
         if !plan.schema().eq(&self.schema) {
             return Err(DataFusionError::Plan(
-                "Inserting query must have same schema with the table.".to_string(),
+                "Inserting query must have the same schema with the table.".to_string(),
             ));
         }
 
@@ -206,28 +201,24 @@ impl TableProvider for MemTable {
 
         // Execute the plan and collect the results into batches.
         let mut tasks = vec![];
-        for i in 0..plan.output_partitioning().partition_count() {
-            let plan = plan.clone();
-            let stream = plan.execute(i, task_ctx.clone())?;
-            let handle: JoinHandle<Result<Vec<RecordBatch>>> = task::spawn(async move {
+        for idx in 0..table_partition_count {
+            let stream = plan.execute(idx, task_ctx.clone())?;
+            let handle = task::spawn(async move {
                 stream.try_collect().await.map_err(DataFusionError::from)
             });
             tasks.push(AbortOnDropSingle::new(handle));
         }
-        let results: Result<Vec<Vec<RecordBatch>>> = futures::future::join_all(tasks)
+        let results = futures::future::join_all(tasks)
             .await
             .into_iter()
             .map(|result| {
                 result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
             })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .collect::<Result<Vec<_>>>();
+            .collect::<Result<Vec<Vec<RecordBatch>>>>()?;
 
         // Write the results into the table.
         let mut all_batches = self.batches.write().await;
-        for (i, result) in results?.into_iter().enumerate() {
-            let batches = all_batches.get_mut(i).unwrap();
+        for (batches, result) in all_batches.iter_mut().zip(results.into_iter()) {
             batches.extend(result);
         }
 
@@ -502,7 +493,7 @@ mod tests {
             Arc::new(LogicalPlanBuilder::scan("source", provider, None)?.build()?);
         // Insert the data from the provider into the table
         initial_table
-            .insert_into_table(&session_ctx.state(), &table_scan)
+            .insert_into(&session_ctx.state(), &table_scan)
             .await?;
         // Ensure that the table now contains two batches of data in the same partition
         assert_eq!(initial_table.batches.read().await.get(0).unwrap().len(), 2);
@@ -519,7 +510,7 @@ mod tests {
         );
         // Insert the data from the provider into the table. We expect coalescing partitions.
         initial_table
-            .insert_into_table(&session_ctx.state(), &table_scan)
+            .insert_into(&session_ctx.state(), &table_scan)
             .await?;
         // Ensure that the table now contains 4 batches of data with only 1 partition
         assert_eq!(initial_table.batches.read().await.get(0).unwrap().len(), 4);
@@ -558,7 +549,7 @@ mod tests {
 
         // insert the data from the 2 partitions data source provider into the initial table
         initial_table
-            .insert_into_table(&session_ctx.state(), &table_scan)
+            .insert_into(&session_ctx.state(), &table_scan)
             .await?;
 
         // We expect one-to-one partition mapping, each partition gets 1 batch.
@@ -578,7 +569,7 @@ mod tests {
         // insert the data from the 1 partition data source provider into the initial table.
         // We expect round robin repartition here.
         initial_table
-            .insert_into_table(&session_ctx.state(), &table_scan)
+            .insert_into(&session_ctx.state(), &table_scan)
             .await?;
         // Ensure that the table now contains 3 batches of data with 2 partitions.
         assert_eq!(initial_table.batches.read().await.get(0).unwrap().len(), 3);

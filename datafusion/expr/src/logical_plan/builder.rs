@@ -203,7 +203,7 @@ impl LogicalPlanBuilder {
         Self::scan_with_filters(table_name, table_source, projection, vec![])
     }
 
-    /// Convert a logical plan into a builder with a DmlStatement
+    /// Convert a logical plan into a builder with a [DmlStatement]
     pub fn insert_into(
         input: LogicalPlan,
         table_name: impl Into<String>,

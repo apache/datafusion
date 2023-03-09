@@ -308,7 +308,8 @@ impl SessionContext {
 
     /// Creates a [`DataFrame`] that will execute a SQL query.
     ///
-    /// Note: This API implements DDL such as `CREATE TABLE` and `CREATE VIEW` with in-memory
+    /// Note: This API implements DDL statements such as `CREATE TABLE` and
+    /// `CREATE VIEW` and DML statements such as `INSERT INTO` with in-memory
     /// default implementations.
     ///
     /// If this is not desirable, consider using [`SessionState::create_logical_plan()`] which
@@ -324,11 +325,10 @@ impl SessionContext {
                 input,
                 ..
             }) => {
-                let exist = self.table_exist(&table_name)?;
-                if exist {
+                if self.table_exist(&table_name)? {
                     let name = table_name.table();
                     let provider = self.table_provider(name).await?;
-                    provider.insert_into_table(&self.state(), &input).await?;
+                    provider.insert_into(&self.state(), &input).await?;
                 }
                 self.return_empty_dataframe()
             }
