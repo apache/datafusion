@@ -201,13 +201,13 @@ impl LogicalPlan {
             | LogicalPlan::Values(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Union(_)
+            | LogicalPlan::Extension(_)
             | LogicalPlan::TableScan(_) => {
                 vec![self.schema()]
             }
             // return children schemas
             LogicalPlan::Limit(_)
             | LogicalPlan::Subquery(_)
-            | LogicalPlan::Extension(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Sort(_)
             | LogicalPlan::CreateMemoryTable(_)
@@ -2380,5 +2380,72 @@ mod tests {
             .unwrap()
             .build()
             .unwrap()
+    }
+
+    /// Extension plan that panic when trying to access its input plan
+    #[derive(Debug)]
+    struct NoChildExtension {
+        empty_schema: DFSchemaRef,
+    }
+
+    impl NoChildExtension {
+        fn empty() -> Self {
+            Self {
+                empty_schema: Arc::new(DFSchema::empty()),
+            }
+        }
+    }
+
+    impl UserDefinedLogicalNode for NoChildExtension {
+        fn as_any(&self) -> &dyn std::any::Any {
+            unimplemented!()
+        }
+
+        fn name(&self) -> &str {
+            unimplemented!()
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            panic!("Should not be called")
+        }
+
+        fn schema(&self) -> &DFSchemaRef {
+            &self.empty_schema
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            unimplemented!()
+        }
+
+        fn fmt_for_explain(&self, _: &mut fmt::Formatter) -> fmt::Result {
+            unimplemented!()
+        }
+
+        fn from_template(
+            &self,
+            _: &[Expr],
+            _: &[LogicalPlan],
+        ) -> Arc<dyn UserDefinedLogicalNode> {
+            unimplemented!()
+        }
+
+        fn dyn_hash(&self, _: &mut dyn Hasher) {
+            unimplemented!()
+        }
+
+        fn dyn_eq(&self, _: &dyn UserDefinedLogicalNode) -> bool {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_extension_all_schemas() {
+        let plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoChildExtension::empty()),
+        });
+
+        let schemas = plan.all_schemas();
+        assert_eq!(1, schemas.len());
+        assert_eq!(0, schemas[0].fields().len());
     }
 }
