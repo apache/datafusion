@@ -23,9 +23,11 @@ use crate::{
     execution::disk_manager::{DiskManager, DiskManagerConfig},
 };
 
-use crate::datasource::object_store::ObjectStoreRegistry;
-use crate::execution::memory_pool::{GreedyMemoryPool, MemoryPool, UnboundedMemoryPool};
 use datafusion_common::DataFusionError;
+use datafusion_execution::{
+    memory_pool::{GreedyMemoryPool, MemoryPool, UnboundedMemoryPool},
+    object_store::ObjectStoreRegistry,
+};
 use object_store::ObjectStore;
 use std::fmt::{Debug, Formatter};
 use std::path::PathBuf;
