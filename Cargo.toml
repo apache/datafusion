@@ -31,7 +31,6 @@ members = [
     "datafusion/substrait",
     "datafusion-examples",
     "test-utils",
-    "parquet-test-utils",
     "benchmarks",
 ]
 
