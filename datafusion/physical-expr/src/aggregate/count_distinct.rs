@@ -112,7 +112,7 @@ impl DistinctCountAccumulator {
                 .values
                 .iter()
                 .next()
-                .map(|vals| ScalarValue::size(vals) - std::mem::size_of_val(&vals))
+                .map(|vals| ScalarValue::size(vals) - std::mem::size_of_val(vals))
                 .unwrap_or(0)
             + std::mem::size_of::<DataType>()
     }
@@ -124,7 +124,7 @@ impl DistinctCountAccumulator {
             + self
                 .values
                 .iter()
-                .map(|vals| ScalarValue::size(vals) - std::mem::size_of_val(&vals))
+                .map(|vals| ScalarValue::size(vals) - std::mem::size_of_val(vals))
                 .sum::<usize>()
             + std::mem::size_of::<DataType>()
     }
