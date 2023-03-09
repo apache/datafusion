@@ -24,8 +24,8 @@ use std::{any::Any, cmp::Eq, collections::HashSet, fmt, sync::Arc};
 /// This defines the interface for [`LogicalPlan`] nodes that can be
 /// used to extend DataFusion with custom relational operators.
 ///
-/// Trait [`UserDefinedLogicalNodeCore`] is *the recommended way to implement*
-/// this trait.
+/// The [`UserDefinedLogicalNodeCore`] trait is *the recommended way to implement*
+/// this trait and avoids having implementing some required boiler plate code.
 pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// Return a reference to self as Any, to support dynamic downcasting
     ///
@@ -94,6 +94,9 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// Update the hash `state` with this node requirements from
     /// [`Hash`].
     ///
+    /// Note: consider using [`UserDefinedLogicalNodeCore`] instead of
+    /// [`UserDefinedLogicalNode`] directly.
+    ///
     /// This method is required to support hashing [`LogicalPlan`]s.  To
     /// implement it, typically the type implementing
     /// [`UserDefinedLogicalNode`] typically implements [`Hash`] and
@@ -124,6 +127,9 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     fn dyn_hash(&self, state: &mut dyn Hasher);
 
     /// Compare `other`, respecting requirements from [std::cmp::Eq].
+    ///
+    /// Note: consider using [`UserDefinedLogicalNodeCore`] instead of
+    /// [`UserDefinedLogicalNode`] directly.
     ///
     /// When `other` has an another type than `self`, then the values
     /// are *not* equal.
@@ -226,8 +232,8 @@ pub trait UserDefinedLogicalNodeCore:
     fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self;
 }
 
-/// Automatically derive UserDefinedLogicalNode to `UserDefinedLogicalNode` 
-/// to avoid boiler plate for implementing `as_any`, `Hash` and `PartialEq` 
+/// Automatically derive UserDefinedLogicalNode to `UserDefinedLogicalNode`
+/// to avoid boiler plate for implementing `as_any`, `Hash` and `PartialEq`
 impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
     fn as_any(&self) -> &dyn Any {
         self
