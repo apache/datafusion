@@ -30,30 +30,30 @@ use std::ops::Range;
 use std::sync::Arc;
 
 /// This object stores the window frame state for use in incremental calculations.
-#[derive(Debug)]
-pub enum WindowFrameContext<'a> {
+#[derive(Debug, Clone)]
+pub enum WindowFrameContext {
     /// ROWS frames are inherently stateless.
-    Rows(&'a Arc<WindowFrame>),
+    Rows(Arc<WindowFrame>),
     /// RANGE frames are stateful, they store indices specifying where the
     /// previous search left off. This amortizes the overall cost to O(n)
     /// where n denotes the row count.
     Range {
-        window_frame: &'a Arc<WindowFrame>,
+        window_frame: Arc<WindowFrame>,
         state: WindowFrameStateRange,
     },
     /// GROUPS frames are stateful, they store group boundaries and indices
     /// specifying where the previous search left off. This amortizes the
     /// overall cost to O(n) where n denotes the row count.
     Groups {
-        window_frame: &'a Arc<WindowFrame>,
+        window_frame: Arc<WindowFrame>,
         state: WindowFrameStateGroups,
     },
 }
 
-impl<'a> WindowFrameContext<'a> {
+impl WindowFrameContext {
     /// Create a new state object for the given window frame.
     pub fn new(
-        window_frame: &'a Arc<WindowFrame>,
+        window_frame: Arc<WindowFrame>,
         sort_options: Vec<SortOptions>,
         last_range: Range<usize>,
     ) -> Self {
@@ -77,7 +77,7 @@ impl<'a> WindowFrameContext<'a> {
         length: usize,
         idx: usize,
     ) -> Result<Range<usize>> {
-        match *self {
+        match self {
             WindowFrameContext::Rows(window_frame) => {
                 Self::calculate_range_rows(window_frame, length, idx)
             }
@@ -166,9 +166,9 @@ impl<'a> WindowFrameContext<'a> {
 /// row count.
 /// Attribute `sort_options` stores the column ordering specified by the ORDER
 /// BY clause. This information is used to calculate the range.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct WindowFrameStateRange {
-    last_range: Range<usize>,
+    pub last_range: Range<usize>,
     sort_options: Vec<SortOptions>,
 }
 
@@ -334,14 +334,14 @@ impl WindowFrameStateRange {
 
 // This structure encapsulates all the state information we require as we
 // scan groups of data while processing window frames.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct WindowFrameStateGroups {
     /// A tuple containing group values and the row index where the group ends.
     /// Example: [[1, 1], [1, 1], [2, 1], [2, 1], ...] would correspond to
     ///          [([1, 1], 2), ([2, 1], 4), ...].
-    group_start_indices: VecDeque<(Vec<ScalarValue>, usize)>,
+    pub group_start_indices: VecDeque<(Vec<ScalarValue>, usize)>,
     /// The group index to which the row index belongs.
-    current_group_idx: usize,
+    pub current_group_idx: usize,
 }
 
 impl WindowFrameStateGroups {
@@ -408,6 +408,7 @@ impl WindowFrameStateGroups {
                 }
             }
         };
+        // println!("idx:{:?}, length:{:?}", idx, length);
         Ok(Range { start, end })
     }
 
@@ -435,14 +436,26 @@ impl WindowFrameStateGroups {
             0
         };
         let mut group_start = 0;
-        let last_group = self.group_start_indices.back();
-        if let Some((_, group_end)) = last_group {
+        let last_group = self.group_start_indices.back_mut();
+        if let Some((group_row, group_end_orig)) = last_group {
+            // Find end boundary of the group (search right boundary):
+            let group_end = search_in_slice(
+                range_columns,
+                group_row,
+                check_equality,
+                *group_end_orig - 1,
+                length,
+            )?;
+            // Last group extended
+            if group_end != *group_end_orig {
+                *group_end_orig = group_end;
+            }
             // Start searching from the last group boundary:
-            group_start = *group_end;
+            group_start = group_end;
         }
 
         // Advance groups until `idx` is inside a group:
-        while idx > group_start {
+        while idx >= group_start {
             let group_row = get_row_at_idx(range_columns, group_start)?;
             // Find end boundary of the group (search right boundary):
             let group_end = search_in_slice(

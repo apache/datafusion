@@ -26,7 +26,7 @@ use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{Accumulator, WindowFrame, WindowFrameUnits};
+use datafusion_expr::{Accumulator, WindowFrame};
 
 use crate::window::window_expr::{reverse_order_bys, AggregateWindowExpr};
 use crate::window::{
@@ -141,7 +141,6 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         // NOTE: Currently, groups queries do not support the bounded memory variant.
         self.aggregate.supports_bounded_execution()
             && !self.window_frame.end_bound.is_unbounded()
-            && !matches!(self.window_frame.units, WindowFrameUnits::Groups)
     }
 }
 

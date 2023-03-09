@@ -36,7 +36,7 @@ use arrow::compute::{concat, SortOptions};
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::{WindowFrame, WindowFrameUnits};
+use datafusion_expr::WindowFrame;
 
 /// A window expr that takes the form of a built in window function
 #[derive(Debug)]
@@ -105,7 +105,7 @@ impl WindowExpr for BuiltInWindowExpr {
 
             let (values, order_bys) = self.get_values_orderbys(batch)?;
             let mut window_frame_ctx = WindowFrameContext::new(
-                &self.window_frame,
+                self.window_frame.clone(),
                 sort_options,
                 Range { start: 0, end: 0 },
             );
@@ -167,12 +167,17 @@ impl WindowExpr for BuiltInWindowExpr {
             let record_batch = &partition_batch_state.record_batch;
             let num_rows = record_batch.num_rows();
             let last_range = state.window_frame_range.clone();
-            let mut window_frame_ctx = WindowFrameContext::new(
-                &self.window_frame,
-                sort_options.clone(),
-                // Start search from the last range
-                last_range,
-            );
+            let mut window_frame_ctx =
+                if let Some(window_frame_ctx) = &state.window_frame_ctx {
+                    window_frame_ctx.clone()
+                } else {
+                    WindowFrameContext::new(
+                        self.window_frame.clone(),
+                        sort_options.clone(),
+                        // Start search from the last range
+                        last_range,
+                    )
+                };
             let sort_partition_points = if evaluator.include_rank() {
                 let columns = self.sort_columns(record_batch)?;
                 self.evaluate_partition_points(num_rows, &columns)?
@@ -205,6 +210,7 @@ impl WindowExpr for BuiltInWindowExpr {
                 ScalarValue::iter_to_array(row_wise_results.into_iter())?
             };
 
+            state.window_frame_ctx = Some(window_frame_ctx);
             state.out_col = concat(&[&state.out_col, &out_col])?;
             state.n_row_result_missing = num_rows - state.last_calculated_index;
             if self.window_frame.start_bound.is_unbounded() {
@@ -239,8 +245,7 @@ impl WindowExpr for BuiltInWindowExpr {
         // NOTE: Currently, groups queries do not support the bounded memory variant.
         self.expr.supports_bounded_execution()
             && (!self.expr.uses_window_frame()
-                || !(self.window_frame.end_bound.is_unbounded()
-                    || matches!(self.window_frame.units, WindowFrameUnits::Groups)))
+                || !self.window_frame.end_bound.is_unbounded())
     }
 }
 

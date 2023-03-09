@@ -18,7 +18,7 @@
 use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::window_frame_state::WindowFrameContext;
 use crate::{PhysicalExpr, PhysicalSortExpr};
-use arrow::array::{new_empty_array, ArrayRef};
+use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::kernels::partition::lexicographical_partition_ranges;
 use arrow::compute::kernels::sort::SortColumn;
 use arrow::compute::{concat, SortOptions};
@@ -165,7 +165,22 @@ pub trait AggregateWindowExpr: WindowExpr {
         let mut accumulator = self.get_accumulator()?;
         let mut last_range = Range { start: 0, end: 0 };
         let mut idx = 0;
-        self.get_result_column(&mut accumulator, batch, &mut last_range, &mut idx, false)
+        let sort_options: Vec<SortOptions> =
+            self.order_by().iter().map(|o| o.options).collect();
+        let mut window_frame_ctx = WindowFrameContext::new(
+            self.get_window_frame().clone(),
+            sort_options,
+            // Start search from the last range
+            last_range.clone(),
+        );
+        self.get_result_column(
+            &mut accumulator,
+            batch,
+            &mut last_range,
+            &mut window_frame_ctx,
+            &mut idx,
+            false,
+        )
     }
 
     /// Statefully evaluates the window function against the batch. Maintains
@@ -199,13 +214,35 @@ pub trait AggregateWindowExpr: WindowExpr {
             let mut state = &mut window_state.state;
 
             let record_batch = &partition_batch_state.record_batch;
-            let out_col = self.get_result_column(
-                accumulator,
-                record_batch,
-                &mut state.window_frame_range,
-                &mut state.last_calculated_index,
-                !partition_batch_state.is_end,
-            )?;
+            let out_col = if let Some(window_frame_ctx) = &mut state.window_frame_ctx {
+                self.get_result_column(
+                    accumulator,
+                    record_batch,
+                    &mut state.window_frame_range,
+                    window_frame_ctx,
+                    &mut state.last_calculated_index,
+                    !partition_batch_state.is_end,
+                )?
+            } else {
+                let sort_options: Vec<SortOptions> =
+                    self.order_by().iter().map(|o| o.options).collect();
+                let mut window_frame_ctx = WindowFrameContext::new(
+                    self.get_window_frame().clone(),
+                    sort_options,
+                    // Start search from the last range
+                    state.window_frame_range.clone(),
+                );
+                let res = self.get_result_column(
+                    accumulator,
+                    record_batch,
+                    &mut state.window_frame_range,
+                    &mut window_frame_ctx,
+                    &mut state.last_calculated_index,
+                    !partition_batch_state.is_end,
+                )?;
+                state.window_frame_ctx = Some(window_frame_ctx);
+                res
+            };
             state.is_end = partition_batch_state.is_end;
             state.out_col = concat(&[&state.out_col, &out_col])?;
             state.n_row_result_missing =
@@ -221,20 +258,13 @@ pub trait AggregateWindowExpr: WindowExpr {
         accumulator: &mut Box<dyn Accumulator>,
         record_batch: &RecordBatch,
         last_range: &mut Range<usize>,
+        window_frame_ctx: &mut WindowFrameContext,
         idx: &mut usize,
         not_end: bool,
     ) -> Result<ArrayRef> {
         let (values, order_bys) = self.get_values_orderbys(record_batch)?;
         // We iterate on each row to perform a running calculation.
         let length = values[0].len();
-        let sort_options: Vec<SortOptions> =
-            self.order_by().iter().map(|o| o.options).collect();
-        let mut window_frame_ctx = WindowFrameContext::new(
-            self.get_window_frame(),
-            sort_options,
-            // Start search from the last range
-            last_range.clone(),
-        );
         let mut row_wise_results: Vec<ScalarValue> = vec![];
         while *idx < length {
             let cur_range = window_frame_ctx.calculate_range(&order_bys, length, *idx)?;
@@ -340,6 +370,7 @@ pub enum BuiltinWindowState {
 pub struct WindowAggState {
     /// The range that we calculate the window function
     pub window_frame_range: Range<usize>,
+    pub window_frame_ctx: Option<WindowFrameContext>,
     /// The index of the last row that its result is calculated inside the partition record batch buffer.
     pub last_calculated_index: usize,
     /// The offset of the deleted row number
@@ -351,6 +382,51 @@ pub struct WindowAggState {
     pub n_row_result_missing: usize,
     /// flag indicating whether we have received all data for this partition
     pub is_end: bool,
+}
+
+impl WindowAggState {
+    pub fn prune_state(&mut self, n_prune: usize) -> Result<()> {
+        self.window_frame_range = Range {
+            start: self.window_frame_range.start - n_prune,
+            end: self.window_frame_range.end - n_prune,
+        };
+        self.last_calculated_index -= n_prune;
+        self.offset_pruned_rows += n_prune;
+
+        if let Some(elem) = self.window_frame_ctx.as_mut() {
+            match elem {
+                // Rows have no state do nothing
+                WindowFrameContext::Rows(_) => {}
+                WindowFrameContext::Range { state, .. } => {
+                    state.last_range = Range {
+                        start: state.last_range.start.saturating_sub(n_prune),
+                        end: state.last_range.end.saturating_sub(n_prune),
+                    };
+                }
+                WindowFrameContext::Groups { state, .. } => {
+                    let mut n_group_to_del = 0;
+                    state.group_start_indices.retain_mut(|(_, start_idx)| {
+                        if n_prune >= *start_idx {
+                            n_group_to_del += 1;
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                    state
+                        .group_start_indices
+                        .iter_mut()
+                        .for_each(|(_, start_idx)| *start_idx -= n_prune);
+                    state.current_group_idx -= n_group_to_del;
+                }
+            }
+            Ok(())
+        } else {
+            Err(DataFusionError::Execution(
+                "Window frame context cannot be empty".to_string(),
+            ))
+        }
+    }
 }
 
 /// State for each unique partition determined according to PARTITION BY column(s)
@@ -383,6 +459,7 @@ impl WindowAggState {
         let empty_out_col = ScalarValue::try_from(out_type)?.to_array_of_size(0);
         Ok(Self {
             window_frame_range: Range { start: 0, end: 0 },
+            window_frame_ctx: None,
             last_calculated_index: 0,
             offset_pruned_rows: 0,
             out_col: empty_out_col,
