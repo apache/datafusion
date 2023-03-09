@@ -325,7 +325,7 @@ impl ops::Shr for Expr {
     }
 }
 
-/// Support `<expr> - <expr>` fluent style
+/// Support `- <expr>` fluent style
 impl ops::Neg for Expr {
     type Output = Self;
 
