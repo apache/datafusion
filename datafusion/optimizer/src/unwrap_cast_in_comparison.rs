@@ -1122,6 +1122,7 @@ mod tests {
 
     #[test]
     fn test_try_cast_literal_to_timestamp() {
+        // TimestampNanosecond to TimestampMicrosecond
         let new_scalar = try_cast_literal_to_type(
             &ScalarValue::TimestampNanosecond(Some(123456), None),
             &DataType::Timestamp(TimeUnit::Microsecond, None),
@@ -1132,6 +1133,126 @@ mod tests {
         assert_eq!(
             new_scalar,
             ScalarValue::TimestampMicrosecond(Some(123), None)
+        );
+
+        // TimestampNanosecond to TimestampMillisecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampNanosecond(Some(123456), None),
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(new_scalar, ScalarValue::TimestampMillisecond(Some(0), None));
+
+        // TimestampNanosecond to TimestampSecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampNanosecond(Some(123456), None),
+            &DataType::Timestamp(TimeUnit::Second, None),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(new_scalar, ScalarValue::TimestampSecond(Some(0), None));
+
+        // TimestampMicrosecond to TimestampNanosecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampMicrosecond(Some(123), None),
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            new_scalar,
+            ScalarValue::TimestampNanosecond(Some(123000), None)
+        );
+
+        // TimestampMicrosecond to TimestampMillisecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampMicrosecond(Some(123), None),
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(new_scalar, ScalarValue::TimestampMillisecond(Some(0), None));
+
+        // TimestampMicrosecond to TimestampSecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampMicrosecond(Some(123456789), None),
+            &DataType::Timestamp(TimeUnit::Second, None),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(new_scalar, ScalarValue::TimestampSecond(Some(123), None));
+
+        // TimestampMillisecond to TimestampNanosecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampMillisecond(Some(123), None),
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            new_scalar,
+            ScalarValue::TimestampNanosecond(Some(123000000), None)
+        );
+
+        // TimestampMillisecond to TimestampMicrosecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampMillisecond(Some(123), None),
+            &DataType::Timestamp(TimeUnit::Microsecond, None),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            new_scalar,
+            ScalarValue::TimestampMicrosecond(Some(123000), None)
+        );
+        // TimestampMillisecond to TimestampSecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampMillisecond(Some(123456789), None),
+            &DataType::Timestamp(TimeUnit::Second, None),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(new_scalar, ScalarValue::TimestampSecond(Some(123456), None));
+
+        // TimestampSecond to TimestampNanosecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampSecond(Some(123), None),
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            new_scalar,
+            ScalarValue::TimestampNanosecond(Some(123000000000), None)
+        );
+
+        // TimestampSecond to TimestampMicrosecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampSecond(Some(123), None),
+            &DataType::Timestamp(TimeUnit::Microsecond, None),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            new_scalar,
+            ScalarValue::TimestampMicrosecond(Some(123000000), None)
+        );
+
+        // TimestampSecond to TimestampMillisecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampSecond(Some(123), None),
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            new_scalar,
+            ScalarValue::TimestampMillisecond(Some(123000), None)
         );
     }
 }
