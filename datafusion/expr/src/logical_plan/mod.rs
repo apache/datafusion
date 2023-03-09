@@ -32,4 +32,4 @@ pub use plan::{
 
 pub use display::display_schema;
 
-pub use extension::UserDefinedLogicalNode;
+pub use extension::{UserDefinedLogicalNode, UserDefinedLogicalNodeCore};
