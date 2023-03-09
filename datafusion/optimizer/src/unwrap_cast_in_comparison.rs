@@ -24,6 +24,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::{
     DataType, TimeUnit, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
+use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
 use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, Cast, TryCast};
 use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
@@ -31,6 +32,7 @@ use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, Operator,
 };
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 /// [`UnwrapCastInComparison`] attempts to remove casts from
@@ -454,31 +456,26 @@ fn try_cast_literal_to_type(
 
 /// Cast a timestamp value from one unit to another
 fn cast_between_timestamp(from: DataType, to: DataType, value: i128) -> Option<i64> {
-    // avoid useless computation, like cast from second to second
-    if from == to {
-        return Some(value as i64);
-    }
-
-    let seconds = match from {
-        DataType::Timestamp(TimeUnit::Second, _) => Some(value * 1000 * 1000 * 1000),
-        DataType::Timestamp(TimeUnit::Millisecond, _) => Some(value * 1000 * 1000),
-        DataType::Timestamp(TimeUnit::Microsecond, _) => Some(value * 1000),
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => Some(value),
+    let from_scale = match from {
+        DataType::Timestamp(TimeUnit::Second, _) => 1,
+        DataType::Timestamp(TimeUnit::Millisecond, _) => MILLISECONDS,
+        DataType::Timestamp(TimeUnit::Microsecond, _) => MICROSECONDS,
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => NANOSECONDS,
         _ => return Some(value as i64),
     };
 
-    match to {
-        DataType::Timestamp(TimeUnit::Second, _) => {
-            seconds.map(|s| (s / 1000 / 1000 / 1000) as i64)
-        }
-        DataType::Timestamp(TimeUnit::Millisecond, _) => {
-            seconds.map(|s| (s / 1000 / 1000) as i64)
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            seconds.map(|s| (s / 1000) as i64)
-        }
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => seconds.map(|s| s as i64),
-        _ => None,
+    let to_scale = match to {
+        DataType::Timestamp(TimeUnit::Second, _) => 1,
+        DataType::Timestamp(TimeUnit::Millisecond, _) => MILLISECONDS,
+        DataType::Timestamp(TimeUnit::Microsecond, _) => MICROSECONDS,
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => NANOSECONDS,
+        _ => return Some(value as i64),
+    };
+
+    match from_scale.cmp(&to_scale) {
+        Ordering::Less => Some(value as i64 * (to_scale / from_scale)),
+        Ordering::Greater => Some(value as i64 / (from_scale / to_scale)),
+        Ordering::Equal => Some(value as i64),
     }
 }
 
