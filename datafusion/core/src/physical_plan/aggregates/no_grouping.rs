@@ -164,7 +164,7 @@ impl RecordBatchStream for AggregateStream {
 
 /// Perform group-by aggregation for the given [`RecordBatch`].
 ///
-/// If successfull, this returns the additional number of bytes that were allocated during this process.
+/// If successfully, this returns the additional number of bytes that were allocated during this process.
 ///
 /// TODO: Make this a member function
 fn aggregate_batch(
