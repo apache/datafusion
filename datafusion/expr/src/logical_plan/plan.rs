@@ -1502,6 +1502,8 @@ pub struct Window {
 #[derive(Clone)]
 pub struct TableScan {
     /// The name of the table
+    // TODO: change to OwnedTableReference
+    // see: https://github.com/apache/arrow-datafusion/issues/5522
     pub table_name: String,
     /// The source of the table
     pub source: Arc<dyn TableSource>,

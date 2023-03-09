@@ -495,7 +495,6 @@ fn push_down_scan(
     let schema = scan.source.schema();
     let mut projection: BTreeSet<usize> = used_columns
         .iter()
-        // TODO: change scan.table_name from String?
         .filter(|c| {
             c.relation.is_none()
                 || c.relation.as_ref().unwrap().to_string() == scan.table_name

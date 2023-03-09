@@ -124,6 +124,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         )))
                     } else {
                         let s = &ids[0..ids.len()];
+                        // safe unwrap as s can never be empty or exceed the bounds
                         let (relation, column_name) = form_identifier(s).unwrap();
                         let relation = relation.map(|r| r.to_owned_reference());
                         Ok(Expr::Column(Column::new(relation, column_name)))
@@ -262,6 +263,7 @@ fn generate_schema_search_terms(
     (0..bound).rev().map(|i| {
         let nested_names_index = i + 1;
         let qualifier_and_column = &ids[0..nested_names_index];
+        // safe unwrap as qualifier_and_column can never be empty or exceed the bounds
         let (relation, column_name) = form_identifier(qualifier_and_column).unwrap();
         (relation, column_name, &ids[nested_names_index..])
     })
