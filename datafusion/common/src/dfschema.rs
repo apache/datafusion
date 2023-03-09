@@ -519,7 +519,7 @@ impl From<DFSchema> for SchemaRef {
 }
 
 // Hashing refers to a subset of fields considered in PartialEq.
-#[allow(clippy::derive_hash_xor_eq)]
+#[allow(clippy::derived_hash_with_manual_eq)]
 impl Hash for DFSchema {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.fields.hash(state);
