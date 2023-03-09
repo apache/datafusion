@@ -3144,7 +3144,7 @@ mod tests {
                 None,
                 &join_type,
                 PartitionMode::Partitioned,
-                &false,
+                false,
             )?;
 
             let stream = join.execute(1, task_ctx)?;
