@@ -18,15 +18,16 @@
 [package]
 name = "datafusion-examples"
 description = "DataFusion usage examples"
-version = "19.0.0"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
 keywords = [ "arrow", "query", "sql" ]
-edition = "2021"
 publish = false
-rust-version = "1.62"
+version = { workspace = true }
+edition = { workspace = true }
+readme = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
 
 [[example]]
 name = "avro_sql"
