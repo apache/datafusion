@@ -860,6 +860,8 @@ impl DefaultPhysicalPlanner {
                     schema: join_schema,
                     ..
                 }) => {
+                    let null_equals_null = *null_equals_null;
+
                     // If join has expression equijoin keys, add physical projecton.
                     let has_expr_join_key = keys.iter().any(|(l, r)| {
                         !(matches!(l, Expr::Column(_))
@@ -1030,7 +1032,7 @@ impl DefaultPhysicalPlanner {
                                 join_on,
                                 *join_type,
                                 vec![SortOptions::default(); join_on_len],
-                                *null_equals_null,
+                                null_equals_null,
                             )?))
                         }
                     } else if session_state.config().target_partitions() > 1

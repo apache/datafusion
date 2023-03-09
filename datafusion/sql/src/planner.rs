@@ -292,6 +292,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // adds/changes the `SQLDataType` the compiler will tell us on upgrade
             // and avoid bugs like https://github.com/apache/arrow-datafusion/issues/3059
             SQLDataType::Nvarchar(_)
+            | SQLDataType::JSON
             | SQLDataType::Uuid
             | SQLDataType::Binary(_)
             | SQLDataType::Varbinary(_)
@@ -315,6 +316,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // precision is not supported
             | SQLDataType::Time(Some(_), _)
             | SQLDataType::Dec(_)
+            | SQLDataType::BigNumeric(_)
+            | SQLDataType::BigDecimal(_)
             | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL type {sql_type:?}"
             ))),

@@ -94,7 +94,7 @@ pin-project-lite = "^0.2.7"
 rand = "0.8"
 rayon = { version = "1.5", optional = true }
 smallvec = { version = "1.6", features = ["union"] }
-sqlparser = { version = "0.30", features = ["visitor"] }
+sqlparser = { version = "0.32", features = ["visitor"] }
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 tokio-stream = "0.1"

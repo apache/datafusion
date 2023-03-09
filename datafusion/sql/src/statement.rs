@@ -580,6 +580,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 | Value::UnQuotedString(_)
                 | Value::EscapedStringLiteral(_)
                 | Value::NationalStringLiteral(_)
+                | Value::SingleQuotedByteStringLiteral(_)
+                | Value::DoubleQuotedByteStringLiteral(_)
+                | Value::RawStringLiteral(_)
                 | Value::HexStringLiteral(_)
                 | Value::Null
                 | Value::Placeholder(_) => {

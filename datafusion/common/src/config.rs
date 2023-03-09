@@ -397,6 +397,12 @@ impl ConfigOptions {
         Self::default()
     }
 
+    /// Set extensions to provided value
+    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions = extensions;
+        self
+    }
+
     /// Set a configuration option
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let (prefix, key) = key.split_once('.').ok_or_else(|| {
@@ -684,7 +690,7 @@ trait Visit {
 ///
 ///
 /// [`Debug`]: std::fmt::Debug
-/// [`ExtensionsOptions`]: crate::config::ExtensionsOptions
+/// [`ExtensionsOptions`]: crate::config::ExtensionOptions
 #[macro_export]
 macro_rules! extensions_options {
     (
