@@ -112,6 +112,8 @@ impl Column {
 
     /// Serialize column into a quoted flat name string
     pub fn quoted_flat_name(&self) -> String {
+        // TODO: quote identifiers only when special characters present
+        // see: https://github.com/apache/arrow-datafusion/issues/5523
         match &self.relation {
             Some(r) => {
                 format!("{}.{}", r.to_quoted_string(), quote_identifier(&self.name))

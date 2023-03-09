@@ -739,7 +739,7 @@ mod tests {
         let col = Column::from_name("t1.c0");
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         // lookup with unqualified name "t1.c0"
-        let err = schema.index_of_column(&col).err().unwrap();
+        let err = schema.index_of_column(&col).unwrap_err();
         assert_eq!(
             r#"Schema error: No field named "t1.c0". Valid fields are "t1"."c0", "t1"."c1"."#,
             &format!("{err}")
