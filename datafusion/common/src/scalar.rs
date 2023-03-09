@@ -672,7 +672,7 @@ fn ts_nanosec_sub_to_interval(
 ) -> Result<ScalarValue, DataFusionError> {
     let err = || {
         DataFusionError::Execution(String::from(
-            "nanosec overflow in timestamp subtractşon",
+            "nanosec overflow in timestamp subtraction",
         ))
     };
     // Conversion of integer and string-typed timestamps to NaiveDateTime objects
@@ -4784,25 +4784,24 @@ mod tests {
         // ts(sec) + interval(ns) = ts(sec); however,
         // ts(sec) - ts(sec) cannot be = interval(ns). Therefore,
         // timestamps are more precise than intervals in tests.
-        let mut timestamp2: ScalarValue;
         for (idx, ts1) in timestamps1.iter().enumerate() {
             if idx % 2 == 0 {
-                timestamp2 = ts1.add(intervals[idx].clone()).unwrap();
+                let timestamp2 = ts1.add(intervals[idx].clone()).unwrap();
                 assert_eq!(
                     intervals[idx],
                     timestamp2.sub(ts1).unwrap(),
                     "operands: {:?} (-) {:?}",
-                    ts1.add(intervals[idx].clone()).unwrap(),
+                    timestamp2,
                     ts1
                 );
             } else {
-                timestamp2 = ts1.sub(intervals[idx].clone()).unwrap();
+                let timestamp2 = ts1.sub(intervals[idx].clone()).unwrap();
                 assert_eq!(
                     intervals[idx],
-                    ts1.sub(timestamp2).unwrap(),
+                    ts1.sub(timestamp2.clone()).unwrap(),
                     "operands: {:?} (-) {:?}",
                     ts1,
-                    ts1.sub(intervals[idx].clone()).unwrap()
+                    timestamp2
                 );
             };
         }
