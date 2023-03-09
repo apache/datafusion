@@ -454,6 +454,11 @@ fn try_cast_literal_to_type(
 
 /// Cast a timestamp value from one unit to another
 fn cast_between_timestamp(from: DataType, to: DataType, value: i128) -> Option<i64> {
+    // avoid useless computation, like cast from second to second
+    if from == to {
+        return Some(value as i64);
+    }
+
     let seconds = match from {
         DataType::Timestamp(TimeUnit::Second, _) => Some(value * 1000 * 1000 * 1000),
         DataType::Timestamp(TimeUnit::Millisecond, _) => Some(value * 1000 * 1000),
@@ -1122,6 +1127,19 @@ mod tests {
 
     #[test]
     fn test_try_cast_literal_to_timestamp() {
+        // same timestamp
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampNanosecond(Some(123456), None),
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            new_scalar,
+            ScalarValue::TimestampNanosecond(Some(123456), None)
+        );
+
         // TimestampNanosecond to TimestampMicrosecond
         let new_scalar = try_cast_literal_to_type(
             &ScalarValue::TimestampNanosecond(Some(123456), None),
