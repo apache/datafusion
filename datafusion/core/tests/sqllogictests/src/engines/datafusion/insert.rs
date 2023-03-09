@@ -56,9 +56,9 @@ pub async fn insert(ctx: &SessionContext, insert_stmt: SQLStatement) -> Result<D
     }
 
     // Second, get batches in table and destroy the old table
-    let mut origin_batches = ctx.table(table_reference.clone()).await?.collect().await?;
-    let schema = ctx.table_provider(table_reference.clone()).await?.schema();
-    ctx.deregister_table(table_reference.clone())?;
+    let mut origin_batches = ctx.table(&table_reference).await?.collect().await?;
+    let schema = ctx.table_provider(&table_reference).await?.schema();
+    ctx.deregister_table(&table_reference)?;
 
     // Third, transfer insert values to `RecordBatch`
     // Attention: schema info can be ignored. (insert values don't contain schema info)
@@ -87,7 +87,7 @@ pub async fn insert(ctx: &SessionContext, insert_stmt: SQLStatement) -> Result<D
 
     // Final, create new memtable with same schema.
     let new_provider = MemTable::try_new(schema, vec![origin_batches])?;
-    ctx.register_table(table_reference, Arc::new(new_provider))?;
+    ctx.register_table(&table_reference, Arc::new(new_provider))?;
 
     Ok(DBOutput::StatementComplete(num_rows as u64))
 }

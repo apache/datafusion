@@ -190,7 +190,7 @@ impl<'a> TableReference<'a> {
     }
 
     /// Converts directly into an [`OwnedTableReference`]
-    pub fn to_owned_reference(self) -> OwnedTableReference {
+    pub fn to_owned_reference(&self) -> OwnedTableReference {
         match self {
             Self::Full {
                 catalog,
@@ -264,6 +264,29 @@ impl<'a> TableReference<'a> {
 impl From<String> for OwnedTableReference {
     fn from(s: String) -> Self {
         TableReference::parse_str(&s).to_owned_reference()
+    }
+}
+
+impl<'a> From<&'a OwnedTableReference> for TableReference<'a> {
+    fn from(value: &'a OwnedTableReference) -> Self {
+        match value {
+            OwnedTableReference::Bare { table } => TableReference::Bare {
+                table: Cow::Borrowed(table),
+            },
+            OwnedTableReference::Partial { schema, table } => TableReference::Partial {
+                schema: Cow::Borrowed(schema),
+                table: Cow::Borrowed(table),
+            },
+            OwnedTableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => TableReference::Full {
+                catalog: Cow::Borrowed(catalog),
+                schema: Cow::Borrowed(schema),
+                table: Cow::Borrowed(table),
+            },
+        }
     }
 }
 
