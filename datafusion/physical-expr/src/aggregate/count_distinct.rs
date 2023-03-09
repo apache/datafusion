@@ -114,6 +114,19 @@ impl DistinctCountAccumulator {
                 .next()
                 .map(|vals| ScalarValue::size(vals) - std::mem::size_of_val(&vals))
                 .unwrap_or(0)
+            + std::mem::size_of::<DataType>()
+    }
+
+    // calculates the size as accurate as possible, call to this method is expensive
+    fn full_size(&self) -> usize {
+        std::mem::size_of_val(self)
+            + (std::mem::size_of::<DistinctScalarValues>() * self.values.capacity())
+            + self
+                .values
+                .iter()
+                .map(|vals| ScalarValue::size(vals) - std::mem::size_of_val(&vals))
+                .sum::<usize>()
+            + std::mem::size_of::<DataType>()
     }
 }
 
@@ -172,7 +185,11 @@ impl Accumulator for DistinctCountAccumulator {
     }
 
     fn size(&self) -> usize {
-        self.fixed_size()
+        match &self.state_data_type {
+            DataType::Boolean | DataType::Null => self.fixed_size(),
+            d if d.is_primitive() => self.fixed_size(),
+            _ => self.full_size(),
+        }
     }
 }
 
