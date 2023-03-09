@@ -129,10 +129,7 @@ impl<'a> SimplifyInfo for SimplifyContext<'a> {
     /// Returns data type of this expr needed for determining optimized int type of a value
     fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
         if self.schemas.len() == 1 {
-            match expr.get_type(&self.schemas[0]) {
-                Ok(expr_data_type) => Ok(expr_data_type),
-                Err(e) => Err(e),
-            }
+            expr.get_type(&self.schemas[0])
         } else {
             Err(DataFusionError::Internal(
                 "The expr has more than one schema, could not determine data type"
