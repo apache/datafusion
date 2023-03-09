@@ -314,7 +314,7 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
 
 /// function return type of variance
 pub fn variance_return_type(arg_type: &DataType) -> Result<DataType> {
-    if NUMERICS.contains(&arg_type) {
+    if NUMERICS.contains(arg_type) {
         Ok(DataType::Float64)
     } else {
         Err(DataFusionError::Plan(format!(
@@ -325,7 +325,7 @@ pub fn variance_return_type(arg_type: &DataType) -> Result<DataType> {
 
 /// function return type of covariance
 pub fn covariance_return_type(arg_type: &DataType) -> Result<DataType> {
-    if NUMERICS.contains(&arg_type) {
+    if NUMERICS.contains(arg_type) {
         Ok(DataType::Float64)
     } else {
         Err(DataFusionError::Plan(format!(
@@ -336,7 +336,7 @@ pub fn covariance_return_type(arg_type: &DataType) -> Result<DataType> {
 
 /// function return type of correlation
 pub fn correlation_return_type(arg_type: &DataType) -> Result<DataType> {
-    if NUMERICS.contains(&arg_type) {
+    if NUMERICS.contains(arg_type) {
         Ok(DataType::Float64)
     } else {
         Err(DataFusionError::Plan(format!(
@@ -347,7 +347,7 @@ pub fn correlation_return_type(arg_type: &DataType) -> Result<DataType> {
 
 /// function return type of standard deviation
 pub fn stddev_return_type(arg_type: &DataType) -> Result<DataType> {
-    if NUMERICS.contains(&arg_type) {
+    if NUMERICS.contains(arg_type) {
         Ok(DataType::Float64)
     } else {
         Err(DataFusionError::Plan(format!(
@@ -366,7 +366,7 @@ pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
             let new_scale = DECIMAL128_MAX_SCALE.min(*scale + 4);
             Ok(DataType::Decimal128(new_precision, new_scale))
         }
-        arg_type if NUMERICS.contains(&arg_type) => Ok(DataType::Float64),
+        arg_type if NUMERICS.contains(arg_type) => Ok(DataType::Float64),
         other => Err(DataFusionError::Plan(format!(
             "AVG does not support {other:?}"
         ))),
@@ -376,7 +376,7 @@ pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
 pub fn is_sum_support_arg_type(arg_type: &DataType) -> bool {
     matches!(
         arg_type,
-        arg_type if NUMERICS.contains(&arg_type)
+        arg_type if NUMERICS.contains(arg_type)
         || matches!(arg_type, DataType::Decimal128(_, _))
     )
 }
@@ -384,7 +384,7 @@ pub fn is_sum_support_arg_type(arg_type: &DataType) -> bool {
 pub fn is_avg_support_arg_type(arg_type: &DataType) -> bool {
     matches!(
         arg_type,
-        arg_type if NUMERICS.contains(&arg_type)
+        arg_type if NUMERICS.contains(arg_type)
             || matches!(arg_type, DataType::Decimal128(_, _))
     )
 }
@@ -392,28 +392,28 @@ pub fn is_avg_support_arg_type(arg_type: &DataType) -> bool {
 pub fn is_variance_support_arg_type(arg_type: &DataType) -> bool {
     matches!(
         arg_type,
-        arg_type if NUMERICS.contains(&arg_type)
+        arg_type if NUMERICS.contains(arg_type)
     )
 }
 
 pub fn is_covariance_support_arg_type(arg_type: &DataType) -> bool {
     matches!(
         arg_type,
-        arg_type if NUMERICS.contains(&arg_type)
+        arg_type if NUMERICS.contains(arg_type)
     )
 }
 
 pub fn is_stddev_support_arg_type(arg_type: &DataType) -> bool {
     matches!(
         arg_type,
-        arg_type if NUMERICS.contains(&arg_type)
+        arg_type if NUMERICS.contains(arg_type)
     )
 }
 
 pub fn is_correlation_support_arg_type(arg_type: &DataType) -> bool {
     matches!(
         arg_type,
-        arg_type if NUMERICS.contains(&arg_type)
+        arg_type if NUMERICS.contains(arg_type)
     )
 }
 
@@ -436,7 +436,7 @@ pub fn is_integer_arg_type(arg_type: &DataType) -> bool {
 pub fn is_approx_percentile_cont_supported_arg_type(arg_type: &DataType) -> bool {
     matches!(
         arg_type,
-        arg_type if NUMERICS.contains(&arg_type)
+        arg_type if NUMERICS.contains(arg_type)
     )
 }
 
