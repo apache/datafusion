@@ -30,7 +30,6 @@ datafusion = { version = "19.0.0", path = "../core" }
 itertools = "0.10.5"
 object_store = "0.5.4"
 prost = "0.11"
-prost-types = "0.11"
 substrait = "0.4"
 tokio = "1.17"
 
