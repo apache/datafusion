@@ -211,7 +211,7 @@ pub trait AggregateWindowExpr: WindowExpr {
                 WindowFn::Aggregate(accumulator) => accumulator,
                 _ => unreachable!(),
             };
-            let mut state = &mut window_state.state;
+            let state = &mut window_state.state;
 
             let record_batch = &partition_batch_state.record_batch;
             let out_col = if let Some(window_frame_ctx) = &mut state.window_frame_ctx {
@@ -243,10 +243,7 @@ pub trait AggregateWindowExpr: WindowExpr {
                 state.window_frame_ctx = Some(window_frame_ctx);
                 res
             };
-            state.is_end = partition_batch_state.is_end;
-            state.out_col = concat(&[&state.out_col, &out_col])?;
-            state.n_row_result_missing =
-                record_batch.num_rows() - state.last_calculated_index;
+            state.update(&out_col, partition_batch_state)?;
         }
         Ok(())
     }
@@ -426,6 +423,20 @@ impl WindowAggState {
                 "Window frame context cannot be empty".to_string(),
             ))
         }
+    }
+}
+
+impl WindowAggState {
+    pub fn update(
+        &mut self,
+        out_col: &ArrayRef,
+        partition_batch_state: &PartitionBatchState,
+    ) -> Result<()> {
+        self.out_col = concat(&[&self.out_col, &out_col])?;
+        self.n_row_result_missing =
+            partition_batch_state.record_batch.num_rows() - self.last_calculated_index;
+        self.is_end = partition_batch_state.is_end;
+        Ok(())
     }
 }
 
