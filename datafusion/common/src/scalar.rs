@@ -516,16 +516,32 @@ macro_rules! impl_op {
                 let value = seconds_add(*ts_s, $RHS, get_sign!($OPERATION))?;
                 Ok(ScalarValue::TimestampSecond(Some(value), zone.clone()))
             }
+            (_, ScalarValue::TimestampSecond(Some(ts_s), zone)) => {
+                let value = seconds_add(*ts_s, $LHS, get_sign!($OPERATION))?;
+                Ok(ScalarValue::TimestampSecond(Some(value), zone.clone()))
+            }
             (ScalarValue::TimestampMillisecond(Some(ts_ms), zone), _) => {
                 let value = milliseconds_add(*ts_ms, $RHS, get_sign!($OPERATION))?;
+                Ok(ScalarValue::TimestampMillisecond(Some(value), zone.clone()))
+            }
+            (_, ScalarValue::TimestampMillisecond(Some(ts_ms), zone)) => {
+                let value = milliseconds_add(*ts_ms, $LHS, get_sign!($OPERATION))?;
                 Ok(ScalarValue::TimestampMillisecond(Some(value), zone.clone()))
             }
             (ScalarValue::TimestampMicrosecond(Some(ts_us), zone), _) => {
                 let value = microseconds_add(*ts_us, $RHS, get_sign!($OPERATION))?;
                 Ok(ScalarValue::TimestampMicrosecond(Some(value), zone.clone()))
             }
+            (_, ScalarValue::TimestampMicrosecond(Some(ts_us), zone)) => {
+                let value = microseconds_add(*ts_us, $LHS, get_sign!($OPERATION))?;
+                Ok(ScalarValue::TimestampMicrosecond(Some(value), zone.clone()))
+            }
             (ScalarValue::TimestampNanosecond(Some(ts_ns), zone), _) => {
                 let value = nanoseconds_add(*ts_ns, $RHS, get_sign!($OPERATION))?;
+                Ok(ScalarValue::TimestampNanosecond(Some(value), zone.clone()))
+            }
+            (_, ScalarValue::TimestampNanosecond(Some(ts_ns), zone)) => {
+                let value = nanoseconds_add(*ts_ns, $LHS, get_sign!($OPERATION))?;
                 Ok(ScalarValue::TimestampNanosecond(Some(value), zone.clone()))
             }
             _ => Err(DataFusionError::Internal(format!(
@@ -1019,7 +1035,7 @@ impl ScalarValue {
         Self::List(scalars, Box::new(Field::new("item", child_type, true)))
     }
 
-    // Create a zero value in the given type.
+    /// Create a zero value in the given type.
     pub fn new_zero(datatype: &DataType) -> Result<ScalarValue> {
         assert!(datatype.is_primitive());
         Ok(match datatype {
@@ -1037,6 +1053,24 @@ impl ScalarValue {
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Can't create a zero scalar from data_type \"{datatype:?}\""
+                )));
+            }
+        })
+    }
+
+    /// Create a negative one value in the given type.
+    pub fn new_negative_one(datatype: &DataType) -> Result<ScalarValue> {
+        assert!(datatype.is_primitive());
+        Ok(match datatype {
+            DataType::Int8 | DataType::UInt8 => ScalarValue::Int8(Some(-1)),
+            DataType::Int16 | DataType::UInt16 => ScalarValue::Int16(Some(-1)),
+            DataType::Int32 | DataType::UInt32 => ScalarValue::Int32(Some(-1)),
+            DataType::Int64 | DataType::UInt64 => ScalarValue::Int64(Some(-1)),
+            DataType::Float32 => ScalarValue::Float32(Some(-1.0)),
+            DataType::Float64 => ScalarValue::Float64(Some(-1.0)),
+            _ => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Can't create a negative one scalar from data_type \"{datatype:?}\""
                 )));
             }
         })
@@ -2920,6 +2954,28 @@ mod tests {
             float_value.sub(float_value_2)?,
             ScalarValue::Float64(Some(0.))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_interval_add_timestamp() -> Result<()> {
+        let interval = ScalarValue::IntervalMonthDayNano(Some(123));
+        let timestamp = ScalarValue::TimestampNanosecond(Some(123), None);
+        let result = interval.add(&timestamp)?;
+        let expect = timestamp.add(&interval)?;
+        assert_eq!(result, expect);
+
+        let interval = ScalarValue::IntervalYearMonth(Some(123));
+        let timestamp = ScalarValue::TimestampNanosecond(Some(123), None);
+        let result = interval.add(&timestamp)?;
+        let expect = timestamp.add(&interval)?;
+        assert_eq!(result, expect);
+
+        let interval = ScalarValue::IntervalDayTime(Some(123));
+        let timestamp = ScalarValue::TimestampNanosecond(Some(123), None);
+        let result = interval.add(&timestamp)?;
+        let expect = timestamp.add(&interval)?;
+        assert_eq!(result, expect);
         Ok(())
     }
 

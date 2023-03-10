@@ -70,6 +70,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// `b > 2`
     ///
     /// ```
+    /// use arrow::datatypes::DataType;
     /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_common::Result;
     /// use datafusion_physical_expr::execution_props::ExecutionProps;
@@ -91,6 +92,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///   }
     ///   fn execution_props(&self) -> &ExecutionProps {
     ///     &self.execution_props
+    ///   }
+    ///   fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
+    ///     Ok(DataType::Int32)
     ///   }
     /// }
     ///
@@ -337,7 +341,8 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
     /// rewrite the expression simplifying any constant expressions
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         use datafusion_expr::Operator::{
-            And, Divide, Eq, Modulo, Multiply, NotEq, Or, RegexIMatch, RegexMatch,
+            And, BitwiseAnd, BitwiseOr, BitwiseShiftLeft, BitwiseShiftRight, BitwiseXor,
+            Divide, Eq, Modulo, Multiply, NotEq, Or, RegexIMatch, RegexMatch,
             RegexNotIMatch, RegexNotMatch,
         };
 
@@ -699,6 +704,298 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             }) if !info.nullable(&left)? && is_zero(&right) => {
                 return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
             }
+
+            //
+            // Rules for BitwiseAnd
+            //
+
+            // A & null -> null
+            Expr::BinaryExpr(BinaryExpr {
+                left: _,
+                op: BitwiseAnd,
+                right,
+            }) if is_null(&right) => *right,
+
+            // null & A -> null
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseAnd,
+                right: _,
+            }) if is_null(&left) => *left,
+
+            // A & 0 -> 0 (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseAnd,
+                right,
+            }) if !info.nullable(&left)? && is_zero(&right) => *right,
+
+            // 0 & A -> 0 (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseAnd,
+                right,
+            }) if !info.nullable(&right)? && is_zero(&left) => *left,
+
+            // !A & A -> 0 (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseAnd,
+                right,
+            }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
+                Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&left)?)?)
+            }
+
+            // A & !A -> 0 (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseAnd,
+                right,
+            }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
+                Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&left)?)?)
+            }
+
+            // (..A..) & A --> (..A..)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseAnd,
+                right,
+            }) if expr_contains(&left, &right, BitwiseAnd) => *left,
+
+            // A & (..A..) --> (..A..)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseAnd,
+                right,
+            }) if expr_contains(&right, &left, BitwiseAnd) => *right,
+
+            // A & (A | B) --> A (if B not null)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseAnd,
+                right,
+            }) if !info.nullable(&right)? && is_op_with(BitwiseOr, &right, &left) => {
+                *left
+            }
+
+            // (A | B) & A --> A (if B not null)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseAnd,
+                right,
+            }) if !info.nullable(&left)? && is_op_with(BitwiseOr, &left, &right) => {
+                *right
+            }
+
+            //
+            // Rules for BitwiseOr
+            //
+
+            // A | null -> null
+            Expr::BinaryExpr(BinaryExpr {
+                left: _,
+                op: BitwiseOr,
+                right,
+            }) if is_null(&right) => *right,
+
+            // null | A -> null
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseOr,
+                right: _,
+            }) if is_null(&left) => *left,
+
+            // A | 0 -> A (even if A is null)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseOr,
+                right,
+            }) if is_zero(&right) => *left,
+
+            // 0 | A -> A (even if A is null)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseOr,
+                right,
+            }) if is_zero(&left) => *right,
+
+            // !A | A -> -1 (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseOr,
+                right,
+            }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
+                Expr::Literal(ScalarValue::new_negative_one(&info.get_data_type(&left)?)?)
+            }
+
+            // A | !A -> -1 (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseOr,
+                right,
+            }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
+                Expr::Literal(ScalarValue::new_negative_one(&info.get_data_type(&left)?)?)
+            }
+
+            // (..A..) | A --> (..A..)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseOr,
+                right,
+            }) if expr_contains(&left, &right, BitwiseOr) => *left,
+
+            // A | (..A..) --> (..A..)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseOr,
+                right,
+            }) if expr_contains(&right, &left, BitwiseOr) => *right,
+
+            // A | (A & B) --> A (if B not null)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseOr,
+                right,
+            }) if !info.nullable(&right)? && is_op_with(BitwiseAnd, &right, &left) => {
+                *left
+            }
+
+            // (A & B) | A --> A (if B not null)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseOr,
+                right,
+            }) if !info.nullable(&left)? && is_op_with(BitwiseAnd, &left, &right) => {
+                *right
+            }
+
+            //
+            // Rules for BitwiseXor
+            //
+
+            // A ^ null -> null
+            Expr::BinaryExpr(BinaryExpr {
+                left: _,
+                op: BitwiseXor,
+                right,
+            }) if is_null(&right) => *right,
+
+            // null ^ A -> null
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseXor,
+                right: _,
+            }) if is_null(&left) => *left,
+
+            // A ^ 0 -> A (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseXor,
+                right,
+            }) if !info.nullable(&left)? && is_zero(&right) => *left,
+
+            // 0 ^ A -> A (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseXor,
+                right,
+            }) if !info.nullable(&right)? && is_zero(&left) => *right,
+
+            // !A ^ A -> -1 (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseXor,
+                right,
+            }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
+                Expr::Literal(ScalarValue::new_negative_one(&info.get_data_type(&left)?)?)
+            }
+
+            // A ^ !A -> -1 (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseXor,
+                right,
+            }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
+                Expr::Literal(ScalarValue::new_negative_one(&info.get_data_type(&left)?)?)
+            }
+
+            // (..A..) ^ A --> (the expression without A, if number of A is odd, otherwise one A)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseXor,
+                right,
+            }) if expr_contains(&left, &right, BitwiseXor) => {
+                let expr = delete_xor_in_complex_expr(&left, &right, false);
+                if expr == *right {
+                    Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&right)?)?)
+                } else {
+                    expr
+                }
+            }
+
+            // A ^ (..A..) --> (the expression without A, if number of A is odd, otherwise one A)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseXor,
+                right,
+            }) if expr_contains(&right, &left, BitwiseXor) => {
+                let expr = delete_xor_in_complex_expr(&right, &left, true);
+                if expr == *left {
+                    Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&left)?)?)
+                } else {
+                    expr
+                }
+            }
+
+            //
+            // Rules for BitwiseShiftRight
+            //
+
+            // A >> null -> null
+            Expr::BinaryExpr(BinaryExpr {
+                left: _,
+                op: BitwiseShiftRight,
+                right,
+            }) if is_null(&right) => *right,
+
+            // null >> A -> null
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseShiftRight,
+                right: _,
+            }) if is_null(&left) => *left,
+
+            // A >> 0 -> A (even if A is null)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseShiftRight,
+                right,
+            }) if is_zero(&right) => *left,
+
+            //
+            // Rules for BitwiseShiftRight
+            //
+
+            // A << null -> null
+            Expr::BinaryExpr(BinaryExpr {
+                left: _,
+                op: BitwiseShiftLeft,
+                right,
+            }) if is_null(&right) => *right,
+
+            // null << A -> null
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseShiftLeft,
+                right: _,
+            }) if is_null(&left) => *left,
+
+            // A << 0 -> A (even if A is null)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: BitwiseShiftLeft,
+                right,
+            }) if is_zero(&right) => *left,
 
             //
             // Rules for Not
@@ -1347,6 +1644,522 @@ mod tests {
     }
 
     #[test]
+    fn test_simplify_bitwise_xor_by_null() {
+        let null = Expr::Literal(ScalarValue::Null);
+        // A ^ null --> null
+        {
+            let expr = binary_expr(col("c2"), Operator::BitwiseXor, null.clone());
+            assert_eq!(simplify(expr), null);
+        }
+        // null ^ A --> null
+        {
+            let expr = binary_expr(null.clone(), Operator::BitwiseXor, col("c2"));
+            assert_eq!(simplify(expr), null);
+        }
+    }
+
+    #[test]
+    fn test_simplify_bitwise_shift_right_by_null() {
+        let null = Expr::Literal(ScalarValue::Null);
+        // A >> null --> null
+        {
+            let expr = binary_expr(col("c2"), Operator::BitwiseShiftRight, null.clone());
+            assert_eq!(simplify(expr), null);
+        }
+        // null >> A --> null
+        {
+            let expr = binary_expr(null.clone(), Operator::BitwiseShiftRight, col("c2"));
+            assert_eq!(simplify(expr), null);
+        }
+    }
+
+    #[test]
+    fn test_simplify_bitwise_shift_left_by_null() {
+        let null = Expr::Literal(ScalarValue::Null);
+        // A << null --> null
+        {
+            let expr = binary_expr(col("c2"), Operator::BitwiseShiftLeft, null.clone());
+            assert_eq!(simplify(expr), null);
+        }
+        // null << A --> null
+        {
+            let expr = binary_expr(null.clone(), Operator::BitwiseShiftLeft, col("c2"));
+            assert_eq!(simplify(expr), null);
+        }
+    }
+
+    #[test]
+    fn test_simplify_bitwise_and_by_zero() {
+        // A & 0 --> 0
+        {
+            let expr = binary_expr(col("c2_non_null"), Operator::BitwiseAnd, lit(0));
+            assert_eq!(simplify(expr), lit(0));
+        }
+        // 0 & A --> 0
+        {
+            let expr = binary_expr(lit(0), Operator::BitwiseAnd, col("c2_non_null"));
+            assert_eq!(simplify(expr), lit(0));
+        }
+    }
+
+    #[test]
+    fn test_simplify_bitwise_or_by_zero() {
+        // A | 0 --> A
+        {
+            let expr = binary_expr(col("c2_non_null"), Operator::BitwiseOr, lit(0));
+            assert_eq!(simplify(expr), col("c2_non_null"));
+        }
+        // 0 | A --> A
+        {
+            let expr = binary_expr(lit(0), Operator::BitwiseOr, col("c2_non_null"));
+            assert_eq!(simplify(expr), col("c2_non_null"));
+        }
+    }
+
+    #[test]
+    fn test_simplify_bitwise_xor_by_zero() {
+        // A ^ 0 --> A
+        {
+            let expr = binary_expr(col("c2_non_null"), Operator::BitwiseXor, lit(0));
+            assert_eq!(simplify(expr), col("c2_non_null"));
+        }
+        // 0 ^ A --> A
+        {
+            let expr = binary_expr(lit(0), Operator::BitwiseXor, col("c2_non_null"));
+            assert_eq!(simplify(expr), col("c2_non_null"));
+        }
+    }
+
+    #[test]
+    fn test_simplify_bitwise_bitwise_shift_right_by_zero() {
+        // A >> 0 --> A
+        {
+            let expr =
+                binary_expr(col("c2_non_null"), Operator::BitwiseShiftRight, lit(0));
+            assert_eq!(simplify(expr), col("c2_non_null"));
+        }
+    }
+
+    #[test]
+    fn test_simplify_bitwise_bitwise_shift_left_by_zero() {
+        // A << 0 --> A
+        {
+            let expr =
+                binary_expr(col("c2_non_null"), Operator::BitwiseShiftLeft, lit(0));
+            assert_eq!(simplify(expr), col("c2_non_null"));
+        }
+    }
+
+    #[test]
+    fn test_simplify_bitwise_and_by_null() {
+        let null = Expr::Literal(ScalarValue::Null);
+        // A & null --> null
+        {
+            let expr = binary_expr(col("c2"), Operator::BitwiseAnd, null.clone());
+            assert_eq!(simplify(expr), null);
+        }
+        // null & A --> null
+        {
+            let expr = binary_expr(null.clone(), Operator::BitwiseAnd, col("c2"));
+            assert_eq!(simplify(expr), null);
+        }
+    }
+
+    #[test]
+    fn test_simplify_composed_bitwise_and() {
+        // ((c2 > 5) & (c1 < 6)) & (c2 > 5) --> (c2 > 5) & (c1 < 6)
+
+        let expr = binary_expr(
+            binary_expr(
+                col("c2").gt(lit(5)),
+                Operator::BitwiseAnd,
+                col("c1").lt(lit(6)),
+            ),
+            Operator::BitwiseAnd,
+            col("c2").gt(lit(5)),
+        );
+        let expected = binary_expr(
+            col("c2").gt(lit(5)),
+            Operator::BitwiseAnd,
+            col("c1").lt(lit(6)),
+        );
+
+        assert_eq!(simplify(expr), expected);
+
+        // (c2 > 5) & ((c2 > 5) & (c1 < 6)) --> (c2 > 5) & (c1 < 6)
+
+        let expr = binary_expr(
+            col("c2").gt(lit(5)),
+            Operator::BitwiseAnd,
+            binary_expr(
+                col("c2").gt(lit(5)),
+                Operator::BitwiseAnd,
+                col("c1").lt(lit(6)),
+            ),
+        );
+        let expected = binary_expr(
+            col("c2").gt(lit(5)),
+            Operator::BitwiseAnd,
+            col("c1").lt(lit(6)),
+        );
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_composed_bitwise_or() {
+        // ((c2 > 5) | (c1 < 6)) | (c2 > 5) --> (c2 > 5) | (c1 < 6)
+
+        let expr = binary_expr(
+            binary_expr(
+                col("c2").gt(lit(5)),
+                Operator::BitwiseOr,
+                col("c1").lt(lit(6)),
+            ),
+            Operator::BitwiseOr,
+            col("c2").gt(lit(5)),
+        );
+        let expected = binary_expr(
+            col("c2").gt(lit(5)),
+            Operator::BitwiseOr,
+            col("c1").lt(lit(6)),
+        );
+
+        assert_eq!(simplify(expr), expected);
+
+        // (c2 > 5) | ((c2 > 5) | (c1 < 6)) --> (c2 > 5) | (c1 < 6)
+
+        let expr = binary_expr(
+            col("c2").gt(lit(5)),
+            Operator::BitwiseOr,
+            binary_expr(
+                col("c2").gt(lit(5)),
+                Operator::BitwiseOr,
+                col("c1").lt(lit(6)),
+            ),
+        );
+        let expected = binary_expr(
+            col("c2").gt(lit(5)),
+            Operator::BitwiseOr,
+            col("c1").lt(lit(6)),
+        );
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_composed_bitwise_xor() {
+        // with an even number of the column "c2"
+        // c2 ^ ((c2 ^ (c2 | c1)) ^ (c1 & c2)) --> (c2 | c1) ^ (c1 & c2)
+
+        let expr = binary_expr(
+            col("c2"),
+            Operator::BitwiseXor,
+            binary_expr(
+                binary_expr(
+                    col("c2"),
+                    Operator::BitwiseXor,
+                    binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
+                ),
+                Operator::BitwiseXor,
+                binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
+            ),
+        );
+
+        let expected = binary_expr(
+            binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
+            Operator::BitwiseXor,
+            binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
+        );
+
+        assert_eq!(simplify(expr), expected);
+
+        // with an odd number of the column "c2"
+        // c2 ^ (c2 ^ (c2 | c1)) ^ ((c1 & c2) ^ c2) --> c2 ^ ((c2 | c1) ^ (c1 & c2))
+
+        let expr = binary_expr(
+            col("c2"),
+            Operator::BitwiseXor,
+            binary_expr(
+                binary_expr(
+                    col("c2"),
+                    Operator::BitwiseXor,
+                    binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
+                ),
+                Operator::BitwiseXor,
+                binary_expr(
+                    binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
+                    Operator::BitwiseXor,
+                    col("c2"),
+                ),
+            ),
+        );
+
+        let expected = binary_expr(
+            col("c2"),
+            Operator::BitwiseXor,
+            binary_expr(
+                binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
+                Operator::BitwiseXor,
+                binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
+            ),
+        );
+
+        assert_eq!(simplify(expr), expected);
+
+        // with an even number of the column "c2"
+        // ((c2 ^ (c2 | c1)) ^ (c1 & c2)) ^ c2 --> (c2 | c1) ^ (c1 & c2)
+
+        let expr = binary_expr(
+            binary_expr(
+                binary_expr(
+                    col("c2"),
+                    Operator::BitwiseXor,
+                    binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
+                ),
+                Operator::BitwiseXor,
+                binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
+            ),
+            Operator::BitwiseXor,
+            col("c2"),
+        );
+
+        let expected = binary_expr(
+            binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
+            Operator::BitwiseXor,
+            binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
+        );
+
+        assert_eq!(simplify(expr), expected);
+
+        // with an odd number of the column "c2"
+        // (c2 ^ (c2 | c1)) ^ ((c1 & c2) ^ c2) ^ c2 --> ((c2 | c1) ^ (c1 & c2)) ^ c2
+
+        let expr = binary_expr(
+            binary_expr(
+                binary_expr(
+                    col("c2"),
+                    Operator::BitwiseXor,
+                    binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
+                ),
+                Operator::BitwiseXor,
+                binary_expr(
+                    binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
+                    Operator::BitwiseXor,
+                    col("c2"),
+                ),
+            ),
+            Operator::BitwiseXor,
+            col("c2"),
+        );
+
+        let expected = binary_expr(
+            binary_expr(
+                binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
+                Operator::BitwiseXor,
+                binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
+            ),
+            Operator::BitwiseXor,
+            col("c2"),
+        );
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_negated_bitwise_and() {
+        // !c4 & c4 --> 0
+        let expr = binary_expr(
+            Expr::Negative(Box::new(col("c4_non_null"))),
+            Operator::BitwiseAnd,
+            col("c4_non_null"),
+        );
+        let expected = Expr::Literal(ScalarValue::UInt32(Some(0)));
+
+        assert_eq!(simplify(expr), expected);
+        // c4 & !c4 --> 0
+        let expr = binary_expr(
+            col("c4_non_null"),
+            Operator::BitwiseAnd,
+            Expr::Negative(Box::new(col("c4_non_null"))),
+        );
+        let expected = Expr::Literal(ScalarValue::UInt32(Some(0)));
+
+        assert_eq!(simplify(expr), expected);
+
+        // !c3 & c3 --> 0
+        let expr = binary_expr(
+            Expr::Negative(Box::new(col("c3_non_null"))),
+            Operator::BitwiseAnd,
+            col("c3_non_null"),
+        );
+        let expected = Expr::Literal(ScalarValue::Int64(Some(0)));
+
+        assert_eq!(simplify(expr), expected);
+        // c3 & !c3 --> 0
+        let expr = binary_expr(
+            col("c3_non_null"),
+            Operator::BitwiseAnd,
+            Expr::Negative(Box::new(col("c3_non_null"))),
+        );
+        let expected = Expr::Literal(ScalarValue::Int64(Some(0)));
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_negated_bitwise_or() {
+        // !c4 | c4 --> -1
+        let expr = binary_expr(
+            Expr::Negative(Box::new(col("c4_non_null"))),
+            Operator::BitwiseOr,
+            col("c4_non_null"),
+        );
+        let expected = Expr::Literal(ScalarValue::Int32(Some(-1)));
+
+        assert_eq!(simplify(expr), expected);
+
+        // c4 | !c4 --> -1
+        let expr = binary_expr(
+            col("c4_non_null"),
+            Operator::BitwiseOr,
+            Expr::Negative(Box::new(col("c4_non_null"))),
+        );
+        let expected = Expr::Literal(ScalarValue::Int32(Some(-1)));
+
+        assert_eq!(simplify(expr), expected);
+
+        // !c3 | c3 --> -1
+        let expr = binary_expr(
+            Expr::Negative(Box::new(col("c3_non_null"))),
+            Operator::BitwiseOr,
+            col("c3_non_null"),
+        );
+        let expected = Expr::Literal(ScalarValue::Int64(Some(-1)));
+
+        assert_eq!(simplify(expr), expected);
+
+        // c3 | !c3 --> -1
+        let expr = binary_expr(
+            col("c3_non_null"),
+            Operator::BitwiseOr,
+            Expr::Negative(Box::new(col("c3_non_null"))),
+        );
+        let expected = Expr::Literal(ScalarValue::Int64(Some(-1)));
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_negated_bitwise_xor() {
+        // !c4 ^ c4 --> -1
+        let expr = binary_expr(
+            Expr::Negative(Box::new(col("c4_non_null"))),
+            Operator::BitwiseXor,
+            col("c4_non_null"),
+        );
+        let expected = Expr::Literal(ScalarValue::Int32(Some(-1)));
+
+        assert_eq!(simplify(expr), expected);
+
+        // c4 ^ !c4 --> -1
+        let expr = binary_expr(
+            col("c4_non_null"),
+            Operator::BitwiseXor,
+            Expr::Negative(Box::new(col("c4_non_null"))),
+        );
+        let expected = Expr::Literal(ScalarValue::Int32(Some(-1)));
+
+        assert_eq!(simplify(expr), expected);
+
+        // !c3 ^ c3 --> -1
+        let expr = binary_expr(
+            Expr::Negative(Box::new(col("c3_non_null"))),
+            Operator::BitwiseXor,
+            col("c3_non_null"),
+        );
+        let expected = Expr::Literal(ScalarValue::Int64(Some(-1)));
+
+        assert_eq!(simplify(expr), expected);
+
+        // c3 ^ !c3 --> -1
+        let expr = binary_expr(
+            col("c3_non_null"),
+            Operator::BitwiseXor,
+            Expr::Negative(Box::new(col("c3_non_null"))),
+        );
+        let expected = Expr::Literal(ScalarValue::Int64(Some(-1)));
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_bitwise_and_or() {
+        // (c2 < 3) & ((c2 < 3) | c1) -> (c2 < 3)
+        let expr = binary_expr(
+            col("c2_non_null").lt(lit(3)),
+            Operator::BitwiseAnd,
+            binary_expr(
+                col("c2_non_null").lt(lit(3)),
+                Operator::BitwiseOr,
+                col("c1_non_null"),
+            ),
+        );
+        let expected = col("c2_non_null").lt(lit(3));
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_bitwise_or_and() {
+        // (c2 < 3) | ((c2 < 3) & c1) -> (c2 < 3)
+        let expr = binary_expr(
+            col("c2_non_null").lt(lit(3)),
+            Operator::BitwiseOr,
+            binary_expr(
+                col("c2_non_null").lt(lit(3)),
+                Operator::BitwiseAnd,
+                col("c1_non_null"),
+            ),
+        );
+        let expected = col("c2_non_null").lt(lit(3));
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_simple_bitwise_and() {
+        // (c2 > 5) & (c2 > 5) -> (c2 > 5)
+        let expr = (col("c2").gt(lit(5))).bitwise_and(col("c2").gt(lit(5)));
+        let expected = col("c2").gt(lit(5));
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_simple_bitwise_or() {
+        // (c2 > 5) | (c2 > 5) -> (c2 > 5)
+        let expr = (col("c2").gt(lit(5))).bitwise_or(col("c2").gt(lit(5)));
+        let expected = col("c2").gt(lit(5));
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_simple_bitwise_xor() {
+        // c4 ^ c4 -> 0
+        let expr = (col("c4")).bitwise_xor(col("c4"));
+        let expected = Expr::Literal(ScalarValue::UInt32(Some(0)));
+
+        assert_eq!(simplify(expr), expected);
+
+        // c3 ^ c3 -> 0
+        let expr = col("c3").bitwise_xor(col("c3"));
+        let expected = Expr::Literal(ScalarValue::Int64(Some(0)));
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
     #[should_panic(
         expected = "called `Result::unwrap()` on an `Err` value: ArrowError(DivideByZero)"
     )]
@@ -1357,7 +2170,7 @@ mod tests {
 
     #[test]
     fn test_simplify_simple_and() {
-        // (c > 5) AND (c > 5)
+        // (c2 > 5) AND (c2 > 5) -> (c2 > 5)
         let expr = (col("c2").gt(lit(5))).and(col("c2").gt(lit(5)));
         let expected = col("c2").gt(lit(5));
 
@@ -1366,7 +2179,7 @@ mod tests {
 
     #[test]
     fn test_simplify_composed_and() {
-        // ((c > 5) AND (c1 < 6)) AND (c > 5)
+        // ((c2 > 5) AND (c1 < 6)) AND (c2 > 5)
         let expr = binary_expr(
             binary_expr(col("c2").gt(lit(5)), Operator::And, col("c1").lt(lit(6))),
             Operator::And,
@@ -1380,7 +2193,7 @@ mod tests {
 
     #[test]
     fn test_simplify_negated_and() {
-        // (c > 5) AND !(c > 5) -- > (c > 5) AND (c <= 5)
+        // (c2 > 5) AND !(c2 > 5) --> (c2 > 5) AND (c2 <= 5)
         let expr = binary_expr(
             col("c2").gt(lit(5)),
             Operator::And,
@@ -1760,8 +2573,12 @@ mod tests {
                 vec![
                     DFField::new(None, "c1", DataType::Utf8, true),
                     DFField::new(None, "c2", DataType::Boolean, true),
+                    DFField::new(None, "c3", DataType::Int64, true),
+                    DFField::new(None, "c4", DataType::UInt32, true),
                     DFField::new(None, "c1_non_null", DataType::Utf8, false),
                     DFField::new(None, "c2_non_null", DataType::Boolean, false),
+                    DFField::new(None, "c3_non_null", DataType::Int64, false),
+                    DFField::new(None, "c4_non_null", DataType::UInt32, false),
                 ],
                 HashMap::new(),
             )
@@ -1808,7 +2625,7 @@ mod tests {
         let schema = expr_test_schema();
         assert_eq!(col("c2").get_type(&schema).unwrap(), DataType::Boolean);
 
-        // true = ture -> true
+        // true = true -> true
         assert_eq!(simplify(lit(true).eq(lit(true))), lit(true));
 
         // true = false -> false

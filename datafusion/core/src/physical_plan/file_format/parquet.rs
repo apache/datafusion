@@ -174,6 +174,11 @@ impl ParquetExec {
         &self.base_config
     }
 
+    /// Optional predicate.
+    pub fn predicate(&self) -> Option<&Arc<dyn PhysicalExpr>> {
+        self.predicate.as_ref()
+    }
+
     /// Optional reference to this parquet scan's pruning predicate
     pub fn pruning_predicate(&self) -> Option<&Arc<PruningPredicate>> {
         self.pruning_predicate.as_ref()
