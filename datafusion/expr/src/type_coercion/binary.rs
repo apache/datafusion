@@ -200,11 +200,9 @@ pub fn negative_coercion(expr_type: &DataType) -> Result<DataType> {
         Int32 => Ok(Int32),
         Int16 => Ok(Int16),
         Int8 => Ok(Int8),
-        _ => Err(DataFusionError::Plan(
-            format!(
-                "'{expr_type:?}' is an unsupported type"
-            ),
-        )),
+        _ => Err(DataFusionError::Plan(format!(
+            "'{expr_type:?}' is an unsupported type"
+        ))),
     }
 }
 
