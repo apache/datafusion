@@ -377,6 +377,7 @@ pub fn normalize_col_with_schemas(
     })
 }
 
+/// See [`Column::normalize_with_schemas_and_ambiguity_check`] for usage
 pub fn normalize_col_with_schemas_and_ambiguity_check(
     expr: Expr,
     schemas: &[&[&DFSchema]],
