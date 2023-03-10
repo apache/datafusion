@@ -54,11 +54,9 @@ use std::task::{Context, Poll};
 
 use crate::physical_optimizer::sort_enforcement::get_at_indices;
 use arrow::array::UInt64Builder;
-use arrow::datatypes::DataType;
-use arrow::row::{Row, RowConverter, Rows, SortField};
 use datafusion_common::utils::get_row_at_idx;
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr::hash_utils::create_hashes;
+use datafusion_physical_expr::hash_utils::{create_hashes, equal_rows};
 use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 use datafusion_physical_expr::window::{
     PartitionBatchState, PartitionBatches, PartitionWindowAggStates, WindowAggState,
@@ -362,7 +360,6 @@ pub struct BoundedWindowAggStream {
     // For instance, if input is ordered by a,b and window expression is
     // PARTITION BY b,a this stores (1, 0).
     ordered_partition_by_indices: Vec<usize>,
-    row_converter: RowConverter,
     random_state: RandomState,
 }
 
@@ -602,19 +599,6 @@ impl BoundedWindowAggStream {
     ) -> Result<Self> {
         let state = window_expr.iter().map(|_| IndexMap::new()).collect();
         let empty_batch = RecordBatch::new_empty(schema.clone());
-        let partition_by = window_expr[0].partition_by();
-        // let res = partition_by[0].data_type(&schema)?;
-        let row_converter = if partition_by.is_empty() {
-            // If empty create dummy converted with datatype null.
-            RowConverter::new(vec![SortField::new(DataType::Null)])?
-        } else {
-            RowConverter::new(
-                partition_by
-                    .iter()
-                    .map(|f| Ok(SortField::new(f.data_type(&schema)?)))
-                    .collect::<Result<Vec<_>>>()?,
-            )?
-        };
         Ok(Self {
             schema,
             input,
@@ -628,7 +612,6 @@ impl BoundedWindowAggStream {
             partition_by_sort_keys,
             search_mode,
             ordered_partition_by_indices,
-            row_converter,
             random_state: Default::default(),
         })
     }
@@ -913,13 +896,11 @@ impl BoundedWindowAggStream {
                 let partition_bys =
                     self.evaluate_partition_by_column_values(record_batch)?;
                 // In Linear or PartiallySorted mode we are sure that partition_by columns are not empty.
-                // Convert columns to row format for efficient processing
-                let rows = self.row_converter.convert_columns(&partition_bys)?;
                 // Calculate indices for each partition
                 let per_partition_indices =
-                    self.get_per_partition_indices(&partition_bys, record_batch, &rows)?;
+                    self.get_per_partition_indices(&partition_bys, record_batch)?;
                 // Construct new record batch from the rows at the calculated indices for each partition.
-                for (_, indices) in per_partition_indices.into_iter() {
+                for indices in per_partition_indices.into_iter() {
                     let row = get_row_at_idx(&partition_bys, indices[0])?;
                     let partition_batch =
                         get_record_batch_at_indices(record_batch, &indices)?;
@@ -950,26 +931,26 @@ impl BoundedWindowAggStream {
             .collect::<Result<Vec<ArrayRef>>>()
     }
 
-    fn get_per_partition_indices<'a>(
+    fn get_per_partition_indices(
         &mut self,
         columns: &[ArrayRef],
         batch: &RecordBatch,
-        rows: &'a Rows,
-    ) -> Result<Vec<(Row<'a>, Vec<usize>)>> {
+    ) -> Result<Vec<Vec<usize>>> {
         let mut batch_hashes = vec![0; batch.num_rows()];
         create_hashes(columns, &self.random_state, &mut batch_hashes)?;
         self.input_buffer_hashes.extend_from_slice(&batch_hashes);
         let mut row_map: RawTable<(u64, usize)> = RawTable::with_capacity(0);
-        let mut res: Vec<(Row, Vec<usize>)> = vec![];
+        // res stores indices for each partition.
+        let mut res: Vec<Vec<usize>> = vec![];
         for (row_idx, hash) in batch_hashes.into_iter().enumerate() {
             let entry = row_map.get_mut(hash, |(_hash, group_idx)| {
-                rows.row(row_idx) == res[*group_idx].0
+                equal_rows(row_idx, res[*group_idx][0], columns, columns, true).unwrap()
             });
             match entry {
-                Some((_hash, group_idx)) => res[*group_idx].1.push(row_idx),
+                Some((_hash, group_idx)) => res[*group_idx].push(row_idx),
                 None => {
                     row_map.insert(hash, (hash, res.len()), |(hash, _group_index)| *hash);
-                    res.push((rows.row(row_idx), vec![row_idx]));
+                    res.push(vec![row_idx]);
                 }
             }
         }
