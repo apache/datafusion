@@ -402,7 +402,7 @@ impl WindowAggState {
                 }
                 WindowFrameContext::Groups { state, .. } => {
                     let mut n_group_to_del = 0;
-                    state.group_start_indices.retain_mut(|(_, start_idx)| {
+                    state.group_end_indices.retain_mut(|(_, start_idx)| {
                         if n_prune >= *start_idx {
                             n_group_to_del += 1;
                             false
@@ -411,7 +411,7 @@ impl WindowAggState {
                         }
                     });
                     state
-                        .group_start_indices
+                        .group_end_indices
                         .iter_mut()
                         .for_each(|(_, start_idx)| *start_idx -= n_prune);
                     state.current_group_idx -= n_group_to_del;
