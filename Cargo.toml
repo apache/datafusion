@@ -46,10 +46,10 @@ repository = "https://github.com/apache/arrow-datafusion"
 rust-version = "1.64"
 
 [workspace.dependencies]
-arrow = { version = "34.0.0", features = ["prettyprint"] }
-arrow-buffer = "34.0.0"
-arrow-schema = "34.0.0"
-parquet = { version = "34.0.0", features = ["arrow", "async"] }
+arrow = { version = "35.0.0", features = ["prettyprint"] }
+arrow-buffer = "35.0.0"
+arrow-schema = "35.0.0"
+parquet = { version = "35.0.0", features = ["arrow", "async"] }
 
 [profile.release]
 codegen-units = 1
@@ -70,8 +70,8 @@ panic = 'unwind'
 rpath = false
 
 [patch.crates-io]
-arrow = { git = "https://github.com/tustvold/arrow-rs.git", rev = "5f22cd4e6fa16729e946cbdfbacfa27692f35ab8" }
-arrow-flight = { git = "https://github.com/tustvold/arrow-rs.git", rev = "5f22cd4e6fa16729e946cbdfbacfa27692f35ab8" }
-arrow-schema = { git = "https://github.com/tustvold/arrow-rs.git", rev = "5f22cd4e6fa16729e946cbdfbacfa27692f35ab8" }
-arrow-buffer = { git = "https://github.com/tustvold/arrow-rs.git", rev = "5f22cd4e6fa16729e946cbdfbacfa27692f35ab8" }
-parquet = { git = "https://github.com/tustvold/arrow-rs.git", rev = "5f22cd4e6fa16729e946cbdfbacfa27692f35ab8" }
+arrow = { git = "https://github.com/tustvold/arrow-rs.git", rev = "c96274a562625f091ca4c06fca21ac35ef330358" }
+arrow-flight = { git = "https://github.com/tustvold/arrow-rs.git", rev = "c96274a562625f091ca4c06fca21ac35ef330358" }
+arrow-schema = { git = "https://github.com/tustvold/arrow-rs.git", rev = "c96274a562625f091ca4c06fca21ac35ef330358" }
+arrow-buffer = { git = "https://github.com/tustvold/arrow-rs.git", rev = "c96274a562625f091ca4c06fca21ac35ef330358" }
+parquet = { git = "https://github.com/tustvold/arrow-rs.git", rev = "c96274a562625f091ca4c06fca21ac35ef330358" }

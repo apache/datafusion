@@ -29,7 +29,7 @@ rust-version = "1.62"
 readme = "README.md"
 
 [dependencies]
-arrow = "34.0.0"
+arrow = "35.0.0"
 async-trait = "0.1.41"
 clap = { version = "3", features = ["derive", "cargo"] }
 datafusion = { path = "../datafusion/core", version = "19.0.0" }
@@ -43,7 +43,7 @@ tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync
 url = "2.2"
 
 [patch.crates-io]
-arrow = { git = "https://github.com/tustvold/arrow-rs.git", rev = "5f22cd4e6fa16729e946cbdfbacfa27692f35ab8" }
-arrow-buffer = { git = "https://github.com/tustvold/arrow-rs.git", rev = "5f22cd4e6fa16729e946cbdfbacfa27692f35ab8" }
-arrow-schema = { git = "https://github.com/tustvold/arrow-rs.git", rev = "5f22cd4e6fa16729e946cbdfbacfa27692f35ab8" }
-parquet = { git = "https://github.com/tustvold/arrow-rs.git", rev = "5f22cd4e6fa16729e946cbdfbacfa27692f35ab8" }
+arrow = { git = "https://github.com/tustvold/arrow-rs.git", rev = "c96274a562625f091ca4c06fca21ac35ef330358" }
+arrow-buffer = { git = "https://github.com/tustvold/arrow-rs.git", rev = "c96274a562625f091ca4c06fca21ac35ef330358" }
+arrow-schema = { git = "https://github.com/tustvold/arrow-rs.git", rev = "c96274a562625f091ca4c06fca21ac35ef330358" }
+parquet = { git = "https://github.com/tustvold/arrow-rs.git", rev = "c96274a562625f091ca4c06fca21ac35ef330358" }
