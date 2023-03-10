@@ -89,6 +89,138 @@ pub trait ObjectStoreProvider: Send + Sync + 'static {
     fn get_by_url(&self, url: &Url) -> Result<Arc<dyn ObjectStore>>;
 }
 
+/// Provides a mechanism to get and put object stores.
+pub trait ObjectStoreManager: Send + Sync + std::fmt::Debug + 'static {
+    /// If a store with the same schema and host existed before, it is replaced and returned
+    fn register_store(
+        &self,
+        scheme: &str,
+        host: &str,
+        store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore>>;
+
+    /// Get a suitable store for the provided URL. For example:
+    ///
+    /// - URL with scheme `file:///` or no schema will return the default LocalFS store
+    /// - URL with scheme `s3://bucket/` will return the S3 store
+    /// - URL with scheme `hdfs://hostname:port/` will return the hdfs store
+    fn get_by_url(&self, url: &Url) -> Result<Arc<dyn ObjectStore>>;
+}
+
+/// The default [`ObjectStoreManager`] is with no `ObjectStoreProvider`.
+pub struct DefaultObjectStoreManager {
+    /// A map from scheme to object store that serve list / read operations for the store
+    object_stores: DashMap<String, Arc<dyn ObjectStore>>,
+}
+
+impl std::fmt::Debug for DefaultObjectStoreManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("DefaultObjectStoreManager")
+            .field(
+                "schemes",
+                &self
+                    .object_stores
+                    .iter()
+                    .map(|o| o.key().clone())
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
+impl Default for DefaultObjectStoreManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DefaultObjectStoreManager {
+    /// This will register [`LocalFileSystem`] to handle `file://` paths
+    pub fn new() -> Self {
+        let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
+        object_stores.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
+        Self { object_stores }
+    }
+}
+
+impl ObjectStoreManager for DefaultObjectStoreManager {
+    fn register_store(
+        &self,
+        scheme: &str,
+        host: &str,
+        store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore>> {
+        let s = format!("{scheme}://{host}");
+        self.object_stores.insert(s, store)
+    }
+
+    /// Get a suitable store for the provided URL. For example:
+    ///
+    /// - URL with scheme `file:///` or no schema will return the default LocalFS store
+    /// - URL with scheme `s3://bucket/` will return the S3 store if it's registered
+    /// - URL with scheme `hdfs://hostname:port/` will return the hdfs store if it's registered
+    fn get_by_url(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
+        let s = &url[url::Position::BeforeScheme..url::Position::BeforePath];
+        self.object_stores
+            .get(s)
+            .map(|o| o.value().clone())
+            .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "No suitable object store found for {url}"
+                ))
+            })
+    }
+}
+
+/// A [`ObjectStoreManager`] with [`ObjectStoreProvider`] which will change the [`get_by_url`] behavior.
+/// When it fails to find a [`ObjectStore`] by its [`ObjectStoreManager`], then it will try with [`ObjectStoreProvider`]
+pub struct ObjectStoreManagerWithProvider {
+    manager: Arc<dyn ObjectStoreManager>,
+    provider: Arc<dyn ObjectStoreProvider>,
+}
+
+impl std::fmt::Debug for ObjectStoreManagerWithProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("ObjectStoreManagerWithProvider")
+            .field("manager", &self.manager)
+            .finish()
+    }
+}
+
+impl ObjectStoreManagerWithProvider {
+    /// Create with a [`ObjectStoreManager`] and a [`ObjectStoreProvider`]
+    pub fn new(
+        manager: Arc<dyn ObjectStoreManager>,
+        provider: Arc<dyn ObjectStoreProvider>,
+    ) -> Self {
+        Self { manager, provider }
+    }
+}
+
+impl ObjectStoreManager for ObjectStoreManagerWithProvider {
+    fn register_store(
+        &self,
+        scheme: &str,
+        host: &str,
+        store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore>> {
+        self.manager.register_store(scheme, host, store)
+    }
+
+    /// Get a suitable store for the provided URL. For example:
+    ///
+    /// - URL with scheme `file:///` or no schema will return the default LocalFS store
+    /// - URL with scheme `s3://bucket/` will return the S3 store
+    ///       if it's registered or it's provided by [`ObjectStoreProvider::get_by_url`]
+    /// - URL with scheme `hdfs://hostname:port/` will return the hdfs store
+    ///       if it's registered or it's provided by [`ObjectStoreProvider::get_by_url`]
+    fn get_by_url(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
+        self.manager
+            .get_by_url(url)
+            .or_else(|_| self.provider.get_by_url(url))
+    }
+}
+
 /// [`ObjectStoreRegistry`] stores [`ObjectStore`] keyed by url scheme and authority, that is
 /// the part of a URL preceding the path
 ///
@@ -122,22 +254,13 @@ pub trait ObjectStoreProvider: Send + Sync + 'static {
 ///
 /// [`ListingTableUrl`]: crate::datasource::listing::ListingTableUrl
 pub struct ObjectStoreRegistry {
-    /// A map from scheme to object store that serve list / read operations for the store
-    object_stores: DashMap<String, Arc<dyn ObjectStore>>,
-    provider: Option<Arc<dyn ObjectStoreProvider>>,
+    manager: Arc<dyn ObjectStoreManager>,
 }
 
 impl std::fmt::Debug for ObjectStoreRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("ObjectStoreRegistry")
-            .field(
-                "schemes",
-                &self
-                    .object_stores
-                    .iter()
-                    .map(|o| o.key().clone())
-                    .collect::<Vec<_>>(),
-            )
+            .field("manager", &self.manager)
             .finish()
     }
 }
@@ -154,21 +277,26 @@ impl ObjectStoreRegistry {
     /// This will register [`LocalFileSystem`] to handle `file://` paths, further stores
     /// will need to be explicitly registered with calls to [`ObjectStoreRegistry::register_store`]
     pub fn new() -> Self {
-        ObjectStoreRegistry::new_with_provider(None)
+        ObjectStoreRegistry::new_with_manager(Arc::new(DefaultObjectStoreManager::new()))
     }
 
     /// Create an [`ObjectStoreRegistry`] with the provided [`ObjectStoreProvider`]
     ///
     /// This will register [`LocalFileSystem`] to handle `file://` paths, further stores
-    /// may be explicity registered with calls to [`ObjectStoreRegistry::register_store`] or
+    /// may be explicitly registered with calls to [`ObjectStoreRegistry::register_store`] or
     /// created lazily, on-demand by the provided [`ObjectStoreProvider`]
-    pub fn new_with_provider(provider: Option<Arc<dyn ObjectStoreProvider>>) -> Self {
-        let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
-        object_stores.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
-        Self {
-            object_stores,
-            provider,
-        }
+    pub fn new_with_provider(provider: Arc<dyn ObjectStoreProvider>) -> Self {
+        ObjectStoreRegistry::new_with_manager(Arc::new(
+            ObjectStoreManagerWithProvider::new(
+                Arc::new(DefaultObjectStoreManager::new()),
+                provider,
+            ),
+        ))
+    }
+
+    /// Create an [`ObjectStoreRegistry`] with the provided [`ObjectStoreManager`]
+    pub fn new_with_manager(manager: Arc<dyn ObjectStoreManager>) -> Self {
+        Self { manager }
     }
 
     /// Adds a new store to this registry.
@@ -180,8 +308,8 @@ impl ObjectStoreRegistry {
         host: impl AsRef<str>,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        let s = format!("{}://{}", scheme.as_ref(), host.as_ref());
-        self.object_stores.insert(s, store)
+        self.manager
+            .register_store(scheme.as_ref(), host.as_ref(), store)
     }
 
     /// Get a suitable store for the provided URL. For example:
@@ -191,26 +319,7 @@ impl ObjectStoreRegistry {
     /// - URL with scheme `hdfs://hostname:port/` will return the hdfs store if it's registered
     ///
     pub fn get_by_url(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
-        let url = url.as_ref();
-        // First check whether can get object store from registry
-        let s = &url[url::Position::BeforeScheme..url::Position::BeforePath];
-        let store = self.object_stores.get(s).map(|o| o.value().clone());
-
-        match store {
-            Some(store) => Ok(store),
-            None => match &self.provider {
-                Some(provider) => {
-                    let store = provider.get_by_url(url)?;
-                    let key =
-                        &url[url::Position::BeforeScheme..url::Position::BeforePath];
-                    self.object_stores.insert(key.to_owned(), store.clone());
-                    Ok(store)
-                }
-                None => Err(DataFusionError::Internal(format!(
-                    "No suitable object store found for {url}"
-                ))),
-            },
-        }
+        self.manager.get_by_url(url.as_ref())
     }
 }
 
