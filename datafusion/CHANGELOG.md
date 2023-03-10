@@ -19,7 +19,7 @@
 
 # Changelog
 
-## 20.0.0
+## [20.0.0](https://github.com/apache/arrow-datafusion/tree/19.0.0) (2023-03-10)
 
 **Merged PRs**
 
