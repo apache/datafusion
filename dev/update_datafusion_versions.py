@@ -51,7 +51,7 @@ def update_datafusion_version(cargo_toml: str, new_version: str):
 
     doc = tomlkit.parse(data)
     pkg = doc.get('package')
-    if 'workspace' not in pkg[version]:
+    if 'workspace' not in pkg['version']:
         pkg['version'] = new_version
 
     with open(cargo_toml, 'w') as f:
