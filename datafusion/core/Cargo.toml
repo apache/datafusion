@@ -18,20 +18,20 @@
 [package]
 name = "datafusion"
 description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
-version = "19.0.0"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-readme = "../../README.md"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
 keywords = ["arrow", "query", "sql"]
 include = [
     "benches/*.rs",
     "src/**/*.rs",
     "Cargo.toml",
 ]
-edition = "2021"
-rust-version = "1.62"
+version = { workspace = true }
+edition = { workspace = true }
+readme = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
 
 [lib]
 name = "datafusion"
@@ -60,7 +60,7 @@ unicode_expressions = ["datafusion-physical-expr/unicode_expressions", "datafusi
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 apache-avro = { version = "0.14", optional = true }
-arrow = { version = "34.0.0", features = ["prettyprint"] }
+arrow = { workspace = true }
 async-compression = { version = "0.3.14", features = ["bzip2", "gzip", "xz", "zstd", "futures-io", "tokio"], optional = true }
 async-trait = "0.1.41"
 bytes = "1.4"
@@ -87,7 +87,7 @@ num-traits = { version = "0.2", optional = true }
 num_cpus = "1.13.0"
 object_store = "0.5.4"
 parking_lot = "0.12"
-parquet = { version = "34.0.0", features = ["arrow", "async"] }
+parquet = { workspace = true }
 paste = "^1.0"
 percent-encoding = "2.2.0"
 pin-project-lite = "^0.2.7"

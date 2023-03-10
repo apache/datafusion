@@ -18,15 +18,15 @@
 [package]
 name = "datafusion-optimizer"
 description = "DataFusion Query Optimizer"
-version = "19.0.0"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-readme = "README.md"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
 keywords = [ "datafusion", "query", "optimizer" ]
-edition = "2021"
-rust-version = "1.62"
+version = { workspace = true }
+edition = { workspace = true }
+readme = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
 
 [lib]
 name = "datafusion_optimizer"
@@ -40,7 +40,7 @@ regex_expressions = ["datafusion-physical-expr/regex_expressions"]
 unicode_expressions = ["datafusion-physical-expr/unicode_expressions"]
 
 [dependencies]
-arrow = { version = "34.0.0", features = ["prettyprint"] }
+arrow = { workspace = true }
 async-trait = "0.1.41"
 chrono = { version = "0.4.23", default-features = false }
 datafusion-common = { path = "../common", version = "19.0.0" }
