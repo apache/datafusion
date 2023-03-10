@@ -188,6 +188,26 @@ fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataT
     }
 }
 
+/// Returns the output type of applying negative (`-`) to argument of `expr_type`
+pub fn negative_coercion(expr_type: &DataType) -> Result<DataType> {
+    use arrow::datatypes::DataType::*;
+    match expr_type {
+        UInt64 => Ok(Int64),
+        UInt32 => Ok(Int64),
+        UInt16 => Ok(Int32),
+        UInt8 => Ok(Int16),
+        Int64 => Ok(Int64),
+        Int32 => Ok(Int32),
+        Int16 => Ok(Int16),
+        Int8 => Ok(Int8),
+        _ => Err(DataFusionError::Plan(
+            format!(
+                "'{expr_type:?}' is an unsupported type"
+            ),
+        )),
+    }
+}
+
 /// Returns the output type of applying comparison operations such as
 /// `eq`, `not eq`, `lt`, `lteq`, `gt`, and `gteq` to arguments
 /// of `lhs_type` and `rhs_type`.

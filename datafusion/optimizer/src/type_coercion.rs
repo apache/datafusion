@@ -28,7 +28,7 @@ use datafusion_expr::expr::{self, Between, BinaryExpr, Case, Like, WindowFunctio
 use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
-    coerce_types, comparison_coercion, like_coercion,
+    coerce_types, comparison_coercion, like_coercion, negative_coercion,
 };
 use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::type_coercion::other::{
@@ -163,6 +163,13 @@ impl ExprRewriter for TypeCoercionRewriter {
             Expr::IsNotFalse(expr) => {
                 let expr =
                     is_not_false(get_casted_expr_for_bool_op(&expr, &self.schema)?);
+                Ok(expr)
+            }
+            Expr::Negative(expr) => {
+                let expr = Expr::Negative(Box::new(get_casted_expr_for_negative_op(
+                    &expr,
+                    &self.schema,
+                )?));
                 Ok(expr)
             }
             Expr::Like(Like {
@@ -549,12 +556,19 @@ fn coerce_window_frame(
     Ok(window_frame)
 }
 
-// Support the `IsTrue` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion.
-// The above op will be rewrite to the binary op when creating the physical op.
+/// Supports the `IsTrue` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion.
+/// The above op will be rewrite to the binary op when creating the physical op.
 fn get_casted_expr_for_bool_op(expr: &Expr, schema: &DFSchemaRef) -> Result<Expr> {
     let left_type = expr.get_type(schema)?;
     let right_type = DataType::Boolean;
     let coerced_type = coerce_types(&left_type, &Operator::IsDistinctFrom, &right_type)?;
+    expr.clone().cast_to(&coerced_type, schema)
+}
+
+/// Supports the 'Negative' type coercion.
+fn get_casted_expr_for_negative_op(expr: &Expr, schema: &DFSchemaRef) -> Result<Expr> {
+    let expr_type = expr.get_type(schema)?;
+    let coerced_type = negative_coercion(&expr_type)?;
     expr.clone().cast_to(&coerced_type, schema)
 }
 
@@ -948,6 +962,18 @@ mod test {
         let empty = empty_with_type(DataType::Boolean);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected = "Projection: a IS NOT FALSE\n  EmptyRelation";
+        assert_optimized_plan_eq(&plan, expected)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn negative_for_type_coercion() -> Result<()> {
+        // negative
+        let expr = Expr::Negative(Box::new(col("a")));
+        let empty = empty_with_type(DataType::UInt32);
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let expected = "Projection: (- CAST(a AS Int64))\n  EmptyRelation";
         assert_optimized_plan_eq(&plan, expected)?;
 
         Ok(())
