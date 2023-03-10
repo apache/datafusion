@@ -2458,6 +2458,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_extension_all_schemas() {
         let plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoChildExtension::empty()),
