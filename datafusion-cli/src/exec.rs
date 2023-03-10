@@ -112,7 +112,7 @@ pub async fn exec_from_repl(
                                     if let Err(e) =
                                         command.execute(&mut print_options).await
                                     {
-                                        eprintln!("{}", e)
+                                        eprintln!("{e}")
                                     }
                                 } else {
                                     eprintln!(
@@ -126,7 +126,7 @@ pub async fn exec_from_repl(
                         }
                         _ => {
                             if let Err(e) = cmd.execute(ctx, &mut print_options).await {
-                                eprintln!("{}", e)
+                                eprintln!("{e}")
                             }
                         }
                     }

@@ -112,6 +112,51 @@ pub fn count(expr: Expr) -> Expr {
     ))
 }
 
+/// Return a new expression with bitwise AND
+pub fn bitwise_and(left: Expr, right: Expr) -> Expr {
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::BitwiseAnd,
+        Box::new(right),
+    ))
+}
+
+/// Return a new expression with bitwise OR
+pub fn bitwise_or(left: Expr, right: Expr) -> Expr {
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::BitwiseOr,
+        Box::new(right),
+    ))
+}
+
+/// Return a new expression with bitwise XOR
+pub fn bitwise_xor(left: Expr, right: Expr) -> Expr {
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::BitwiseXor,
+        Box::new(right),
+    ))
+}
+
+/// Return a new expression with bitwise SHIFT RIGHT
+pub fn bitwise_shift_right(left: Expr, right: Expr) -> Expr {
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::BitwiseShiftRight,
+        Box::new(right),
+    ))
+}
+
+/// Return a new expression with bitwise SHIFT LEFT
+pub fn bitwise_shift_left(left: Expr, right: Expr) -> Expr {
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::BitwiseShiftLeft,
+        Box::new(right),
+    ))
+}
+
 /// Create an expression to represent the count(distinct) aggregate function
 pub fn count_distinct(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
@@ -169,6 +214,16 @@ pub fn random() -> Expr {
 pub fn approx_distinct(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
         aggregate_function::AggregateFunction::ApproxDistinct,
+        vec![expr],
+        false,
+        None,
+    ))
+}
+
+/// Calculate the median for `expr`.
+pub fn median(expr: Expr) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::Median,
         vec![expr],
         false,
         None,

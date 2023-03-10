@@ -80,3 +80,29 @@ select '1' from foo order by column1;
 # foo distinct order by
 statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions column1 must appear in select list
 select distinct '1' from foo order by column1;
+
+# distincts for float nan
+query BBBBBBBBBBBBBBBBB
+select 
+    'nan'::double is distinct from 'nan'::double v1,
+    'nan'::double is not distinct from 'nan'::double v2,
+    'nan'::double is not distinct from null v3,
+    'nan'::double is distinct from null v4,
+    null is distinct from 'nan'::double v5,
+    null is not distinct from 'nan'::double v6,
+    'nan'::float is distinct from 'nan'::float v7,
+    'nan'::float is not distinct from 'nan'::float v8,
+    'nan'::float is not distinct from null v9,
+    'nan'::float is distinct from null v10,
+    null is distinct from 'nan'::float v11,
+    null is not distinct from 'nan'::float v12,
+    1::float is distinct from 2::float v13,
+    'nan'::float is distinct from 1::float v14,
+    'nan'::float is not distinct from 1::float v15,
+    1::float is not distinct from null v16,
+    1::float is distinct from null v17
+;
+----
+false true false true true false false true false true true false true true false false true
+
+

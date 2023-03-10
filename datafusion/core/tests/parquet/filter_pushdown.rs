@@ -517,7 +517,7 @@ impl<'a> TestCase<'a> {
         let ctx = SessionContext::with_config(scan_options.config());
         let exec = self
             .test_parquet_file
-            .create_scan(filter.clone())
+            .create_scan(Some(filter.clone()))
             .await
             .unwrap();
         let result = collect(exec.clone(), ctx.task_ctx()).await.unwrap();

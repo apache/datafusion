@@ -17,11 +17,6 @@
 
 //! Join related functionality used both on logical and physical plans
 
-use crate::error::{DataFusionError, Result, SharedResult};
-use crate::logical_expr::JoinType;
-use crate::physical_plan::expressions::Column;
-use crate::physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
-use crate::physical_plan::SchemaRef;
 use arrow::array::{
     new_null_array, Array, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
     UInt32Builder, UInt64Array,
@@ -29,22 +24,32 @@ use arrow::array::{
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, UInt32Type, UInt64Type};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion_common::cast::as_boolean_array;
-use datafusion_common::ScalarValue;
-use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use parking_lot::Mutex;
 use std::cmp::max;
 use std::collections::HashSet;
+use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::usize;
 
+use datafusion_common::cast::as_boolean_array;
+use datafusion_common::{ScalarValue, SharedResult};
+
+use datafusion_physical_expr::rewrite::TreeNodeRewritable;
+use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
+
+use crate::error::{DataFusionError, Result};
+use crate::logical_expr::JoinType;
+use crate::physical_plan::expressions::Column;
+
+use crate::physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
+use crate::physical_plan::SchemaRef;
 use crate::physical_plan::{
     ColumnStatistics, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
 };
-use datafusion_physical_expr::rewrite::TreeNodeRewritable;
 
 /// The on clause of the join, as vector of (left, right) columns.
 pub type JoinOn = Vec<(Column, Column)>;
@@ -221,13 +226,32 @@ pub fn cross_join_equivalence_properties(
     new_properties
 }
 
+impl Display for JoinSide {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JoinSide::Left => write!(f, "left"),
+            JoinSide::Right => write!(f, "right"),
+        }
+    }
+}
+
 /// Used in ColumnIndex to distinguish which side the index is for
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum JoinSide {
     /// Left side of the join
     Left,
     /// Right side of the join
     Right,
+}
+
+impl JoinSide {
+    /// Inverse the join side
+    pub fn negate(&self) -> Self {
+        match self {
+            JoinSide::Left => JoinSide::Right,
+            JoinSide::Right => JoinSide::Left,
+        }
+    }
 }
 
 /// Information about the index and placement (left or right) of the columns
@@ -743,26 +767,26 @@ pub(crate) fn get_final_indices_from_bit_map(
     (left_indices, right_indices)
 }
 
-/// Use the `left_indices` and `right_indices` to restructure tuples, and apply the `filter` to
-/// all of them to get the matched left and right indices.
 pub(crate) fn apply_join_filter_to_indices(
-    left: &RecordBatch,
-    right: &RecordBatch,
-    left_indices: UInt64Array,
-    right_indices: UInt32Array,
+    build_input_buffer: &RecordBatch,
+    probe_batch: &RecordBatch,
+    build_indices: UInt64Array,
+    probe_indices: UInt32Array,
     filter: &JoinFilter,
+    build_side: JoinSide,
 ) -> Result<(UInt64Array, UInt32Array)> {
-    if left_indices.is_empty() && right_indices.is_empty() {
-        return Ok((left_indices, right_indices));
+    if build_indices.is_empty() && probe_indices.is_empty() {
+        return Ok((build_indices, probe_indices));
     };
 
     let intermediate_batch = build_batch_from_indices(
         filter.schema(),
-        left,
-        right,
-        PrimitiveArray::from(left_indices.data().clone()),
-        PrimitiveArray::from(right_indices.data().clone()),
+        build_input_buffer,
+        probe_batch,
+        PrimitiveArray::from(build_indices.data().clone()),
+        PrimitiveArray::from(probe_indices.data().clone()),
         filter.column_indices(),
+        build_side,
     )?;
     let filter_result = filter
         .expression()
@@ -771,12 +795,11 @@ pub(crate) fn apply_join_filter_to_indices(
     let mask = as_boolean_array(&filter_result)?;
 
     let left_filtered = PrimitiveArray::<UInt64Type>::from(
-        compute::filter(&left_indices, mask)?.data().clone(),
+        compute::filter(&build_indices, mask)?.data().clone(),
     );
     let right_filtered = PrimitiveArray::<UInt32Type>::from(
-        compute::filter(&right_indices, mask)?.data().clone(),
+        compute::filter(&probe_indices, mask)?.data().clone(),
     );
-
     Ok((left_filtered, right_filtered))
 }
 
@@ -784,16 +807,17 @@ pub(crate) fn apply_join_filter_to_indices(
 /// The resulting batch has [Schema] `schema`.
 pub(crate) fn build_batch_from_indices(
     schema: &Schema,
-    left: &RecordBatch,
-    right: &RecordBatch,
-    left_indices: UInt64Array,
-    right_indices: UInt32Array,
+    build_input_buffer: &RecordBatch,
+    probe_batch: &RecordBatch,
+    build_indices: UInt64Array,
+    probe_indices: UInt32Array,
     column_indices: &[ColumnIndex],
+    build_side: JoinSide,
 ) -> Result<RecordBatch> {
     if schema.fields().is_empty() {
         let options = RecordBatchOptions::new()
             .with_match_field_names(true)
-            .with_row_count(Some(left_indices.len()));
+            .with_row_count(Some(build_indices.len()));
 
         return Ok(RecordBatch::try_new_with_options(
             Arc::new(schema.clone()),
@@ -808,27 +832,24 @@ pub(crate) fn build_batch_from_indices(
     let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
 
     for column_index in column_indices {
-        let array = match column_index.side {
-            JoinSide::Left => {
-                let array = left.column(column_index.index);
-                if array.is_empty() || left_indices.null_count() == left_indices.len() {
-                    // Outer join would generate a null index when finding no match at our side.
-                    // Therefore, it's possible we are empty but need to populate an n-length null array,
-                    // where n is the length of the index array.
-                    assert_eq!(left_indices.null_count(), left_indices.len());
-                    new_null_array(array.data_type(), left_indices.len())
-                } else {
-                    compute::take(array.as_ref(), &left_indices, None)?
-                }
+        let array = if column_index.side == build_side {
+            let array = build_input_buffer.column(column_index.index);
+            if array.is_empty() || build_indices.null_count() == build_indices.len() {
+                // Outer join would generate a null index when finding no match at our side.
+                // Therefore, it's possible we are empty but need to populate an n-length null array,
+                // where n is the length of the index array.
+                assert_eq!(build_indices.null_count(), build_indices.len());
+                new_null_array(array.data_type(), build_indices.len())
+            } else {
+                compute::take(array.as_ref(), &build_indices, None)?
             }
-            JoinSide::Right => {
-                let array = right.column(column_index.index);
-                if array.is_empty() || right_indices.null_count() == right_indices.len() {
-                    assert_eq!(right_indices.null_count(), right_indices.len());
-                    new_null_array(array.data_type(), right_indices.len())
-                } else {
-                    compute::take(array.as_ref(), &right_indices, None)?
-                }
+        } else {
+            let array = probe_batch.column(column_index.index);
+            if array.is_empty() || probe_indices.null_count() == probe_indices.len() {
+                assert_eq!(probe_indices.null_count(), probe_indices.len());
+                new_null_array(array.data_type(), probe_indices.len())
+            } else {
+                compute::take(array.as_ref(), &probe_indices, None)?
             }
         };
         columns.push(array);

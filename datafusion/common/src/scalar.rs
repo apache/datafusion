@@ -516,16 +516,32 @@ macro_rules! impl_op {
                 let value = seconds_add(*ts_s, $RHS, get_sign!($OPERATION))?;
                 Ok(ScalarValue::TimestampSecond(Some(value), zone.clone()))
             }
+            (_, ScalarValue::TimestampSecond(Some(ts_s), zone)) => {
+                let value = seconds_add(*ts_s, $LHS, get_sign!($OPERATION))?;
+                Ok(ScalarValue::TimestampSecond(Some(value), zone.clone()))
+            }
             (ScalarValue::TimestampMillisecond(Some(ts_ms), zone), _) => {
                 let value = milliseconds_add(*ts_ms, $RHS, get_sign!($OPERATION))?;
+                Ok(ScalarValue::TimestampMillisecond(Some(value), zone.clone()))
+            }
+            (_, ScalarValue::TimestampMillisecond(Some(ts_ms), zone)) => {
+                let value = milliseconds_add(*ts_ms, $LHS, get_sign!($OPERATION))?;
                 Ok(ScalarValue::TimestampMillisecond(Some(value), zone.clone()))
             }
             (ScalarValue::TimestampMicrosecond(Some(ts_us), zone), _) => {
                 let value = microseconds_add(*ts_us, $RHS, get_sign!($OPERATION))?;
                 Ok(ScalarValue::TimestampMicrosecond(Some(value), zone.clone()))
             }
+            (_, ScalarValue::TimestampMicrosecond(Some(ts_us), zone)) => {
+                let value = microseconds_add(*ts_us, $LHS, get_sign!($OPERATION))?;
+                Ok(ScalarValue::TimestampMicrosecond(Some(value), zone.clone()))
+            }
             (ScalarValue::TimestampNanosecond(Some(ts_ns), zone), _) => {
                 let value = nanoseconds_add(*ts_ns, $RHS, get_sign!($OPERATION))?;
+                Ok(ScalarValue::TimestampNanosecond(Some(value), zone.clone()))
+            }
+            (_, ScalarValue::TimestampNanosecond(Some(ts_ns), zone)) => {
+                let value = nanoseconds_add(*ts_ns, $LHS, get_sign!($OPERATION))?;
                 Ok(ScalarValue::TimestampNanosecond(Some(value), zone.clone()))
             }
             _ => Err(DataFusionError::Internal(format!(
@@ -1019,6 +1035,47 @@ impl ScalarValue {
         Self::List(scalars, Box::new(Field::new("item", child_type, true)))
     }
 
+    /// Create a zero value in the given type.
+    pub fn new_zero(datatype: &DataType) -> Result<ScalarValue> {
+        assert!(datatype.is_primitive());
+        Ok(match datatype {
+            DataType::Boolean => ScalarValue::Boolean(Some(false)),
+            DataType::Int8 => ScalarValue::Int8(Some(0)),
+            DataType::Int16 => ScalarValue::Int16(Some(0)),
+            DataType::Int32 => ScalarValue::Int32(Some(0)),
+            DataType::Int64 => ScalarValue::Int64(Some(0)),
+            DataType::UInt8 => ScalarValue::UInt8(Some(0)),
+            DataType::UInt16 => ScalarValue::UInt16(Some(0)),
+            DataType::UInt32 => ScalarValue::UInt32(Some(0)),
+            DataType::UInt64 => ScalarValue::UInt64(Some(0)),
+            DataType::Float32 => ScalarValue::Float32(Some(0.0)),
+            DataType::Float64 => ScalarValue::Float64(Some(0.0)),
+            _ => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Can't create a zero scalar from data_type \"{datatype:?}\""
+                )));
+            }
+        })
+    }
+
+    /// Create a negative one value in the given type.
+    pub fn new_negative_one(datatype: &DataType) -> Result<ScalarValue> {
+        assert!(datatype.is_primitive());
+        Ok(match datatype {
+            DataType::Int8 | DataType::UInt8 => ScalarValue::Int8(Some(-1)),
+            DataType::Int16 | DataType::UInt16 => ScalarValue::Int16(Some(-1)),
+            DataType::Int32 | DataType::UInt32 => ScalarValue::Int32(Some(-1)),
+            DataType::Int64 | DataType::UInt64 => ScalarValue::Int64(Some(-1)),
+            DataType::Float32 => ScalarValue::Float32(Some(-1.0)),
+            DataType::Float64 => ScalarValue::Float64(Some(-1.0)),
+            _ => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Can't create a negative one scalar from data_type \"{datatype:?}\""
+                )));
+            }
+        })
+    }
+
     /// Getter for the `DataType` of the value
     pub fn get_datatype(&self) -> DataType {
         match self {
@@ -1273,7 +1330,7 @@ impl ScalarValue {
         }
 
         macro_rules! build_array_primitive_tz {
-            ($ARRAY_TY:ident, $SCALAR_TY:ident) => {{
+            ($ARRAY_TY:ident, $SCALAR_TY:ident, $TZ:expr) => {{
                 {
                     let array = scalars.map(|sv| {
                         if let ScalarValue::$SCALAR_TY(v, _) = sv {
@@ -1287,7 +1344,7 @@ impl ScalarValue {
                         }
                     })
                     .collect::<Result<$ARRAY_TY>>()?;
-                    Arc::new(array)
+                    Arc::new(array.with_timezone_opt($TZ.clone()))
                 }
             }};
         }
@@ -1421,17 +1478,29 @@ impl ScalarValue {
             DataType::Time64(TimeUnit::Nanosecond) => {
                 build_array_primitive!(Time64NanosecondArray, Time64Nanosecond)
             }
-            DataType::Timestamp(TimeUnit::Second, _) => {
-                build_array_primitive_tz!(TimestampSecondArray, TimestampSecond)
+            DataType::Timestamp(TimeUnit::Second, tz) => {
+                build_array_primitive_tz!(TimestampSecondArray, TimestampSecond, tz)
             }
-            DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                build_array_primitive_tz!(TimestampMillisecondArray, TimestampMillisecond)
+            DataType::Timestamp(TimeUnit::Millisecond, tz) => {
+                build_array_primitive_tz!(
+                    TimestampMillisecondArray,
+                    TimestampMillisecond,
+                    tz
+                )
             }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                build_array_primitive_tz!(TimestampMicrosecondArray, TimestampMicrosecond)
+            DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+                build_array_primitive_tz!(
+                    TimestampMicrosecondArray,
+                    TimestampMicrosecond,
+                    tz
+                )
             }
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                build_array_primitive_tz!(TimestampNanosecondArray, TimestampNanosecond)
+            DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+                build_array_primitive_tz!(
+                    TimestampNanosecondArray,
+                    TimestampNanosecond,
+                    tz
+                )
             }
             DataType::Interval(IntervalUnit::DayTime) => {
                 build_array_primitive!(IntervalDayTimeArray, IntervalDayTime)
@@ -2624,7 +2693,7 @@ impl TryFrom<&DataType> for ScalarValue {
 macro_rules! format_option {
     ($F:expr, $EXPR:expr) => {{
         match $EXPR {
-            Some(e) => write!($F, "{}", e),
+            Some(e) => write!($F, "{e}"),
             None => write!($F, "NULL"),
         }
     }};
@@ -2885,6 +2954,28 @@ mod tests {
             float_value.sub(float_value_2)?,
             ScalarValue::Float64(Some(0.))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_interval_add_timestamp() -> Result<()> {
+        let interval = ScalarValue::IntervalMonthDayNano(Some(123));
+        let timestamp = ScalarValue::TimestampNanosecond(Some(123), None);
+        let result = interval.add(&timestamp)?;
+        let expect = timestamp.add(&interval)?;
+        assert_eq!(result, expect);
+
+        let interval = ScalarValue::IntervalYearMonth(Some(123));
+        let timestamp = ScalarValue::TimestampNanosecond(Some(123), None);
+        let result = interval.add(&timestamp)?;
+        let expect = timestamp.add(&interval)?;
+        assert_eq!(result, expect);
+
+        let interval = ScalarValue::IntervalDayTime(Some(123));
+        let timestamp = ScalarValue::TimestampNanosecond(Some(123), None);
+        let result = interval.add(&timestamp)?;
+        let expect = timestamp.add(&interval)?;
+        assert_eq!(result, expect);
         Ok(())
     }
 

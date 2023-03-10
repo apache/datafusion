@@ -26,7 +26,7 @@ const SECONDS_PER_HOUR: f64 = 3_600_f64;
 const NANOS_PER_SECOND: f64 = 1_000_000_000_f64;
 
 /// Readable file compression type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CompressionTypeVariant {
     /// Gzip-ed file
     GZIP,

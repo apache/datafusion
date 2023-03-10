@@ -20,6 +20,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
+use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result, SchemaError};
@@ -331,6 +332,27 @@ impl DFSchema {
         }
     }
 
+    /// Find if the field exists with the given name
+    pub fn has_column_with_unqualified_name(&self, name: &str) -> bool {
+        self.fields().iter().any(|field| field.name() == name)
+    }
+
+    /// Find if the field exists with the given qualified name
+    pub fn has_column_with_qualified_name(&self, qualifier: &str, name: &str) -> bool {
+        self.fields().iter().any(|field| {
+            field.qualifier().map(|q| q.eq(qualifier)).unwrap_or(false)
+                && field.name() == name
+        })
+    }
+
+    /// Find if the field exists with the given qualified column
+    pub fn has_column(&self, column: &Column) -> bool {
+        match &column.relation {
+            Some(r) => self.has_column_with_qualified_name(r, &column.name),
+            None => self.has_column_with_unqualified_name(&column.name),
+        }
+    }
+
     /// Check to see if unqualified field names matches field names in Arrow schema
     pub fn matches_arrow_schema(&self, arrow_schema: &Schema) -> bool {
         self.fields
@@ -496,6 +518,15 @@ impl From<DFSchema> for SchemaRef {
     }
 }
 
+// Hashing refers to a subset of fields considered in PartialEq.
+#[allow(clippy::derived_hash_with_manual_eq)]
+impl Hash for DFSchema {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.fields.hash(state);
+        self.metadata.len().hash(state); // HashMap is not hashable
+    }
+}
+
 /// Convenience trait to convert Schema like things to DFSchema and DFSchemaRef with fewer keystrokes
 pub trait ToDFSchema
 where
@@ -587,7 +618,7 @@ impl ExprSchema for DFSchema {
 }
 
 /// DFField wraps an Arrow field and adds an optional qualifier
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DFField {
     /// Optional qualifier (usually a table or relation name)
     qualifier: Option<String>,
