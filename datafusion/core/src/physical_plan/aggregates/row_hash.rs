@@ -297,7 +297,7 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 impl GroupedHashAggregateStream {
     /// Perform group-by aggregation for the given [`RecordBatch`].
     ///
-    /// If successfull, this returns the additional number of bytes that were allocated during this process.
+    /// If successful, this returns the additional number of bytes that were allocated during this process.
     ///
     fn group_aggregate_batch(&mut self, batch: RecordBatch) -> Result<usize> {
         // Evaluate the grouping expressions:
