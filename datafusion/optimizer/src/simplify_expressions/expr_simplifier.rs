@@ -2721,7 +2721,7 @@ mod tests {
                 vec![scalar_subquery(subquery.clone())],
                 true
             )),
-            not_in_subquery(col("c1"), subquery.clone())
+            not_in_subquery(col("c1"), subquery)
         );
     }
 
