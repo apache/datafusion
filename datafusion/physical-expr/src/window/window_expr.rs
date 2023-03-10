@@ -212,38 +212,35 @@ pub trait AggregateWindowExpr: WindowExpr {
                 _ => unreachable!(),
             };
             let state = &mut window_state.state;
-
             let record_batch = &partition_batch_state.record_batch;
-            let out_col = if let Some(window_frame_ctx) = &mut state.window_frame_ctx {
-                self.get_result_column(
+
+            // If window_frame_ctx is None initialize it.
+            if state.window_frame_ctx.is_none() {
+                let sort_options: Vec<SortOptions> =
+                    self.order_by().iter().map(|o| o.options).collect();
+                let window_frame_ctx = WindowFrameContext::new(
+                    self.get_window_frame().clone(),
+                    sort_options,
+                    // Start search from the last range
+                    state.window_frame_range.clone(),
+                );
+                state.window_frame_ctx = Some(window_frame_ctx);
+            }
+            if let Some(window_frame_ctx) = &mut state.window_frame_ctx {
+                let out_col = self.get_result_column(
                     accumulator,
                     record_batch,
                     &mut state.window_frame_range,
                     window_frame_ctx,
                     &mut state.last_calculated_index,
                     !partition_batch_state.is_end,
-                )?
-            } else {
-                let sort_options: Vec<SortOptions> =
-                    self.order_by().iter().map(|o| o.options).collect();
-                let mut window_frame_ctx = WindowFrameContext::new(
-                    self.get_window_frame().clone(),
-                    sort_options,
-                    // Start search from the last range
-                    state.window_frame_range.clone(),
-                );
-                let res = self.get_result_column(
-                    accumulator,
-                    record_batch,
-                    &mut state.window_frame_range,
-                    &mut window_frame_ctx,
-                    &mut state.last_calculated_index,
-                    !partition_batch_state.is_end,
                 )?;
-                state.window_frame_ctx = Some(window_frame_ctx);
-                res
-            };
-            state.update(&out_col, partition_batch_state)?;
+                state.update(&out_col, partition_batch_state)?;
+            } else {
+                return Err(DataFusionError::Execution(
+                    "window_frame_ctx cannot be None.".to_string(),
+                ));
+            }
         }
         Ok(())
     }
