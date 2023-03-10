@@ -406,36 +406,32 @@ fn try_cast_literal_to_type(
                             lit_data_type,
                             DataType::Timestamp(TimeUnit::Second, tz.clone()),
                             value,
-                        )
-                        .unwrap();
-                        ScalarValue::TimestampSecond(Some(value), tz.clone())
+                        );
+                        ScalarValue::TimestampSecond(value, tz.clone())
                     }
                     DataType::Timestamp(TimeUnit::Millisecond, tz) => {
                         let value = cast_between_timestamp(
                             lit_data_type,
                             DataType::Timestamp(TimeUnit::Millisecond, tz.clone()),
                             value,
-                        )
-                        .unwrap();
-                        ScalarValue::TimestampMillisecond(Some(value), tz.clone())
+                        );
+                        ScalarValue::TimestampMillisecond(value, tz.clone())
                     }
                     DataType::Timestamp(TimeUnit::Microsecond, tz) => {
                         let value = cast_between_timestamp(
                             lit_data_type,
                             DataType::Timestamp(TimeUnit::Microsecond, tz.clone()),
                             value,
-                        )
-                        .unwrap();
-                        ScalarValue::TimestampMicrosecond(Some(value), tz.clone())
+                        );
+                        ScalarValue::TimestampMicrosecond(value, tz.clone())
                     }
                     DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
                         let value = cast_between_timestamp(
                             lit_data_type,
                             DataType::Timestamp(TimeUnit::Nanosecond, tz.clone()),
                             value,
-                        )
-                        .unwrap();
-                        ScalarValue::TimestampNanosecond(Some(value), tz.clone())
+                        );
+                        ScalarValue::TimestampNanosecond(value, tz.clone())
                     }
                     DataType::Decimal128(p, s) => {
                         ScalarValue::Decimal128(Some(value), *p, *s)
@@ -456,12 +452,13 @@ fn try_cast_literal_to_type(
 
 /// Cast a timestamp value from one unit to another
 fn cast_between_timestamp(from: DataType, to: DataType, value: i128) -> Option<i64> {
+    let value = value as i64;
     let from_scale = match from {
         DataType::Timestamp(TimeUnit::Second, _) => 1,
         DataType::Timestamp(TimeUnit::Millisecond, _) => MILLISECONDS,
         DataType::Timestamp(TimeUnit::Microsecond, _) => MICROSECONDS,
         DataType::Timestamp(TimeUnit::Nanosecond, _) => NANOSECONDS,
-        _ => return Some(value as i64),
+        _ => return Some(value),
     };
 
     let to_scale = match to {
@@ -469,13 +466,13 @@ fn cast_between_timestamp(from: DataType, to: DataType, value: i128) -> Option<i
         DataType::Timestamp(TimeUnit::Millisecond, _) => MILLISECONDS,
         DataType::Timestamp(TimeUnit::Microsecond, _) => MICROSECONDS,
         DataType::Timestamp(TimeUnit::Nanosecond, _) => NANOSECONDS,
-        _ => return Some(value as i64),
+        _ => return Some(value),
     };
 
     match from_scale.cmp(&to_scale) {
-        Ordering::Less => Some(value as i64 * (to_scale / from_scale)),
-        Ordering::Greater => Some(value as i64 / (from_scale / to_scale)),
-        Ordering::Equal => Some(value as i64),
+        Ordering::Less => value.checked_mul(to_scale / from_scale),
+        Ordering::Greater => Some(value / (from_scale / to_scale)),
+        Ordering::Equal => Some(value),
     }
 }
 
@@ -1269,5 +1266,14 @@ mod tests {
             new_scalar,
             ScalarValue::TimestampMillisecond(Some(123000), None)
         );
+
+        // overflow
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampSecond(Some(i64::MAX), None),
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(new_scalar, ScalarValue::TimestampMillisecond(None, None));
     }
 }
