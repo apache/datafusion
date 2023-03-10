@@ -859,8 +859,8 @@ impl BoundedWindowAggStream {
     fn evaluate_partition_batches(
         &mut self,
         record_batch: &RecordBatch,
-    ) -> Result<IndexMap<Vec<ScalarValue>, RecordBatch>> {
-        let mut res = IndexMap::new();
+    ) -> Result<Vec<(Vec<ScalarValue>, RecordBatch)>> {
+        let mut res = vec![];
         let num_rows = record_batch.num_rows();
         match &self.search_mode {
             PartitionSearchMode::Sorted => {
@@ -889,7 +889,7 @@ impl BoundedWindowAggStream {
                     let row = get_row_at_idx(&partition_bys, range.start)?;
                     let len = range.end - range.start;
                     let slice = record_batch.slice(range.start, len);
-                    res.insert(row, slice);
+                    res.push((row, slice));
                 }
             }
             PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted => {
@@ -904,7 +904,7 @@ impl BoundedWindowAggStream {
                     let row = get_row_at_idx(&partition_bys, indices[0])?;
                     let partition_batch =
                         get_record_batch_at_indices(record_batch, &indices)?;
-                    res.insert(row, partition_batch);
+                    res.push((row, partition_batch));
                 }
             }
         }
