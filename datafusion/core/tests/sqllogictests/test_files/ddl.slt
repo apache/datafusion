@@ -366,7 +366,7 @@ STORED AS CSV
 PARTITIONED BY (c_date)
 LOCATION 'tests/data/partitioned_table';
 
-query TP?
+query TPD
 SELECT * from csv_with_timestamps where c_date='2018-11-13'
 ----
 Jorge 2018-12-13T12:12:10.011 2018-11-13

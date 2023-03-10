@@ -86,7 +86,15 @@ impl TableProviderFactory for ListingTableFactory {
                 None,
                 cmd.table_partition_cols
                     .iter()
-                    .map(|x| (x.clone(), DataType::Utf8))
+                    .map(|x| {
+                        (
+                            x.clone(),
+                            DataType::Dictionary(
+                                Box::new(DataType::UInt16),
+                                Box::new(DataType::Utf8),
+                            ),
+                        )
+                    })
                     .collect::<Vec<_>>(),
             )
         } else {

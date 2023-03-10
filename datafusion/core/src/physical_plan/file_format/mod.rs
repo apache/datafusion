@@ -30,9 +30,9 @@ pub use self::csv::CsvExec;
 pub(crate) use self::parquet::plan_to_parquet;
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 use arrow::{
-    array::{ArrayData, ArrayRef, DictionaryArray},
+    array::{ArrayData, ArrayRef, BufferBuilder, DictionaryArray},
     buffer::Buffer,
-    datatypes::{DataType, Field, Schema, SchemaRef, UInt16Type},
+    datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
     record_batch::RecordBatch,
 };
 pub use avro::AvroExec;
@@ -49,7 +49,7 @@ use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
 };
-use arrow::array::{new_null_array, UInt16BufferBuilder};
+use arrow::array::new_null_array;
 use arrow::record_batch::RecordBatchOptions;
 use log::{debug, info};
 use object_store::path::Path;
@@ -57,16 +57,12 @@ use object_store::ObjectMeta;
 use std::{
     collections::HashMap,
     fmt::{Display, Formatter, Result as FmtResult},
+    marker::PhantomData,
     sync::Arc,
     vec,
 };
 
 use super::{ColumnStatistics, Statistics};
-
-/// Convert logical type of partition column to physical type: `Dictionary(UInt16, val_type)`
-pub fn partition_type_wrap(val_type: DataType) -> DataType {
-    DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val_type))
-}
 
 /// The base configurations to provide when creating a physical plan for
 /// any given file format.
@@ -346,7 +342,7 @@ struct PartitionColumnProjector {
     /// An Arrow buffer initialized to zeros that represents the key array of all partition
     /// columns (partition columns are materialized by dictionary arrays with only one
     /// value in the dictionary, thus all the keys are equal to zero).
-    key_buffer_cache: Option<Buffer>,
+    key_buffer_cache: ZeroBufferGenerators,
     /// Mapping between the indexes in the list of partition columns and the target
     /// schema. Sorted by index in the target schema so that we can iterate on it to
     /// insert the partition columns in the target record batch.
@@ -372,7 +368,7 @@ impl PartitionColumnProjector {
 
         Self {
             projected_partition_indexes,
-            key_buffer_cache: None,
+            key_buffer_cache: Default::default(),
             projected_schema,
         }
     }
@@ -400,7 +396,7 @@ impl PartitionColumnProjector {
         for &(pidx, sidx) in &self.projected_partition_indexes {
             cols.insert(
                 sidx,
-                create_dict_array(
+                create_output_array(
                     &mut self.key_buffer_cache,
                     &partition_values[pidx],
                     file_batch.num_rows(),
@@ -411,26 +407,60 @@ impl PartitionColumnProjector {
     }
 }
 
-fn create_dict_array(
-    key_buffer_cache: &mut Option<Buffer>,
-    val: &ScalarValue,
-    len: usize,
-) -> ArrayRef {
-    // build value dictionary
-    let dict_vals = val.to_array();
+#[derive(Debug, Default)]
+struct ZeroBufferGenerators {
+    gen_i8: ZeroBufferGenerator<i8>,
+    gen_i16: ZeroBufferGenerator<i16>,
+    gen_i32: ZeroBufferGenerator<i32>,
+    gen_i64: ZeroBufferGenerator<i64>,
+    gen_u8: ZeroBufferGenerator<u8>,
+    gen_u16: ZeroBufferGenerator<u16>,
+    gen_u32: ZeroBufferGenerator<u32>,
+    gen_u64: ZeroBufferGenerator<u64>,
+}
 
-    // build keys array
-    let sliced_key_buffer = match key_buffer_cache {
-        Some(buf) if buf.len() >= len * 2 => buf.slice(buf.len() - len * 2),
-        _ => {
-            let mut key_buffer_builder = UInt16BufferBuilder::new(len * 2);
-            key_buffer_builder.advance(len * 2); // keys are all 0
-            key_buffer_cache.insert(key_buffer_builder.finish()).clone()
+/// Generate a arrow [`Buffer`] that contains zero values.
+#[derive(Debug, Default)]
+struct ZeroBufferGenerator<T>
+where
+    T: ArrowNativeType,
+{
+    cache: Option<Buffer>,
+    _t: PhantomData<T>,
+}
+
+impl<T> ZeroBufferGenerator<T>
+where
+    T: ArrowNativeType,
+{
+    const SIZE: usize = std::mem::size_of::<T>();
+
+    fn get_buffer(&mut self, n_vals: usize) -> Buffer {
+        match &mut self.cache {
+            Some(buf) if buf.len() >= n_vals * Self::SIZE => {
+                buf.slice_with_length(0, n_vals * Self::SIZE)
+            }
+            _ => {
+                let mut key_buffer_builder = BufferBuilder::<T>::new(n_vals);
+                key_buffer_builder.advance(n_vals); // keys are all 0
+                self.cache.insert(key_buffer_builder.finish()).clone()
+            }
         }
-    };
+    }
+}
 
-    // create data type
-    let data_type = partition_type_wrap(val.get_datatype());
+fn create_dict_array<T>(
+    buffer_gen: &mut ZeroBufferGenerator<T>,
+    dict_val: &ScalarValue,
+    len: usize,
+    data_type: DataType,
+) -> ArrayRef
+where
+    T: ArrowNativeType,
+{
+    let dict_vals = dict_val.to_array();
+
+    let sliced_key_buffer = buffer_gen.get_buffer(len);
 
     // assemble pieces together
     let mut builder = ArrayData::builder(data_type)
@@ -440,6 +470,84 @@ fn create_dict_array(
     Arc::new(DictionaryArray::<UInt16Type>::from(
         builder.build().unwrap(),
     ))
+}
+
+fn create_output_array(
+    key_buffer_cache: &mut ZeroBufferGenerators,
+    val: &ScalarValue,
+    len: usize,
+) -> ArrayRef {
+    if let ScalarValue::Dictionary(key_type, dict_val) = &val {
+        match key_type.as_ref() {
+            DataType::Int8 => {
+                return create_dict_array(
+                    &mut key_buffer_cache.gen_i8,
+                    dict_val,
+                    len,
+                    val.get_datatype(),
+                );
+            }
+            DataType::Int16 => {
+                return create_dict_array(
+                    &mut key_buffer_cache.gen_i16,
+                    dict_val,
+                    len,
+                    val.get_datatype(),
+                );
+            }
+            DataType::Int32 => {
+                return create_dict_array(
+                    &mut key_buffer_cache.gen_i32,
+                    dict_val,
+                    len,
+                    val.get_datatype(),
+                );
+            }
+            DataType::Int64 => {
+                return create_dict_array(
+                    &mut key_buffer_cache.gen_i64,
+                    dict_val,
+                    len,
+                    val.get_datatype(),
+                );
+            }
+            DataType::UInt8 => {
+                return create_dict_array(
+                    &mut key_buffer_cache.gen_u8,
+                    dict_val,
+                    len,
+                    val.get_datatype(),
+                );
+            }
+            DataType::UInt16 => {
+                return create_dict_array(
+                    &mut key_buffer_cache.gen_u16,
+                    dict_val,
+                    len,
+                    val.get_datatype(),
+                );
+            }
+            DataType::UInt32 => {
+                return create_dict_array(
+                    &mut key_buffer_cache.gen_u32,
+                    dict_val,
+                    len,
+                    val.get_datatype(),
+                );
+            }
+            DataType::UInt64 => {
+                return create_dict_array(
+                    &mut key_buffer_cache.gen_u64,
+                    dict_val,
+                    len,
+                    val.get_datatype(),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    val.to_array_of_size(len)
 }
 
 /// A single file or part of a file that should be read, along with its schema, statistics
@@ -670,9 +778,9 @@ mod tests {
                 // file_batch is ok here because we kept all the file cols in the projection
                 file_batch,
                 &[
-                    ScalarValue::Utf8(Some("2021".to_owned())),
-                    ScalarValue::Utf8(Some("10".to_owned())),
-                    ScalarValue::Utf8(Some("26".to_owned())),
+                    partition_value_wrap(ScalarValue::Utf8(Some("2021".to_owned()))),
+                    partition_value_wrap(ScalarValue::Utf8(Some("10".to_owned()))),
+                    partition_value_wrap(ScalarValue::Utf8(Some("26".to_owned()))),
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
@@ -698,9 +806,9 @@ mod tests {
                 // file_batch is ok here because we kept all the file cols in the projection
                 file_batch,
                 &[
-                    ScalarValue::Utf8(Some("2021".to_owned())),
-                    ScalarValue::Utf8(Some("10".to_owned())),
-                    ScalarValue::Utf8(Some("27".to_owned())),
+                    partition_value_wrap(ScalarValue::Utf8(Some("2021".to_owned()))),
+                    partition_value_wrap(ScalarValue::Utf8(Some("10".to_owned()))),
+                    partition_value_wrap(ScalarValue::Utf8(Some("27".to_owned()))),
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
@@ -728,9 +836,9 @@ mod tests {
                 // file_batch is ok here because we kept all the file cols in the projection
                 file_batch,
                 &[
-                    ScalarValue::Utf8(Some("2021".to_owned())),
-                    ScalarValue::Utf8(Some("10".to_owned())),
-                    ScalarValue::Utf8(Some("28".to_owned())),
+                    partition_value_wrap(ScalarValue::Utf8(Some("2021".to_owned()))),
+                    partition_value_wrap(ScalarValue::Utf8(Some("10".to_owned()))),
+                    partition_value_wrap(ScalarValue::Utf8(Some("28".to_owned()))),
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
@@ -861,5 +969,14 @@ mod tests {
             range: None,
             extensions: None,
         }
+    }
+
+    /// Convert logical type of partition column to physical type: `Dictionary(UInt16, val_type)`
+    fn partition_type_wrap(val_type: DataType) -> DataType {
+        DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val_type))
+    }
+
+    fn partition_value_wrap(val: ScalarValue) -> ScalarValue {
+        ScalarValue::Dictionary(Box::new(DataType::UInt16), Box::new(val))
     }
 }
