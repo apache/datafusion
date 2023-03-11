@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{ArrowDictionaryKeyType, DataType, Field};
+use datafusion_common::cast::as_dictionary_array;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -85,10 +86,47 @@ impl AggregateExpr for DistinctCount {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(DistinctCountAccumulator {
-            values: HashSet::default(),
-            state_data_type: self.state_data_type.clone(),
-        }))
+        use arrow::datatypes;
+        use datatypes::DataType::*;
+
+        Ok(match &self.state_data_type {
+            Dictionary(key, _) if key.is_dictionary_key_type() => {
+                match **key {
+                    Int8 => Box::new(
+                        CountDistinctDictAccumulator::<datatypes::Int8Type>::new(),
+                    ),
+                    Int16 => Box::new(
+                        CountDistinctDictAccumulator::<datatypes::Int16Type>::new(),
+                    ),
+                    Int32 => Box::new(
+                        CountDistinctDictAccumulator::<datatypes::Int32Type>::new(),
+                    ),
+                    Int64 => Box::new(
+                        CountDistinctDictAccumulator::<datatypes::Int64Type>::new(),
+                    ),
+                    UInt8 => Box::new(
+                        CountDistinctDictAccumulator::<datatypes::UInt8Type>::new(),
+                    ),
+                    UInt16 => Box::new(CountDistinctDictAccumulator::<
+                        datatypes::UInt16Type,
+                    >::new()),
+                    UInt32 => Box::new(CountDistinctDictAccumulator::<
+                        datatypes::UInt32Type,
+                    >::new()),
+                    UInt64 => Box::new(CountDistinctDictAccumulator::<
+                        datatypes::UInt64Type,
+                    >::new()),
+                    _ => {
+                        // just checked that datatype is a valid dict key type
+                        unreachable!()
+                    }
+                }
+            }
+            _ => Box::new(DistinctCountAccumulator {
+                values: HashSet::default(),
+                state_data_type: self.state_data_type.clone(),
+            }),
+        })
     }
 
     fn name(&self) -> &str {
@@ -192,6 +230,143 @@ impl Accumulator for DistinctCountAccumulator {
         }
     }
 }
+/// Special case accumulator for counting distinct values in a dict
+struct CountDistinctDictAccumulator<K>
+where
+    K: ArrowDictionaryKeyType + std::marker::Send + std::marker::Sync,
+{
+    /// `K` is required when casting to dict array
+    _dt: core::marker::PhantomData<K>,
+    /// laziliy initialized state that holds a boolean for each index.
+    /// the bool at each index indicates whether the value for that index has been seen yet.
+    state: Option<Vec<bool>>,
+}
+
+impl<K> std::fmt::Debug for CountDistinctDictAccumulator<K>
+where
+    K: ArrowDictionaryKeyType + std::marker::Send + std::marker::Sync,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CountDistinctDictAccumulator")
+            .field("state", &self.state)
+            .finish()
+    }
+}
+impl<K: ArrowDictionaryKeyType + std::marker::Send + std::marker::Sync>
+    CountDistinctDictAccumulator<K>
+{
+    fn new() -> Self {
+        Self {
+            _dt: core::marker::PhantomData,
+            state: None,
+        }
+    }
+}
+impl<K> Accumulator for CountDistinctDictAccumulator<K>
+where
+    K: ArrowDictionaryKeyType + std::marker::Send + std::marker::Sync,
+{
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        if let Some(state) = &self.state {
+            let bools = state
+                .iter()
+                .map(|b| ScalarValue::Boolean(Some(*b)))
+                .collect();
+            Ok(vec![ScalarValue::List(
+                Some(bools),
+                Box::new(Field::new("item", DataType::Boolean, false)),
+            )])
+        } else {
+            // empty state
+            Ok(vec![])
+        }
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+        let arr = as_dictionary_array::<K>(&values[0])?;
+        let nvalues = arr.values().len();
+        if let Some(state) = &self.state {
+            if state.len() != nvalues {
+                return Err(DataFusionError::Internal(
+                    "Accumulator update_batch got invalid value".to_string(),
+                ));
+            }
+        } else {
+            // init state
+            self.state = Some((0..nvalues).map(|_| false).collect());
+        }
+        for key in arr.keys_iter() {
+            if let Some(idx) = key {
+                self.state
+                    .as_mut()
+                    // state always will have been initialized at this point
+                    .unwrap()[idx] = true;
+            }
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        }
+
+        let arr = &states[0];
+        (0..arr.len()).try_for_each(|index| {
+            let scalar = ScalarValue::try_from_array(arr, index)?;
+
+            if let ScalarValue::List(Some(scalar), _) = scalar {
+                if self.state.is_none() {
+                    self.state = Some((0..scalar.len()).map(|_| false).collect());
+                } else if scalar.len() != self.state.as_ref().unwrap().len() {
+                    return Err(DataFusionError::Internal(
+                        "accumulator merged invalid state".into(),
+                    ));
+                }
+                for (idx, val) in scalar.iter().enumerate() {
+                    match val {
+                        ScalarValue::Boolean(Some(b)) => {
+                            if *b {
+                                self.state.as_mut().unwrap()[idx] = true;
+                            }
+                        }
+                        _ => {
+                            return Err(DataFusionError::Internal(
+                                "Unexpected accumulator state".into(),
+                            ));
+                        }
+                    }
+                }
+            } else {
+                return Err(DataFusionError::Internal(
+                    "Unexpected accumulator state".into(),
+                ));
+            }
+            Ok(())
+        })
+    }
+
+    fn evaluate(&self) -> Result<ScalarValue> {
+        if let Some(state) = &self.state {
+            let num_seen = state.iter().filter(|v| **v).count();
+            Ok(ScalarValue::Int64(Some(num_seen as i64)))
+        } else {
+            Ok(ScalarValue::Int64(Some(0)))
+        }
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self)
+            + self
+                .state
+                .as_ref()
+                .map(|state| std::mem::size_of::<bool>() * state.capacity())
+                .unwrap_or(0)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -199,10 +374,11 @@ mod tests {
 
     use super::*;
     use arrow::array::{
-        ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
-        Int64Array, Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        ArrayRef, BooleanArray, DictionaryArray, Float32Array, Float64Array, Int16Array,
+        Int32Array, Int64Array, Int8Array, StringArray, UInt16Array, UInt32Array,
+        UInt64Array, UInt8Array,
     };
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Int8Type};
 
     macro_rules! state_to_vec {
         ($LIST:expr, $DATA_TYPE:ident, $PRIM_TY:ty) => {{
@@ -346,8 +522,6 @@ mod tests {
 
             let mut state_vec =
                 state_to_vec!(&states[0], $DATA_TYPE, $PRIM_TYPE).unwrap();
-
-            dbg!(&state_vec);
             state_vec.sort_by(|a, b| match (a, b) {
                 (Some(lhs), Some(rhs)) => lhs.total_cmp(rhs),
                 _ => a.partial_cmp(b).unwrap(),
@@ -575,6 +749,108 @@ mod tests {
         )?;
         assert_eq!(states.len(), 1);
         assert_eq!(result, ScalarValue::Int64(Some(2)));
+        Ok(())
+    }
+
+    #[test]
+    fn count_distinct_dict_update() -> Result<()> {
+        let values = StringArray::from_iter_values(["a", "b", "c"]);
+        // value "b" is never used
+        let keys =
+            Int8Array::from_iter(vec![Some(0), Some(0), Some(0), Some(0), None, Some(2)]);
+        let arrays =
+            vec![
+                Arc::new(DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap())
+                    as ArrayRef,
+            ];
+        let agg = DistinctCount::new(
+            arrays[0].data_type().clone(),
+            Arc::new(NoOp::new()),
+            String::from("__col_name__"),
+        );
+        let mut accum = agg.create_accumulator()?;
+        accum.update_batch(&arrays)?;
+        // should evaluate to 2 since "b" never seen
+        assert_eq!(accum.evaluate()?, ScalarValue::Int64(Some(2)));
+        // now update with a new batch that does use "b"
+        let values = StringArray::from_iter_values(["a", "b", "c"]);
+        let keys = Int8Array::from_iter(vec![Some(1), Some(1), None]);
+        let arrays =
+            vec![
+                Arc::new(DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap())
+                    as ArrayRef,
+            ];
+        accum.update_batch(&arrays)?;
+        assert_eq!(accum.evaluate()?, ScalarValue::Int64(Some(3)));
+        Ok(())
+    }
+
+    #[test]
+    fn count_distinct_dict_merge() -> Result<()> {
+        let values = StringArray::from_iter_values(["a", "b", "c"]);
+        let keys = Int8Array::from_iter(vec![Some(0), Some(0), None]);
+        let arrays =
+            vec![
+                Arc::new(DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap())
+                    as ArrayRef,
+            ];
+        let agg = DistinctCount::new(
+            arrays[0].data_type().clone(),
+            Arc::new(NoOp::new()),
+            String::from("__col_name__"),
+        );
+        // create accum with 1 value seen
+        let mut accum = agg.create_accumulator()?;
+        accum.update_batch(&arrays)?;
+        assert_eq!(accum.evaluate()?, ScalarValue::Int64(Some(1)));
+        // create accum with state that has seen "a" and "b" but not "c"
+        let values = StringArray::from_iter_values(["a", "b", "c"]);
+        let keys = Int8Array::from_iter(vec![Some(0), Some(1), None]);
+        let arrays =
+            vec![
+                Arc::new(DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap())
+                    as ArrayRef,
+            ];
+        let mut accum2 = agg.create_accumulator()?;
+        accum2.update_batch(&arrays)?;
+        let states = accum2
+            .state()?
+            .into_iter()
+            .map(|v| v.to_array())
+            .collect::<Vec<_>>();
+        // after merging the accumulator should have seen 2 vals
+        accum.merge_batch(&states)?;
+        assert_eq!(accum.evaluate()?, ScalarValue::Int64(Some(2)));
+        Ok(())
+    }
+
+    #[test]
+    fn count_distinct_dict_merge_inits_state() -> Result<()> {
+        let values = StringArray::from_iter_values(["a", "b", "c"]);
+        let keys = Int8Array::from_iter(vec![Some(0), Some(1), None]);
+        let arrays =
+            vec![
+                Arc::new(DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap())
+                    as ArrayRef,
+            ];
+        let agg = DistinctCount::new(
+            arrays[0].data_type().clone(),
+            Arc::new(NoOp::new()),
+            String::from("__col_name__"),
+        );
+        // create accum to get a state from
+        let mut accum = agg.create_accumulator()?;
+        accum.update_batch(&arrays)?;
+        let states = accum
+            .state()?
+            .into_iter()
+            .map(|v| v.to_array())
+            .collect::<Vec<_>>();
+        // create accum that hasnt been initialized
+        // the merge_batch should initialize its state
+        let mut accum2 = agg.create_accumulator()?;
+        accum2.merge_batch(&states)?;
+        assert_eq!(accum2.evaluate()?, ScalarValue::Int64(Some(2)));
         Ok(())
     }
 }
