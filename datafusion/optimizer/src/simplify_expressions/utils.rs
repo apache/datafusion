@@ -318,7 +318,7 @@ pub fn negate_clause(expr: Expr) -> Expr {
 ///    ~(A | B) ===> ~A & ~B
 ///    ~(~A) ===> A
 /// For others, use Negative clause
-pub fn negative_clause(expr: Expr) -> Expr {
+pub fn distribute_negation(expr: Expr) -> Expr {
     match expr {
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
             match op {
@@ -344,6 +344,7 @@ pub fn negative_clause(expr: Expr) -> Expr {
         }
         // ~(~A) ===> A
         Expr::Negative(expr) => *expr,
+        // use negative clause
         _ => Expr::Negative(Box::new(expr)),
     }
 }

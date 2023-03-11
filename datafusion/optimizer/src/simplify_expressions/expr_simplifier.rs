@@ -1005,7 +1005,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             //
             // Rules for Negative
             //
-            Expr::Negative(inner) => negative_clause(*inner),
+            Expr::Negative(inner) => distribute_negation(*inner),
 
             //
             // Rules for Case
