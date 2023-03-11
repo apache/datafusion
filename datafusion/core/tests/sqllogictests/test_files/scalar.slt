@@ -22,11 +22,13 @@
 statement ok
 CREATE TABLE t1(
   a INT,
-  b INT
+  b INT,
+  c INT,
+  d INT
 ) as VALUES
-  (1, 100), 
-  (2, 1000), 
-  (3, 10000)
+  (1, 100, 567, 1024), 
+  (2, 1000, 123, 256), 
+  (3, 10000, 978, 2048)
 ;
 
 # log scalar function
@@ -68,3 +70,43 @@ query RR rowsort
 select log(0) a, log(1, 64) b
 ----
 -Infinity Infinity
+
+# bitwise and with column and scalar
+query I rowsort
+select c & 856 from t1;
+----
+528
+848
+88
+
+# bitwise or with column and scalar
+query I rowsort
+select c | 856 from t1;
+----
+891
+895
+986
+
+# bitwise xor with column and scalar
+query I rowsort
+select c ^ 856 from t1;
+----
+138
+367
+803
+
+# right shift with column and scalar
+query I rowsort
+select d >> 2 from t1;
+----
+256
+512
+64
+
+# left shift with column and scalar
+query I rowsort
+select d << 2 from t1;
+----
+1024
+4096
+8192

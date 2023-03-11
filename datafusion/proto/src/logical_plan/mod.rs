@@ -496,10 +496,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                 };
 
                 let file_type = create_extern_table.file_type.as_str();
-                let env = ctx.runtime_env();
-                if !env.table_factories.contains_key(file_type) {
+                if ctx.table_factory(file_type).is_none() {
                     Err(DataFusionError::Internal(format!(
-                        "No TableProvider for file type: {file_type}"
+                        "No TableProviderFactory for file type: {file_type}"
                     )))?
                 }
 
@@ -1377,6 +1376,7 @@ mod roundtrip_tests {
     };
     use datafusion::datasource::datasource::TableProviderFactory;
     use datafusion::datasource::TableProvider;
+    use datafusion::execution::context::SessionState;
     use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::prelude::{
@@ -1387,7 +1387,7 @@ mod roundtrip_tests {
     use datafusion_expr::expr::{
         self, Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort,
     };
-    use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
+    use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
     use datafusion_expr::{
         col, lit, Accumulator, AggregateFunction,
         BuiltinScalarFunction::{Sqrt, Substr},
@@ -1397,7 +1397,6 @@ mod roundtrip_tests {
         create_udaf, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction,
     };
     use prost::Message;
-    use std::any::Any;
     use std::collections::HashMap;
     use std::fmt;
     use std::fmt::Debug;
@@ -1523,10 +1522,13 @@ mod roundtrip_tests {
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
             HashMap::new();
         table_factories.insert("TESTTABLE".to_string(), Arc::new(TestTableFactory {}));
-        let cfg = RuntimeConfig::new().with_table_factories(table_factories);
+        let cfg = RuntimeConfig::new();
         let env = RuntimeEnv::new(cfg).unwrap();
         let ses = SessionConfig::new();
-        let ctx = SessionContext::with_config_rt(ses, Arc::new(env));
+        let mut state = SessionState::with_config_rt(ses, Arc::new(env));
+        // replace factories
+        *state.table_factories_mut() = table_factories;
+        let ctx = SessionContext::with_state(state);
 
         let sql = "CREATE EXTERNAL TABLE t STORED AS testtable LOCATION 's3://bucket/schema/table';";
         ctx.sql(sql).await.unwrap();
@@ -1660,9 +1662,9 @@ mod roundtrip_tests {
         }
     }
 
-    impl UserDefinedLogicalNode for TopKPlanNode {
-        fn as_any(&self) -> &dyn Any {
-            self
+    impl UserDefinedLogicalNodeCore for TopKPlanNode {
+        fn name(&self) -> &str {
+            "TopK"
         }
 
         fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -1683,31 +1685,14 @@ mod roundtrip_tests {
             write!(f, "TopK: k={}", self.k)
         }
 
-        fn from_template(
-            &self,
-            exprs: &[Expr],
-            inputs: &[LogicalPlan],
-        ) -> Arc<dyn UserDefinedLogicalNode> {
+        fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
             assert_eq!(inputs.len(), 1, "input size inconsistent");
             assert_eq!(exprs.len(), 1, "expression size inconsistent");
-            Arc::new(TopKPlanNode {
+            Self {
                 k: self.k,
                 input: inputs[0].clone(),
                 expr: exprs[0].clone(),
-            })
-        }
-
-        fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool {
-            match other.as_any().downcast_ref::<Self>() {
-                Some(o) => self == o,
-                None => false,
             }
-        }
-
-        fn dyn_hash(&self, state: &mut dyn std::hash::Hasher) {
-            use std::hash::Hash;
-            let mut s = state;
-            self.hash(&mut s);
         }
     }
 
@@ -2113,8 +2098,11 @@ mod roundtrip_tests {
             DataType::Float16,
             DataType::Float32,
             DataType::Float64,
-            // Add more timestamp tests
+            DataType::Timestamp(TimeUnit::Second, None),
             DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
             DataType::Date32,
             DataType::Date64,
             DataType::Time32(TimeUnit::Second),

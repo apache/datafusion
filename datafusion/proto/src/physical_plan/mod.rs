@@ -536,7 +536,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     filter,
                     &join_type.into(),
                     partition_mode,
-                    &hashjoin.null_equals_null,
+                    hashjoin.null_equals_null,
                 )?))
             }
             PhysicalPlanType::Union(union) => {
@@ -827,7 +827,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         on,
                         join_type: join_type.into(),
                         partition_mode: partition_mode.into(),
-                        null_equals_null: *exec.null_equals_null(),
+                        null_equals_null: exec.null_equals_null(),
                         filter,
                     },
                 ))),
@@ -956,15 +956,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )),
             })
         } else if let Some(exec) = plan.downcast_ref::<ParquetExec>() {
-            let pruning_expr = exec
-                .pruning_predicate()
-                .map(|pred| pred.orig_expr().clone().try_into())
+            let predicate = exec
+                .predicate()
+                .map(|pred| pred.clone().try_into())
                 .transpose()?;
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ParquetScan(
                     protobuf::ParquetScanExecNode {
                         base_conf: Some(exec.base_config().try_into()?),
-                        predicate: pruning_expr,
+                        predicate,
                     },
                 )),
             })
@@ -1367,7 +1367,7 @@ mod roundtrip_tests {
                     None,
                     join_type,
                     *partition_mode,
-                    &false,
+                    false,
                 )?))?;
             }
         }

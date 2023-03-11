@@ -821,9 +821,8 @@ mod tests {
     use datafusion_expr::{
         and, col, in_list, in_subquery, lit, logical_plan::JoinType, or, sum, BinaryExpr,
         Expr, Extension, LogicalPlanBuilder, Operator, TableSource, TableType,
-        UserDefinedLogicalNode,
+        UserDefinedLogicalNodeCore,
     };
-    use std::any::Any;
     use std::fmt::{Debug, Formatter};
     use std::sync::Arc;
 
@@ -1080,9 +1079,9 @@ mod tests {
         schema: DFSchemaRef,
     }
 
-    impl UserDefinedLogicalNode for NoopPlan {
-        fn as_any(&self) -> &dyn Any {
-            self
+    impl UserDefinedLogicalNodeCore for NoopPlan {
+        fn name(&self) -> &str {
+            "NoopPlan"
         }
 
         fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -1108,28 +1107,11 @@ mod tests {
             write!(f, "NoopPlan")
         }
 
-        fn from_template(
-            &self,
-            _exprs: &[Expr],
-            inputs: &[LogicalPlan],
-        ) -> Arc<dyn UserDefinedLogicalNode> {
-            Arc::new(Self {
+        fn from_template(&self, _exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
+            Self {
                 input: inputs.to_vec(),
                 schema: self.schema.clone(),
-            })
-        }
-
-        fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool {
-            match other.as_any().downcast_ref::<Self>() {
-                Some(o) => self == o,
-                None => false,
             }
-        }
-
-        fn dyn_hash(&self, state: &mut dyn std::hash::Hasher) {
-            use std::hash::Hash;
-            let mut s = state;
-            self.hash(&mut s);
         }
     }
 
