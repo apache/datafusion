@@ -19,7 +19,6 @@
 //! The nested loop join can execute in parallel by partitions and it is
 //! determined by the [`JoinType`].
 
-use crate::physical_plan::common::{OperatorMemoryReservation, SharedMemoryReservation};
 use crate::physical_plan::joins::utils::{
     adjust_right_output_partitioning, append_right_indices, apply_join_filter_to_indices,
     build_batch_from_indices, build_join_schema, check_join_is_valid,
@@ -43,7 +42,6 @@ use datafusion_common::{DataFusionError, Statistics};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortExpr};
 use futures::{ready, Stream, StreamExt, TryStreamExt};
-use parking_lot::Mutex;
 use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
@@ -51,7 +49,9 @@ use std::task::Poll;
 
 use crate::error::Result;
 use crate::execution::context::TaskContext;
-use crate::execution::memory_pool::MemoryConsumer;
+use crate::execution::memory_pool::{
+    MemoryConsumer, SharedMemoryReservation, SharedOptionalMemoryReservation, TryGrow,
+};
 use crate::physical_plan::coalesce_batches::concat_batches;
 
 /// Data of the inner table side
@@ -92,7 +92,7 @@ pub struct NestedLoopJoinExec {
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// Operator-level memory reservation for left data
-    reservation: OperatorMemoryReservation,
+    reservation: SharedOptionalMemoryReservation,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -202,27 +202,14 @@ impl ExecutionPlan for NestedLoopJoinExec {
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
         // Initialization of operator-level reservation
-        {
-            let mut operator_reservation_lock = self.reservation.lock();
-            if operator_reservation_lock.is_none() {
-                *operator_reservation_lock = Some(Arc::new(Mutex::new(
-                    MemoryConsumer::new("NestedLoopJoinExec")
-                        .register(context.memory_pool()),
-                )));
-            };
-        }
-
-        let operator_reservation = self.reservation.lock().clone().ok_or_else(|| {
-            DataFusionError::Internal(
-                "Operator-level memory reservation is not initialized".to_string(),
-            )
-        })?;
+        self.reservation
+            .initialize("NestedLoopJoinExec", context.memory_pool());
 
         // Inititalization of stream-level reservation
-        let reservation = Arc::new(Mutex::new(
+        let reservation = SharedMemoryReservation::from(
             MemoryConsumer::new(format!("NestedLoopJoinStream[{partition}]"))
                 .register(context.memory_pool()),
-        ));
+        );
 
         let (outer_table, inner_table) = if left_is_build_side(self.join_type) {
             // left must be single partition
@@ -232,7 +219,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
                     self.left.clone(),
                     context.clone(),
                     join_metrics.clone(),
-                    operator_reservation.clone(),
+                    Arc::new(self.reservation.clone()),
                 )
             });
             let outer_table = self.right.execute(partition, context)?;
@@ -245,7 +232,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
                     self.right.clone(),
                     context.clone(),
                     join_metrics.clone(),
-                    operator_reservation.clone(),
+                    Arc::new(self.reservation.clone()),
                 )
             });
             let outer_table = self.left.execute(partition, context)?;
@@ -327,7 +314,7 @@ async fn load_specified_partition_of_input(
     input: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
     join_metrics: BuildProbeJoinMetrics,
-    reservation: SharedMemoryReservation,
+    reservation: Arc<dyn TryGrow>,
 ) -> Result<JoinLeftData> {
     let stream = input.execute(partition, context)?;
 
@@ -338,7 +325,7 @@ async fn load_specified_partition_of_input(
             |mut acc, batch| async {
                 let batch_size = batch.get_array_memory_size();
                 // Reserve memory for incoming batch
-                acc.3.lock().try_grow(batch_size)?;
+                acc.3.try_grow(batch_size)?;
                 // Update metrics
                 acc.2.build_mem_used.add(batch_size);
                 acc.2.build_input_batches.add(1);
@@ -436,7 +423,7 @@ impl NestedLoopJoinStream {
             // TODO: Replace `ceil` wrapper with stable `div_cell` after
             // https://github.com/rust-lang/rust/issues/88581
             let visited_bitmap_size = bit_util::ceil(left_data.num_rows(), 8);
-            self.reservation.lock().try_grow(visited_bitmap_size)?;
+            self.reservation.try_grow(visited_bitmap_size)?;
             self.join_metrics.build_mem_used.add(visited_bitmap_size);
         }
 
