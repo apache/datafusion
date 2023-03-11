@@ -298,13 +298,8 @@ where
             // init state
             self.state = Some((0..nvalues).map(|_| false).collect());
         }
-        for key in arr.keys_iter() {
-            if let Some(idx) = key {
-                self.state
-                    .as_mut()
-                    // state always will have been initialized at this point
-                    .unwrap()[idx] = true;
-            }
+        for idx in arr.keys_iter().flatten() {
+            self.state.as_mut().unwrap()[idx] = true;
         }
         Ok(())
     }
