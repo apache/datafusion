@@ -17,6 +17,7 @@
 
 //! DateTime expressions
 
+use arrow::array::Float64Builder;
 use arrow::compute::cast;
 use arrow::{
     array::TimestampNanosecondArray, compute::kernels::temporal, datatypes::TimeUnit,
@@ -478,6 +479,7 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         "millisecond" => extract_date_part!(&array, millis),
         "microsecond" => extract_date_part!(&array, micros),
         "nanosecond" => extract_date_part!(&array, nanos),
+        "epoch" => extract_date_part!(&array, epoch),
         _ => Err(DataFusionError::Execution(format!(
             "Date part '{date_part}' not supported"
         ))),
@@ -535,6 +537,35 @@ where
     i64: From<T::Native>,
 {
     to_ticks(array, 1_000_000_000)
+}
+
+fn epoch<T>(array: &PrimitiveArray<T>) -> Result<Float64Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    let mut b = Float64Builder::with_capacity(array.len());
+    match array.data_type() {
+        DataType::Timestamp(tu, _) => {
+            for i in 0..array.len() {
+                if array.is_null(i) {
+                    b.append_null();
+                } else {
+                    let scale = match tu {
+                        TimeUnit::Second => 1,
+                        TimeUnit::Millisecond => 1_000,
+                        TimeUnit::Microsecond => 1_000_000,
+                        TimeUnit::Nanosecond => 1_000_000_000,
+                    };
+
+                    let n: i64 = array.value(i).into();
+                    b.append_value(n as f64 / scale as f64);
+                }
+            }
+        }
+        _ => return Err(DataFusionError::Internal("Invalid data type".to_string())),
+    }
+    Ok(b.finish())
 }
 
 #[cfg(test)]

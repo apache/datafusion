@@ -1314,6 +1314,23 @@ async fn test_extract_date_part() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_extract_epoch() -> Result<()> {
+    // test_expression!(
+    //     "extract(epoch from '2070-01-01T07:29:10.256'::timestamp)",
+    //     "-4554981058.744"
+    // );
+    // test_expression!(
+    //     "extract(epoch from '2000-01-01T00:00:00.000'::timestamp)",
+    //     "946684800.0"
+    // );
+    test_expression!(
+        "extract(epoch from to_timestamp('2000-01-01T00:00:00+00:00'))",
+        "946684800.0"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_extract_date_part_func() -> Result<()> {
     test_expression!(
         format!(
