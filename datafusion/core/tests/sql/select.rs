@@ -763,11 +763,11 @@ async fn query_on_string_dictionary() -> Result<()> {
     let sql = "SELECT COUNT(d1) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-----------+",
-        "| COUNT(d1) |",
-        "+-----------+",
-        "| 2         |",
-        "+-----------+",
+        "+----------------+",
+        "| COUNT(test.d1) |",
+        "+----------------+",
+        "| 2              |",
+        "+----------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
