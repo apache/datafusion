@@ -18,7 +18,7 @@
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{plan_err, Column, DFSchemaRef};
+use datafusion_common::{plan_err, Column, DFSchemaRef, DataFusionError};
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr::{BinaryExpr, Sort};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
@@ -30,7 +30,7 @@ use datafusion_expr::{
     logical_plan::{Filter, LogicalPlan},
     Expr, Operator,
 };
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
 /// Convenience rule for writing optimizers: recursively invoke
@@ -503,6 +503,23 @@ pub(crate) fn extract_join_filters(
     } else {
         Ok((vec![], maybe_filter.clone()))
     }
+}
+
+pub(crate) fn collect_subquery_cols(
+    exprs: &[Expr],
+    subquery_schema: DFSchemaRef,
+) -> Result<BTreeSet<Column>> {
+    exprs.iter().try_fold(BTreeSet::new(), |mut cols, expr| {
+        let mut using_cols: Vec<Column> = vec![];
+        for col in expr.to_columns()?.into_iter() {
+            if subquery_schema.has_column(&col) {
+                using_cols.push(col);
+            }
+        }
+
+        cols.extend(using_cols);
+        Result::<_, DataFusionError>::Ok(cols)
+    })
 }
 
 #[cfg(test)]
