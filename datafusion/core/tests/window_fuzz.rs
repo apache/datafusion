@@ -254,7 +254,7 @@ fn get_random_window_frame(rng: &mut StdRng) -> WindowFrame {
             }
             window_frame
         }
-        // For both Rows and Groups window queries, window frame boundary should be Uint64
+        // Window frame boundary should be UInt64 for both ROWS and GROUPS frames:
         WindowFrameUnits::Rows | WindowFrameUnits::Groups => {
             let start_bound = if start_bound.is_preceding {
                 WindowFrameBound::Preceding(ScalarValue::UInt64(Some(

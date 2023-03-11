@@ -35,7 +35,7 @@ use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::WindowFrame;
 
 /// A window expr that takes the form of a built in window function
@@ -139,20 +139,18 @@ impl WindowExpr for BuiltInWindowExpr {
         let out_type = field.data_type();
         let sort_options = self.order_by.iter().map(|o| o.options).collect::<Vec<_>>();
         for (partition_row, partition_batch_state) in partition_batches.iter() {
-            if !window_agg_state.contains_key(partition_row) {
-                let evaluator = self.expr.create_evaluator()?;
-                window_agg_state.insert(
-                    partition_row.clone(),
-                    WindowState {
-                        state: WindowAggState::new(out_type)?,
-                        window_fn: WindowFn::Builtin(evaluator),
-                    },
-                );
-            };
             let window_state =
-                window_agg_state.get_mut(partition_row).ok_or_else(|| {
-                    DataFusionError::Execution("Cannot find state".to_string())
-                })?;
+                if let Some(window_state) = window_agg_state.get_mut(partition_row) {
+                    window_state
+                } else {
+                    let evaluator = self.expr.create_evaluator()?;
+                    window_agg_state
+                        .entry(partition_row.clone())
+                        .or_insert(WindowState {
+                            state: WindowAggState::new(out_type)?,
+                            window_fn: WindowFn::Builtin(evaluator),
+                        })
+                };
             let evaluator = match &mut window_state.window_fn {
                 WindowFn::Builtin(evaluator) => evaluator,
                 _ => unreachable!(),
@@ -165,18 +163,6 @@ impl WindowExpr for BuiltInWindowExpr {
             // We iterate on each row to perform a running calculation.
             let record_batch = &partition_batch_state.record_batch;
             let num_rows = record_batch.num_rows();
-            let last_range = state.window_frame_range.clone();
-            let mut window_frame_ctx =
-                if let Some(window_frame_ctx) = &state.window_frame_ctx {
-                    window_frame_ctx.clone()
-                } else {
-                    WindowFrameContext::new(
-                        self.window_frame.clone(),
-                        sort_options.clone(),
-                        // Start search from the last range
-                        last_range,
-                    )
-                };
             let sort_partition_points = if evaluator.include_rank() {
                 let columns = self.sort_columns(record_batch)?;
                 self.evaluate_partition_points(num_rows, &columns)?
@@ -186,7 +172,17 @@ impl WindowExpr for BuiltInWindowExpr {
             let mut row_wise_results: Vec<ScalarValue> = vec![];
             for idx in state.last_calculated_index..num_rows {
                 let frame_range = if self.expr.uses_window_frame() {
-                    window_frame_ctx.calculate_range(&order_bys, num_rows, idx)
+                    state
+                        .window_frame_ctx
+                        .get_or_insert_with(|| {
+                            WindowFrameContext::new(
+                                self.window_frame.clone(),
+                                sort_options.clone(),
+                                // Start search from the last range
+                                state.window_frame_range.clone(),
+                            )
+                        })
+                        .calculate_range(&order_bys, num_rows, idx)
                 } else {
                     evaluator.get_range(state, num_rows)
                 }?;
@@ -206,7 +202,6 @@ impl WindowExpr for BuiltInWindowExpr {
                 ScalarValue::iter_to_array(row_wise_results.into_iter())?
             };
 
-            state.window_frame_ctx = Some(window_frame_ctx);
             state.update(&out_col, partition_batch_state)?;
             if self.window_frame.start_bound.is_unbounded() {
                 let mut evaluator_state = evaluator.state()?;
@@ -237,7 +232,6 @@ impl WindowExpr for BuiltInWindowExpr {
     }
 
     fn uses_bounded_memory(&self) -> bool {
-        // NOTE: Currently, groups queries do not support the bounded memory variant.
         self.expr.supports_bounded_execution()
             && (!self.expr.uses_window_frame()
                 || !self.window_frame.end_bound.is_unbounded())

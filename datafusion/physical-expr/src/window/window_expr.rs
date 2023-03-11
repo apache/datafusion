@@ -214,33 +214,26 @@ pub trait AggregateWindowExpr: WindowExpr {
             let state = &mut window_state.state;
             let record_batch = &partition_batch_state.record_batch;
 
-            // If window_frame_ctx is None initialize it.
-            if state.window_frame_ctx.is_none() {
+            // If there is no window state context, initialize it.
+            let window_frame_ctx = state.window_frame_ctx.get_or_insert_with(|| {
                 let sort_options: Vec<SortOptions> =
                     self.order_by().iter().map(|o| o.options).collect();
-                let window_frame_ctx = WindowFrameContext::new(
+                WindowFrameContext::new(
                     self.get_window_frame().clone(),
                     sort_options,
                     // Start search from the last range
                     state.window_frame_range.clone(),
-                );
-                state.window_frame_ctx = Some(window_frame_ctx);
-            }
-            if let Some(window_frame_ctx) = &mut state.window_frame_ctx {
-                let out_col = self.get_result_column(
-                    accumulator,
-                    record_batch,
-                    &mut state.window_frame_range,
-                    window_frame_ctx,
-                    &mut state.last_calculated_index,
-                    !partition_batch_state.is_end,
-                )?;
-                state.update(&out_col, partition_batch_state)?;
-            } else {
-                return Err(DataFusionError::Execution(
-                    "window_frame_ctx cannot be None.".to_string(),
-                ));
-            }
+                )
+            });
+            let out_col = self.get_result_column(
+                accumulator,
+                record_batch,
+                &mut state.window_frame_range,
+                window_frame_ctx,
+                &mut state.last_calculated_index,
+                !partition_batch_state.is_end,
+            )?;
+            state.update(&out_col, partition_batch_state)?;
         }
         Ok(())
     }
@@ -379,7 +372,7 @@ pub struct WindowAggState {
 }
 
 impl WindowAggState {
-    pub fn prune_state(&mut self, n_prune: usize) -> Result<()> {
+    pub fn prune_state(&mut self, n_prune: usize) {
         self.window_frame_range = Range {
             start: self.window_frame_range.start - n_prune,
             end: self.window_frame_range.end - n_prune,
@@ -387,39 +380,33 @@ impl WindowAggState {
         self.last_calculated_index -= n_prune;
         self.offset_pruned_rows += n_prune;
 
-        if let Some(elem) = self.window_frame_ctx.as_mut() {
-            match elem {
-                // Rows have no state do nothing
-                WindowFrameContext::Rows(_) => {}
-                WindowFrameContext::Range { state, .. } => {
-                    state.last_range = Range {
-                        start: state.last_range.start.saturating_sub(n_prune),
-                        end: state.last_range.end.saturating_sub(n_prune),
-                    };
-                }
-                WindowFrameContext::Groups { state, .. } => {
-                    let mut n_group_to_del = 0;
-                    state.group_end_indices.retain_mut(|(_, start_idx)| {
-                        if n_prune >= *start_idx {
-                            n_group_to_del += 1;
-                            false
-                        } else {
-                            true
-                        }
-                    });
-                    state
-                        .group_end_indices
-                        .iter_mut()
-                        .for_each(|(_, start_idx)| *start_idx -= n_prune);
-                    state.current_group_idx -= n_group_to_del;
-                }
+        match self.window_frame_ctx.as_mut() {
+            // Rows have no state do nothing
+            Some(WindowFrameContext::Rows(_)) => {}
+            Some(WindowFrameContext::Range { state, .. }) => {
+                state.last_range = Range {
+                    start: state.last_range.start.saturating_sub(n_prune),
+                    end: state.last_range.end.saturating_sub(n_prune),
+                };
             }
-            Ok(())
-        } else {
-            Err(DataFusionError::Execution(
-                "Window frame context cannot be empty".to_string(),
-            ))
-        }
+            Some(WindowFrameContext::Groups { state, .. }) => {
+                let mut n_group_to_del = 0;
+                state.group_end_indices.retain_mut(|(_, start_idx)| {
+                    if n_prune >= *start_idx {
+                        n_group_to_del += 1;
+                        false
+                    } else {
+                        true
+                    }
+                });
+                state
+                    .group_end_indices
+                    .iter_mut()
+                    .for_each(|(_, start_idx)| *start_idx -= n_prune);
+                state.current_group_idx -= n_group_to_del;
+            }
+            None => {}
+        };
     }
 }
 

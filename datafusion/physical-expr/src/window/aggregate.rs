@@ -159,7 +159,6 @@ impl WindowExpr for PlainAggregateWindowExpr {
     }
 
     fn uses_bounded_memory(&self) -> bool {
-        // NOTE: Currently, groups queries do not support the bounded memory variant.
         self.aggregate.supports_bounded_execution()
             && !self.window_frame.end_bound.is_unbounded()
     }

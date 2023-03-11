@@ -30,7 +30,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 /// This object stores the window frame state for use in incremental calculations.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum WindowFrameContext {
     /// ROWS frames are inherently stateless.
     Rows(Arc<WindowFrame>),
@@ -166,7 +166,7 @@ impl WindowFrameContext {
 /// row count.
 /// Attribute `sort_options` stores the column ordering specified by the ORDER
 /// BY clause. This information is used to calculate the range.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct WindowFrameStateRange {
     pub last_range: Range<usize>,
     sort_options: Vec<SortOptions>,
@@ -332,9 +332,9 @@ impl WindowFrameStateRange {
 //                        last row of the group that comes "offset" groups after the current group.
 //    - UNBOUNDED FOLLOWING: End with the last row of the partition. Possible only in frame_end.
 
-// This structure encapsulates all the state information we require as we
-// scan groups of data while processing window frames.
-#[derive(Debug, Default, Clone)]
+/// This structure encapsulates all the state information we require as we
+/// scan groups of data while processing window frames.
+#[derive(Debug, Default)]
 pub struct WindowFrameStateGroups {
     /// A tuple containing group values and the row index where the group ends.
     /// Example: [[1, 1], [1, 1], [2, 1], [2, 1], ...] would correspond to
@@ -439,9 +439,9 @@ impl WindowFrameStateGroups {
         if let Some((group_row, group_end)) = last_group {
             if *group_end < length {
                 let new_group_row = get_row_at_idx(range_columns, *group_end)?;
-                // Last group key and current group key are same. We need to extend last group
+                // If last/current group keys are the same, we extend the last group:
                 if new_group_row.eq(group_row) {
-                    // Update end boundary of the group (search right boundary):
+                    // Update the end boundary of the group (search right boundary):
                     *group_end = search_in_slice(
                         range_columns,
                         group_row,

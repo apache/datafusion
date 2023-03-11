@@ -548,9 +548,9 @@ impl SortedPartitionByBoundedWindowStream {
             for (partition_row, WindowState { state: value, .. }) in window_agg_state {
                 let n_prune =
                     min(value.window_frame_range.start, value.last_calculated_index);
-                if let Some(state) = n_prune_each_partition.get_mut(partition_row) {
-                    if n_prune < *state {
-                        *state = n_prune;
+                if let Some(current) = n_prune_each_partition.get_mut(partition_row) {
+                    if n_prune < *current {
+                        *current = n_prune;
                     }
                 } else {
                     n_prune_each_partition.insert(partition_row.clone(), n_prune);
@@ -571,9 +571,7 @@ impl SortedPartitionByBoundedWindowStream {
 
             // Update state indices since we have pruned some rows from the beginning:
             for window_agg_state in self.window_agg_states.iter_mut() {
-                let window_state =
-                    window_agg_state.get_mut(partition_row).ok_or_else(err)?;
-                window_state.state.prune_state(*n_prune)?;
+                window_agg_state[partition_row].state.prune_state(*n_prune);
             }
         }
         Ok(())
