@@ -34,6 +34,22 @@ members = [
     "benchmarks",
 ]
 
+[workspace.package]
+version = "20.0.0"
+edition = "2021"
+readme = "README.md"
+authors = ["Apache Arrow <dev@arrow.apache.org>"]
+license = "Apache-2.0"
+homepage = "https://github.com/apache/arrow-datafusion"
+repository = "https://github.com/apache/arrow-datafusion"
+rust-version = "1.64"
+
+[workspace.dependencies]
+arrow = { version = "34.0.0", features = ["prettyprint"] }
+arrow-buffer = "34.0.0"
+arrow-schema = "34.0.0"
+parquet = { version = "34.0.0", features = ["arrow", "async"] }
+
 [profile.release]
 codegen-units = 1
 lto = true

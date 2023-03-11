@@ -151,8 +151,9 @@ fn where_exists_distinct() -> Result<()> {
     let plan = test_sql(sql)?;
     let expected = "LeftSemi Join: test.col_int32 = t2.col_int32\
     \n  TableScan: test projection=[col_int32]\
-    \n  SubqueryAlias: t2\
-    \n    TableScan: test projection=[col_int32]";
+    \n  Aggregate: groupBy=[[t2.col_int32]], aggr=[[]]\
+    \n    SubqueryAlias: t2\
+    \n      TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }

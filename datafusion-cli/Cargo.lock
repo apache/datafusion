@@ -356,9 +356,9 @@ dependencies = [
 
 [[package]]
 name = "block-buffer"
-version = "0.10.3"
+version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69cce20737498f97b993470a6e536b8523f0af7892a4f928cceb1ac5e52ebe7e"
+checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
 ]
@@ -670,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -717,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -735,7 +735,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-execution"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
  "dashmap",
  "datafusion-common",
@@ -763,7 +763,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -774,7 +774,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-optimizer"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -790,7 +790,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -820,7 +820,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-row"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
  "arrow-schema",
  "datafusion-common",
@@ -1464,9 +1464,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.139"
+version = "0.2.140"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "201de327520df007757c1f0adce6e827fe8562fbc28bfd9c15571c66ca1f5f79"
+checksum = "99227334921fae1a979cf0bfdfcc6b3e5ce376ef57e16fb6fb3ea2ed6095f80c"
 
 [[package]]
 name = "libm"
@@ -2621,9 +2621,9 @@ dependencies = [
 
 [[package]]
 name = "utf8parse"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "936e4b492acfd135421d8dca4b1aa80a7bfc26e702ef3af710e0752684df5372"
+checksum = "711b9620af191e0cdc7468a8d14e709c3dcdb115b36f838e601583af800a370a"
 
 [[package]]
 name = "uuid"
