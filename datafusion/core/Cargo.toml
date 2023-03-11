@@ -88,7 +88,6 @@ num_cpus = "1.13.0"
 object_store = "0.5.4"
 parking_lot = "0.12"
 parquet = { workspace = true }
-paste = "^1.0"
 percent-encoding = "2.2.0"
 pin-project-lite = "^0.2.7"
 rand = "0.8"
