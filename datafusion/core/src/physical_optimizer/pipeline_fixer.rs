@@ -710,7 +710,7 @@ mod hash_join_tests {
             None,
             &t.initial_join_type,
             t.initial_mode,
-            &false,
+            false,
         )?;
 
         let initial_hash_join_state = PipelineStatePropagator {
