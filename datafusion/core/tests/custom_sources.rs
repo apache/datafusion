@@ -264,8 +264,8 @@ async fn optimizers_catch_all_statistics() {
     let expected = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("COUNT(UInt8(1))", DataType::Int64, false),
-            Field::new("MIN(c1)", DataType::Int32, false),
-            Field::new("MAX(c1)", DataType::Int32, false),
+            Field::new("MIN(test.c1)", DataType::Int32, false),
+            Field::new("MAX(test.c1)", DataType::Int32, false),
         ])),
         vec![
             Arc::new(Int64Array::from_slice([4])),

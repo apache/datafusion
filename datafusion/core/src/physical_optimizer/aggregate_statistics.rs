@@ -189,10 +189,9 @@ fn take_optimizable_column_count(
                     ..
                 } = &col_stats[col_expr.index()]
                 {
-                    let expr = format!("COUNT({})", col_expr.name());
                     return Some((
                         ScalarValue::Int64(Some((num_rows - val) as i64)),
-                        expr,
+                        casted_expr.name().to_string(),
                     ));
                 }
             }
@@ -221,7 +220,7 @@ fn take_optimizable_min(
                     ..
                 } = &col_stats[col_expr.index()]
                 {
-                    return Some((val.clone(), format!("MIN({})", col_expr.name())));
+                    return Some((val.clone(), casted_expr.name().to_string()));
                 }
             }
         }
@@ -249,7 +248,7 @@ fn take_optimizable_max(
                     ..
                 } = &col_stats[col_expr.index()]
                 {
-                    return Some((val.clone(), format!("MAX({})", col_expr.name())));
+                    return Some((val.clone(), casted_expr.name().to_string()));
                 }
             }
         }
