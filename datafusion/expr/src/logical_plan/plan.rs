@@ -24,8 +24,8 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::plan;
 use crate::utils::{
-    exprlist_to_fields, find_out_reference_exprs, from_plan, grouping_set_expr_count,
-    grouping_set_to_exprlist,
+    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs, from_plan,
+    grouping_set_expr_count, grouping_set_to_exprlist,
 };
 use crate::{
     build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
@@ -1827,6 +1827,7 @@ impl Aggregate {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
     ) -> datafusion_common::Result<Self> {
+        let group_expr = enumerate_grouping_sets(group_expr)?;
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
         let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
         validate_unique_names("Aggregations", all_expr.clone())?;
