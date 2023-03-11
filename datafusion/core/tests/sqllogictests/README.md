@@ -33,7 +33,6 @@ cargo test -p datafusion --test sqllogictests
 RUST_LOG=debug cargo test -p datafusion --test sqllogictests
 ```
 
-
 ```shell
 # Run only the tests in `information_schema.slt`
 cargo test -p datafusion --test sqllogictests -- information_schema
