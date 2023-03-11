@@ -316,6 +316,7 @@ pub fn negate_clause(expr: Expr) -> Expr {
 /// For BinaryExpr:
 ///    ~(A & B) ===> ~A | ~B
 ///    ~(A | B) ===> ~A & ~B
+/// For Negative:
 ///    ~(~A) ===> A
 /// For others, use Negative clause
 pub fn distribute_negation(expr: Expr) -> Expr {
@@ -324,15 +325,15 @@ pub fn distribute_negation(expr: Expr) -> Expr {
             match op {
                 // ~(A & B) ===> ~A | ~B
                 Operator::BitwiseAnd => {
-                    let left = negative_clause(*left);
-                    let right = negative_clause(*right);
+                    let left = distribute_negation(*left);
+                    let right = distribute_negation(*right);
 
                     bitwise_or(left, right)
                 }
                 // ~(A | B) ===> ~A & ~B
                 Operator::BitwiseOr => {
-                    let left = negative_clause(*left);
-                    let right = negative_clause(*right);
+                    let left = distribute_negation(*left);
+                    let right = distribute_negation(*right);
 
                     bitwise_and(left, right)
                 }
