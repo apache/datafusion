@@ -48,9 +48,6 @@ use arrow::compute::kernels::comparison::{
     eq_dyn_utf8_scalar, gt_dyn_utf8_scalar, gt_eq_dyn_utf8_scalar, lt_dyn_utf8_scalar,
     lt_eq_dyn_utf8_scalar, neq_dyn_utf8_scalar,
 };
-use arrow::compute::kernels::comparison::{
-    eq_scalar, gt_eq_scalar, gt_scalar, lt_eq_scalar, lt_scalar, neq_scalar,
-};
 use arrow::datatypes::*;
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
@@ -63,11 +60,12 @@ use kernels::{
 use kernels_arrow::{
     add_decimal_dyn_scalar, add_dyn_decimal, divide_decimal_dyn_scalar,
     divide_dyn_opt_decimal, is_distinct_from, is_distinct_from_bool,
-    is_distinct_from_decimal, is_distinct_from_null, is_distinct_from_utf8,
-    is_not_distinct_from, is_not_distinct_from_bool, is_not_distinct_from_decimal,
-    is_not_distinct_from_null, is_not_distinct_from_utf8, modulus_decimal,
-    modulus_decimal_scalar, multiply_decimal_dyn_scalar, multiply_dyn_decimal,
-    subtract_decimal_dyn_scalar, subtract_dyn_decimal,
+    is_distinct_from_decimal, is_distinct_from_f32, is_distinct_from_f64,
+    is_distinct_from_null, is_distinct_from_utf8, is_not_distinct_from,
+    is_not_distinct_from_bool, is_not_distinct_from_decimal, is_not_distinct_from_f32,
+    is_not_distinct_from_f64, is_not_distinct_from_null, is_not_distinct_from_utf8,
+    modulus_decimal, modulus_decimal_scalar, multiply_decimal_dyn_scalar,
+    multiply_dyn_decimal, subtract_decimal_dyn_scalar, subtract_dyn_decimal,
 };
 
 use arrow::datatypes::{DataType, Schema, TimeUnit};
@@ -153,9 +151,8 @@ impl std::fmt::Display for BinaryExpr {
 
 macro_rules! compute_decimal_op_dyn_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
-        let ll = as_decimal128_array($LEFT).unwrap();
         if let ScalarValue::Decimal128(Some(v_i128), _, _) = $RIGHT {
-            Ok(Arc::new(paste::expr! {[<$OP _dyn_scalar>]}(ll, v_i128)?))
+            Ok(Arc::new(paste::expr! {[<$OP _dyn_scalar>]}($LEFT, v_i128)?))
         } else {
             // when the $RIGHT is a NULL, generate a NULL array of $OP_TYPE type
             Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
@@ -186,16 +183,44 @@ macro_rules! compute_decimal_op {
     }};
 }
 
+macro_rules! compute_f32_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast left side array");
+        let rr = $RIGHT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast right side array");
+        Ok(Arc::new(paste::expr! {[<$OP _f32>]}(ll, rr)?))
+    }};
+}
+
+macro_rules! compute_f64_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast left side array");
+        let rr = $RIGHT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast right side array");
+        Ok(Arc::new(paste::expr! {[<$OP _f64>]}(ll, rr)?))
+    }};
+}
+
 macro_rules! compute_null_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast left side array");
         let rr = $RIGHT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast right side array");
         Ok(Arc::new(paste::expr! {[<$OP _null>]}(&ll, &rr)?))
     }};
 }
@@ -206,11 +231,11 @@ macro_rules! compute_utf8_op {
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast left side array");
         let rr = $RIGHT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast right side array");
         Ok(Arc::new(paste::expr! {[<$OP _utf8>]}(&ll, &rr)?))
     }};
 }
@@ -221,7 +246,7 @@ macro_rules! compute_utf8_op_scalar {
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast left side array");
         if let ScalarValue::Utf8(Some(string_value)) = $RIGHT {
             Ok(Arc::new(paste::expr! {[<$OP _utf8_scalar>]}(
                 &ll,
@@ -320,7 +345,7 @@ macro_rules! compute_op_scalar {
             let ll = $LEFT
                 .as_any()
                 .downcast_ref::<$DT>()
-                .expect("compute_op failed to downcast array");
+                .expect("compute_op failed to downcast left side array");
             Ok(Arc::new(paste::expr! {[<$OP _scalar>]}(
                 &ll,
                 $RIGHT.try_into()?,
@@ -394,11 +419,11 @@ macro_rules! compute_op {
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast left side array");
         let rr = $RIGHT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast right side array");
         Ok(Arc::new($OP(&ll, &rr)?))
     }};
     // invoke unary operator
@@ -542,8 +567,8 @@ macro_rules! binary_array_op {
             DataType::UInt16 => compute_op!($LEFT, $RIGHT, $OP, UInt16Array),
             DataType::UInt32 => compute_op!($LEFT, $RIGHT, $OP, UInt32Array),
             DataType::UInt64 => compute_op!($LEFT, $RIGHT, $OP, UInt64Array),
-            DataType::Float32 => compute_op!($LEFT, $RIGHT, $OP, Float32Array),
-            DataType::Float64 => compute_op!($LEFT, $RIGHT, $OP, Float64Array),
+            DataType::Float32 => compute_f32_op!($LEFT, $RIGHT, $OP, Float32Array),
+            DataType::Float64 => compute_f64_op!($LEFT, $RIGHT, $OP, Float64Array),
             DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampNanosecondArray)
@@ -1029,16 +1054,16 @@ macro_rules! binary_array_op_dyn_scalar {
             ScalarValue::UInt64(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::Float32(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::Float64(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
-            ScalarValue::Date32(_) => compute_op_scalar!($LEFT, right, $OP, Date32Array),
-            ScalarValue::Date64(_) => compute_op_scalar!($LEFT, right, $OP, Date64Array),
-            ScalarValue::Time32Second(_) => compute_op_scalar!($LEFT, right, $OP, Time32SecondArray),
-            ScalarValue::Time32Millisecond(_) => compute_op_scalar!($LEFT, right, $OP, Time32MillisecondArray),
-            ScalarValue::Time64Microsecond(_) => compute_op_scalar!($LEFT, right, $OP, Time64MicrosecondArray),
-            ScalarValue::Time64Nanosecond(_) => compute_op_scalar!($LEFT, right, $OP, Time64NanosecondArray),
-            ScalarValue::TimestampSecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampSecondArray),
-            ScalarValue::TimestampMillisecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampMillisecondArray),
-            ScalarValue::TimestampMicrosecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampMicrosecondArray),
-            ScalarValue::TimestampNanosecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampNanosecondArray),
+            ScalarValue::Date32(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::Date64(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::Time32Second(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::Time32Millisecond(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::Time64Microsecond(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::Time64Nanosecond(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::TimestampSecond(v, _) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::TimestampMillisecond(v, _) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::TimestampMicrosecond(v, _) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::TimestampNanosecond(v, _) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for scalar operation '{}' on dyn array",
                 other, stringify!($OP)))
@@ -1638,16 +1663,28 @@ mod tests {
             vec![0i64, 0i64, 1i64],
         );
         test_coercion!(
-            Int16Array,
-            DataType::Int16,
-            vec![1i16, 2i16, 3i16],
-            Int64Array,
-            DataType::Int64,
-            vec![10i64, 4i64, 5i64],
+            UInt16Array,
+            DataType::UInt16,
+            vec![1u16, 2u16, 3u16],
+            UInt64Array,
+            DataType::UInt64,
+            vec![10u64, 4u64, 5u64],
+            Operator::BitwiseAnd,
+            UInt64Array,
+            DataType::UInt64,
+            vec![0u64, 0u64, 1u64],
+        );
+        test_coercion!(
+            UInt16Array,
+            DataType::UInt16,
+            vec![1u16, 2u16, 3u16],
+            UInt64Array,
+            DataType::UInt64,
+            vec![10u64, 4u64, 5u64],
             Operator::BitwiseOr,
-            Int64Array,
-            DataType::Int64,
-            vec![11i64, 6i64, 7i64],
+            UInt64Array,
+            DataType::UInt64,
+            vec![11u64, 6u64, 7u64],
         );
         test_coercion!(
             Int16Array,
@@ -1660,6 +1697,18 @@ mod tests {
             Int64Array,
             DataType::Int64,
             vec![9i64, 4i64, 6i64],
+        );
+        test_coercion!(
+            UInt16Array,
+            DataType::UInt16,
+            vec![3u16, 2u16, 3u16],
+            UInt64Array,
+            DataType::UInt64,
+            vec![10u64, 6u64, 5u64],
+            Operator::BitwiseXor,
+            UInt64Array,
+            DataType::UInt64,
+            vec![9u64, 4u64, 6u64],
         );
         Ok(())
     }
@@ -3291,6 +3340,97 @@ mod tests {
     }
 
     #[test]
+    fn comparison_dict_decimal_scalar_expr_test() -> Result<()> {
+        // scalar of decimal compare with dictionary decimal array
+        let value_i128 = 123;
+        let decimal_scalar = ScalarValue::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(ScalarValue::Decimal128(Some(value_i128), 25, 3)),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Decimal128(25, 3)),
+            ),
+            true,
+        )]));
+        let decimal_array = Arc::new(create_decimal_array(
+            &[
+                Some(value_i128),
+                None,
+                Some(value_i128 - 1),
+                Some(value_i128 + 1),
+            ],
+            25,
+            3,
+        )) as ArrayRef;
+
+        let keys = Int8Array::from(vec![Some(0), None, Some(2), Some(3)]);
+        let dictionary =
+            Arc::new(DictionaryArray::try_new(&keys, &decimal_array)?) as ArrayRef;
+
+        // array = scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &dictionary,
+            &decimal_scalar,
+            Operator::Eq,
+            &BooleanArray::from(vec![Some(true), None, Some(false), Some(false)]),
+        )
+        .unwrap();
+        // array != scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &dictionary,
+            &decimal_scalar,
+            Operator::NotEq,
+            &BooleanArray::from(vec![Some(false), None, Some(true), Some(true)]),
+        )
+        .unwrap();
+        //  array < scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &dictionary,
+            &decimal_scalar,
+            Operator::Lt,
+            &BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+        )
+        .unwrap();
+
+        //  array <= scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &dictionary,
+            &decimal_scalar,
+            Operator::LtEq,
+            &BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
+        )
+        .unwrap();
+        // array > scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &dictionary,
+            &decimal_scalar,
+            Operator::Gt,
+            &BooleanArray::from(vec![Some(false), None, Some(false), Some(true)]),
+        )
+        .unwrap();
+
+        // array >= scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &dictionary,
+            &decimal_scalar,
+            Operator::GtEq,
+            &BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+        )
+        .unwrap();
+
+        Ok(())
+    }
+
+    #[test]
     fn comparison_decimal_expr_test() -> Result<()> {
         // scalar of decimal compare with decimal array
         let value_i128 = 123;
@@ -3977,6 +4117,22 @@ mod tests {
         let expected = Int32Array::from(vec![Some(13), None, Some(12)]);
         assert_eq!(result.as_ref(), &expected);
 
+        let left =
+            Arc::new(UInt32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
+        let right =
+            Arc::new(UInt32Array::from(vec![Some(1), Some(3), Some(7)])) as ArrayRef;
+        let mut result = bitwise_and(left.clone(), right.clone())?;
+        let expected = UInt32Array::from(vec![Some(0), None, Some(3)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_or(left.clone(), right.clone())?;
+        let expected = UInt32Array::from(vec![Some(13), None, Some(15)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_xor(left.clone(), right.clone())?;
+        let expected = UInt32Array::from(vec![Some(13), None, Some(12)]);
+        assert_eq!(result.as_ref(), &expected);
+
         Ok(())
     }
 
@@ -3993,6 +4149,17 @@ mod tests {
         result = bitwise_shift_right(result.clone(), modules.clone())?;
         assert_eq!(result.as_ref(), &input);
 
+        let input =
+            Arc::new(UInt32Array::from(vec![Some(2), None, Some(10)])) as ArrayRef;
+        let modules =
+            Arc::new(UInt32Array::from(vec![Some(2), Some(4), Some(8)])) as ArrayRef;
+        let mut result = bitwise_shift_left(input.clone(), modules.clone())?;
+
+        let expected = UInt32Array::from(vec![Some(8), None, Some(2560)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_shift_right(result.clone(), modules.clone())?;
+        assert_eq!(result.as_ref(), &input);
         Ok(())
     }
 
@@ -4005,6 +4172,12 @@ mod tests {
         let expected = Int32Array::from(vec![Some(32)]);
         assert_eq!(result.as_ref(), &expected);
 
+        let input = Arc::new(UInt32Array::from(vec![Some(2)])) as ArrayRef;
+        let modules = Arc::new(UInt32Array::from(vec![Some(100)])) as ArrayRef;
+        let result = bitwise_shift_left(input.clone(), modules.clone())?;
+
+        let expected = UInt32Array::from(vec![Some(32)]);
+        assert_eq!(result.as_ref(), &expected);
         Ok(())
     }
 
@@ -4023,6 +4196,21 @@ mod tests {
         result = bitwise_xor_scalar(&left, right).unwrap()?;
         let expected = Int32Array::from(vec![Some(15), None, Some(8)]);
         assert_eq!(result.as_ref(), &expected);
+
+        let left =
+            Arc::new(UInt32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
+        let right = ScalarValue::from(3u32);
+        let mut result = bitwise_and_scalar(&left, right.clone()).unwrap()?;
+        let expected = UInt32Array::from(vec![Some(0), None, Some(3)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_or_scalar(&left, right.clone()).unwrap()?;
+        let expected = UInt32Array::from(vec![Some(15), None, Some(11)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_xor_scalar(&left, right).unwrap()?;
+        let expected = UInt32Array::from(vec![Some(15), None, Some(8)]);
+        assert_eq!(result.as_ref(), &expected);
         Ok(())
     }
 
@@ -4038,6 +4226,15 @@ mod tests {
         result = bitwise_shift_right_scalar(&result, module).unwrap()?;
         assert_eq!(result.as_ref(), &input);
 
+        let input = Arc::new(UInt32Array::from(vec![Some(2), None, Some(4)])) as ArrayRef;
+        let module = ScalarValue::from(10u32);
+        let mut result = bitwise_shift_left_scalar(&input, module.clone()).unwrap()?;
+
+        let expected = UInt32Array::from(vec![Some(2048), None, Some(4096)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_shift_right_scalar(&result, module).unwrap()?;
+        assert_eq!(result.as_ref(), &input);
         Ok(())
     }
 

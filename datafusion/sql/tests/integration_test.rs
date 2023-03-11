@@ -1916,7 +1916,7 @@ fn union_with_multiply_cols() {
 #[test]
 fn sorted_union_with_different_types_and_group_by() {
     let sql = "SELECT a FROM (select 1 a) x GROUP BY 1 UNION ALL (SELECT a FROM (select 1.1 a) x GROUP BY 1) ORDER BY 1";
-    let expected = "Sort: a ASC NULLS LAST\
+    let expected = "Sort: x.a ASC NULLS LAST\
         \n  Union\
         \n    Projection: CAST(x.a AS Float64) AS a\
         \n      Aggregate: groupBy=[[x.a]], aggr=[[]]\
@@ -2312,6 +2312,15 @@ fn approx_median_window() {
 }
 
 #[test]
+fn select_arrow_cast() {
+    let sql = "SELECT arrow_cast(1234, 'Float64'), arrow_cast('foo', 'LargeUtf8')";
+    let expected = "\
+    Projection: CAST(Int64(1234) AS Float64), CAST(Utf8(\"foo\") AS LargeUtf8)\
+    \n  EmptyRelation";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn select_typed_date_string() {
     let sql = "SELECT date '2020-12-10' AS date";
     let expected = "Projection: CAST(Utf8(\"2020-12-10\") AS Date32) AS date\
@@ -2534,7 +2543,7 @@ impl ContextProvider for MockContextProvider {
     }
 
     fn get_function_meta(&self, _name: &str) -> Option<Arc<ScalarUDF>> {
-        unimplemented!()
+        None
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {

@@ -23,7 +23,7 @@ use crate::variable::VarProvider;
 use arrow::datatypes::DataType;
 
 /// System variable
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct SystemVar {}
 
 impl SystemVar {
@@ -46,7 +46,7 @@ impl VarProvider for SystemVar {
 }
 
 /// user defined variable
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct UserDefinedVar {}
 
 impl UserDefinedVar {

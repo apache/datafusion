@@ -512,7 +512,7 @@ pub(crate) fn collect_subquery_cols(
     exprs.iter().try_fold(BTreeSet::new(), |mut cols, expr| {
         let mut using_cols: Vec<Column> = vec![];
         for col in expr.to_columns()?.into_iter() {
-            if subquery_schema.is_column_from_schema(&col)? {
+            if subquery_schema.has_column(&col) {
                 using_cols.push(col);
             }
         }
