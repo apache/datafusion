@@ -44,45 +44,54 @@ use super::ParquetFileMetrics;
 ///
 /// If an index IS present in the returned Vec it means the predicate
 /// did not filter out that row group.
-pub(crate) fn prune_row_groups(
+pub(crate) fn prune_row_groups_by_statistics(
     groups: &[RowGroupMetaData],
-    range: Option<FileRange>,
-    predicate: Option<&PruningPredicate>,
+    range: Option<&FileRange>,
+    predicate: &PruningPredicate,
     metrics: &ParquetFileMetrics,
 ) -> Vec<usize> {
     let mut filtered = Vec::with_capacity(groups.len());
     for (idx, metadata) in groups.iter().enumerate() {
-        if let Some(range) = &range {
+        if let Some(range) = range {
             let offset = metadata.column(0).file_offset();
             if offset < range.start || offset >= range.end {
                 continue;
             }
         }
 
-        if let Some(predicate) = predicate {
-            let pruning_stats = RowGroupPruningStatistics {
-                row_group_metadata: metadata,
-                parquet_schema: predicate.schema().as_ref(),
-            };
-            match predicate.prune(&pruning_stats) {
-                Ok(values) => {
-                    // NB: false means don't scan row group
-                    if !values[0] {
-                        metrics.row_groups_pruned.add(1);
-                        continue;
-                    }
+        let pruning_stats = RowGroupPruningStatistics {
+            row_group_metadata: metadata,
+            parquet_schema: predicate.schema().as_ref(),
+        };
+        match predicate.prune(&pruning_stats) {
+            Ok(values) => {
+                // NB: false means don't scan row group
+                if !values[0] {
+                    metrics.row_groups_pruned.add(1);
+                    continue;
                 }
-                // stats filter array could not be built
-                // return a closure which will not filter out any row groups
-                Err(e) => {
-                    debug!("Error evaluating row group predicate values {e}");
-                    metrics.predicate_evaluation_errors.add(1);
-                }
+            }
+            // stats filter array could not be built
+            // return a closure which will not filter out any row groups
+            Err(e) => {
+                debug!("Error evaluating row group predicate values {e}");
+                metrics.predicate_evaluation_errors.add(1);
             }
         }
 
         filtered.push(idx)
     }
+    filtered
+}
+
+pub(crate) fn prune_row_groups_by_bloom_filter(
+    groups: &[RowGroupMetaData],
+    range: Option<&FileRange>,
+    predicate: &PruningPredicate,
+    metrics: &ParquetFileMetrics,
+) -> Vec<usize> {
+    let mut filtered = Vec::with_capacity(groups.len());
+
     filtered
 }
 
@@ -285,7 +294,12 @@ mod tests {
 
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(&pruning_predicate), &metrics),
+            prune_row_groups_by_statistics(
+                &[rgm1, rgm2],
+                None,
+                &pruning_predicate,
+                &metrics
+            ),
             vec![1]
         );
     }
@@ -320,7 +334,12 @@ mod tests {
         // missing statistics for first row group mean that the result from the predicate expression
         // is null / undefined so the first row group can't be filtered out
         assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(&pruning_predicate), &metrics),
+            prune_row_groups_by_statistics(
+                &[rgm1, rgm2],
+                None,
+                &pruning_predicate,
+                &metrics
+            ),
             vec![0, 1]
         );
     }
@@ -364,7 +383,7 @@ mod tests {
         // the first row group is still filtered out because the predicate expression can be partially evaluated
         // when conditions are joined using AND
         assert_eq!(
-            prune_row_groups(groups, None, Some(&pruning_predicate), &metrics),
+            prune_row_groups_by_statistics(groups, None, &pruning_predicate, &metrics),
             vec![1]
         );
 
@@ -379,7 +398,7 @@ mod tests {
         // if conditions in predicate are joined with OR and an unsupported expression is used
         // this bypasses the entire predicate expression and no row groups are filtered out
         assert_eq!(
-            prune_row_groups(groups, None, Some(&pruning_predicate), &metrics),
+            prune_row_groups_by_statistics(groups, None, &pruning_predicate, &metrics),
             vec![0, 1]
         );
     }
@@ -422,7 +441,7 @@ mod tests {
         let metrics = parquet_file_metrics();
         // First row group was filtered out because it contains no null value on "c2".
         assert_eq!(
-            prune_row_groups(&groups, None, Some(&pruning_predicate), &metrics),
+            prune_row_groups_by_statistics(&groups, None, &pruning_predicate, &metrics),
             vec![1]
         );
     }
@@ -448,7 +467,7 @@ mod tests {
         // bool = NULL always evaluates to NULL (and thus will not
         // pass predicates. Ideally these should both be false
         assert_eq!(
-            prune_row_groups(&groups, None, Some(&pruning_predicate), &metrics),
+            prune_row_groups_by_statistics(&groups, None, &pruning_predicate, &metrics),
             vec![1]
         );
     }
@@ -504,10 +523,10 @@ mod tests {
         );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(
+            prune_row_groups_by_statistics(
                 &[rgm1, rgm2, rgm3],
                 None,
-                Some(&pruning_predicate),
+                &pruning_predicate,
                 &metrics
             ),
             vec![0, 2]
@@ -569,10 +588,10 @@ mod tests {
         );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(
+            prune_row_groups_by_statistics(
                 &[rgm1, rgm2, rgm3, rgm4],
                 None,
-                Some(&pruning_predicate),
+                &pruning_predicate,
                 &metrics
             ),
             vec![0, 1, 3]
@@ -619,10 +638,10 @@ mod tests {
         );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(
+            prune_row_groups_by_statistics(
                 &[rgm1, rgm2, rgm3],
                 None,
-                Some(&pruning_predicate),
+                &pruning_predicate,
                 &metrics
             ),
             vec![1, 2]
@@ -691,10 +710,10 @@ mod tests {
         );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(
+            prune_row_groups_by_statistics(
                 &[rgm1, rgm2, rgm3],
                 None,
-                Some(&pruning_predicate),
+                &pruning_predicate,
                 &metrics
             ),
             vec![1, 2]
@@ -752,10 +771,10 @@ mod tests {
         );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(
+            prune_row_groups_by_statistics(
                 &[rgm1, rgm2, rgm3],
                 None,
-                Some(&pruning_predicate),
+                &pruning_predicate,
                 &metrics
             ),
             vec![1, 2]

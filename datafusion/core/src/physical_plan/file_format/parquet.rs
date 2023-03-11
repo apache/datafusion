@@ -90,6 +90,10 @@ pub struct ParquetExec {
     /// Override for `Self::with_enable_page_index`. If None, uses
     /// values from base_config
     enable_page_index: Option<bool>,
+
+    /// Override for `Self::with_enable_bloom_filter`. If None, uses
+    /// values from base_config
+    enable_bloom_filter: Option<bool>,
     /// Base configuraton for this scan
     base_config: FileScanConfig,
     projected_statistics: Statistics,
@@ -157,6 +161,7 @@ impl ParquetExec {
             pushdown_filters: None,
             reorder_filters: None,
             enable_page_index: None,
+            enable_bloom_filter: None,
             base_config,
             projected_schema,
             projected_statistics,
@@ -243,6 +248,20 @@ impl ParquetExec {
     fn enable_page_index(&self, config_options: &ConfigOptions) -> bool {
         self.enable_page_index
             .unwrap_or(config_options.execution.parquet.enable_page_index)
+    }
+
+    /// If enabled, the reader will read the bloom filter
+    /// This is used to pruning row groups by
+    /// eliminating unnecessary IO and decoding
+    pub fn with_enable_bloom_filter(mut self, enable_bloom_filter: bool) -> Self {
+        self.enable_bloom_filter = Some(enable_bloom_filter);
+        self
+    }
+
+    /// Return the value described in [`Self::with_enable_bloom_filter`]
+    fn enable_bloom_filter(&self, config_options: &ConfigOptions) -> bool {
+        self.enable_bloom_filter
+            .unwrap_or(config_options.execution.parquet.enable_bloom_fiter)
     }
 
     /// Redistribute files across partitions according to their size
@@ -389,6 +408,7 @@ impl ExecutionPlan for ParquetExec {
             pushdown_filters: self.pushdown_filters(config_options),
             reorder_filters: self.reorder_filters(config_options),
             enable_page_index: self.enable_page_index(config_options),
+            enable_bloom_filter: self.enable_bloom_filter(config_options),
         };
 
         let stream =
@@ -474,6 +494,7 @@ struct ParquetOpener {
     pushdown_filters: bool,
     reorder_filters: bool,
     enable_page_index: bool,
+    enable_bloom_filter: bool,
 }
 
 impl FileOpener for ParquetOpener {
@@ -504,6 +525,7 @@ impl FileOpener for ParquetOpener {
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let enable_page_index = self.enable_page_index;
+        let enable_bloom_filter = self.enable_bloom_filter;
         let limit = self.limit;
 
         Ok(Box::pin(async move {
@@ -545,23 +567,42 @@ impl FileOpener for ParquetOpener {
                 };
             };
 
-            // Row group pruning: attempt to skip entire row_groups
-            // using metadata on the row groups
-            let file_metadata = builder.metadata();
-            let row_groups = row_groups::prune_row_groups(
-                file_metadata.row_groups(),
-                file_range,
-                pruning_predicate.as_ref().map(|p| p.as_ref()),
-                &file_metrics,
-            );
+            let file_metadata = builder.metadata().clone();
+            let mut row_groups_index: Vec<usize> =
+                (0..file_metadata.num_row_groups()).collect();
+
+            if let Some(pruning_predicate) = pruning_predicate.as_ref() {
+                // Row group pruning: attempt to skip entire row_groups
+                // using min max metadata on the row groups
+                row_groups_index = row_groups::prune_row_groups_by_statistics(
+                    file_metadata.row_groups(),
+                    file_range.as_ref(),
+                    pruning_predicate.as_ref(),
+                    &file_metrics,
+                );
+
+                // Row group pruning: attempt to skip entire row_groups
+                // using bloom filter metadata on the row groups
+                if enable_bloom_filter {
+                    row_groups_index = row_groups::prune_row_groups_by_bloom_filter(
+                        file_metadata.row_groups(),
+                        file_range.as_ref(),
+                        pruning_predicate.as_ref(),
+                        &file_metrics,
+                    );
+                }
+            }
 
             // page index pruning: if all data on individual pages can
             // be ruled using page metadata, rows from other columns
             // with that range can be skipped as well
-            if enable_page_index && !row_groups.is_empty() {
+            if enable_page_index && !row_groups_index.is_empty() {
                 if let Some(p) = page_pruning_predicate {
-                    let pruned =
-                        p.prune(&row_groups, file_metadata.as_ref(), &file_metrics)?;
+                    let pruned = p.prune(
+                        &row_groups_index,
+                        file_metadata.as_ref(),
+                        &file_metrics,
+                    )?;
                     if let Some(row_selection) = pruned {
                         builder = builder.with_row_selection(row_selection);
                     }
@@ -575,7 +616,7 @@ impl FileOpener for ParquetOpener {
             let stream = builder
                 .with_projection(mask)
                 .with_batch_size(batch_size)
-                .with_row_groups(row_groups)
+                .with_row_groups(row_groups_index)
                 .build()?;
 
             let adapted = stream
