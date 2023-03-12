@@ -970,7 +970,7 @@ mod test {
     #[test]
     fn negative_for_type_coercion() -> Result<()> {
         // negative
-        let expr = Expr::Negative(Box::new(col("a")));
+        let expr = -col("a");
         let empty = empty_with_type(DataType::UInt32);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected = "Projection: (- CAST(a AS Int64))\n  EmptyRelation";
