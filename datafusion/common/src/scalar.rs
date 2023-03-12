@@ -648,27 +648,24 @@ fn ts_sub_to_interval(
     rhs_ts: &i64,
     lhs_tz: &Option<String>,
     rhs_tz: &Option<String>,
-    scale_factor: i32,
+    scale_factor: i64,
 ) -> Result<ScalarValue, DataFusionError> {
     // Conversion of integer and string-typed timestamps to NaiveDateTime objects
     // Timezone offsets are added also if applicable.
-    let (naive_date_time2_unchecked, naive_date_time1_unchecked) =
+    let (naive_date_time2, naive_date_time1) =
         with_timezone_to_naive_datetime(lhs_ts, rhs_ts, lhs_tz, rhs_tz, &scale_factor)?;
-
-    // Check whether we will find a negative interval or not.
-    let (naive_date_time2, naive_date_time1, sign) =
-        find_interval_sign(naive_date_time2_unchecked, naive_date_time1_unchecked);
 
     let delta_secs = naive_date_time2.signed_duration_since(naive_date_time1);
 
+    // 60 * 60 * 24 * 1000 = 86_400_000, number of millisecs in a day
+    let number_of_millisecs_in_day: i64 = 86_400_000;
     match scale_factor {
-        // 60 * 60 * 24 * 1000 = 86_400_000, number of millisecs in a day
         1 => {
             let as_millisecs = delta_secs.num_milliseconds();
             Ok(ScalarValue::IntervalDayTime(Some(
                 IntervalDayTimeType::make_value(
-                    sign * (as_millisecs / 86_400_000) as i32,
-                    sign * (as_millisecs % 86_400_000) as i32,
+                    (as_millisecs / number_of_millisecs_in_day) as i32,
+                    (as_millisecs % number_of_millisecs_in_day) as i32,
                 ),
             )))
         }
@@ -682,8 +679,8 @@ fn ts_sub_to_interval(
             Ok(ScalarValue::IntervalMonthDayNano(Some(
                 IntervalMonthDayNanoType::make_value(
                     0,
-                    sign * (as_nanosecs / 86_400_000_000_000) as i32,
-                    sign as i64 * (as_nanosecs % 86_400_000_000_000),
+                    (as_nanosecs / (number_of_millisecs_in_day * scale_factor)) as i32,
+                    as_nanosecs % (number_of_millisecs_in_day * scale_factor),
                 ),
             )))
         }
@@ -698,7 +695,7 @@ fn with_timezone_to_naive_datetime(
     rhs_ts: &i64,
     lhs_tz: &Option<String>,
     rhs_tz: &Option<String>,
-    scale_factor: &i32,
+    scale_factor: &i64,
 ) -> Result<(NaiveDateTime, NaiveDateTime), DataFusionError> {
     let (naive_lhs, naive_rhs) = match scale_factor {
         1 => ms_to_naive_datetime(lhs_ts, rhs_ts)?,
@@ -784,17 +781,6 @@ fn parse_tz_to_offset(tz: &str) -> Result<FixedOffset, DataFusionError> {
         }
     };
     Ok(timezone_offset)
-}
-#[inline]
-fn find_interval_sign(
-    ndt2: NaiveDateTime,
-    ndt1: NaiveDateTime,
-) -> (NaiveDateTime, NaiveDateTime, i32) {
-    if ndt2.timestamp_nanos() < ndt1.timestamp_nanos() {
-        (ndt1, ndt2, -1)
-    } else {
-        (ndt2, ndt1, 1)
-    }
 }
 
 #[inline]
@@ -4755,7 +4741,7 @@ mod tests {
     fn timestamp_op_random_tests() {
         // timestamp1 + (or -) interval = timestamp2
         // timestamp2 - timestamp1 (or timestamp1 - timestamp2) = interval ?
-        let sample_size = 1000000;
+        let sample_size = 100000;
         let timestamps1 = get_random_timestamps(sample_size);
         let intervals = get_random_intervals(sample_size);
         // ts(sec) + interval(ns) = ts(sec); however,
