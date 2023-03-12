@@ -21,20 +21,20 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use datafusion::arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion::common::ToDFSchema;
-use datafusion::config::ConfigOptions;
-use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
-use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::error::Result;
-use datafusion::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
-use datafusion::physical_expr::create_physical_expr;
-use datafusion::physical_expr::execution_props::ExecutionProps;
-use datafusion::physical_plan::file_format::{FileScanConfig, ParquetExec};
-use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::metrics::MetricsSet;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::{Expr, SessionConfig};
+use crate::arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use crate::common::ToDFSchema;
+use crate::config::ConfigOptions;
+use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
+use crate::datasource::object_store::ObjectStoreUrl;
+use crate::error::Result;
+use crate::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
+use crate::physical_expr::create_physical_expr;
+use crate::physical_expr::execution_props::ExecutionProps;
+use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
+use crate::physical_plan::filter::FilterExec;
+use crate::physical_plan::metrics::MetricsSet;
+use crate::physical_plan::ExecutionPlan;
+use crate::prelude::{Expr, SessionConfig};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
@@ -49,9 +49,13 @@ pub struct TestParquetFile {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Options for how to create the parquet scan
 pub struct ParquetScanOptions {
+    /// Enable pushdown filters
     pub pushdown_filters: bool,
+    /// enable reordering filters
     pub reorder_filters: bool,
+    /// enable page index
     pub enable_page_index: bool,
 }
 
