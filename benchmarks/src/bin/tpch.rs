@@ -17,15 +17,7 @@
 
 //! Benchmark derived from TPC-H. This is not an official TPC-H benchmark.
 
-use std::{
-    fs::File,
-    io::Write,
-    iter::Iterator,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::{Instant, SystemTime},
-};
-
+use datafusion::datasource::file_format::{csv::CsvFormat, FileFormat};
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::parquet::basic::Compression;
@@ -39,18 +31,14 @@ use datafusion::{
     arrow::util::pretty,
     datasource::listing::{ListingOptions, ListingTable, ListingTableConfig},
 };
-use datafusion::{
-    datasource::file_format::{csv::CsvFormat, FileFormat},
-    DATAFUSION_VERSION,
-};
-use datafusion_benchmarks::tpch::*;
+use datafusion_benchmarks::{tpch::*, BenchmarkRun};
+use std::{iter::Iterator, path::PathBuf, sync::Arc, time::Instant};
 
 use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::scheduler::Scheduler;
 use futures::TryStreamExt;
-use serde::Serialize;
 use structopt::StructOpt;
 
 #[cfg(feature = "snmalloc")]
@@ -95,7 +83,7 @@ struct DataFusionBenchmarkOpt {
     #[structopt(short = "m", long = "mem-table")]
     mem_table: bool,
 
-    /// Path to output directory where JSON summary file should be written to
+    /// Path to machine readable output file
     #[structopt(parse(from_os_str), short = "o", long = "output")]
     output_path: Option<PathBuf>,
 
@@ -201,13 +189,16 @@ async fn benchmark_datafusion(
     let mut benchmark_run = BenchmarkRun::new();
     let mut results = vec![];
     for query_id in query_range {
+        benchmark_run.start_new_case(&format!("Query {query_id}"));
         let (query_run, result) = benchmark_query(&opt, query_id).await?;
         results.push(result);
-        benchmark_run.add_query(query_run);
+        for iter in query_run {
+            benchmark_run.write_iter(iter.elapsed, iter.row_count);
+        }
     }
 
     if let Some(path) = &opt.output_path {
-        write_summary_json(&mut benchmark_run, path)?;
+        std::fs::write(path, &benchmark_run.to_json())?;
     }
     Ok(results)
 }
@@ -215,8 +206,8 @@ async fn benchmark_datafusion(
 async fn benchmark_query(
     opt: &DataFusionBenchmarkOpt,
     query_id: usize,
-) -> Result<(QueryRun, Vec<RecordBatch>)> {
-    let mut benchmark_run = QueryRun::new(query_id);
+) -> Result<(Vec<QueryResult>, Vec<RecordBatch>)> {
+    let mut query_results = vec![];
     let config = SessionConfig::new()
         .with_target_partitions(opt.partitions)
         .with_batch_size(opt.batch_size)
@@ -258,13 +249,13 @@ async fn benchmark_query(
         println!(
             "Query {query_id} iteration {i} took {elapsed:.1} ms and returned {row_count} rows"
         );
-        benchmark_run.add_result(elapsed, row_count);
+        query_results.push(QueryResult { elapsed, row_count });
     }
 
     let avg = millis.iter().sum::<f64>() / millis.len() as f64;
     println!("Query {query_id} avg time: {avg:.2} ms");
 
-    Ok((benchmark_run, result))
+    Ok((query_results, result))
 }
 
 async fn register_tables(
@@ -299,20 +290,6 @@ async fn register_tables(
             ctx.register_table(*table, table_provider)?;
         }
     }
-    Ok(())
-}
-
-fn write_summary_json(benchmark_run: &mut BenchmarkRun, path: &Path) -> Result<()> {
-    let json =
-        serde_json::to_string_pretty(&benchmark_run).expect("summary is serializable");
-    let filename = format!("tpch-summary--{}.json", benchmark_run.context.start_time);
-    let path = path.join(filename);
-    println!(
-        "Writing summary file to {}",
-        path.as_os_str().to_str().unwrap()
-    );
-    let mut file = File::create(path)?;
-    file.write_all(json.as_bytes())?;
     Ok(())
 }
 
@@ -421,84 +398,6 @@ async fn get_table(
     Ok(Arc::new(ListingTable::try_new(config)?))
 }
 
-#[derive(Debug, Serialize)]
-struct RunContext {
-    /// Benchmark crate version
-    benchmark_version: String,
-    /// DataFusion crate version
-    datafusion_version: String,
-    /// Number of CPU cores
-    num_cpus: usize,
-    /// Start time
-    start_time: u64,
-    /// CLI arguments
-    arguments: Vec<String>,
-}
-
-impl RunContext {
-    fn new() -> Self {
-        Self {
-            benchmark_version: env!("CARGO_PKG_VERSION").to_owned(),
-            datafusion_version: DATAFUSION_VERSION.to_owned(),
-            num_cpus: num_cpus::get(),
-            start_time: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("current time is later than UNIX_EPOCH")
-                .as_secs(),
-            arguments: std::env::args().skip(1).collect::<Vec<String>>(),
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct BenchmarkRun {
-    /// Information regarding the environment in which the benchmark was run
-    context: RunContext,
-    /// Per-query summaries
-    queries: Vec<QueryRun>,
-}
-
-impl BenchmarkRun {
-    fn new() -> Self {
-        Self {
-            context: RunContext::new(),
-            queries: vec![],
-        }
-    }
-
-    fn add_query(&mut self, query: QueryRun) {
-        self.queries.push(query)
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct QueryRun {
-    /// query number
-    query: usize,
-    /// list of individual run times and row counts
-    iterations: Vec<QueryResult>,
-    /// Start time
-    start_time: u64,
-}
-
-impl QueryRun {
-    fn new(query: usize) -> Self {
-        Self {
-            query,
-            iterations: vec![],
-            start_time: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("current time is later than UNIX_EPOCH")
-                .as_secs(),
-        }
-    }
-
-    fn add_result(&mut self, elapsed: f64, row_count: usize) {
-        self.iterations.push(QueryResult { elapsed, row_count })
-    }
-}
-
-#[derive(Debug, Serialize)]
 struct QueryResult {
     elapsed: f64,
     row_count: usize,
@@ -508,7 +407,9 @@ struct QueryResult {
 mod tests {
     use super::*;
     use datafusion::sql::TableReference;
+    use std::fs::File;
     use std::io::{BufRead, BufReader};
+    use std::path::Path;
     use std::sync::Arc;
 
     #[tokio::test]
@@ -823,6 +724,8 @@ mod tests {
 #[cfg(test)]
 #[cfg(feature = "ci")]
 mod ci {
+    use std::path::Path;
+
     use super::*;
     use arrow::datatypes::{DataType, Field};
     use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};

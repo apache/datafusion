@@ -24,6 +24,7 @@ use datafusion::physical_plan::collect;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::prelude::{col, SessionConfig, SessionContext};
 use datafusion::test_util::parquet::{ParquetScanOptions, TestParquetFile};
+use datafusion_benchmarks::BenchmarkRun;
 use parquet::file::properties::WriterProperties;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -72,6 +73,10 @@ struct Opt {
     /// Total size of generated dataset. The default scale factor of 1.0 will generate a roughly 1GB parquet file
     #[structopt(short = "s", long = "scale-factor", default_value = "1.0")]
     scale_factor: f32,
+
+    /// Path to machine readable output file
+    #[structopt(parse(from_os_str), short = "o", long = "output")]
+    output_path: Option<PathBuf>,
 }
 impl Opt {
     /// Initialize parquet test file given options.
@@ -114,6 +119,7 @@ async fn main() -> Result<()> {
 
 async fn run_sort_benchmarks(opt: Opt, test_file: &TestParquetFile) -> Result<()> {
     use datafusion::physical_expr::expressions::col;
+    let mut rundata = BenchmarkRun::new();
     let schema = test_file.schema();
     let sort_cases = vec![
         (
@@ -195,22 +201,31 @@ async fn run_sort_benchmarks(opt: Opt, test_file: &TestParquetFile) -> Result<()
     ];
     for (title, expr) in sort_cases {
         println!("Executing '{title}' (sorting by: {expr:?})");
+        rundata.start_new_case(title);
         for i in 0..opt.iterations {
             let config = SessionConfig::new().with_target_partitions(opt.partitions);
             let ctx = SessionContext::with_config(config);
             let start = Instant::now();
-            exec_sort(&ctx, &expr, test_file, opt.debug).await?;
-            println!(
-                "Iteration {} finished in {} ms",
-                i,
-                start.elapsed().as_millis()
-            );
+            let rows = exec_sort(&ctx, &expr, test_file, opt.debug).await?;
+            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+            println!("Iteration {i} finished in {elapsed}ms");
+            rundata.write_iter(elapsed, rows);
         }
         println!("\n");
     }
+    if let Some(path) = &opt.output_path {
+        std::fs::write(path, rundata.to_json())?;
+    }
     Ok(())
 }
+fn parquet_scan_disp(opts: &ParquetScanOptions) -> String {
+    format!(
+        "pushdown_filters={}, reorder_filters={}, page_index={}",
+        opts.pushdown_filters, opts.reorder_filters, opts.enable_page_index
+    )
+}
 async fn run_filter_benchmarks(opt: Opt, test_file: &TestParquetFile) -> Result<()> {
+    let mut rundata = BenchmarkRun::new();
     let scan_options_matrix = vec![
         ParquetScanOptions {
             pushdown_filters: false,
@@ -230,36 +245,43 @@ async fn run_filter_benchmarks(opt: Opt, test_file: &TestParquetFile) -> Result<
     ];
 
     let filter_matrix = vec![
-        // Selective-ish filter
-        col("request_method").eq(lit("GET")),
-        // Non-selective filter
-        col("request_method").not_eq(lit("GET")),
-        // Basic conjunction
-        col("request_method")
-            .eq(lit("POST"))
-            .and(col("response_status").eq(lit(503_u16))),
-        // Nested filters
-        col("request_method").eq(lit("POST")).and(or(
-            col("response_status").eq(lit(503_u16)),
-            col("response_status").eq(lit(403_u16)),
-        )),
-        // Many filters
-        disjunction([
+        ("Selective-ish filter", col("request_method").eq(lit("GET"))),
+        (
+            "Non-selective filter",
             col("request_method").not_eq(lit("GET")),
-            col("response_status").eq(lit(400_u16)),
-            col("service").eq(lit("backend")),
-        ])
-        .unwrap(),
-        // Filter everything
-        col("response_status").eq(lit(429_u16)),
-        // Filter nothing
-        col("response_status").gt(lit(0_u16)),
+        ),
+        (
+            "Basic conjunction",
+            col("request_method")
+                .eq(lit("POST"))
+                .and(col("response_status").eq(lit(503_u16))),
+        ),
+        (
+            "Nested filters",
+            col("request_method").eq(lit("POST")).and(or(
+                col("response_status").eq(lit(503_u16)),
+                col("response_status").eq(lit(403_u16)),
+            )),
+        ),
+        (
+            "Many filters",
+            disjunction([
+                col("request_method").not_eq(lit("GET")),
+                col("response_status").eq(lit(400_u16)),
+                col("service").eq(lit("backend")),
+            ])
+            .unwrap(),
+        ),
+        ("Filter everything", col("response_status").eq(lit(429_u16))),
+        ("Filter nothing", col("response_status").gt(lit(0_u16))),
     ];
 
-    for filter_expr in &filter_matrix {
-        println!("Executing with filter '{filter_expr}'");
+    for (name, filter_expr) in &filter_matrix {
+        println!("Executing '{name}' (filter: {filter_expr})");
         for scan_options in &scan_options_matrix {
             println!("Using scan options {scan_options:?}");
+            rundata
+                .start_new_case(&format!("{name}: {}", parquet_scan_disp(scan_options)));
             for i in 0..opt.iterations {
                 let start = Instant::now();
 
@@ -268,15 +290,15 @@ async fn run_filter_benchmarks(opt: Opt, test_file: &TestParquetFile) -> Result<
 
                 let rows =
                     exec_scan(&ctx, test_file, filter_expr.clone(), opt.debug).await?;
-                println!(
-                    "Iteration {} returned {} rows in {} ms",
-                    i,
-                    rows,
-                    start.elapsed().as_millis()
-                );
+                let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+                println!("Iteration {} returned {} rows in {elapsed} ms", i, rows);
+                rundata.write_iter(elapsed, rows);
             }
         }
         println!("\n");
+    }
+    if let Some(path) = &opt.output_path {
+        std::fs::write(path, rundata.to_json())?;
     }
     Ok(())
 }
@@ -303,7 +325,7 @@ async fn exec_sort(
     expr: &[PhysicalSortExpr],
     test_file: &TestParquetFile,
     debug: bool,
-) -> Result<()> {
+) -> Result<usize> {
     let scan = test_file.create_scan(None).await?;
     let exec = Arc::new(SortExec::try_new(expr.to_owned(), scan, None)?);
     let task_ctx = ctx.task_ctx();
@@ -311,7 +333,7 @@ async fn exec_sort(
     if debug {
         pretty::print_batches(&result)?;
     }
-    Ok(())
+    Ok(result.iter().map(|b| b.num_rows()).sum())
 }
 
 fn gen_data(
