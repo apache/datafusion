@@ -563,7 +563,12 @@ where
                 }
             }
         }
-        _ => return Err(DataFusionError::Internal("Invalid data type".to_string())),
+        _ => {
+            return Err(DataFusionError::Internal(format!(
+                "Can not convert {:?} to epoch",
+                array.data_type()
+            )))
+        }
     }
     Ok(b.finish())
 }
