@@ -67,14 +67,11 @@ impl AggregateExpr for ApproxMedian {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let accumulater = self.approx_percentile.create_accumulator();
-        if let Ok(accumulater) = accumulater {
-            Ok(accumulater)
-        } else {
-            Err(DataFusionError::Internal(
+        self.approx_percentile.create_accumulator().map_err(|_| {
+            DataFusionError::Execution(
                 "approx median requires at least one non-null value".to_string(),
-            ))
-        }
+            )
+        })
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
