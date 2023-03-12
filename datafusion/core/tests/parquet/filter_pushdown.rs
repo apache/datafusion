@@ -33,10 +33,10 @@ use arrow::record_batch::RecordBatch;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::metrics::MetricsSet;
 use datafusion::prelude::{col, lit, lit_timestamp_nano, Expr, SessionContext};
+use datafusion::test_util::parquet::{ParquetScanOptions, TestParquetFile};
 use datafusion_optimizer::utils::{conjunction, disjunction, split_conjunction};
 use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
-use parquet_test_utils::{ParquetScanOptions, TestParquetFile};
 use tempfile::TempDir;
 use test_utils::AccessLogGenerator;
 

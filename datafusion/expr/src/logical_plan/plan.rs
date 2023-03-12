@@ -174,7 +174,26 @@ impl LogicalPlan {
         }
     }
 
+    /// Used for normalizing columns, as the fallback schemas to the main schema
+    /// of the plan.
+    pub fn fallback_normalize_schemas(&self) -> Vec<&DFSchema> {
+        match self {
+            LogicalPlan::Window(_)
+            | LogicalPlan::Projection(_)
+            | LogicalPlan::Aggregate(_)
+            | LogicalPlan::Unnest(_)
+            | LogicalPlan::Join(_)
+            | LogicalPlan::CrossJoin(_) => self
+                .inputs()
+                .iter()
+                .map(|input| input.schema().as_ref())
+                .collect(),
+            _ => vec![],
+        }
+    }
+
     /// Get all meaningful schemas of a plan and its children plan.
+    #[deprecated(since = "20.0.0")]
     pub fn all_schemas(&self) -> Vec<&DFSchemaRef> {
         match self {
             // return self and children schemas
@@ -2439,6 +2458,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_extension_all_schemas() {
         let plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoChildExtension::empty()),
