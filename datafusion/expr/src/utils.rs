@@ -37,7 +37,7 @@ use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 ///  The value to which `COUNT(*)` is expanded to in
@@ -96,41 +96,7 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             Expr::ScalarVariable(_, var_names) => {
                 accum.insert(Column::from_name(var_names.join(".")));
             }
-            Expr::Alias(_, _)
-            | Expr::Literal(_)
-            | Expr::BinaryExpr { .. }
-            | Expr::Like { .. }
-            | Expr::ILike { .. }
-            | Expr::SimilarTo { .. }
-            | Expr::Not(_)
-            | Expr::IsNotNull(_)
-            | Expr::IsNull(_)
-            | Expr::IsTrue(_)
-            | Expr::IsFalse(_)
-            | Expr::IsUnknown(_)
-            | Expr::IsNotTrue(_)
-            | Expr::IsNotFalse(_)
-            | Expr::IsNotUnknown(_)
-            | Expr::Negative(_)
-            | Expr::Between { .. }
-            | Expr::Case { .. }
-            | Expr::Cast { .. }
-            | Expr::TryCast { .. }
-            | Expr::Sort { .. }
-            | Expr::ScalarFunction { .. }
-            | Expr::ScalarUDF { .. }
-            | Expr::WindowFunction { .. }
-            | Expr::AggregateFunction { .. }
-            | Expr::GroupingSet(_)
-            | Expr::AggregateUDF { .. }
-            | Expr::InList { .. }
-            | Expr::Exists { .. }
-            | Expr::InSubquery { .. }
-            | Expr::ScalarSubquery(_)
-            | Expr::Wildcard
-            | Expr::QualifiedWildcard { .. }
-            | Expr::GetIndexedField { .. }
-            | Expr::Placeholder { .. } => {}
+            _ => {}
         }
         Ok(())
     })
@@ -1033,65 +999,6 @@ pub fn find_valid_equijoin_key_pair(
     };
 
     Ok(join_key_pair)
-}
-
-/// Ensure any column reference of the expression is unambiguous.
-/// Assume we have two schema:
-/// schema1: a, b ,c
-/// schema2: a, d, e
-///
-/// `schema1.a + schema2.a` is unambiguous.
-/// `a + d` is ambiguous, because `a` may come from schema1 or schema2.
-pub fn ensure_any_column_reference_is_unambiguous(
-    expr: &Expr,
-    schemas: &[&DFSchema],
-) -> Result<()> {
-    if schemas.len() == 1 {
-        return Ok(());
-    }
-    // all referenced columns in the expression that don't have relation
-    let referenced_cols = expr.to_columns()?;
-    let mut no_relation_cols = referenced_cols
-        .iter()
-        .filter_map(|col| {
-            if col.relation.is_none() {
-                Some((col.name.as_str(), 0))
-            } else {
-                None
-            }
-        })
-        .collect::<HashMap<&str, u8>>();
-    // find the name of the column existing in multi schemas.
-    let ambiguous_col_name = schemas
-        .iter()
-        .flat_map(|schema| schema.fields())
-        .map(|field| field.name())
-        .find(|col_name| {
-            no_relation_cols.entry(col_name).and_modify(|v| *v += 1);
-            matches!(
-                no_relation_cols.get_key_value(col_name.as_str()),
-                Some((_, 2..))
-            )
-        });
-
-    if let Some(col_name) = ambiguous_col_name {
-        let maybe_field = schemas
-            .iter()
-            .flat_map(|schema| {
-                schema
-                    .field_with_unqualified_name(col_name)
-                    .map(|f| f.qualified_name())
-                    .ok()
-            })
-            .collect::<Vec<_>>();
-        Err(DataFusionError::Plan(format!(
-            "reference \'{}\' is ambiguous, could be {};",
-            col_name,
-            maybe_field.join(","),
-        )))
-    } else {
-        Ok(())
-    }
 }
 
 #[cfg(test)]
