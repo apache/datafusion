@@ -174,7 +174,26 @@ impl LogicalPlan {
         }
     }
 
+    /// Used for normalizing columns, as the fallback schemas to the main schema
+    /// of the plan.
+    pub fn fallback_normalize_schemas(&self) -> Vec<&DFSchema> {
+        match self {
+            LogicalPlan::Window(_)
+            | LogicalPlan::Projection(_)
+            | LogicalPlan::Aggregate(_)
+            | LogicalPlan::Unnest(_)
+            | LogicalPlan::Join(_)
+            | LogicalPlan::CrossJoin(_) => self
+                .inputs()
+                .iter()
+                .map(|input| input.schema().as_ref())
+                .collect(),
+            _ => vec![],
+        }
+    }
+
     /// Get all meaningful schemas of a plan and its children plan.
+    #[deprecated(since = "20.0.0")]
     pub fn all_schemas(&self) -> Vec<&DFSchemaRef> {
         match self {
             // return self and children schemas
@@ -201,13 +220,13 @@ impl LogicalPlan {
             | LogicalPlan::Values(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Union(_)
+            | LogicalPlan::Extension(_)
             | LogicalPlan::TableScan(_) => {
                 vec![self.schema()]
             }
             // return children schemas
             LogicalPlan::Limit(_)
             | LogicalPlan::Subquery(_)
-            | LogicalPlan::Extension(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Sort(_)
             | LogicalPlan::CreateMemoryTable(_)
@@ -1622,7 +1641,7 @@ pub struct CreateExternalTable {
 }
 
 // Hashing refers to a subset of fields considered in PartialEq.
-#[allow(clippy::derive_hash_xor_eq)]
+#[allow(clippy::derived_hash_with_manual_eq)]
 impl Hash for CreateExternalTable {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.schema.hash(state);
@@ -1721,7 +1740,7 @@ pub struct Analyze {
 }
 
 /// Extension operator defined outside of DataFusion
-#[allow(clippy::derive_hash_xor_eq)] // see impl PartialEq for explanation
+#[allow(clippy::derived_hash_with_manual_eq)] // see impl PartialEq for explanation
 #[derive(Clone, Eq, Hash)]
 pub struct Extension {
     /// The runtime extension operator
@@ -2382,5 +2401,73 @@ mod tests {
             .unwrap()
             .build()
             .unwrap()
+    }
+
+    /// Extension plan that panic when trying to access its input plan
+    #[derive(Debug)]
+    struct NoChildExtension {
+        empty_schema: DFSchemaRef,
+    }
+
+    impl NoChildExtension {
+        fn empty() -> Self {
+            Self {
+                empty_schema: Arc::new(DFSchema::empty()),
+            }
+        }
+    }
+
+    impl UserDefinedLogicalNode for NoChildExtension {
+        fn as_any(&self) -> &dyn std::any::Any {
+            unimplemented!()
+        }
+
+        fn name(&self) -> &str {
+            unimplemented!()
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            panic!("Should not be called")
+        }
+
+        fn schema(&self) -> &DFSchemaRef {
+            &self.empty_schema
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            unimplemented!()
+        }
+
+        fn fmt_for_explain(&self, _: &mut fmt::Formatter) -> fmt::Result {
+            unimplemented!()
+        }
+
+        fn from_template(
+            &self,
+            _: &[Expr],
+            _: &[LogicalPlan],
+        ) -> Arc<dyn UserDefinedLogicalNode> {
+            unimplemented!()
+        }
+
+        fn dyn_hash(&self, _: &mut dyn Hasher) {
+            unimplemented!()
+        }
+
+        fn dyn_eq(&self, _: &dyn UserDefinedLogicalNode) -> bool {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_extension_all_schemas() {
+        let plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoChildExtension::empty()),
+        });
+
+        let schemas = plan.all_schemas();
+        assert_eq!(1, schemas.len());
+        assert_eq!(0, schemas[0].fields().len());
     }
 }

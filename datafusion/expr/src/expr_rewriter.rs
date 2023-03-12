@@ -22,7 +22,7 @@ use crate::expr::{
     Like, Sort, TryCast, WindowFunction,
 };
 use crate::logical_plan::Projection;
-use crate::{Expr, ExprSchemable, LogicalPlan};
+use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 use datafusion_common::Result;
 use datafusion_common::{Column, DFSchema};
 use std::collections::HashMap;
@@ -344,11 +344,23 @@ where
 /// Recursively call [`Column::normalize_with_schemas`] on all [`Column`] expressions
 /// in the `expr` expression tree.
 pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
-    normalize_col_with_schemas(expr, &plan.all_schemas(), &plan.using_columns()?)
+    rewrite_expr(expr, |expr| {
+        if let Expr::Column(c) = expr {
+            let col = LogicalPlanBuilder::normalize(plan, c)?;
+            Ok(Expr::Column(col))
+        } else {
+            Ok(expr)
+        }
+    })
 }
 
 /// Recursively call [`Column::normalize_with_schemas`] on all [`Column`] expressions
 /// in the `expr` expression tree.
+#[deprecated(
+    since = "20.0.0",
+    note = "use normalize_col_with_schemas_and_ambiguity_check instead"
+)]
+#[allow(deprecated)]
 pub fn normalize_col_with_schemas(
     expr: Expr,
     schemas: &[&Arc<DFSchema>],
@@ -359,6 +371,24 @@ pub fn normalize_col_with_schemas(
             Ok(Expr::Column(
                 c.normalize_with_schemas(schemas, using_columns)?,
             ))
+        } else {
+            Ok(expr)
+        }
+    })
+}
+
+/// See [`Column::normalize_with_schemas_and_ambiguity_check`] for usage
+pub fn normalize_col_with_schemas_and_ambiguity_check(
+    expr: Expr,
+    schemas: &[&[&DFSchema]],
+    using_columns: &[HashSet<Column>],
+) -> Result<Expr> {
+    rewrite_expr(expr, |expr| {
+        if let Expr::Column(c) = expr {
+            Ok(Expr::Column(c.normalize_with_schemas_and_ambiguity_check(
+                schemas,
+                using_columns,
+            )?))
         } else {
             Ok(expr)
         }
@@ -600,13 +630,12 @@ mod test {
             make_field("tableC", "f"),
             make_field("tableC", "ff"),
         ]);
-        let schemas = vec![schema_c, schema_f, schema_b, schema_a]
-            .into_iter()
-            .map(Arc::new)
-            .collect::<Vec<_>>();
+        let schemas = vec![schema_c, schema_f, schema_b, schema_a];
         let schemas = schemas.iter().collect::<Vec<_>>();
 
-        let normalized_expr = normalize_col_with_schemas(expr, &schemas, &[]).unwrap();
+        let normalized_expr =
+            normalize_col_with_schemas_and_ambiguity_check(expr, &[&schemas], &[])
+                .unwrap();
         assert_eq!(
             normalized_expr,
             col("tableA.a") + col("tableB.b") + col("tableC.c")
@@ -614,6 +643,7 @@ mod test {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn normalize_cols_priority() {
         let expr = col("a") + col("b");
         // Schemas with multiple matches for column a, first takes priority
@@ -636,12 +666,13 @@ mod test {
         let expr = col("a") + col("b");
         let schema_a =
             make_schema_with_empty_metadata(vec![make_field("\"tableA\"", "a")]);
-        let schemas = vec![schema_a].into_iter().map(Arc::new).collect::<Vec<_>>();
+        let schemas = vec![schema_a];
         let schemas = schemas.iter().collect::<Vec<_>>();
 
-        let error = normalize_col_with_schemas(expr, &schemas, &[])
-            .unwrap_err()
-            .to_string();
+        let error =
+            normalize_col_with_schemas_and_ambiguity_check(expr, &[&schemas], &[])
+                .unwrap_err()
+                .to_string();
         assert_eq!(
             error,
             r#"Schema error: No field named "b". Valid fields are "tableA"."a"."#

@@ -23,8 +23,8 @@ use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::prelude::{col, SessionConfig, SessionContext};
+use datafusion::test_util::parquet::{ParquetScanOptions, TestParquetFile};
 use parquet::file::properties::WriterProperties;
-use parquet_test_utils::{ParquetScanOptions, TestParquetFile};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -75,7 +75,7 @@ struct Opt {
 }
 impl Opt {
     /// Initialize parquet test file given options.
-    fn init_file(&self) -> Result<parquet_test_utils::TestParquetFile> {
+    fn init_file(&self) -> Result<TestParquetFile> {
         let path = self.path.join("logs.parquet");
 
         let mut props_builder = WriterProperties::builder();

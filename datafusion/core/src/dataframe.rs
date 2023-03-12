@@ -1393,8 +1393,7 @@ mod tests {
         let join = left
             .join_on(right, JoinType::Inner, [col("c1").eq(col("c1"))])
             .expect_err("join didn't fail check");
-        let expected =
-            "Error during planning: reference 'c1' is ambiguous, could be a.c1,b.c1;";
+        let expected = "Schema error: Ambiguous reference to unqualified field \"c1\"";
         assert_eq!(join.to_string(), expected);
 
         Ok(())
@@ -1861,7 +1860,7 @@ mod tests {
         )]));
 
         let data = RecordBatch::try_new(
-            schema.clone(),
+            schema,
             vec![
                 Arc::new(arrow::array::StringArray::from(vec![
                     Some("2a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),

@@ -505,10 +505,14 @@ pub async fn from_substrait_rex(
                         "Direct reference StructField with child is not supported"
                             .to_string(),
                     )),
-                    None => Ok(Arc::new(Expr::Column(Column {
-                        relation: None,
-                        name: input_schema.field(x.field as usize).name().to_string(),
-                    }))),
+                    None => {
+                        let column =
+                            input_schema.field(x.field as usize).qualified_column();
+                        Ok(Arc::new(Expr::Column(Column {
+                            relation: column.relation,
+                            name: column.name,
+                        })))
+                    }
                 },
                 _ => Err(DataFusionError::NotImplemented(
                     "Direct reference with types other than StructField is not supported"
