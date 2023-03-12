@@ -32,7 +32,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 
 type DistinctScalarValues = ScalarValue;
-
+type ValueSet = HashSet<DistinctScalarValues, RandomState>;
 /// Expression for a COUNT(DISTINCT) aggregation.
 #[derive(Debug)]
 pub struct DistinctCount {
@@ -144,7 +144,7 @@ impl AggregateExpr for DistinctCount {
         &self.name
     }
 }
-type ValueSet = HashSet<DistinctScalarValues, RandomState>;
+
 // calculating the size of values hashset for fixed length values,
 // taking first batch size * number of batches.
 // This method is faster than full_size(), however it is not suitable for variable length
@@ -197,7 +197,7 @@ fn values_to_state(values: &ValueSet, datatype: &DataType) -> Result<Vec<ScalarV
 
 #[derive(Debug)]
 struct DistinctCountAccumulator {
-    values: HashSet<DistinctScalarValues, RandomState>,
+    values: ValueSet,
     state_data_type: DataType,
 }
 
@@ -243,7 +243,7 @@ where
     /// `K` is required when casting to dict array
     _dt: core::marker::PhantomData<K>,
     values_datatype: DataType,
-    values: HashSet<DistinctScalarValues, RandomState>,
+    values: ValueSet,
 }
 
 impl<K> std::fmt::Debug for CountDistinctDictAccumulator<K>
