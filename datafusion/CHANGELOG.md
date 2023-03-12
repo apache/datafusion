@@ -32,10 +32,30 @@
 **Implemented enhancements:**
 
 - Add UserDefinedLogicalNodeCore [#5521](https://github.com/apache/arrow-datafusion/pull/5521) (mslapek)
+- feat: add `arrow_cast` function to support supports arbitrary arrow types [#5166](https://github.com/apache/arrow-datafusion/pull/5166) (alamb)
+- feat: interval add timestamp [#5491](https://github.com/apache/arrow-datafusion/pull/5491) (Weijun-H)
+- feat: `ParquetExec` predicate preservation [#5495](https://github.com/apache/arrow-datafusion/pull/5495) (crepererum)
+- feat: add optimization rules for bitwise operations [#5423](https://github.com/apache/arrow-datafusion/pull/5423) (izveigor)
+- feat: Support bitwise operations for unsigned integer types [#5476](https://github.com/apache/arrow-datafusion/pull/5476) (izveigor)
+- feat: eliminate the duplicated sort keys in Order By clause [#5462](https://github.com/apache/arrow-datafusion/pull/5462) (jackwener)
+- feat: add name() method to UserDefinedLogicalNode [#5450](https://github.com/apache/arrow-datafusion/pull/5450) (waynexia)
+- feat: express unsigned literal in substrait [#5448](https://github.com/apache/arrow-datafusion/pull/5448) (waynexia)
+- feat: `extensions_options` macro [#5442](https://github.com/apache/arrow-datafusion/pull/5442) (crepererum)
+- [feat]:fast check has column [#5328](https://github.com/apache/arrow-datafusion/pull/5328) (suxiaogang223)
+- feat: eliminate unnecessary projection. [#5366](https://github.com/apache/arrow-datafusion/pull/5366) (jackwener)
 
 **Fixed bugs:**
 
+- revert accidently deleted size code in count_distinct [#5533](https://github.com/apache/arrow-datafusion/pull/5533) (comphead)
+- fix: return schema of ExtensionPlan instead of its children's [#5514](https://github.com/apache/arrow-datafusion/pull/5514) (waynexia)
+- fix: logical merge conflict -- hash_join tests with passing boolean by value [#5531](https://github.com/apache/arrow-datafusion/pull/5531) (korowa)
 - fix: build union schema with child has same column name but qualifier… [#5452](https://github.com/apache/arrow-datafusion/pull/5452) (yukkit)
+- Fix is_distinct from for float NaN values [#5446](https://github.com/apache/arrow-datafusion/pull/5446) (comphead)
+- Bug/union wrong casting [#5342](https://github.com/apache/arrow-datafusion/pull/5342) (berkaysynnada)
+- fix nested loop join with literal join filter [#5431](https://github.com/apache/arrow-datafusion/pull/5431) (ygf11)
+- Fix filter pushdown for extension plans [#5425](https://github.com/apache/arrow-datafusion/pull/5425) (thinkharderdev)
+- Bug fix: Window frame range value outside the type range [#5384](https://github.com/apache/arrow-datafusion/pull/5384) (mustafasrepo)
+- fix: misc phys. expression display bugs [#5387](https://github.com/apache/arrow-datafusion/pull/5387) (crepererum)
 
 **Documentation updates:**
 
