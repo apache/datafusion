@@ -151,7 +151,16 @@ impl Accumulator for MedianAccumulator {
                 // ignore null values
                 .filter(|v| !v.is_null())
                 .cloned(),
-        )?;
+        );
+
+        if array.is_err() {
+            // no non-null values
+            return Err(DataFusionError::Internal(
+                "median requires at least one non-null value".to_string(),
+            ));
+        }
+
+        let array = array.unwrap();
 
         // find the mid point
         let len = array.len();
