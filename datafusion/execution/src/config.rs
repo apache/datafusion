@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{collections::HashMap, hash::{BuildHasherDefault, Hasher}, sync::Arc, any::{TypeId, Any}};
+use std::{
+    any::{Any, TypeId},
+    collections::HashMap,
+    hash::{BuildHasherDefault, Hasher},
+    sync::Arc,
+};
 
-use datafusion_common::{config::ConfigOptions, ScalarValue, Result};
-
-
-
+use datafusion_common::{config::ConfigOptions, Result, ScalarValue};
 
 /// Configuration options for Execution context
 #[derive(Clone)]
@@ -242,12 +244,24 @@ impl SessionConfig {
     }
 
     /// Return a handle to the configuration options.
+    #[deprecated(since = "21.0.0", note = "use options() instead")]
     pub fn config_options(&self) -> &ConfigOptions {
         &self.options
     }
 
     /// Return a mutable handle to the configuration options.
+    #[deprecated(since = "21.0.0", note = "use options_mut() instead")]
     pub fn config_options_mut(&mut self) -> &mut ConfigOptions {
+        &mut self.options
+    }
+
+    /// Return a handle to the configuration options.
+    pub fn options(&self) -> &ConfigOptions {
+        &self.options
+    }
+
+    /// Return a mutable handle to the configuration options.
+    pub fn options_mut(&mut self) -> &mut ConfigOptions {
         &mut self.options
     }
 
@@ -328,7 +342,6 @@ impl From<ConfigOptions> for SessionConfig {
         }
     }
 }
-
 
 /// Map that holds opaque objects indexed by their type.
 ///

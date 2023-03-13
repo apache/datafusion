@@ -36,12 +36,8 @@ pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
+use std::string::String;
 use std::sync::Arc;
-use std::{
-    any::{Any, TypeId},
-    hash::{BuildHasherDefault, Hasher},
-    string::String,
-};
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -87,7 +83,7 @@ use crate::physical_plan::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_common::{config::Extensions, OwnedTableReference, ScalarValue};
+use datafusion_common::{config::Extensions, OwnedTableReference};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -106,6 +102,9 @@ use crate::physical_optimizer::sort_enforcement::EnforceSorting;
 use datafusion_optimizer::OptimizerConfig;
 use datafusion_sql::planner::object_name_to_table_reference;
 use uuid::Uuid;
+
+// backwards compatibility
+pub use datafusion_execution::config::SessionConfig;
 
 use super::options::{
     AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions, ReadOptions,
@@ -296,7 +295,7 @@ impl SessionContext {
         self.state
             .read()
             .config
-            .options
+            .options()
             .sql_parser
             .enable_ident_normalization
     }
@@ -423,8 +422,7 @@ impl SessionContext {
                 variable, value, ..
             }) => {
                 let mut state = self.state.write();
-                let config_options = &mut state.config.options;
-                config_options.set(&variable, &value)?;
+                state.config.options_mut().set(&variable, &value)?;
                 drop(state);
 
                 self.return_empty_dataframe()
@@ -445,7 +443,7 @@ impl SessionContext {
                 let (catalog, schema_name) = match tokens.len() {
                     1 => {
                         let state = self.state.read();
-                        let name = &state.config.options.catalog.default_catalog;
+                        let name = &state.config.options().catalog.default_catalog;
                         let catalog =
                             state.catalog_list.catalog(name).ok_or_else(|| {
                                 DataFusionError::Execution(format!(
@@ -1237,7 +1235,7 @@ impl SessionState {
 
             default_catalog
                 .register_schema(
-                    &config.config_options().catalog.default_schema,
+                    &config.options().catalog.default_schema,
                     Arc::new(MemorySchemaProvider::new()),
                 )
                 .expect("memory catalog provider can register schema");
@@ -1250,7 +1248,7 @@ impl SessionState {
             );
 
             catalog_list.register_catalog(
-                config.config_options().catalog.default_catalog.clone(),
+                config.options().catalog.default_catalog.clone(),
                 Arc::new(default_catalog),
             );
         }
@@ -1326,8 +1324,8 @@ impl SessionState {
         runtime: &Arc<RuntimeEnv>,
         default_catalog: &MemoryCatalogProvider,
     ) {
-        let url = config.options.catalog.location.as_ref();
-        let format = config.options.catalog.format.as_ref();
+        let url = config.options().catalog.location.as_ref();
+        let format = config.options().catalog.format.as_ref();
         let (url, format) = match (url, format) {
             (Some(url), Some(format)) => (url, format),
             _ => return,
@@ -1335,7 +1333,7 @@ impl SessionState {
         let url = url.to_string();
         let format = format.to_string();
 
-        let has_header = config.options.catalog.has_header;
+        let has_header = config.options().catalog.has_header;
         let url = Url::parse(url.as_str()).expect("Invalid default catalog location!");
         let authority = match url.host_str() {
             Some(host) => format!("{}://{}", url.scheme(), host),
@@ -1551,7 +1549,7 @@ impl SessionState {
         }
 
         let enable_ident_normalization =
-            self.config.options.sql_parser.enable_ident_normalization;
+            self.config.options().sql_parser.enable_ident_normalization;
         relations
             .into_iter()
             .map(|x| object_name_to_table_reference(x, enable_ident_normalization))
@@ -1571,9 +1569,9 @@ impl SessionState {
         };
 
         let enable_ident_normalization =
-            self.config.options.sql_parser.enable_ident_normalization;
+            self.config.options().sql_parser.enable_ident_normalization;
         let parse_float_as_decimal =
-            self.config.options.sql_parser.parse_float_as_decimal;
+            self.config.options().sql_parser.parse_float_as_decimal;
         for reference in references {
             let table = reference.table();
             let resolved = self.resolve_table_ref(reference.as_table_reference());
@@ -1682,7 +1680,7 @@ impl SessionState {
 
     /// return the configuration options
     pub fn config_options(&self) -> &ConfigOptions {
-        self.config.config_options()
+        self.config.options()
     }
 
     /// Get a new TaskContext to run in this session
@@ -2620,7 +2618,7 @@ mod tests {
 
         let test = task_context
             .session_config()
-            .config_options()
+            .options()
             .extensions
             .get::<TestExtension>();
         assert!(test.is_some());
