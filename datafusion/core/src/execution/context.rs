@@ -329,6 +329,11 @@ impl SessionContext {
                     let name = table_name.table();
                     let provider = self.table_provider(name).await?;
                     provider.insert_into(&self.state(), &input).await?;
+                } else {
+                    return Err(DataFusionError::Execution(format!(
+                        "Table '{}' does not exist",
+                        table_name
+                    )));
                 }
                 self.return_empty_dataframe()
             }
@@ -2725,46 +2730,6 @@ mod tests {
         let results = ctx.sql("SELECT * FROM information_schema.tables WHERE table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
 
         assert_eq!(results[0].num_rows(), 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn sql_table_insert() -> Result<()> {
-        let session_ctx = SessionContext::with_config(SessionConfig::new());
-
-        session_ctx
-            .sql("CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)")
-            .await?
-            .collect()
-            .await?;
-        session_ctx
-            .sql("CREATE TABLE xyz AS VALUES (1,3,3), (5,5,6)")
-            .await?
-            .collect()
-            .await?;
-
-        let sql = "INSERT INTO abc SELECT * FROM xyz";
-        session_ctx.sql(sql).await?.collect().await?;
-
-        let results = session_ctx
-            .sql("SELECT * FROM abc")
-            .await?
-            .collect()
-            .await?;
-
-        let expected = vec![
-            "+---------+---------+---------+",
-            "| column1 | column2 | column3 |",
-            "+---------+---------+---------+",
-            "| 1       | 2       | 3       |",
-            "| 4       | 5       | 6       |",
-            "| 1       | 3       | 3       |",
-            "| 5       | 5       | 6       |",
-            "+---------+---------+---------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
-
         Ok(())
     }
 

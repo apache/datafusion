@@ -203,18 +203,15 @@ impl LogicalPlanBuilder {
         Self::scan_with_filters(table_name, table_source, projection, vec![])
     }
 
-    /// Convert a logical plan into a builder with a [DmlStatement]
+    /// Create a [DmlStatement] for inserting the contents of this builder into the named table
     pub fn insert_into(
         input: LogicalPlan,
-        table_name: impl Into<String>,
+        table_name: impl Into<OwnedTableReference>,
         table_schema: &Schema,
     ) -> Result<Self> {
-        let table_name = OwnedTableReference::Bare {
-            table: table_name.into(),
-        };
         let table_schema = table_schema.clone().to_dfschema_ref()?;
         Ok(Self::from(LogicalPlan::Dml(DmlStatement {
-            table_name,
+            table_name: table_name.into(),
             table_schema,
             op: WriteOp::Insert,
             input: Arc::new(input),
