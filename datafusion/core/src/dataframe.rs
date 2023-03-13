@@ -344,33 +344,19 @@ impl DataFrame {
             .collect::<Vec<_>>();
         describe_schemas.insert(0, Field::new("describe", DataType::Utf8, false));
 
-        //count aggregation
-        let cnt = self.clone().aggregate(
-            vec![],
-            original_schema_fields
-                .clone()
-                .map(|f| count(col(f.name())))
-                .collect::<Vec<_>>(),
-        )?;
-        // The optimization of AggregateStatistics will rewrite the physical plan
-        // for the count function and ignore alias functions,
-        // as shown in https://github.com/apache/arrow-datafusion/issues/5444.
-        // This logic should be removed when #5444 is fixed.
-        let cnt = cnt.clone().select(
-            cnt.schema()
-                .fields()
-                .iter()
-                .zip(original_schema_fields.clone())
-                .map(|(count_field, orgin_field)| {
-                    col(count_field.name()).alias(orgin_field.name())
-                })
-                .collect::<Vec<_>>(),
-        )?;
-        //should be removed when #5444 is fixed
         //collect recordBatch
         let describe_record_batch = vec![
             // count aggregation
-            cnt.collect().await?,
+            self.clone()
+                .aggregate(
+                    vec![],
+                    original_schema_fields
+                        .clone()
+                        .map(|f| count(col(f.name())).alias(f.name()))
+                        .collect::<Vec<_>>(),
+                )?
+                .collect()
+                .await?,
             // null_count aggregation
             self.clone()
                 .aggregate(
