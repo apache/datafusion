@@ -312,6 +312,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
 }
 
 pub trait PartitionSearchTrait: Send {
+    /// This method constructs output columns using the result of each window expression
     fn calculate_out_columns(
         &mut self,
         input_buffer: &mut RecordBatch,
@@ -327,7 +328,7 @@ pub trait PartitionSearchTrait: Send {
         ordered_partition_by_indices: &[usize],
     ) -> Result<Vec<(Vec<ScalarValue>, RecordBatch)>>;
 
-    fn prune(&mut self, n_out: usize) -> Result<()> {
+    fn prune(&mut self, _n_out: usize) -> Result<()> {
         Ok(())
     }
 }
@@ -732,133 +733,6 @@ pub struct BoundedWindowAggStream {
 }
 
 impl BoundedWindowAggStream {
-    // /// This method constructs output columns using the result of each window expression
-    // fn calculate_out_columns(&mut self) -> Result<Option<Vec<ArrayRef>>> {
-    //     match &self.search_mode {
-    //         PartitionSearchMode::Sorted => {
-    //             let n_out = self.calculate_n_out_row()?;
-    //             if n_out == 0 {
-    //                 Ok(None)
-    //             } else {
-    //                 self.input_buffer
-    //                     .columns()
-    //                     .iter()
-    //                     .map(|elem| Ok(elem.slice(0, n_out)))
-    //                     .chain(
-    //                         self.window_agg_states
-    //                             .iter()
-    //                             .map(|elem| get_aggregate_result_out_column(elem, n_out)),
-    //                     )
-    //                     .collect::<Result<Vec<_>>>()
-    //                     .map(Some)
-    //             }
-    //         }
-    //         PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted => {
-    //             let partition_by_columns =
-    //                 self.evaluate_partition_by_column_values(&self.input_buffer)?;
-    //             let n_window_col = self.window_agg_states.len();
-    //             // `row_map` stores hash id and partition index starting from 0 to n. unique to each partition.
-    //             // partition index corresponds to index of the partition in the vector `partition_indices`
-    //             let mut row_map: RawTable<(u64, usize)> = RawTable::with_capacity(0);
-    //             // `partition_indices` store vector of tuple. First entry is the partition key (unique for each partition)
-    //             // second entry is indices of the rows which partition is constructed in the input record batch
-    //             // Third entry is the how many outputs are generated for the partition.
-    //             let mut partition_indices: Vec<(Vec<ScalarValue>, Vec<usize>, usize)> =
-    //                 vec![];
-    //             let err = || {
-    //                 DataFusionError::Execution("Expects to have partition".to_string())
-    //             };
-    //             for (row_idx, hash) in self.input_buffer_hashes.iter().enumerate() {
-    //                 let entry = row_map.get_mut(*hash, |(_hash, group_idx)| {
-    //                     let row = get_row_at_idx(&partition_by_columns, row_idx).unwrap();
-    //                     row == partition_indices[*group_idx].0
-    //                 });
-    //                 match entry {
-    //                     Some((_hash, group_idx)) => {
-    //                         let (_row, indices, n_out) =
-    //                             &mut partition_indices[*group_idx];
-    //                         if indices.len() >= *n_out {
-    //                             break;
-    //                         }
-    //                         indices.push(row_idx);
-    //                     }
-    //                     None => {
-    //                         row_map.insert(
-    //                             *hash,
-    //                             (*hash, partition_indices.len()),
-    //                             |(hash, _group_index)| *hash,
-    //                         );
-    //                         let row = get_row_at_idx(&partition_by_columns, row_idx)?;
-    //                         let min_out = self
-    //                             .window_agg_states
-    //                             .iter()
-    //                             .map(|window_agg_state| {
-    //                                 window_agg_state
-    //                                     .get(&row)
-    //                                     .map(|partition| partition.state.out_col.len())
-    //                                     .unwrap_or(0)
-    //                             })
-    //                             .min()
-    //                             .unwrap_or(0);
-    //                         if min_out == 0 {
-    //                             break;
-    //                         }
-    //                         partition_indices.push((row, vec![row_idx], min_out));
-    //                     }
-    //                 }
-    //             }
-    //             let mut new_columns = vec![vec![]; n_window_col];
-    //             let mut all_indices = vec![];
-    //             for (row, indices, _) in partition_indices {
-    //                 for (idx, window_agg_state) in
-    //                     self.window_agg_states.iter().enumerate()
-    //                 {
-    //                     let partition = window_agg_state.get(&row).ok_or_else(err)?;
-    //                     let values =
-    //                         partition.state.out_col.slice(0, indices.len()).clone();
-    //                     new_columns[idx].push(values);
-    //                 }
-    //                 let partition_batch_state =
-    //                     self.partition_buffers.get_mut(&row).ok_or_else(err)?;
-    //                 // Store how many rows are generated for each partition
-    //                 partition_batch_state.n_out_row = indices.len();
-    //
-    //                 // For each row keep corresponding index in the input record batch
-    //                 all_indices.extend(indices);
-    //             }
-    //             // We couldn't generate any new value return None.
-    //             if all_indices.is_empty() {
-    //                 return Ok(None);
-    //             }
-    //
-    //             // Concat results for each column
-    //             let new_columns = new_columns
-    //                 .iter()
-    //                 .map(|elems| {
-    //                     concat(
-    //                         &elems.iter().map(|elem| elem.as_ref()).collect::<Vec<_>>(),
-    //                     )
-    //                     .map_err(DataFusionError::ArrowError)
-    //                 })
-    //                 .collect::<Result<Vec<_>>>()?;
-    //             // We should output column according to row index ordering.
-    //             let sorted_indices = argsort(&all_indices);
-    //             // Construct new column according to row ordering.
-    //             let new_columns = get_arrayref_at_indices(&new_columns, &sorted_indices)?;
-    //
-    //             let n_out = new_columns[0].len();
-    //             let res = self
-    //                 .input_buffer
-    //                 .columns()
-    //                 .iter()
-    //                 .map(|elem| elem.slice(0, n_out))
-    //                 .chain(new_columns.into_iter())
-    //                 .collect::<Vec<_>>();
-    //             Ok(Some(res))
-    //         }
-    //     }
-    // }
-
     /// Prunes sections of the state that are no longer needed when calculating
     /// results (as determined by window frame boundaries and number of results generated).
     // For instance, if first `n` (not necessarily same with `n_out`) elements are no longer needed to
