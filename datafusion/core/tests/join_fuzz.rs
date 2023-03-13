@@ -153,7 +153,7 @@ async fn run_join_test(
                 None,
                 &join_type,
                 PartitionMode::Partitioned,
-                &false,
+                false,
             )
             .unwrap(),
         );
