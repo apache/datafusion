@@ -179,3 +179,62 @@ async fn in_subquery_with_same_table() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn invalid_scalar_subquery() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", true)?;
+
+    let sql = "SELECT t1_id, t1_name, t1_int, (select t2_id, t2_name FROM t2 WHERE t2.t2_id = t1.t1_int) FROM t1";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let err = dataframe.into_optimized_plan().err().unwrap();
+    assert_eq!(
+        "Plan(\"Scalar subquery should only return one column\")",
+        &format!("{err:?}")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn subquery_not_allowed() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", true)?;
+
+    // In/Exist Subquery is not allowed in ORDER BY clause.
+    let sql = "SELECT t1_id, t1_name, t1_int FROM t1 order by t1_int in (SELECT t2_int FROM t2 WHERE t1.t1_id > t1.t1_int)";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let err = dataframe.into_optimized_plan().err().unwrap();
+
+    assert_eq!(
+        "Plan(\"In/Exist subquery can not be used in Sort plan nodes\")",
+        &format!("{err:?}")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "Test ignored, fix correlated column reference check"]
+async fn support_agg_correlated_columns() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", true)?;
+
+    let sql = "SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT sum(t1.t1_int + t2.t2_id) FROM t2 WHERE t1.t1_name = t2.t2_name)";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let _plan = dataframe.into_optimized_plan()?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "Test ignored, fix correlated column reference check"]
+async fn support_join_correlated_columns() -> Result<()> {
+    let ctx = create_sub_query_join_context("t0_id", "t1_id", "t2_id", true)?;
+    let sql = "SELECT t0_id, t0_name FROM t0 WHERE EXISTS (SELECT 1 FROM t1 INNER JOIN t2 ON(t1.t1_id = t2.t2_id and t1.t1_name = t0.t0_name))";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let _plan = dataframe.into_optimized_plan()?;
+
+    Ok(())
+}
