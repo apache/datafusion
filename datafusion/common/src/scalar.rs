@@ -4719,14 +4719,14 @@ mod tests {
         // positive interval, edge cases
         let test_data = get_test_data(1);
 
-        for (idx, exp) in test_data.iter().enumerate() {
-            assert_eq!(exp.2, test_data[idx].0.sub(&test_data[idx].1).unwrap())
+        for (lhs, rhs, expected) in test_data.iter() {
+            assert_eq!(expected, &lhs.sub(rhs).unwrap())
         }
 
         // negative interval, edge cases
         let test_data = get_test_data(-1);
-        for (idx, exp) in test_data.iter().enumerate() {
-            assert_eq!(exp.2, test_data[idx].1.sub(&test_data[idx].0).unwrap());
+        for (rhs, lhs, expected) in test_data.iter() {
+            assert_eq!(expected, &lhs.sub(rhs).unwrap());
         }
     }
     #[test]
