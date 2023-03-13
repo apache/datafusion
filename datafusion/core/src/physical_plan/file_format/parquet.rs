@@ -139,7 +139,7 @@ impl ParquetExec {
                     }
                 }
             })
-            .filter(|p| !p.allways_true());
+            .filter(|p| !p.always_true());
 
         let page_pruning_predicate = predicate.as_ref().and_then(|predicate_expr| {
             match PagePruningPredicate::try_new(predicate_expr, file_schema.clone()) {
@@ -585,6 +585,8 @@ impl FileOpener for ParquetOpener {
                 // using bloom filter metadata on the row groups
                 if enable_bloom_filter {
                     row_groups_index = row_groups::prune_row_groups_by_bloom_filter(
+                        reader.clone(),
+                        &row_groups_index,
                         file_metadata.row_groups(),
                         file_range.as_ref(),
                         pruning_predicate.as_ref(),

@@ -15,14 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::datatypes::SchemaRef;
 use arrow::{
     array::ArrayRef,
     datatypes::{DataType, Schema},
 };
 use datafusion_common::Column;
 use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
 use log::debug;
+use parquet::arrow::async_reader::AsyncFileReader;
+use parquet::bloom_filter::Sbbf;
+use std::num::TryFromIntError;
+use std::sync::Arc;
 
+use datafusion_common::DataFusionError::ArrowError;
+use datafusion_expr::Operator;
+use datafusion_physical_expr::expressions as phys_expr;
+use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
+use parquet::file::metadata::ColumnChunkMetaData;
 use parquet::file::{
     metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics,
 };
@@ -85,14 +96,83 @@ pub(crate) fn prune_row_groups_by_statistics(
 }
 
 pub(crate) fn prune_row_groups_by_bloom_filter(
+    reader: Box<dyn AsyncFileReader>,
+    row_groups_index: &[usize],
     groups: &[RowGroupMetaData],
     range: Option<&FileRange>,
     predicate: &PruningPredicate,
     metrics: &ParquetFileMetrics,
 ) -> Vec<usize> {
+    // All row groups are filtered return fast.
+    if row_groups_index.is_empty() {
+        return row_groups_index.into();
+    }
+
+    let bloom_filter_predicates = match BloomFilterPruningPredicate::try_new(
+        predicate.orig_expr(),
+    ) {
+        Ok(predicate) => predicate,
+        Err(e) => {
+            debug!("Error evaluating row group predicate values when using BloomFilterPruningPredicate {e}");
+        }
+    };
+
     let mut filtered = Vec::with_capacity(groups.len());
 
+    for rg_index in row_groups_index {
+        let rg_meta = groups
+            .get(*rg_index)
+            .expect("RowGroupMetaData out of index");
+        let filtered = false;
+        for (filter_col, filter_val) in bloom_filter_predicates.predicates {
+            let col_meta = rg_meta.column(filter_col.index());
+            read_bloom_filter_from_column_chunk(col_meta, reader.clone())
+            reader
+        }
+    }
     filtered
+}
+
+fn read_bloom_filter_from_column_chunk(
+    column_metadata: &ColumnChunkMetaData,
+    reader: Box<dyn AsyncFileReader>,
+) -> Option<Sbbf> {
+    let offset = if let Some(offset) = column_metadata.bloom_filter_offset() {
+        match u64::try_from(offset) {
+            Ok(v) => v,
+            Err(e) => {
+                debug!("Bloom filter offset is invalid {e}");
+                return None;
+            }
+        }
+    } else {
+        return None;
+    };
+
+    let (header, bitset_offset) =
+        chunk_read_bloom_filter_header_and_offset(offset, reader.clone())?;
+
+    match header.algorithm {
+        BloomFilterAlgorithm::BLOCK(_) => {
+            // this match exists to future proof the singleton algorithm enum
+        }
+    }
+    match header.compression {
+        BloomFilterCompression::UNCOMPRESSED(_) => {
+            // this match exists to future proof the singleton compression enum
+        }
+    }
+    match header.hash {
+        BloomFilterHash::XXHASH(_) => {
+            // this match exists to future proof the singleton hash enum
+        }
+    }
+    // length in bytes
+    let length: usize = header.num_bytes.try_into().map_err(|_| {
+        ParquetError::General("Bloom filter length is invalid".to_string())
+    })?;
+    let bitset = reader.get_bytes(bitset_offset, length)?;
+    Some(Sbbf::new(&bitset))
 }
 
 /// Wraps parquet statistics in a way
@@ -244,6 +324,49 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
         get_null_count_values!(self, column)
     }
+}
+#[derive(Debug)]
+pub(crate) struct BloomFilterPruningPredicate {
+    // Only predicates like `col = <constant>` can be applied to bloom filters
+    predicates: Vec<(phys_expr::Column, ScalarValue)>,
+}
+
+impl BloomFilterPruningPredicate {
+    pub fn try_new(expr: &Arc<dyn PhysicalExpr>) -> Result<Self> {
+        let mut predicates = vec![];
+        for x in split_conjunction(expr) {
+            if let Some(bin_expr) = x.as_any().downcast_ref::<phys_expr::BinaryExpr>() {
+                if let Some(res) = check_expr_is_col_equal_const(bin_expr) {
+                    predicates.push(res)
+                }
+            }
+        }
+        Ok(Self { predicates })
+    }
+}
+
+fn check_expr_is_col_equal_const(
+    exr: &phys_expr::BinaryExpr,
+) -> Option<(phys_expr::Column, ScalarValue)> {
+    if exr.op() == Operator::Eq {
+        let left_any = exr.left().as_any();
+        let right_any = exr.right().as_any();
+
+        if let (Some(col), Some(liter)) = (
+            left_any.downcast_ref::<phys_expr::Column>(),
+            right_any.downcast_ref::<phys_expr::Literal>(),
+        ) {
+            return Some((col.into(), liter.value().into()));
+        }
+
+        if let (Some(liter), Some(col)) = (
+            left_any.downcast_ref::<phys_expr::Literal>(),
+            right_any.downcast_ref::<phys_expr::Column>(),
+        ) {
+            return Some((col.into(), liter.value().into()));
+        }
+    }
+    return None;
 }
 
 #[cfg(test)]

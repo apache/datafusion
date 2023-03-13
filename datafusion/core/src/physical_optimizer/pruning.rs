@@ -208,7 +208,7 @@ impl PruningPredicate {
     }
 
     /// Returns true if this pruning predicate is "always true" (aka will not prune anything)
-    pub fn allways_true(&self) -> bool {
+    pub fn always_true(&self) -> bool {
         is_always_true(&self.predicate_expr)
     }
 
