@@ -391,14 +391,13 @@ impl WindowAggState {
             }
             Some(WindowFrameContext::Groups { state, .. }) => {
                 let mut n_group_to_del = 0;
-                state.group_end_indices.retain_mut(|(_, start_idx)| {
-                    if n_prune >= *start_idx {
-                        n_group_to_del += 1;
-                        false
-                    } else {
-                        true
+                for (_, end_idx) in &state.group_end_indices {
+                    if n_prune < *end_idx {
+                        break;
                     }
-                });
+                    n_group_to_del += 1;
+                }
+                state.group_end_indices.drain(0..n_group_to_del);
                 state
                     .group_end_indices
                     .iter_mut()
