@@ -515,7 +515,7 @@ fn select_with_ambiguous_column() {
     let sql = "SELECT id FROM person a, person b";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Plan(\"column reference id is ambiguous\")",
+        "SchemaError(AmbiguousReference { qualifier: None, name: \"id\" })",
         format!("{err:?}")
     );
 }
@@ -538,7 +538,7 @@ fn where_selection_with_ambiguous_column() {
     let sql = "SELECT * FROM person a, person b WHERE id = id + 1";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Plan(\"column reference id is ambiguous\")",
+        "SchemaError(AmbiguousReference { qualifier: None, name: \"id\" })",
         format!("{err:?}")
     );
 }
@@ -2312,6 +2312,15 @@ fn approx_median_window() {
 }
 
 #[test]
+fn select_arrow_cast() {
+    let sql = "SELECT arrow_cast(1234, 'Float64'), arrow_cast('foo', 'LargeUtf8')";
+    let expected = "\
+    Projection: CAST(Int64(1234) AS Float64), CAST(Utf8(\"foo\") AS LargeUtf8)\
+    \n  EmptyRelation";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn select_typed_date_string() {
     let sql = "SELECT date '2020-12-10' AS date";
     let expected = "Projection: CAST(Utf8(\"2020-12-10\") AS Date32) AS date\
@@ -2534,7 +2543,7 @@ impl ContextProvider for MockContextProvider {
     }
 
     fn get_function_meta(&self, _name: &str) -> Option<Arc<ScalarUDF>> {
-        unimplemented!()
+        None
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
@@ -2953,6 +2962,24 @@ fn order_by_unaliased_name() {
 }
 
 #[test]
+fn order_by_ambiguous_name() {
+    let sql = "select * from person a join person b using (id) order by age";
+    let expected = "Schema error: Ambiguous reference to unqualified field 'age'";
+
+    let err = logical_plan(sql).unwrap_err();
+    assert_eq!(err.to_string(), expected);
+}
+
+#[test]
+fn group_by_ambiguous_name() {
+    let sql = "select max(id) from person a join person b using (id) group by age";
+    let expected = "Schema error: Ambiguous reference to unqualified field 'age'";
+
+    let err = logical_plan(sql).unwrap_err();
+    assert_eq!(err.to_string(), expected);
+}
+
+#[test]
 fn test_zero_offset_with_limit() {
     let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 0;";
     let expected = "Limit: skip=0, fetch=5\
@@ -3251,8 +3278,7 @@ fn test_ambiguous_column_references_in_on_join() {
             INNER JOIN person as p2
             ON id = 1";
 
-    let expected =
-        "Error during planning: reference 'id' is ambiguous, could be p1.id,p2.id;";
+    let expected = "Schema error: Ambiguous reference to unqualified field 'id'";
 
     // It should return error.
     let result = logical_plan(sql);

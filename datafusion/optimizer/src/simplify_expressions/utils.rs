@@ -77,6 +77,61 @@ pub fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
     }
 }
 
+/// Deletes all 'needles' or remains one 'needle' that are found in a chain of xor
+/// expressions. Such as: A ^ (A ^ (B ^ A))
+pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> Expr {
+    /// Deletes recursively 'needles' in a chain of xor expressions
+    fn recursive_delete_xor_in_expr(
+        expr: &Expr,
+        needle: &Expr,
+        xor_counter: &mut i32,
+    ) -> Expr {
+        match expr {
+            Expr::BinaryExpr(BinaryExpr { left, op, right })
+                if *op == Operator::BitwiseXor =>
+            {
+                let left_expr = recursive_delete_xor_in_expr(left, needle, xor_counter);
+                let right_expr = recursive_delete_xor_in_expr(right, needle, xor_counter);
+                if left_expr == *needle {
+                    *xor_counter += 1;
+                    return right_expr;
+                } else if right_expr == *needle {
+                    *xor_counter += 1;
+                    return left_expr;
+                }
+
+                Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(left_expr),
+                    *op,
+                    Box::new(right_expr),
+                ))
+            }
+            _ => expr.clone(),
+        }
+    }
+
+    let mut xor_counter: i32 = 0;
+    let result_expr = recursive_delete_xor_in_expr(expr, needle, &mut xor_counter);
+    if result_expr == *needle {
+        return needle.clone();
+    } else if xor_counter % 2 == 0 {
+        if is_left {
+            return Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(needle.clone()),
+                Operator::BitwiseXor,
+                Box::new(result_expr),
+            ));
+        } else {
+            return Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(result_expr),
+                Operator::BitwiseXor,
+                Box::new(needle.clone()),
+            ));
+        }
+    }
+    result_expr
+}
+
 pub fn is_zero(s: &Expr) -> bool {
     match s {
         Expr::Literal(ScalarValue::Int8(Some(0)))
@@ -154,9 +209,14 @@ pub fn is_op_with(target_op: Operator, haystack: &Expr, needle: &Expr) -> bool {
     matches!(haystack, Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()))
 }
 
-/// returns true if `not_expr` is !`expr`
+/// returns true if `not_expr` is !`expr` (not)
 pub fn is_not_of(not_expr: &Expr, expr: &Expr) -> bool {
     matches!(not_expr, Expr::Not(inner) if expr == inner.as_ref())
+}
+
+/// returns true if `not_expr` is !`expr` (bitwise not)
+pub fn is_negative_of(not_expr: &Expr, expr: &Expr) -> bool {
+    matches!(not_expr, Expr::Negative(inner) if expr == inner.as_ref())
 }
 
 /// returns the contained boolean value in `expr` as
