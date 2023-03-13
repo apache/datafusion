@@ -2723,6 +2723,33 @@ mod tests {
             )),
             not_in_subquery(col("c1"), subquery)
         );
+
+        let subquery1 =
+            scalar_subquery(Arc::new(test_table_scan_with_name("test1").unwrap()));
+        let subquery2 =
+            scalar_subquery(Arc::new(test_table_scan_with_name("test2").unwrap()));
+
+        // c1 NOT IN (<subquery1>, <subquery2>) -> c1 != <subquery2> AND c1 != <subquery1>
+        assert_eq!(
+            simplify(in_list(
+                col("c1"),
+                vec![subquery1.clone(), subquery2.clone()],
+                true
+            )),
+            col("c1")
+                .not_eq(subquery2.clone())
+                .and(col("c1").not_eq(subquery1.clone()))
+        );
+
+        // c1 IN (<subquery1>, <subquery2>) -> c1 == <subquery2> OR c1 == <subquery1>
+        assert_eq!(
+            simplify(in_list(
+                col("c1"),
+                vec![subquery1.clone(), subquery2.clone()],
+                false
+            )),
+            col("c1").eq(subquery2).or(col("c1").eq(subquery1))
+        );
     }
 
     #[test]
