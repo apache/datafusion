@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int64Array, StringArray};
+use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
@@ -318,7 +318,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/tpch-csv/customer.csv", CsvReadOptions::new()).await?;    
+    /// let df = ctx.read_csv("tests/tpch-csv/customer.csv", CsvReadOptions::new()).await?;
     /// df.describe().await.unwrap();
     ///
     /// # Ok(())
@@ -329,10 +329,10 @@ impl DataFrame {
         let supported_describe_functions =
             vec!["count", "null_count", "mean", "std", "min", "max", "median"];
 
-        let fields_iter = self.schema().fields().iter();
+        let original_schema_fields = self.schema().fields().iter();
 
         //define describe column
-        let mut describe_schemas = fields_iter
+        let mut describe_schemas = original_schema_fields
             .clone()
             .map(|field| {
                 if field.data_type().is_numeric() {
@@ -344,24 +344,38 @@ impl DataFrame {
             .collect::<Vec<_>>();
         describe_schemas.insert(0, Field::new("describe", DataType::Utf8, false));
 
+        //count aggregation
+        let cnt = self.clone().aggregate(
+            vec![],
+            original_schema_fields
+                .clone()
+                .map(|f| count(col(f.name())))
+                .collect::<Vec<_>>(),
+        )?;
+        // The optimization of AggregateStatistics will rewrite the physical plan
+        // for the count function and ignore alias functions,
+        // as shown in https://github.com/apache/arrow-datafusion/issues/5444.
+        // This logic should be removed when #5444 is fixed.
+        let cnt = cnt.clone().select(
+            cnt.schema()
+                .fields()
+                .iter()
+                .zip(original_schema_fields.clone())
+                .map(|(count_field, orgin_field)| {
+                    col(count_field.name()).alias(orgin_field.name())
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        //should be removed when #5444 is fixed
         //collect recordBatch
         let describe_record_batch = vec![
             // count aggregation
-            self.clone()
-                .aggregate(
-                    vec![],
-                    fields_iter
-                        .clone()
-                        .map(|f| count(col(f.name())).alias(f.name()))
-                        .collect::<Vec<_>>(),
-                )?
-                .collect()
-                .await?,
+            cnt.collect().await?,
             // null_count aggregation
             self.clone()
                 .aggregate(
                     vec![],
-                    fields_iter
+                    original_schema_fields
                         .clone()
                         .map(|f| count(is_null(col(f.name()))).alias(f.name()))
                         .collect::<Vec<_>>(),
@@ -372,7 +386,7 @@ impl DataFrame {
             self.clone()
                 .aggregate(
                     vec![],
-                    fields_iter
+                    original_schema_fields
                         .clone()
                         .filter(|f| f.data_type().is_numeric())
                         .map(|f| avg(col(f.name())).alias(f.name()))
@@ -384,7 +398,7 @@ impl DataFrame {
             self.clone()
                 .aggregate(
                     vec![],
-                    fields_iter
+                    original_schema_fields
                         .clone()
                         .filter(|f| f.data_type().is_numeric())
                         .map(|f| stddev(col(f.name())).alias(f.name()))
@@ -396,7 +410,7 @@ impl DataFrame {
             self.clone()
                 .aggregate(
                     vec![],
-                    fields_iter
+                    original_schema_fields
                         .clone()
                         .filter(|f| {
                             !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
@@ -410,7 +424,7 @@ impl DataFrame {
             self.clone()
                 .aggregate(
                     vec![],
-                    fields_iter
+                    original_schema_fields
                         .clone()
                         .filter(|f| {
                             !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
@@ -424,7 +438,7 @@ impl DataFrame {
             self.clone()
                 .aggregate(
                     vec![],
-                    fields_iter
+                    original_schema_fields
                         .clone()
                         .filter(|f| f.data_type().is_numeric())
                         .map(|f| median(col(f.name())).alias(f.name()))
@@ -435,7 +449,7 @@ impl DataFrame {
         ];
 
         let mut array_ref_vec: Vec<ArrayRef> = vec![];
-        for field in fields_iter {
+        for field in original_schema_fields {
             let mut array_datas = vec![];
             for record_batch in describe_record_batch.iter() {
                 let column = record_batch.get(0).unwrap().column_by_name(field.name());
@@ -928,7 +942,8 @@ impl DataFrame {
     /// Write a `DataFrame` to a CSV file.
     pub async fn write_csv(self, path: &str) -> Result<()> {
         let plan = self.session_state.create_physical_plan(&self.plan).await?;
-        plan_to_csv(&self.session_state, plan, path).await
+        let task_ctx = Arc::new(self.task_ctx());
+        plan_to_csv(task_ctx, plan, path).await
     }
 
     /// Write a `DataFrame` to a Parquet file.
@@ -938,13 +953,15 @@ impl DataFrame {
         writer_properties: Option<WriterProperties>,
     ) -> Result<()> {
         let plan = self.session_state.create_physical_plan(&self.plan).await?;
-        plan_to_parquet(&self.session_state, plan, path, writer_properties).await
+        let task_ctx = Arc::new(self.task_ctx());
+        plan_to_parquet(task_ctx, plan, path, writer_properties).await
     }
 
     /// Executes a query and writes the results to a partitioned JSON file.
     pub async fn write_json(self, path: impl AsRef<str>) -> Result<()> {
         let plan = self.session_state.create_physical_plan(&self.plan).await?;
-        plan_to_json(&self.session_state, plan, path).await
+        let task_ctx = Arc::new(self.task_ctx());
+        plan_to_json(task_ctx, plan, path).await
     }
 
     /// Add an additional column to the DataFrame.
@@ -1376,8 +1393,7 @@ mod tests {
         let join = left
             .join_on(right, JoinType::Inner, [col("c1").eq(col("c1"))])
             .expect_err("join didn't fail check");
-        let expected =
-            "Error during planning: reference 'c1' is ambiguous, could be a.c1,b.c1;";
+        let expected = "Schema error: Ambiguous reference to unqualified field 'c1'";
         assert_eq!(join.to_string(), expected);
 
         Ok(())
@@ -1844,7 +1860,7 @@ mod tests {
         )]));
 
         let data = RecordBatch::try_new(
-            schema.clone(),
+            schema,
             vec![
                 Arc::new(arrow::array::StringArray::from(vec![
                     Some("2a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),

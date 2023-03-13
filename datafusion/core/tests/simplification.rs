@@ -49,6 +49,10 @@ impl SimplifyInfo for MyInfo {
     fn execution_props(&self) -> &ExecutionProps {
         &self.execution_props
     }
+
+    fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
+        expr.get_type(&self.schema)
+    }
 }
 
 impl From<DFSchema> for MyInfo {

@@ -21,20 +21,20 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use datafusion::arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion::common::ToDFSchema;
-use datafusion::config::ConfigOptions;
-use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
-use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::error::Result;
-use datafusion::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
-use datafusion::physical_expr::create_physical_expr;
-use datafusion::physical_expr::execution_props::ExecutionProps;
-use datafusion::physical_plan::file_format::{FileScanConfig, ParquetExec};
-use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::metrics::MetricsSet;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::{Expr, SessionConfig};
+use crate::arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use crate::common::ToDFSchema;
+use crate::config::ConfigOptions;
+use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
+use crate::datasource::object_store::ObjectStoreUrl;
+use crate::error::Result;
+use crate::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
+use crate::physical_expr::create_physical_expr;
+use crate::physical_expr::execution_props::ExecutionProps;
+use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
+use crate::physical_plan::filter::FilterExec;
+use crate::physical_plan::metrics::MetricsSet;
+use crate::physical_plan::ExecutionPlan;
+use crate::prelude::{Expr, SessionConfig};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
@@ -49,9 +49,13 @@ pub struct TestParquetFile {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Options for how to create the parquet scan
 pub struct ParquetScanOptions {
+    /// Enable pushdown filters
     pub pushdown_filters: bool,
+    /// enable reordering filters
     pub reorder_filters: bool,
+    /// enable page index
     pub enable_page_index: bool,
 }
 
@@ -117,15 +121,22 @@ impl TestParquetFile {
 }
 
 impl TestParquetFile {
-    /// return a `ParquetExec` and `FilterExec` with the specified options to scan this parquet file.
+    /// Return a `ParquetExec` with the specified options.
     ///
-    /// This returns the same plan that DataFusion will make with a pushed down predicate followed by a filter:
+    /// If `maybe_filter` is non-None, the ParquetExec will be filtered using
+    /// the given expression, and this method will return the same plan that DataFusion
+    /// will make with a pushed down predicate followed by a filter:
     ///
     /// ```text
     /// (FilterExec)
     ///   (ParquetExec)
     /// ```
-    pub async fn create_scan(&self, filter: Expr) -> Result<Arc<dyn ExecutionPlan>> {
+    ///
+    /// Otherwise if `maybe_filter` is None, return just a `ParquetExec`
+    pub async fn create_scan(
+        &self,
+        maybe_filter: Option<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         let scan_config = FileScanConfig {
             object_store_url: self.object_store_url.clone(),
             file_schema: self.schema.clone(),
@@ -148,25 +159,26 @@ impl TestParquetFile {
         // run coercion on the filters to coerce types etc.
         let props = ExecutionProps::new();
         let context = SimplifyContext::new(&props).with_schema(df_schema.clone());
-        let simplifier = ExprSimplifier::new(context);
-        let filter = simplifier.coerce(filter, df_schema.clone()).unwrap();
+        if let Some(filter) = maybe_filter {
+            let simplifier = ExprSimplifier::new(context);
+            let filter = simplifier.coerce(filter, df_schema.clone()).unwrap();
+            let physical_filter_expr = create_physical_expr(
+                &filter,
+                &df_schema,
+                self.schema.as_ref(),
+                &ExecutionProps::default(),
+            )?;
+            let parquet_exec = Arc::new(ParquetExec::new(
+                scan_config,
+                Some(physical_filter_expr.clone()),
+                None,
+            ));
 
-        let physical_filter_expr = create_physical_expr(
-            &filter,
-            &df_schema,
-            self.schema.as_ref(),
-            &ExecutionProps::default(),
-        )?;
-
-        let parquet_exec = Arc::new(ParquetExec::new(
-            scan_config,
-            Some(physical_filter_expr.clone()),
-            None,
-        ));
-
-        let exec = Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
-
-        Ok(exec)
+            let exec = Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
+            Ok(exec)
+        } else {
+            Ok(Arc::new(ParquetExec::new(scan_config, None, None)))
+        }
     }
 
     /// Retrieve metrics from the parquet exec returned from `create_scan`

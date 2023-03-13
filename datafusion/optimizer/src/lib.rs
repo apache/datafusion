@@ -16,10 +16,12 @@
 // under the License.
 
 pub mod alias;
+pub mod analyzer;
 pub mod common_subexpr_eliminate;
 pub mod decorrelate_where_exists;
 pub mod decorrelate_where_in;
 pub mod eliminate_cross_join;
+pub mod eliminate_duplicated_expr;
 pub mod eliminate_filter;
 pub mod eliminate_limit;
 pub mod eliminate_outer_join;
@@ -33,19 +35,18 @@ pub mod propagate_empty_relation;
 pub mod push_down_filter;
 pub mod push_down_limit;
 pub mod push_down_projection;
+pub mod replace_distinct_aggregate;
+pub mod rewrite;
+pub mod rewrite_disjunctive_predicate;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
 pub mod type_coercion;
+pub mod unwrap_cast_in_comparison;
 pub mod utils;
 
-pub mod analyzer;
-pub mod replace_distinct_aggregate;
-pub mod rewrite;
-pub mod rewrite_disjunctive_predicate;
 #[cfg(test)]
 pub mod test;
-pub mod unwrap_cast_in_comparison;
 
 pub use optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
 pub use utils::optimize_children;

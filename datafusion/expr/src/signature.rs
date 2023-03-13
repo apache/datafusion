@@ -37,7 +37,7 @@ pub enum Volatility {
 }
 
 /// A function's type signature, which defines the function's supported argument types.
-#[derive(Debug, Clone, PartialEq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeSignature {
     /// arbitrary number of arguments of an common type out of a list of valid types
     // A function such as `concat` is `Variadic(vec![DataType::Utf8, DataType::LargeUtf8])`
@@ -59,7 +59,7 @@ pub enum TypeSignature {
 }
 
 ///The Signature of a function defines its supported input types as well as its volatility.
-#[derive(Debug, Clone, PartialEq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Signature {
     /// type_signature - The types that the function accepts. See [TypeSignature] for more information.
     pub type_signature: TypeSignature,

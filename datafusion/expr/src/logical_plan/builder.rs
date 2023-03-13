@@ -18,14 +18,12 @@
 //! This module provides a builder for creating LogicalPlans
 
 use crate::expr_rewriter::{
-    coerce_plan_expr_for_schema, normalize_col, normalize_col_with_schemas,
-    normalize_cols, rewrite_sort_cols_by_aggs,
+    coerce_plan_expr_for_schema, normalize_col,
+    normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
+    rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{
-    columnize_expr, compare_sort_expr, ensure_any_column_reference_is_unambiguous,
-    exprlist_to_fields, from_plan,
-};
+use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields, from_plan};
 use crate::{and, binary_expr, Operator};
 use crate::{
     logical_plan::{
@@ -377,10 +375,7 @@ impl LogicalPlanBuilder {
                 input,
                 mut expr,
                 schema: _,
-            }) if missing_cols
-                .iter()
-                .all(|c| input.schema().field_from_column(c).is_ok()) =>
-            {
+            }) if missing_cols.iter().all(|c| input.schema().has_column(c)) => {
                 let mut missing_exprs = missing_cols
                     .iter()
                     .map(|c| normalize_col(Expr::Column(c.clone()), &input))
@@ -555,15 +550,17 @@ impl LogicalPlanBuilder {
         self.join_detailed(right, join_type, join_keys, filter, false)
     }
 
-    fn normalize(
+    pub(crate) fn normalize(
         plan: &LogicalPlan,
         column: impl Into<Column> + Clone,
     ) -> Result<Column> {
-        let schemas = plan.all_schemas();
+        let schema = plan.schema();
+        let fallback_schemas = plan.fallback_normalize_schemas();
         let using_columns = plan.using_columns()?;
-        column
-            .into()
-            .normalize_with_schemas(&schemas, &using_columns)
+        column.into().normalize_with_schemas_and_ambiguity_check(
+            &[&[schema], &fallback_schemas],
+            &using_columns,
+        )
     }
 
     /// Apply a join with on constraint and specified null equality
@@ -583,18 +580,10 @@ impl LogicalPlanBuilder {
         }
 
         let filter = if let Some(expr) = filter {
-            // ambiguous check
-            ensure_any_column_reference_is_unambiguous(
-                &expr,
-                &[self.schema(), right.schema()],
-            )?;
-
-            // normalize all columns in expression
-            let using_columns = expr.to_columns()?;
-            let filter = normalize_col_with_schemas(
+            let filter = normalize_col_with_schemas_and_ambiguity_check(
                 expr,
-                &[self.schema(), right.schema()],
-                &[using_columns],
+                &[&[self.schema(), right.schema()]],
+                &[],
             )?;
             Some(filter)
         } else {
@@ -723,13 +712,13 @@ impl LogicalPlanBuilder {
         let mut join_on: Vec<(Expr, Expr)> = vec![];
         let mut filters: Option<Expr> = None;
         for (l, r) in &on {
-            if self.plan.schema().field_from_column(l).is_ok()
-                && right.schema().field_from_column(r).is_ok()
+            if self.plan.schema().has_column(l)
+                && right.schema().has_column(r)
                 && can_hash(self.plan.schema().field_from_column(l)?.data_type())
             {
                 join_on.push((Expr::Column(l.clone()), Expr::Column(r.clone())));
-            } else if self.plan.schema().field_from_column(r).is_ok()
-                && right.schema().field_from_column(l).is_ok()
+            } else if self.plan.schema().has_column(l)
+                && right.schema().has_column(r)
                 && can_hash(self.plan.schema().field_from_column(r)?.data_type())
             {
                 join_on.push((Expr::Column(r.clone()), Expr::Column(l.clone())));
@@ -950,16 +939,16 @@ impl LogicalPlanBuilder {
                 let right_key = r.into();
 
                 let left_using_columns = left_key.to_columns()?;
-                let normalized_left_key = normalize_col_with_schemas(
+                let normalized_left_key = normalize_col_with_schemas_and_ambiguity_check(
                     left_key,
-                    &[self.plan.schema(), right.schema()],
+                    &[&[self.plan.schema(), right.schema()]],
                     &[left_using_columns],
                 )?;
 
                 let right_using_columns = right_key.to_columns()?;
-                let normalized_right_key = normalize_col_with_schemas(
+                let normalized_right_key = normalize_col_with_schemas_and_ambiguity_check(
                     right_key,
-                    &[self.plan.schema(), right.schema()],
+                    &[&[self.plan.schema(), right.schema()]],
                     &[right_using_columns],
                 )?;
 
@@ -1101,7 +1090,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
                     })?;
 
             Ok(DFField::new(
-                None,
+                left_field.qualifier().map(|x| x.as_ref()),
                 left_field.name(),
                 data_type,
                 nullable,
@@ -1781,5 +1770,25 @@ mod tests {
         ]);
 
         table_scan(Some(table_name), &schema, None)
+    }
+
+    #[test]
+    fn test_union_after_join() -> Result<()> {
+        let values = vec![vec![lit(1)]];
+
+        let left = LogicalPlanBuilder::values(values.clone())?
+            .alias("left")?
+            .build()?;
+        let right = LogicalPlanBuilder::values(values)?
+            .alias("right")?
+            .build()?;
+
+        let join = LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
+
+        let _ = LogicalPlanBuilder::from(join.clone())
+            .union(join)?
+            .build()?;
+
+        Ok(())
     }
 }

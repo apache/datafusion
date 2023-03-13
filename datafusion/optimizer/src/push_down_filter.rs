@@ -821,9 +821,8 @@ mod tests {
     use datafusion_expr::{
         and, col, in_list, in_subquery, lit, logical_plan::JoinType, or, sum, BinaryExpr,
         Expr, Extension, LogicalPlanBuilder, Operator, TableSource, TableType,
-        UserDefinedLogicalNode,
+        UserDefinedLogicalNodeCore,
     };
-    use std::any::Any;
     use std::fmt::{Debug, Formatter};
     use std::sync::Arc;
 
@@ -1074,15 +1073,15 @@ mod tests {
         assert_optimized_plan_eq(&plan, expected)
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct NoopPlan {
         input: Vec<LogicalPlan>,
         schema: DFSchemaRef,
     }
 
-    impl UserDefinedLogicalNode for NoopPlan {
-        fn as_any(&self) -> &dyn Any {
-            self
+    impl UserDefinedLogicalNodeCore for NoopPlan {
+        fn name(&self) -> &str {
+            "NoopPlan"
         }
 
         fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -1108,15 +1107,11 @@ mod tests {
             write!(f, "NoopPlan")
         }
 
-        fn from_template(
-            &self,
-            _exprs: &[Expr],
-            inputs: &[LogicalPlan],
-        ) -> Arc<dyn UserDefinedLogicalNode> {
-            Arc::new(Self {
+        fn from_template(&self, _exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
+            Self {
                 input: inputs.to_vec(),
                 schema: self.schema.clone(),
-            })
+            }
         }
     }
 
@@ -1496,7 +1491,7 @@ mod tests {
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
             )?
-            .filter(col("a").lt_eq(lit(1i64)))?
+            .filter(col("test.a").lt_eq(lit(1i64)))?
             .build()?;
 
         // not part of the test, just good to know:

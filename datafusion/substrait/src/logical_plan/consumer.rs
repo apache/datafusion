@@ -505,10 +505,14 @@ pub async fn from_substrait_rex(
                         "Direct reference StructField with child is not supported"
                             .to_string(),
                     )),
-                    None => Ok(Arc::new(Expr::Column(Column {
-                        relation: None,
-                        name: input_schema.field(x.field as usize).name().to_string(),
-                    }))),
+                    None => {
+                        let column =
+                            input_schema.field(x.field as usize).qualified_column();
+                        Ok(Arc::new(Expr::Column(Column {
+                            relation: column.relation,
+                            name: column.name,
+                        })))
+                    }
                 },
                 _ => Err(DataFusionError::NotImplemented(
                     "Direct reference with types other than StructField is not supported"
@@ -615,16 +619,58 @@ pub async fn from_substrait_rex(
         Some(RexType::Literal(lit)) => {
             match &lit.literal_type {
                 Some(LiteralType::I8(n)) => {
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Int8(Some(*n as i8)))))
+                    if lit.type_variation_reference == 0 {
+                        Ok(Arc::new(Expr::Literal(ScalarValue::Int8(Some(*n as i8)))))
+                    } else if lit.type_variation_reference == 1 {
+                        Ok(Arc::new(Expr::Literal(ScalarValue::UInt8(Some(*n as u8)))))
+                    } else {
+                        Err(DataFusionError::Substrait(format!(
+                            "Unknown type variation reference {}",
+                            lit.type_variation_reference
+                        )))
+                    }
                 }
                 Some(LiteralType::I16(n)) => {
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Int16(Some(*n as i16)))))
+                    if lit.type_variation_reference == 0 {
+                        Ok(Arc::new(Expr::Literal(ScalarValue::Int16(Some(*n as i16)))))
+                    } else if lit.type_variation_reference == 1 {
+                        Ok(Arc::new(Expr::Literal(ScalarValue::UInt16(Some(
+                            *n as u16,
+                        )))))
+                    } else {
+                        Err(DataFusionError::Substrait(format!(
+                            "Unknown type variation reference {}",
+                            lit.type_variation_reference
+                        )))
+                    }
                 }
                 Some(LiteralType::I32(n)) => {
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Int32(Some(*n)))))
+                    if lit.type_variation_reference == 0 {
+                        Ok(Arc::new(Expr::Literal(ScalarValue::Int32(Some(*n)))))
+                    } else if lit.type_variation_reference == 1 {
+                        Ok(Arc::new(Expr::Literal(ScalarValue::UInt32(Some(unsafe {
+                            std::mem::transmute_copy::<i32, u32>(n)
+                        })))))
+                    } else {
+                        Err(DataFusionError::Substrait(format!(
+                            "Unknown type variation reference {}",
+                            lit.type_variation_reference
+                        )))
+                    }
                 }
                 Some(LiteralType::I64(n)) => {
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Int64(Some(*n)))))
+                    if lit.type_variation_reference == 0 {
+                        Ok(Arc::new(Expr::Literal(ScalarValue::Int64(Some(*n)))))
+                    } else if lit.type_variation_reference == 1 {
+                        Ok(Arc::new(Expr::Literal(ScalarValue::UInt64(Some(unsafe {
+                            std::mem::transmute_copy::<i64, u64>(n)
+                        })))))
+                    } else {
+                        Err(DataFusionError::Substrait(format!(
+                            "Unknown type variation reference {}",
+                            lit.type_variation_reference
+                        )))
+                    }
                 }
                 Some(LiteralType::Boolean(b)) => {
                     Ok(Arc::new(Expr::Literal(ScalarValue::Boolean(Some(*b)))))

@@ -22,6 +22,7 @@ use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_where_exists::DecorrelateWhereExists;
 use crate::decorrelate_where_in::DecorrelateWhereIn;
 use crate::eliminate_cross_join::EliminateCrossJoin;
+use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
 use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_outer_join::EliminateOuterJoin;
@@ -46,6 +47,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use log::{debug, trace, warn};
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -222,6 +224,7 @@ impl Optimizer {
             Arc::new(SimplifyExpressions::new()),
             Arc::new(MergeProjection::new()),
             Arc::new(RewriteDisjunctivePredicate::new()),
+            Arc::new(EliminateDuplicatedExpr::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(EliminateCrossJoin::new()),
             Arc::new(CommonSubexprEliminate::new()),
@@ -266,8 +269,8 @@ impl Optimizer {
         let options = config.options();
         let analyzed_plan = Analyzer::default().execute_and_check(plan, options)?;
         let start_time = Instant::now();
-        let mut plan_str = format!("{}", analyzed_plan.display_indent());
-        let mut new_plan = analyzed_plan;
+        let mut old_plan = Cow::Borrowed(&analyzed_plan);
+        let mut new_plan = analyzed_plan.clone();
         let mut i = 0;
         while i < options.optimizer.max_passes {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
@@ -330,13 +333,12 @@ impl Optimizer {
             // TODO this is an expensive way to see if the optimizer did anything and
             // it would be better to change the OptimizerRule trait to return an Option
             // instead
-            let new_plan_str = format!("{}", new_plan.display_indent());
-            if plan_str == new_plan_str {
+            if old_plan.as_ref() == &new_plan {
                 // plan did not change, so no need to continue trying to optimize
                 debug!("optimizer pass {} did not make changes", i);
                 break;
             }
-            plan_str = new_plan_str;
+            old_plan = Cow::Owned(new_plan.clone());
             i += 1;
         }
         log_plan("Final optimized plan", &new_plan);

@@ -59,7 +59,7 @@ pub struct PartitionedFile {
     pub partition_values: Vec<ScalarValue>,
     /// An optional file range for a more fine-grained parallel execution
     pub range: Option<FileRange>,
-    /// An optional field for user defined per object metadata  
+    /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
@@ -101,5 +101,54 @@ impl From<ObjectMeta> for PartitionedFile {
             range: None,
             extensions: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_execution::object_store::ObjectStoreRegistry;
+    use object_store::local::LocalFileSystem;
+
+    use super::*;
+
+    #[test]
+    fn test_object_store_listing_url() {
+        let listing = ListingTableUrl::parse("file:///").unwrap();
+        let store = listing.object_store();
+        assert_eq!(store.as_str(), "file:///");
+
+        let listing = ListingTableUrl::parse("s3://bucket/").unwrap();
+        let store = listing.object_store();
+        assert_eq!(store.as_str(), "s3://bucket/");
+    }
+
+    #[test]
+    fn test_get_by_url_hdfs() {
+        let sut = ObjectStoreRegistry::default();
+        sut.register_store("hdfs", "localhost:8020", Arc::new(LocalFileSystem::new()));
+        let url = ListingTableUrl::parse("hdfs://localhost:8020/key").unwrap();
+        sut.get_by_url(&url).unwrap();
+    }
+
+    #[test]
+    fn test_get_by_url_s3() {
+        let sut = ObjectStoreRegistry::default();
+        sut.register_store("s3", "bucket", Arc::new(LocalFileSystem::new()));
+        let url = ListingTableUrl::parse("s3://bucket/key").unwrap();
+        sut.get_by_url(&url).unwrap();
+    }
+
+    #[test]
+    fn test_get_by_url_file() {
+        let sut = ObjectStoreRegistry::default();
+        let url = ListingTableUrl::parse("file:///bucket/key").unwrap();
+        sut.get_by_url(&url).unwrap();
+    }
+
+    #[test]
+    fn test_get_by_url_local() {
+        let sut = ObjectStoreRegistry::default();
+        let url = ListingTableUrl::parse("../").unwrap();
+        sut.get_by_url(&url).unwrap();
     }
 }

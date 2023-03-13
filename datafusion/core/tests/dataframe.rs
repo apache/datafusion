@@ -33,33 +33,33 @@ use datafusion::prelude::JoinType;
 use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion_expr::expr::{GroupingSet, Sort};
-use datafusion_expr::{avg, col, count, lit, sum, Expr, ExprSchemable};
+use datafusion_expr::{avg, col, count, lit, max, sum, Expr, ExprSchemable};
 
 #[tokio::test]
 async fn describe() -> Result<()> {
     let ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();
 
-    let filename = &format!("{testdata}/alltypes_plain.parquet");
-
     let df = ctx
-        .read_parquet(filename, ParquetReadOptions::default())
+        .read_parquet(
+            &format!("{testdata}/alltypes_tiny_pages.parquet"),
+            ParquetReadOptions::default(),
+        )
         .await?;
-
     let describe_record_batch = df.describe().await.unwrap().collect().await.unwrap();
     #[rustfmt::skip]
         let expected = vec![
-        "+------------+--------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+-------------------+-----------------+------------+---------------------+",
-        "| describe   | id                 | bool_col | tinyint_col        | smallint_col       | int_col            | bigint_col         | float_col          | double_col        | date_string_col | string_col | timestamp_col       |",
-        "+------------+--------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+-------------------+-----------------+------------+---------------------+",
-        "| count      | 8.0                | 8        | 8.0                | 8.0                | 8.0                | 8.0                | 8.0                | 8.0               | 8               | 8          | 8                   |",
-        "| null_count | 8.0                | 8        | 8.0                | 8.0                | 8.0                | 8.0                | 8.0                | 8.0               | 8               | 8          | 8                   |",
-        "| mean       | 3.5                | null     | 0.5                | 0.5                | 0.5                | 5.0                | 0.550000011920929  | 5.05              | null            | null       | null                |",
-        "| std        | 2.4494897427831783 | null     | 0.5345224838248488 | 0.5345224838248488 | 0.5345224838248488 | 5.3452248382484875 | 0.5879747449513427 | 5.398677086630973 | null            | null       | null                |",
-        "| min        | 0.0                | null     | 0.0                | 0.0                | 0.0                | 0.0                | 0.0                | 0.0               | null            | null       | 2009-01-01T00:00:00 |",
-        "| max        | 7.0                | null     | 1.0                | 1.0                | 1.0                | 10.0               | 1.100000023841858  | 10.1              | null            | null       | 2009-04-01T00:01:00 |",
-        "| median     | 3.0                | null     | 0.0                | 0.0                | 0.0                | 5.0                | 0.550000011920929  | 5.05              | null            | null       | null                |",
-        "+------------+--------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+-------------------+-----------------+------------+---------------------+",
+        "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
+        "| describe   | id                | bool_col | tinyint_col        | smallint_col       | int_col            | bigint_col         | float_col          | double_col         | date_string_col | string_col | timestamp_col           | year               | month             |",
+        "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
+        "| count      | 7300.0            | 7300     | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300            | 7300       | 7300                    | 7300.0             | 7300.0            |",
+        "| null_count | 7300.0            | 7300     | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300            | 7300       | 7300                    | 7300.0             | 7300.0            |",
+        "| mean       | 3649.5            | null     | 4.5                | 4.5                | 4.5                | 45.0               | 4.949999964237213  | 45.45000000000001  | null            | null       | null                    | 2009.5             | 6.526027397260274 |",
+        "| std        | 2107.472815166704 | null     | 2.8724780750809518 | 2.8724780750809518 | 2.8724780750809518 | 28.724780750809533 | 3.1597258182544645 | 29.012028558317645 | null            | null       | null                    | 0.5000342500942125 | 3.44808750051728  |",
+        "| min        | 0.0               | null     | 0.0                | 0.0                | 0.0                | 0.0                | 0.0                | 0.0                | 01/01/09        | 0          | 2008-12-31T23:00:00     | 2009.0             | 1.0               |",
+        "| max        | 7299.0            | null     | 9.0                | 9.0                | 9.0                | 90.0               | 9.899999618530273  | 90.89999999999999  | 12/31/10        | 9          | 2010-12-31T04:09:13.860 | 2010.0             | 12.0              |",
+        "| median     | 3649.0            | null     | 4.0                | 4.0                | 4.0                | 45.0               | 4.949999809265137  | 45.45              | null            | null       | null                    | 2009.0             | 7.0               |",
+        "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
     ];
     assert_batches_eq!(expected, &describe_record_batch);
 
@@ -201,6 +201,7 @@ async fn sort_on_distinct_columns() -> Result<()> {
     assert_batches_eq!(expected, &results);
     Ok(())
 }
+
 #[tokio::test]
 async fn sort_on_distinct_unprojected_columns() -> Result<()> {
     let schema = Schema::new(vec![
@@ -214,23 +215,95 @@ async fn sort_on_distinct_unprojected_columns() -> Result<()> {
             Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
             Arc::new(Int32Array::from_slice([2, 3, 4, 5])),
         ],
-    )
-    .unwrap();
+    )?;
 
     // Cannot sort on a column after distinct that would add a new column
     let ctx = SessionContext::new();
-    ctx.register_batch("t", batch).unwrap();
+    ctx.register_batch("t", batch)?;
     let err = ctx
         .table("t")
-        .await
-        .unwrap()
-        .select(vec![col("a")])
-        .unwrap()
-        .distinct()
-        .unwrap()
+        .await?
+        .select(vec![col("a")])?
+        .distinct()?
         .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))])
         .unwrap_err();
     assert_eq!(err.to_string(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions b must appear in select list");
+    Ok(())
+}
+
+#[tokio::test]
+async fn sort_on_ambiguous_column() -> Result<()> {
+    let err = create_test_table("t1")
+        .await?
+        .join(
+            create_test_table("t2").await?,
+            JoinType::Inner,
+            &["a"],
+            &["a"],
+            None,
+        )?
+        .sort(vec![col("b").sort(true, true)])
+        .unwrap_err();
+
+    let expected = "Schema error: Ambiguous reference to unqualified field 'b'";
+    assert_eq!(err.to_string(), expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn group_by_ambiguous_column() -> Result<()> {
+    let err = create_test_table("t1")
+        .await?
+        .join(
+            create_test_table("t2").await?,
+            JoinType::Inner,
+            &["a"],
+            &["a"],
+            None,
+        )?
+        .aggregate(vec![col("b")], vec![max(col("a"))])
+        .unwrap_err();
+
+    let expected = "Schema error: Ambiguous reference to unqualified field 'b'";
+    assert_eq!(err.to_string(), expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn filter_on_ambiguous_column() -> Result<()> {
+    let err = create_test_table("t1")
+        .await?
+        .join(
+            create_test_table("t2").await?,
+            JoinType::Inner,
+            &["a"],
+            &["a"],
+            None,
+        )?
+        .filter(col("b").eq(lit(1)))
+        .unwrap_err();
+
+    let expected = "Schema error: Ambiguous reference to unqualified field 'b'";
+    assert_eq!(err.to_string(), expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn select_ambiguous_column() -> Result<()> {
+    let err = create_test_table("t1")
+        .await?
+        .join(
+            create_test_table("t2").await?,
+            JoinType::Inner,
+            &["a"],
+            &["a"],
+            None,
+        )?
+        .select(vec![col("b")])
+        .unwrap_err();
+
+    let expected = "Schema error: Ambiguous reference to unqualified field 'b'";
+    assert_eq!(err.to_string(), expected);
     Ok(())
 }
 
@@ -316,7 +389,7 @@ async fn test_grouping_sets() -> Result<()> {
         vec![col("a"), col("b")],
     ]));
 
-    let df = create_test_table()
+    let df = create_test_table("test")
         .await?
         .aggregate(vec![grouping_set_expr], vec![count(col("a"))])?
         .sort(vec![
@@ -746,7 +819,7 @@ async fn unnest_aggregate_columns() -> Result<()> {
     Ok(())
 }
 
-async fn create_test_table() -> Result<DataFrame> {
+async fn create_test_table(name: &str) -> Result<DataFrame> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Int32, false),
@@ -768,9 +841,9 @@ async fn create_test_table() -> Result<DataFrame> {
 
     let ctx = SessionContext::new();
 
-    ctx.register_batch("test", batch)?;
+    ctx.register_batch(name, batch)?;
 
-    ctx.table("test").await
+    ctx.table(name).await
 }
 
 async fn aggregates_table(ctx: &SessionContext) -> Result<DataFrame> {

@@ -17,6 +17,8 @@
 
 //! Utility functions to make testing DataFusion based crates easier
 
+pub mod parquet;
+
 use std::any::Any;
 use std::collections::HashMap;
 use std::pin::Pin;

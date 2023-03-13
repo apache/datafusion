@@ -217,21 +217,11 @@ impl ObjectStoreRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::listing::ListingTableUrl;
-    use std::sync::Arc;
 
     #[test]
     fn test_object_store_url() {
-        let listing = ListingTableUrl::parse("file:///").unwrap();
-        let store = listing.object_store();
-        assert_eq!(store.as_str(), "file:///");
-
         let file = ObjectStoreUrl::parse("file://").unwrap();
         assert_eq!(file.as_str(), "file:///");
-
-        let listing = ListingTableUrl::parse("s3://bucket/").unwrap();
-        let store = listing.object_store();
-        assert_eq!(store.as_str(), "s3://bucket/");
 
         let url = ObjectStoreUrl::parse("s3://bucket").unwrap();
         assert_eq!(url.as_str(), "s3://bucket/");
@@ -254,35 +244,5 @@ mod tests {
         let err =
             ObjectStoreUrl::parse("s3://username:password@host:123/foo").unwrap_err();
         assert_eq!(err.to_string(), "Execution error: ObjectStoreUrl must only contain scheme and authority, got: /foo");
-    }
-
-    #[test]
-    fn test_get_by_url_hdfs() {
-        let sut = ObjectStoreRegistry::default();
-        sut.register_store("hdfs", "localhost:8020", Arc::new(LocalFileSystem::new()));
-        let url = ListingTableUrl::parse("hdfs://localhost:8020/key").unwrap();
-        sut.get_by_url(&url).unwrap();
-    }
-
-    #[test]
-    fn test_get_by_url_s3() {
-        let sut = ObjectStoreRegistry::default();
-        sut.register_store("s3", "bucket", Arc::new(LocalFileSystem::new()));
-        let url = ListingTableUrl::parse("s3://bucket/key").unwrap();
-        sut.get_by_url(&url).unwrap();
-    }
-
-    #[test]
-    fn test_get_by_url_file() {
-        let sut = ObjectStoreRegistry::default();
-        let url = ListingTableUrl::parse("file:///bucket/key").unwrap();
-        sut.get_by_url(&url).unwrap();
-    }
-
-    #[test]
-    fn test_get_by_url_local() {
-        let sut = ObjectStoreRegistry::default();
-        let url = ListingTableUrl::parse("../").unwrap();
-        sut.get_by_url(&url).unwrap();
     }
 }

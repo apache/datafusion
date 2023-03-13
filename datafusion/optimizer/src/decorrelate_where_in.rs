@@ -17,9 +17,12 @@
 
 use crate::alias::AliasGenerator;
 use crate::optimizer::ApplyOrder;
-use crate::utils::{conjunction, extract_join_filters, only_or_err, split_conjunction};
+use crate::utils::{
+    collect_subquery_cols, conjunction, extract_join_filters, only_or_err,
+    split_conjunction,
+};
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{context, Column, DataFusionError, Result};
+use datafusion_common::{context, Column, Result};
 use datafusion_expr::expr_rewriter::{replace_col, unnormalize_col};
 use datafusion_expr::logical_plan::{JoinType, Projection, Subquery};
 use datafusion_expr::{Expr, Filter, LogicalPlan, LogicalPlanBuilder};
@@ -159,19 +162,7 @@ fn optimize_where_in(
     // replace qualified name with subquery alias.
     let subquery_alias = alias.next("__correlated_sq");
     let input_schema = subquery_input.schema();
-    let mut subquery_cols: BTreeSet<Column> =
-        join_filters
-            .iter()
-            .try_fold(BTreeSet::new(), |mut cols, expr| {
-                let using_cols: Vec<Column> = expr
-                    .to_columns()?
-                    .into_iter()
-                    .filter(|col| input_schema.field_from_column(col).is_ok())
-                    .collect::<_>();
-
-                cols.extend(using_cols);
-                Result::<_, DataFusionError>::Ok(cols)
-            })?;
+    let mut subquery_cols = collect_subquery_cols(&join_filters, input_schema.clone())?;
     let join_filter = conjunction(join_filters).map_or(Ok(None), |filter| {
         replace_qualified_name(filter, &subquery_cols, &subquery_alias).map(Option::Some)
     })?;

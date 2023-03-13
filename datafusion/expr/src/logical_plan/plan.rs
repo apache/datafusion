@@ -49,7 +49,7 @@ use std::sync::Arc;
 /// an output relation (table) with a (potentially) different
 /// schema. A plan represents a dataflow tree where data flows
 /// from leaves up to the root to produce the query result.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
     /// SELECT with an expression list) on its input.
@@ -174,7 +174,26 @@ impl LogicalPlan {
         }
     }
 
+    /// Used for normalizing columns, as the fallback schemas to the main schema
+    /// of the plan.
+    pub fn fallback_normalize_schemas(&self) -> Vec<&DFSchema> {
+        match self {
+            LogicalPlan::Window(_)
+            | LogicalPlan::Projection(_)
+            | LogicalPlan::Aggregate(_)
+            | LogicalPlan::Unnest(_)
+            | LogicalPlan::Join(_)
+            | LogicalPlan::CrossJoin(_) => self
+                .inputs()
+                .iter()
+                .map(|input| input.schema().as_ref())
+                .collect(),
+            _ => vec![],
+        }
+    }
+
     /// Get all meaningful schemas of a plan and its children plan.
+    #[deprecated(since = "20.0.0")]
     pub fn all_schemas(&self) -> Vec<&DFSchemaRef> {
         match self {
             // return self and children schemas
@@ -201,13 +220,13 @@ impl LogicalPlan {
             | LogicalPlan::Values(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Union(_)
+            | LogicalPlan::Extension(_)
             | LogicalPlan::TableScan(_) => {
                 vec![self.schema()]
             }
             // return children schemas
             LogicalPlan::Limit(_)
             | LogicalPlan::Subquery(_)
-            | LogicalPlan::Extension(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Sort(_)
             | LogicalPlan::CreateMemoryTable(_)
@@ -1249,7 +1268,7 @@ impl Display for JoinType {
 }
 
 /// Join constraint
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum JoinConstraint {
     /// Join ON
     On,
@@ -1258,7 +1277,7 @@ pub enum JoinConstraint {
 }
 
 /// Creates a catalog (aka "Database").
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CreateCatalog {
     /// The catalog name
     pub catalog_name: String,
@@ -1269,7 +1288,7 @@ pub struct CreateCatalog {
 }
 
 /// Creates a schema.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CreateCatalogSchema {
     /// The table schema
     pub schema_name: String,
@@ -1280,7 +1299,7 @@ pub struct CreateCatalogSchema {
 }
 
 /// Drops a table.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DropTable {
     /// The table name
     pub name: OwnedTableReference,
@@ -1291,7 +1310,7 @@ pub struct DropTable {
 }
 
 /// Drops a view.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DropView {
     /// The view name
     pub name: OwnedTableReference,
@@ -1303,7 +1322,7 @@ pub struct DropView {
 
 /// Set a Variable's value -- value in
 /// [`ConfigOptions`](datafusion_common::config::ConfigOptions)
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct SetVariable {
     /// The variable name
     pub variable: String,
@@ -1314,7 +1333,7 @@ pub struct SetVariable {
 }
 
 /// Produces no rows: An empty relation with an empty schema
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct EmptyRelation {
     /// Whether to produce a placeholder row
     pub produce_one_row: bool,
@@ -1325,7 +1344,7 @@ pub struct EmptyRelation {
 /// Values expression. See
 /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
 /// documentation for more details.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Values {
     /// The table schema
     pub schema: DFSchemaRef,
@@ -1335,7 +1354,7 @@ pub struct Values {
 
 /// Evaluates an arbitrary list of expressions (essentially a
 /// SELECT with an expression list) on its input.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 // mark non_exhaustive to encourage use of try_new/new()
 #[non_exhaustive]
 pub struct Projection {
@@ -1400,7 +1419,7 @@ impl Projection {
 }
 
 /// Aliased subquery
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 // mark non_exhaustive to encourage use of try_new/new()
 #[non_exhaustive]
 pub struct SubqueryAlias {
@@ -1440,7 +1459,7 @@ impl SubqueryAlias {
 ///
 /// Filter should not be created directly but instead use `try_new()`
 /// and that these fields are only pub to support pattern matching
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct Filter {
     /// The predicate expression, which must have Boolean type.
@@ -1488,7 +1507,7 @@ impl Filter {
 }
 
 /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Window {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -1515,8 +1534,30 @@ pub struct TableScan {
     pub fetch: Option<usize>,
 }
 
+impl PartialEq for TableScan {
+    fn eq(&self, other: &Self) -> bool {
+        self.table_name == other.table_name
+            && self.projection == other.projection
+            && self.projected_schema == other.projected_schema
+            && self.filters == other.filters
+            && self.fetch == other.fetch
+    }
+}
+
+impl Eq for TableScan {}
+
+impl Hash for TableScan {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.table_name.hash(state);
+        self.projection.hash(state);
+        self.projected_schema.hash(state);
+        self.filters.hash(state);
+        self.fetch.hash(state);
+    }
+}
+
 /// Apply Cross Join to two logical plans
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CrossJoin {
     /// Left input
     pub left: Arc<LogicalPlan>,
@@ -1527,7 +1568,7 @@ pub struct CrossJoin {
 }
 
 /// Repartition the plan based on a partitioning scheme.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Repartition {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -1536,7 +1577,7 @@ pub struct Repartition {
 }
 
 /// Union multiple inputs
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Union {
     /// Inputs to merge
     pub inputs: Vec<Arc<LogicalPlan>>,
@@ -1545,7 +1586,7 @@ pub struct Union {
 }
 
 /// Creates an in memory table.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CreateMemoryTable {
     /// The table name
     pub name: OwnedTableReference,
@@ -1558,7 +1599,7 @@ pub struct CreateMemoryTable {
 }
 
 /// Creates a view.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CreateView {
     /// The table name
     pub name: OwnedTableReference,
@@ -1571,7 +1612,7 @@ pub struct CreateView {
 }
 
 /// Creates an external table.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CreateExternalTable {
     /// The table schema
     pub schema: DFSchemaRef,
@@ -1597,7 +1638,25 @@ pub struct CreateExternalTable {
     pub options: HashMap<String, String>,
 }
 
-#[derive(Clone)]
+// Hashing refers to a subset of fields considered in PartialEq.
+#[allow(clippy::derived_hash_with_manual_eq)]
+impl Hash for CreateExternalTable {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.schema.hash(state);
+        self.name.hash(state);
+        self.location.hash(state);
+        self.file_type.hash(state);
+        self.has_header.hash(state);
+        self.delimiter.hash(state);
+        self.table_partition_cols.hash(state);
+        self.if_not_exists.hash(state);
+        self.definition.hash(state);
+        self.file_compression_type.hash(state);
+        self.options.len().hash(state); // HashMap is not hashable
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum WriteOp {
     Insert,
     Delete,
@@ -1617,7 +1676,7 @@ impl Display for WriteOp {
 }
 
 /// The operator that modifies the content of a database (adapted from substrait WriteRel)
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DmlStatement {
     /// The table name
     pub table_name: OwnedTableReference,
@@ -1631,7 +1690,7 @@ pub struct DmlStatement {
 
 /// Prepare a statement but do not execute it. Prepare statements can have 0 or more
 /// `Expr::Placeholder` expressions that are filled in during execution
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Prepare {
     /// The name of the statement
     pub name: String,
@@ -1642,7 +1701,7 @@ pub struct Prepare {
 }
 
 /// Describe the schema of table
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DescribeTable {
     /// Table schema
     pub schema: Arc<Schema>,
@@ -1652,7 +1711,7 @@ pub struct DescribeTable {
 
 /// Produces a relation with string representations of
 /// various parts of the plan
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Explain {
     /// Should extra (detailed, intermediate plans) be included?
     pub verbose: bool,
@@ -1668,7 +1727,7 @@ pub struct Explain {
 
 /// Runs the actual plan, and then prints the physical plan with
 /// with execution metrics.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Analyze {
     /// Should extra detail be included?
     pub verbose: bool,
@@ -1679,14 +1738,24 @@ pub struct Analyze {
 }
 
 /// Extension operator defined outside of DataFusion
-#[derive(Clone)]
+#[allow(clippy::derived_hash_with_manual_eq)] // see impl PartialEq for explanation
+#[derive(Clone, Eq, Hash)]
 pub struct Extension {
     /// The runtime extension operator
     pub node: Arc<dyn UserDefinedLogicalNode>,
 }
 
+impl PartialEq for Extension {
+    #[allow(clippy::op_ref)] // clippy false positive
+    fn eq(&self, other: &Self) -> bool {
+        // must be manually derived due to a bug in #[derive(PartialEq)]
+        // https://github.com/rust-lang/rust/issues/39128
+        &self.node == &other.node
+    }
+}
+
 /// Produces the first `n` tuples from its input and discards the rest.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Limit {
     /// Number of rows to skip before fetch
     pub skip: usize,
@@ -1698,7 +1767,7 @@ pub struct Limit {
 }
 
 /// Removes duplicate rows from the input
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Distinct {
     /// The logical plan that is being DISTINCT'd
     pub input: Arc<LogicalPlan>,
@@ -1706,7 +1775,7 @@ pub struct Distinct {
 
 /// Aggregates its input based on a set of grouping and aggregate
 /// expressions (e.g. SUM).
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 // mark non_exhaustive to encourage use of try_new/new()
 #[non_exhaustive]
 pub struct Aggregate {
@@ -1779,7 +1848,7 @@ impl Aggregate {
 }
 
 /// Sorts its input according to a list of sort expressions.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Sort {
     /// The sort expressions
     pub expr: Vec<Expr>,
@@ -1790,7 +1859,7 @@ pub struct Sort {
 }
 
 /// Join two logical plans on one or more join columns
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Join {
     /// Left input
     pub left: Arc<LogicalPlan>,
@@ -1846,7 +1915,7 @@ impl Join {
 }
 
 /// Subquery
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Subquery {
     /// The subquery
     pub subquery: Arc<LogicalPlan>,
@@ -1873,29 +1942,8 @@ impl Debug for Subquery {
     }
 }
 
-impl Hash for Subquery {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        state.finish();
-    }
-
-    fn hash_slice<H: Hasher>(_data: &[Self], state: &mut H)
-    where
-        Self: Sized,
-    {
-        state.finish();
-    }
-}
-
-impl PartialEq for Subquery {
-    fn eq(&self, _other: &Self) -> bool {
-        false
-    }
-}
-
-impl Eq for Subquery {}
-
 /// Logical partitioning schemes supported by the repartition operator.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions
     RoundRobinBatch(usize),
@@ -1908,7 +1956,7 @@ pub enum Partitioning {
 
 /// Represents which type of plan, when storing multiple
 /// for use in EXPLAIN plans
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PlanType {
     /// The initial LogicalPlan provided to DataFusion
     InitialLogicalPlan,
@@ -1948,7 +1996,7 @@ impl Display for PlanType {
 }
 
 /// Represents some sort of execution plan, in String form
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[allow(clippy::rc_buffer)]
 pub struct StringifiedPlan {
     /// An identifier of what type of plan this string represents
@@ -1984,7 +2032,7 @@ pub trait ToStringifiedPlan {
 }
 
 /// Unnest a column that contains a nested list type.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Unnest {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -2351,5 +2399,73 @@ mod tests {
             .unwrap()
             .build()
             .unwrap()
+    }
+
+    /// Extension plan that panic when trying to access its input plan
+    #[derive(Debug)]
+    struct NoChildExtension {
+        empty_schema: DFSchemaRef,
+    }
+
+    impl NoChildExtension {
+        fn empty() -> Self {
+            Self {
+                empty_schema: Arc::new(DFSchema::empty()),
+            }
+        }
+    }
+
+    impl UserDefinedLogicalNode for NoChildExtension {
+        fn as_any(&self) -> &dyn std::any::Any {
+            unimplemented!()
+        }
+
+        fn name(&self) -> &str {
+            unimplemented!()
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            panic!("Should not be called")
+        }
+
+        fn schema(&self) -> &DFSchemaRef {
+            &self.empty_schema
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            unimplemented!()
+        }
+
+        fn fmt_for_explain(&self, _: &mut fmt::Formatter) -> fmt::Result {
+            unimplemented!()
+        }
+
+        fn from_template(
+            &self,
+            _: &[Expr],
+            _: &[LogicalPlan],
+        ) -> Arc<dyn UserDefinedLogicalNode> {
+            unimplemented!()
+        }
+
+        fn dyn_hash(&self, _: &mut dyn Hasher) {
+            unimplemented!()
+        }
+
+        fn dyn_eq(&self, _: &dyn UserDefinedLogicalNode) -> bool {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_extension_all_schemas() {
+        let plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoChildExtension::empty()),
+        });
+
+        let schemas = plan.all_schemas();
+        assert_eq!(1, schemas.len());
+        assert_eq!(0, schemas[0].fields().len());
     }
 }
