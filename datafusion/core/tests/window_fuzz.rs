@@ -393,7 +393,7 @@ async fn run_window_test(
     let mut exec1 = Arc::new(
         MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None).unwrap(),
     ) as Arc<dyn ExecutionPlan>;
-    // Table is ordered according to ORDER BY a,b In linear test we use PARTITION BY b, ORDER BY b
+    // Table is ordered according to ORDER BY a,b In linear test we use PARTITION BY b, ORDER BY a
     // For WindowAggExec  to produce correct result it need table to be ordered by b,a. Hence add a sort.
     if is_linear {
         exec1 = Arc::new(SortExec::try_new(sort_keys.clone(), exec1, None)?) as _;
@@ -471,7 +471,7 @@ async fn run_window_test(
         assert_eq!(
             (i, usual_line),
             (i, running_line),
-            "Inconsistent result for window_fn: {window_fn:?}, args:{args:?}"
+            "Inconsistent result for window_fn: {window_fn:?}, args:{args:?}, window_frame: {window_frame:?}"
         );
     }
     Ok(())

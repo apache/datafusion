@@ -21,17 +21,8 @@
 use ahash::RandomState;
 
 use arrow::{
-    array::{
-        ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-        DictionaryArray, FixedSizeBinaryArray, LargeStringArray, PrimitiveArray,
-        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampSecondArray, UInt32BufferBuilder, UInt64BufferBuilder,
-    },
-    datatypes::{
-        Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
-        UInt8Type,
-    },
+    array::{ArrayData, PrimitiveArray, UInt32BufferBuilder, UInt64BufferBuilder},
+    datatypes::{UInt32Type, UInt64Type},
     util::bit_util,
 };
 use smallvec::{smallvec, SmallVec};
@@ -70,7 +61,6 @@ use crate::error::{DataFusionError, Result};
 use crate::logical_expr::JoinType;
 
 use crate::arrow::array::BooleanBufferBuilder;
-use crate::arrow::datatypes::TimeUnit;
 use crate::execution::{context::TaskContext, memory_pool::MemoryConsumer};
 
 use super::{
@@ -82,7 +72,6 @@ use crate::physical_plan::joins::utils::{
     get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
 };
 use datafusion_physical_expr::hash_utils::equal_rows;
-use log::debug;
 use parking_lot::Mutex;
 use std::fmt;
 use std::task::Poll;
