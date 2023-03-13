@@ -265,9 +265,7 @@ fn memoize_nth_value(
             let result = ScalarValue::try_from_array(out, size - 1)?;
             nth_value_state.finalized_result = Some(result);
         }
-        if state.window_frame_range.end > 0 {
-            state.window_frame_range.start = state.window_frame_range.end - 1;
-        }
+        state.window_frame_range.start = state.window_frame_range.end.saturating_sub(1);
     }
     Ok(())
 }

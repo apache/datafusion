@@ -115,11 +115,8 @@ impl WindowExpr for PlainAggregateWindowExpr {
                 })?;
             let mut state = &mut window_state.state;
             if self.window_frame.start_bound.is_unbounded() {
-                state.window_frame_range.start = if state.window_frame_range.end >= 1 {
-                    state.window_frame_range.end - 1
-                } else {
-                    0
-                };
+                state.window_frame_range.start =
+                    state.window_frame_range.end.saturating_sub(1);
             }
         }
         Ok(())
