@@ -143,6 +143,12 @@ impl Accumulator for MedianAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
+        if !self.all_values.iter().any(|v| !v.is_null()) {
+            return Err(DataFusionError::Execution(
+                "median requires at least one non-null value".into(),
+            ));
+        }
+
         // Create an array of all the non null values and find the
         // sorted indexes
         let array = ScalarValue::iter_to_array(
@@ -151,12 +157,7 @@ impl Accumulator for MedianAccumulator {
                 // ignore null values
                 .filter(|v| !v.is_null())
                 .cloned(),
-        )
-        .map_err(|_| {
-            DataFusionError::Execution(
-                "median requires at least one non-null value".into(),
-            )
-        })?;
+        )?;
 
         // find the mid point
         let len = array.len();

@@ -20,7 +20,7 @@
 use crate::expressions::{lit, ApproxPercentileCont};
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{datatypes::DataType, datatypes::Field};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::Result;
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
@@ -67,11 +67,7 @@ impl AggregateExpr for ApproxMedian {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        self.approx_percentile.create_accumulator().map_err(|_| {
-            DataFusionError::Execution(
-                "approx median requires at least one non-null value".to_string(),
-            )
-        })
+        self.approx_percentile.create_accumulator()
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
