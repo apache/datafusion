@@ -24,6 +24,7 @@ use datafusion_common::utils::{compare_rows, get_row_at_idx, search_in_slice};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use std::cmp::min;
+use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
@@ -338,7 +339,7 @@ pub struct WindowFrameStateGroups {
     /// A tuple containing group values and the row index where the group ends.
     /// Example: [[1, 1], [1, 1], [2, 1], [2, 1], ...] would correspond to
     ///          [([1, 1], 2), ([2, 1], 4), ...].
-    pub group_end_indices: Vec<(Vec<ScalarValue>, usize)>,
+    pub group_end_indices: VecDeque<(Vec<ScalarValue>, usize)>,
     /// The group index to which the row index belongs.
     pub current_group_idx: usize,
 }
@@ -434,7 +435,7 @@ impl WindowFrameStateGroups {
             0
         };
         let mut group_start = 0;
-        let last_group = self.group_end_indices.last_mut();
+        let last_group = self.group_end_indices.back_mut();
         if let Some((group_row, group_end)) = last_group {
             if *group_end < length {
                 let new_group_row = get_row_at_idx(range_columns, *group_end)?;
@@ -465,7 +466,7 @@ impl WindowFrameStateGroups {
                 group_start,
                 length,
             )?;
-            self.group_end_indices.push((group_row, group_end));
+            self.group_end_indices.push_back((group_row, group_end));
             group_start = group_end;
         }
 
@@ -498,7 +499,7 @@ impl WindowFrameStateGroups {
                 group_start,
                 length,
             )?;
-            self.group_end_indices.push((group_row, group_end));
+            self.group_end_indices.push_back((group_row, group_end));
             group_start = group_end;
         }
 
