@@ -4767,7 +4767,7 @@ mod tests {
     fn get_test_data(sign: i32) -> Vec<(ScalarValue, ScalarValue, ScalarValue)> {
         let test_data = vec![
             (
-                // 1. test case
+                // 1st test case
                 ScalarValue::TimestampNanosecond(
                     Some(
                         NaiveDate::from_ymd_opt(2023, 1, 1)
@@ -4792,7 +4792,7 @@ mod tests {
                     IntervalMonthDayNanoType::make_value(0, 0, 0),
                 )),
             ),
-            // 2. test case
+            // 2nd test case
             (
                 ScalarValue::TimestampMicrosecond(
                     Some(
@@ -4818,7 +4818,7 @@ mod tests {
                     IntervalMonthDayNanoType::make_value(0, sign * 59, 0),
                 )),
             ),
-            // 3. test case
+            // 3rd test case
             (
                 ScalarValue::TimestampMillisecond(
                     Some(
@@ -4845,7 +4845,7 @@ mod tests {
                     0,
                 ))),
             ),
-            // 4. test case
+            // 4th test case
             (
                 ScalarValue::TimestampSecond(
                     Some(
@@ -4872,7 +4872,7 @@ mod tests {
                     0,
                 ))),
             ),
-            // 5. test case
+            // 5th test case
             (
                 ScalarValue::TimestampMillisecond(
                     Some(
@@ -4899,7 +4899,7 @@ mod tests {
                     sign * 250,
                 ))),
             ),
-            // 6. test case
+            // 6th test case
             (
                 ScalarValue::TimestampMicrosecond(
                     Some(
@@ -4929,7 +4929,7 @@ mod tests {
                     ),
                 )),
             ),
-            // 7. test case
+            // 7th test case
             (
                 ScalarValue::TimestampNanosecond(
                     Some(
@@ -4955,7 +4955,7 @@ mod tests {
                     IntervalMonthDayNanoType::make_value(0, sign * 29, sign as i64 * 22),
                 )),
             ),
-            // 8. test case
+            // 8th test case
             (
                 ScalarValue::TimestampSecond(
                     Some(
@@ -4982,7 +4982,7 @@ mod tests {
                     sign * 86370000,
                 ))),
             ),
-            // 9. test case
+            // 9th test case
             (
                 ScalarValue::TimestampSecond(
                     Some(
