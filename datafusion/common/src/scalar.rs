@@ -519,7 +519,7 @@ macro_rules! impl_op {
                         &ts_rhs.checked_mul(1_000).ok_or_else(err)?,
                         &tz_lhs,
                         &tz_rhs,
-                        1,
+                        IntervalMode::Milli,
                     )?)
                 }
                 _ => Err(DataFusionError::Internal(format!(
@@ -533,7 +533,13 @@ macro_rules! impl_op {
                 ScalarValue::TimestampMillisecond(Some(ts_lhs), tz_lhs),
                 ScalarValue::TimestampMillisecond(Some(ts_rhs), tz_rhs),
             ) => match get_sign!($OPERATION) {
-                -1 => Ok(ts_sub_to_interval(&ts_lhs, &ts_rhs, &tz_lhs, &tz_rhs, 1)?),
+                -1 => Ok(ts_sub_to_interval(
+                    &ts_lhs,
+                    &ts_rhs,
+                    &tz_lhs,
+                    &tz_rhs,
+                    IntervalMode::Milli,
+                )?),
                 _ => Err(DataFusionError::Internal(format!(
                     "Operator {} is not implemented for {:?} and {:?}",
                     stringify!($OPERATION),
@@ -557,7 +563,7 @@ macro_rules! impl_op {
                         &ts_rhs.checked_mul(1_000).ok_or_else(err)?,
                         &tz_lhs,
                         &tz_rhs,
-                        1_000_000,
+                        IntervalMode::Nano,
                     )?)
                 }
                 _ => Err(DataFusionError::Internal(format!(
@@ -572,7 +578,11 @@ macro_rules! impl_op {
                 ScalarValue::TimestampNanosecond(Some(ts_rhs), tz_rhs),
             ) => match get_sign!($OPERATION) {
                 -1 => Ok(ts_sub_to_interval(
-                    &ts_lhs, &ts_rhs, &tz_lhs, &tz_rhs, 1_000_000,
+                    &ts_lhs,
+                    &ts_rhs,
+                    &tz_lhs,
+                    &tz_rhs,
+                    IntervalMode::Nano,
                 )?),
                 _ => Err(DataFusionError::Internal(format!(
                     "Operator {} is not implemented for {:?} and {:?}",
@@ -641,6 +651,10 @@ macro_rules! get_sign {
     };
 }
 
+enum IntervalMode {
+    Milli,
+    Nano,
+}
 // Timestamp(sec) and Timestamp(millisec) difference is resulting as Interval(days, millis)
 // Timestamp(microsec) and Tiemstamp(nanosec) difference is resulting as Interval(days, nanos)
 fn ts_sub_to_interval(
@@ -648,19 +662,19 @@ fn ts_sub_to_interval(
     rhs_ts: &i64,
     lhs_tz: &Option<String>,
     rhs_tz: &Option<String>,
-    scale_factor: i64,
+    mode: IntervalMode,
 ) -> Result<ScalarValue, DataFusionError> {
     // Conversion of integer and string-typed timestamps to NaiveDateTime objects
     // Timezone offsets are added also if applicable.
     let (naive_date_time2, naive_date_time1) =
-        with_timezone_to_naive_datetime(lhs_ts, rhs_ts, lhs_tz, rhs_tz, &scale_factor)?;
+        with_timezone_to_naive_datetime(lhs_ts, rhs_ts, lhs_tz, rhs_tz, &mode)?;
 
     let delta_secs = naive_date_time2.signed_duration_since(naive_date_time1);
 
     // 60 * 60 * 24 * 1000 = 86_400_000, number of millisecs in a day
     let number_of_millisecs_in_day: i64 = 86_400_000;
-    match scale_factor {
-        1 => {
+    match mode {
+        IntervalMode::Milli => {
             let as_millisecs = delta_secs.num_milliseconds();
             Ok(ScalarValue::IntervalDayTime(Some(
                 IntervalDayTimeType::make_value(
@@ -670,7 +684,7 @@ fn ts_sub_to_interval(
             )))
         }
         // 60 * 60 * 24 * 1000_000_000 = 86_400_000_000_000, number of nanosecs in a day
-        1_000_000 => {
+        IntervalMode::Nano => {
             let as_nanosecs = delta_secs.num_nanoseconds().ok_or_else(|| {
                 DataFusionError::Execution(String::from(
                     "timestamp difference cannot be shown in nanosecond precision",
@@ -679,14 +693,11 @@ fn ts_sub_to_interval(
             Ok(ScalarValue::IntervalMonthDayNano(Some(
                 IntervalMonthDayNanoType::make_value(
                     0,
-                    (as_nanosecs / (number_of_millisecs_in_day * scale_factor)) as i32,
-                    as_nanosecs % (number_of_millisecs_in_day * scale_factor),
+                    (as_nanosecs / (number_of_millisecs_in_day * 1_000_000)) as i32,
+                    as_nanosecs % (number_of_millisecs_in_day * 1_000_000),
                 ),
             )))
         }
-        _ => Err(DataFusionError::Execution(String::from(
-            "undefined scale factor",
-        ))),
     }
 }
 #[inline]
@@ -695,16 +706,11 @@ fn with_timezone_to_naive_datetime(
     rhs_ts: &i64,
     lhs_tz: &Option<String>,
     rhs_tz: &Option<String>,
-    scale_factor: &i64,
+    mode: &IntervalMode,
 ) -> Result<(NaiveDateTime, NaiveDateTime), DataFusionError> {
-    let (naive_lhs, naive_rhs) = match scale_factor {
-        1 => ms_to_naive_datetime(lhs_ts, rhs_ts)?,
-        1_000_000 => ns_to_naive_datetime(lhs_ts, rhs_ts)?,
-        _ => {
-            return Err(DataFusionError::Execution(String::from(
-                "undefined scale factor",
-            )))
-        }
+    let (naive_lhs, naive_rhs) = match mode {
+        IntervalMode::Milli => ms_to_naive_datetime(lhs_ts, rhs_ts)?,
+        IntervalMode::Nano => ns_to_naive_datetime(lhs_ts, rhs_ts)?,
     };
 
     match (lhs_tz, rhs_tz) {
@@ -4711,37 +4717,23 @@ mod tests {
     #[test]
     fn timestamp_op_tests() {
         // positive interval, edge cases
-        let vec_timestamps_next = timestamps_next();
-        let vec_timestamps_prev = timestamps_prev();
-        let expected_results = get_expected_results(1);
+        let test_data = get_test_data(1);
 
-        for (idx, exp) in expected_results.iter().enumerate() {
-            assert_eq!(
-                *exp,
-                vec_timestamps_next[idx]
-                    .sub(&vec_timestamps_prev[idx])
-                    .unwrap()
-            )
+        for (idx, exp) in test_data.iter().enumerate() {
+            assert_eq!(exp.2, test_data[idx].0.sub(&test_data[idx].1).unwrap())
         }
 
         // negative interval, edge cases
-        let vec_timestamps_next = timestamps_prev();
-        let vec_timestamps_prev = timestamps_next();
-        let expected_results = get_expected_results(-1);
-        for (idx, exp) in expected_results.iter().enumerate() {
-            assert_eq!(
-                *exp,
-                vec_timestamps_next[idx]
-                    .sub(&vec_timestamps_prev[idx])
-                    .unwrap()
-            );
+        let test_data = get_test_data(-1);
+        for (idx, exp) in test_data.iter().enumerate() {
+            assert_eq!(exp.2, test_data[idx].1.sub(&test_data[idx].0).unwrap());
         }
     }
     #[test]
     fn timestamp_op_random_tests() {
         // timestamp1 + (or -) interval = timestamp2
         // timestamp2 - timestamp1 (or timestamp1 - timestamp2) = interval ?
-        let sample_size = 100000;
+        let sample_size = 1000000;
         let timestamps1 = get_random_timestamps(sample_size);
         let intervals = get_random_intervals(sample_size);
         // ts(sec) + interval(ns) = ts(sec); however,
@@ -4772,231 +4764,254 @@ mod tests {
         }
     }
 
-    fn timestamps_next() -> Vec<ScalarValue> {
-        vec![
-            ScalarValue::TimestampNanosecond(
-                Some(
-                    NaiveDate::from_ymd_opt(2023, 1, 1)
-                        .unwrap()
-                        .and_hms_nano_opt(1, 0, 0, 000_000_000)
-                        .unwrap()
-                        .timestamp_nanos(),
+    fn get_test_data(sign: i32) -> Vec<(ScalarValue, ScalarValue, ScalarValue)> {
+        let test_data = vec![
+            (
+                // 1. test case
+                ScalarValue::TimestampNanosecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 1, 1)
+                            .unwrap()
+                            .and_hms_nano_opt(1, 0, 0, 000_000_000)
+                            .unwrap()
+                            .timestamp_nanos(),
+                    ),
+                    Some("+01:00".to_string()),
                 ),
-                Some("+01:00".to_string()),
-            ),
-            ScalarValue::TimestampMicrosecond(
-                Some(
-                    NaiveDate::from_ymd_opt(2023, 3, 1)
-                        .unwrap()
-                        .and_hms_micro_opt(2, 0, 0, 000_000)
-                        .unwrap()
-                        .timestamp_micros(),
+                ScalarValue::TimestampNanosecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 1, 1)
+                            .unwrap()
+                            .and_hms_nano_opt(0, 0, 0, 000_000_000)
+                            .unwrap()
+                            .timestamp_nanos(),
+                    ),
+                    Some("+00:00".to_string()),
                 ),
-                Some("+01:00".to_string()),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(0, 0, 0),
+                )),
             ),
-            ScalarValue::TimestampMillisecond(
-                Some(
-                    NaiveDate::from_ymd_opt(2023, 2, 11)
-                        .unwrap()
-                        .and_hms_milli_opt(10, 10, 0, 000)
-                        .unwrap()
-                        .timestamp_millis(),
+            // 2. test case
+            (
+                ScalarValue::TimestampMicrosecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 3, 1)
+                            .unwrap()
+                            .and_hms_micro_opt(2, 0, 0, 000_000)
+                            .unwrap()
+                            .timestamp_micros(),
+                    ),
+                    Some("+01:00".to_string()),
                 ),
-                Some("+10:10".to_string()),
-            ),
-            ScalarValue::TimestampSecond(
-                Some(
-                    NaiveDate::from_ymd_opt(2023, 3, 1)
-                        .unwrap()
-                        .and_hms_opt(0, 0, 0)
-                        .unwrap()
-                        .timestamp(),
+                ScalarValue::TimestampMicrosecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 1, 1)
+                            .unwrap()
+                            .and_hms_micro_opt(0, 0, 0, 000_000)
+                            .unwrap()
+                            .timestamp_micros(),
+                    ),
+                    Some("-01:00".to_string()),
                 ),
-                Some("-11:59".to_string()),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(0, sign * 59, 0),
+                )),
             ),
-            ScalarValue::TimestampMillisecond(
-                Some(
-                    NaiveDate::from_ymd_opt(2023, 3, 1)
-                        .unwrap()
-                        .and_hms_milli_opt(23, 58, 0, 250)
-                        .unwrap()
-                        .timestamp_millis(),
+            // 3. test case
+            (
+                ScalarValue::TimestampMillisecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 2, 11)
+                            .unwrap()
+                            .and_hms_milli_opt(10, 10, 0, 000)
+                            .unwrap()
+                            .timestamp_millis(),
+                    ),
+                    Some("+10:10".to_string()),
                 ),
-                Some("+11:59".to_string()),
-            ),
-            ScalarValue::TimestampMicrosecond(
-                Some(
-                    NaiveDate::from_ymd_opt(2023, 3, 1)
-                        .unwrap()
-                        .and_hms_micro_opt(0, 0, 0, 15)
-                        .unwrap()
-                        .timestamp_micros(),
+                ScalarValue::TimestampMillisecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 1, 1)
+                            .unwrap()
+                            .and_hms_milli_opt(1, 0, 0, 000)
+                            .unwrap()
+                            .timestamp_millis(),
+                    ),
+                    Some("+01:00".to_string()),
                 ),
-                None,
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                    sign * 41,
+                    0,
+                ))),
             ),
-            ScalarValue::TimestampNanosecond(
-                Some(
-                    NaiveDate::from_ymd_opt(2023, 3, 1)
-                        .unwrap()
-                        .and_hms_nano_opt(0, 0, 0, 22)
-                        .unwrap()
-                        .timestamp_nanos(),
+            // 4. test case
+            (
+                ScalarValue::TimestampSecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 3, 1)
+                            .unwrap()
+                            .and_hms_opt(0, 0, 0)
+                            .unwrap()
+                            .timestamp(),
+                    ),
+                    Some("-11:59".to_string()),
                 ),
-                None,
-            ),
-            ScalarValue::TimestampSecond(
-                Some(
-                    NaiveDate::from_ymd_opt(2023, 3, 1)
-                        .unwrap()
-                        .and_hms_opt(0, 0, 0)
-                        .unwrap()
-                        .timestamp(),
+                ScalarValue::TimestampSecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 1, 1)
+                            .unwrap()
+                            .and_hms_opt(23, 58, 0)
+                            .unwrap()
+                            .timestamp(),
+                    ),
+                    Some("+11:59".to_string()),
                 ),
-                None,
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                    sign * 59,
+                    0,
+                ))),
             ),
-            ScalarValue::TimestampSecond(
-                Some(
-                    NaiveDate::from_ymd_opt(2023, 12, 1)
-                        .unwrap()
-                        .and_hms_opt(0, 0, 0)
-                        .unwrap()
-                        .timestamp(),
+            // 5. test case
+            (
+                ScalarValue::TimestampMillisecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 3, 1)
+                            .unwrap()
+                            .and_hms_milli_opt(23, 58, 0, 250)
+                            .unwrap()
+                            .timestamp_millis(),
+                    ),
+                    Some("+11:59".to_string()),
                 ),
-                None,
+                ScalarValue::TimestampMillisecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 1, 1)
+                            .unwrap()
+                            .and_hms_milli_opt(0, 0, 0, 000)
+                            .unwrap()
+                            .timestamp_millis(),
+                    ),
+                    Some("-11:59".to_string()),
+                ),
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                    sign * 59,
+                    sign * 250,
+                ))),
             ),
-        ]
-    }
+            // 6. test case
+            (
+                ScalarValue::TimestampMicrosecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 3, 1)
+                            .unwrap()
+                            .and_hms_micro_opt(0, 0, 0, 15)
+                            .unwrap()
+                            .timestamp_micros(),
+                    ),
+                    None,
+                ),
+                ScalarValue::TimestampMicrosecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 1, 1)
+                            .unwrap()
+                            .and_hms_micro_opt(0, 0, 0, 000_000)
+                            .unwrap()
+                            .timestamp_micros(),
+                    ),
+                    None,
+                ),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(
+                        0,
+                        sign * 59,
+                        sign as i64 * 15_000,
+                    ),
+                )),
+            ),
+            // 7. test case
+            (
+                ScalarValue::TimestampNanosecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 3, 1)
+                            .unwrap()
+                            .and_hms_nano_opt(0, 0, 0, 22)
+                            .unwrap()
+                            .timestamp_nanos(),
+                    ),
+                    None,
+                ),
+                ScalarValue::TimestampNanosecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 1, 31)
+                            .unwrap()
+                            .and_hms_nano_opt(0, 0, 0, 000_000_000)
+                            .unwrap()
+                            .timestamp_nanos(),
+                    ),
+                    None,
+                ),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(0, sign * 29, sign as i64 * 22),
+                )),
+            ),
+            // 8. test case
+            (
+                ScalarValue::TimestampSecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 3, 1)
+                            .unwrap()
+                            .and_hms_opt(0, 0, 0)
+                            .unwrap()
+                            .timestamp(),
+                    ),
+                    None,
+                ),
+                ScalarValue::TimestampSecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2021, 12, 30)
+                            .unwrap()
+                            .and_hms_opt(0, 0, 30)
+                            .unwrap()
+                            .timestamp(),
+                    ),
+                    None,
+                ),
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                    sign * 425,
+                    sign * 86370000,
+                ))),
+            ),
+            // 9. test case
+            (
+                ScalarValue::TimestampSecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 12, 1)
+                            .unwrap()
+                            .and_hms_opt(0, 0, 0)
+                            .unwrap()
+                            .timestamp(),
+                    ),
+                    None,
+                ),
+                ScalarValue::TimestampSecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(1980, 11, 1)
+                            .unwrap()
+                            .and_hms_opt(0, 0, 0)
+                            .unwrap()
+                            .timestamp(),
+                    ),
+                    None,
+                ),
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                    sign * 15735,
+                    0,
+                ))),
+            ),
+        ];
 
-    fn timestamps_prev() -> Vec<ScalarValue> {
-        vec![
-            ScalarValue::TimestampNanosecond(
-                Some(
-                    NaiveDate::from_ymd_opt(2023, 1, 1)
-                        .unwrap()
-                        .and_hms_nano_opt(0, 0, 0, 000_000_000)
-                        .unwrap()
-                        .timestamp_nanos(),
-                ),
-                Some("+00:00".to_string()),
-            ),
-            ScalarValue::TimestampMicrosecond(
-                Some(
-                    NaiveDate::from_ymd_opt(2023, 1, 1)
-                        .unwrap()
-                        .and_hms_micro_opt(0, 0, 0, 000_000)
-                        .unwrap()
-                        .timestamp_micros(),
-                ),
-                Some("-01:00".to_string()),
-            ),
-            ScalarValue::TimestampMillisecond(
-                Some(
-                    NaiveDate::from_ymd_opt(2023, 1, 1)
-                        .unwrap()
-                        .and_hms_milli_opt(1, 0, 0, 000)
-                        .unwrap()
-                        .timestamp_millis(),
-                ),
-                Some("+01:00".to_string()),
-            ),
-            ScalarValue::TimestampSecond(
-                Some(
-                    NaiveDate::from_ymd_opt(2023, 1, 1)
-                        .unwrap()
-                        .and_hms_opt(23, 58, 0)
-                        .unwrap()
-                        .timestamp(),
-                ),
-                Some("+11:59".to_string()),
-            ),
-            ScalarValue::TimestampMillisecond(
-                Some(
-                    NaiveDate::from_ymd_opt(2023, 1, 1)
-                        .unwrap()
-                        .and_hms_milli_opt(0, 0, 0, 000)
-                        .unwrap()
-                        .timestamp_millis(),
-                ),
-                Some("-11:59".to_string()),
-            ),
-            ScalarValue::TimestampMicrosecond(
-                Some(
-                    NaiveDate::from_ymd_opt(2023, 1, 1)
-                        .unwrap()
-                        .and_hms_micro_opt(0, 0, 0, 000_000)
-                        .unwrap()
-                        .timestamp_micros(),
-                ),
-                None,
-            ),
-            ScalarValue::TimestampNanosecond(
-                Some(
-                    NaiveDate::from_ymd_opt(2023, 1, 31)
-                        .unwrap()
-                        .and_hms_nano_opt(0, 0, 0, 000_000_000)
-                        .unwrap()
-                        .timestamp_nanos(),
-                ),
-                None,
-            ),
-            ScalarValue::TimestampSecond(
-                Some(
-                    NaiveDate::from_ymd_opt(2021, 12, 30)
-                        .unwrap()
-                        .and_hms_opt(0, 0, 30)
-                        .unwrap()
-                        .timestamp(),
-                ),
-                None,
-            ),
-            ScalarValue::TimestampSecond(
-                Some(
-                    NaiveDate::from_ymd_opt(1980, 11, 1)
-                        .unwrap()
-                        .and_hms_opt(0, 0, 0)
-                        .unwrap()
-                        .timestamp(),
-                ),
-                None,
-            ),
-        ]
-    }
-
-    fn get_expected_results(sign: i32) -> Vec<ScalarValue> {
-        vec![
-            ScalarValue::IntervalMonthDayNano(Some(
-                IntervalMonthDayNanoType::make_value(0, 0, 0),
-            )),
-            ScalarValue::IntervalMonthDayNano(Some(
-                IntervalMonthDayNanoType::make_value(0, sign * 59, 0),
-            )),
-            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                sign * 41,
-                0,
-            ))),
-            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                sign * 59,
-                0,
-            ))),
-            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                sign * 59,
-                sign * 250,
-            ))),
-            ScalarValue::IntervalMonthDayNano(Some(
-                IntervalMonthDayNanoType::make_value(0, sign * 59, sign as i64 * 15_000),
-            )),
-            ScalarValue::IntervalMonthDayNano(Some(
-                IntervalMonthDayNanoType::make_value(0, sign * 29, sign as i64 * 22),
-            )),
-            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                sign * 425,
-                sign * 86370000,
-            ))),
-            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                sign * 15735,
-                0,
-            ))),
-        ]
+        test_data
     }
 
     fn get_random_timestamps(sample_size: u64) -> Vec<ScalarValue> {
