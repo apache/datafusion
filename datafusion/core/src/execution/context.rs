@@ -1161,37 +1161,6 @@ impl QueryPlanner for DefaultQueryPlanner {
     }
 }
 
-/// Map that holds opaque objects indexed by their type.
-///
-/// Data is wrapped into an [`Arc`] to enable [`Clone`] while still being [object safe].
-///
-/// [object safe]: https://doc.rust-lang.org/reference/items/traits.html#object-safety
-type AnyMap =
-    HashMap<TypeId, Arc<dyn Any + Send + Sync + 'static>, BuildHasherDefault<IdHasher>>;
-
-/// Hasher for [`AnyMap`].
-///
-/// With [`TypeId`]s as keys, there's no need to hash them. They are already hashes themselves, coming from the compiler.
-/// The [`IdHasher`] just holds the [`u64`] of the [`TypeId`], and then returns it, instead of doing any bit fiddling.
-#[derive(Default)]
-struct IdHasher(u64);
-
-impl Hasher for IdHasher {
-    fn write(&mut self, _: &[u8]) {
-        unreachable!("TypeId calls write_u64");
-    }
-
-    #[inline]
-    fn write_u64(&mut self, id: u64) {
-        self.0 = id;
-    }
-
-    #[inline]
-    fn finish(&self) -> u64 {
-        self.0
-    }
-}
-
 /// Configuration options for session context
 #[derive(Clone)]
 pub struct SessionConfig {
@@ -2125,74 +2094,6 @@ impl OptimizerConfig for SessionState {
     }
 }
 
-/// Task Execution Context
-pub struct TaskContext {
-    /// Session Id
-    session_id: String,
-    /// Optional Task Identify
-    task_id: Option<String>,
-    /// Session configuration
-    session_config: SessionConfig,
-    /// Scalar functions associated with this task context
-    scalar_functions: HashMap<String, Arc<ScalarUDF>>,
-    /// Aggregate functions associated with this task context
-    aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
-    /// Runtime environment associated with this task context
-    runtime: Arc<RuntimeEnv>,
-}
-
-impl TaskContext {
-    /// Create a new task context instance
-    pub fn try_new(
-        task_id: String,
-        session_id: String,
-        task_props: HashMap<String, String>,
-        scalar_functions: HashMap<String, Arc<ScalarUDF>>,
-        aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
-        runtime: Arc<RuntimeEnv>,
-        extensions: Extensions,
-    ) -> Result<Self> {
-        let mut config = ConfigOptions::new().with_extensions(extensions);
-        for (k, v) in task_props {
-            config.set(&k, &v)?;
-        }
-
-        Ok(Self {
-            task_id: Some(task_id),
-            session_id,
-            session_config: config.into(),
-            scalar_functions,
-            aggregate_functions,
-            runtime,
-        })
-    }
-
-    /// Return the SessionConfig associated with the Task
-    pub fn session_config(&self) -> &SessionConfig {
-        &self.session_config
-    }
-
-    /// Return the `session_id` of this [TaskContext]
-    pub fn session_id(&self) -> String {
-        self.session_id.clone()
-    }
-
-    /// Return the `task_id` of this [TaskContext]
-    pub fn task_id(&self) -> Option<String> {
-        self.task_id.clone()
-    }
-
-    /// Return the [`MemoryPool`] associated with this [TaskContext]
-    pub fn memory_pool(&self) -> &Arc<dyn MemoryPool> {
-        &self.runtime.memory_pool
-    }
-
-    /// Return the [RuntimeEnv] associated with this [TaskContext]
-    pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
-        self.runtime.clone()
-    }
-}
-
 /// Create a new task context instance from SessionContext
 impl From<&SessionContext> for TaskContext {
     fn from(session: &SessionContext) -> Self {
@@ -2216,32 +2117,6 @@ impl From<&SessionState> for TaskContext {
             aggregate_functions,
             runtime,
         }
-    }
-}
-
-impl FunctionRegistry for TaskContext {
-    fn udfs(&self) -> HashSet<String> {
-        self.scalar_functions.keys().cloned().collect()
-    }
-
-    fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>> {
-        let result = self.scalar_functions.get(name);
-
-        result.cloned().ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "There is no UDF named \"{name}\" in the TaskContext"
-            ))
-        })
-    }
-
-    fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
-        let result = self.aggregate_functions.get(name);
-
-        result.cloned().ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "There is no UDAF named \"{name}\" in the TaskContext"
-            ))
-        })
     }
 }
 
@@ -2927,44 +2802,5 @@ mod tests {
                 .await
                 .unwrap()
         }
-    }
-
-    extensions_options! {
-        struct TestExtension {
-            value: usize, default = 42
-        }
-    }
-
-    impl ConfigExtension for TestExtension {
-        const PREFIX: &'static str = "test";
-    }
-
-    #[test]
-    fn task_context_extensions() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
-        let task_props = HashMap::from([("test.value".to_string(), "24".to_string())]);
-        let mut extensions = Extensions::default();
-        extensions.insert(TestExtension::default());
-
-        let task_context = TaskContext::try_new(
-            "task_id".to_string(),
-            "session_id".to_string(),
-            task_props,
-            HashMap::default(),
-            HashMap::default(),
-            runtime,
-            extensions,
-        )?;
-
-        let test = task_context
-            .session_config()
-            .config_options()
-            .extensions
-            .get::<TestExtension>();
-        assert!(test.is_some());
-
-        assert_eq!(test.unwrap().value, 24);
-
-        Ok(())
     }
 }

@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod any_map;
 pub mod disk_manager;
 pub mod memory_pool;
 pub mod object_store;
 pub mod registry;
 pub mod runtime_env;
+pub mod task_context;
