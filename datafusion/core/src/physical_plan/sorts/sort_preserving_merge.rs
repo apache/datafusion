@@ -226,7 +226,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     schema,
                     &self.expr,
                     tracking_metrics,
-                    context.session_config().batch_size(),
+                    context.batch_size(),
                 )?);
 
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
@@ -1302,7 +1302,7 @@ mod tests {
             batches.schema(),
             sort.as_slice(),
             tracking_metrics,
-            task_ctx.session_config().batch_size(),
+            task_ctx.batch_size(),
         )
         .unwrap();
 

@@ -31,6 +31,8 @@ use crate::{
         optimizer::PhysicalOptimizerRule,
     },
 };
+pub use datafusion_execution::any_map::AnyMap;
+pub use datafusion_execution::task_context::TaskContext;
 use datafusion_expr::{DescribeTable, StringifiedPlan};
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
@@ -39,7 +41,7 @@ use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::{
     any::{Any, TypeId},
-    hash::{BuildHasherDefault, Hasher},
+    hash::BuildHasherDefault,
     string::String,
 };
 use std::{
@@ -87,7 +89,7 @@ use crate::physical_plan::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_common::{config::Extensions, OwnedTableReference, ScalarValue};
+use datafusion_common::{OwnedTableReference, ScalarValue};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -98,7 +100,6 @@ use url::Url;
 use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
-use crate::execution::memory_pool::MemoryPool;
 use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
@@ -2105,18 +2106,24 @@ impl From<&SessionContext> for TaskContext {
 impl From<&SessionState> for TaskContext {
     fn from(state: &SessionState) -> Self {
         let session_id = state.session_id.clone();
-        let session_config = state.config.clone();
+        let SessionConfig {
+            options: config_options,
+            extensions,
+        } = state.config.clone();
         let scalar_functions = state.scalar_functions.clone();
         let aggregate_functions = state.aggregate_functions.clone();
         let runtime = state.runtime_env.clone();
-        Self {
-            task_id: None,
+        let task_id = None;
+
+        TaskContext::new(
             session_id,
-            session_config,
+            task_id,
+            config_options,
+            extensions,
             scalar_functions,
             aggregate_functions,
             runtime,
-        }
+        )
     }
 }
 
@@ -2134,8 +2141,6 @@ mod tests {
     use arrow::array::ArrayRef;
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
-    use datafusion_common::config::ConfigExtension;
-    use datafusion_common::extensions_options;
     use datafusion_expr::{create_udaf, create_udf, Expr, Volatility};
     use datafusion_physical_expr::functions::make_scalar_function;
     use std::fs::File;

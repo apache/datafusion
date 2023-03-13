@@ -24,7 +24,6 @@ use crate::execution::context::TaskContext;
 use crate::execution::memory_pool::{
     human_readable_size, MemoryConsumer, MemoryReservation,
 };
-use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::common::{batch_byte_size, IPCWriter, SizedRecordBatchStream};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
@@ -37,7 +36,6 @@ use crate::physical_plan::{
     DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use crate::prelude::SessionConfig;
 use arrow::array::{make_array, Array, ArrayRef, MutableArrayData};
 pub use arrow::compute::SortOptions;
 use arrow::compute::{concat, lexsort_to_indices, take, SortColumn, TakeOptions};
@@ -76,8 +74,7 @@ struct ExternalSorter {
     spills: Vec<NamedTempFile>,
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
-    session_config: Arc<SessionConfig>,
-    runtime: Arc<RuntimeEnv>,
+    context: Arc<TaskContext>,
     metrics_set: CompositeMetricsSet,
     metrics: BaselineMetrics,
     fetch: Option<usize>,
@@ -91,23 +88,21 @@ impl ExternalSorter {
         schema: SchemaRef,
         expr: Vec<PhysicalSortExpr>,
         metrics_set: CompositeMetricsSet,
-        session_config: Arc<SessionConfig>,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
         fetch: Option<usize>,
     ) -> Self {
         let metrics = metrics_set.new_intermediate_baseline(partition_id);
 
         let reservation = MemoryConsumer::new(format!("ExternalSorter[{partition_id}]"))
             .with_can_spill(true)
-            .register(&runtime.memory_pool);
+            .register(&context.runtime_env().memory_pool);
 
         Self {
             schema,
             in_mem_batches: vec![],
             spills: vec![],
             expr,
-            session_config,
-            runtime,
+            context,
             metrics_set,
             metrics,
             fetch,
@@ -166,12 +161,13 @@ impl ExternalSorter {
 
     /// MergeSort in mem batches as well as spills into total order with `SortPreservingMergeStream`.
     fn sort(&mut self) -> Result<SendableRecordBatchStream> {
-        let batch_size = self.session_config.batch_size();
+        let batch_size = self.context.batch_size();
+        let runtime = self.context.runtime_env();
 
         if self.spilled_before() {
             let tracking_metrics = self
                 .metrics_set
-                .new_intermediate_tracking(self.partition_id, &self.runtime.memory_pool);
+                .new_intermediate_tracking(self.partition_id, &runtime.memory_pool);
             let mut streams: Vec<SortedStream> = vec![];
             if !self.in_mem_batches.is_empty() {
                 let in_mem_stream = in_mem_partial_sort(
@@ -192,18 +188,18 @@ impl ExternalSorter {
             }
             let tracking_metrics = self
                 .metrics_set
-                .new_final_tracking(self.partition_id, &self.runtime.memory_pool);
+                .new_final_tracking(self.partition_id, &runtime.memory_pool);
             Ok(Box::pin(SortPreservingMergeStream::new_from_streams(
                 streams,
                 self.schema.clone(),
                 &self.expr,
                 tracking_metrics,
-                self.session_config.batch_size(),
+                self.context.batch_size(),
             )?))
         } else if !self.in_mem_batches.is_empty() {
             let tracking_metrics = self
                 .metrics_set
-                .new_final_tracking(self.partition_id, &self.runtime.memory_pool);
+                .new_final_tracking(self.partition_id, &runtime.memory_pool);
             let result = in_mem_partial_sort(
                 &mut self.in_mem_batches,
                 self.schema.clone(),
@@ -240,16 +236,17 @@ impl ExternalSorter {
 
         debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
 
+        let runtime = self.context.runtime_env();
         let tracking_metrics = self
             .metrics_set
-            .new_intermediate_tracking(self.partition_id, &self.runtime.memory_pool);
+            .new_intermediate_tracking(self.partition_id, &runtime.memory_pool);
 
-        let spillfile = self.runtime.disk_manager.create_tmp_file("Sorting")?;
+        let spillfile = runtime.disk_manager.create_tmp_file("Sorting")?;
         let stream = in_mem_partial_sort(
             &mut self.in_mem_batches,
             self.schema.clone(),
             &self.expr,
-            self.session_config.batch_size(),
+            self.context.batch_size(),
             tracking_metrics,
             self.fetch,
         );
@@ -702,7 +699,7 @@ impl ExecutionPlan for SortExec {
 
     /// Specifies whether this plan generates an infinite stream of records.
     /// If the plan does not support pipelining, but it its input(s) are
-    /// infinite, returns an error to indicate this.    
+    /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
             Err(DataFusionError::Plan(
@@ -882,13 +879,13 @@ async fn do_sort(
     let schema = input.schema();
     let tracking_metrics =
         metrics_set.new_intermediate_tracking(partition_id, context.memory_pool());
+
     let mut sorter = ExternalSorter::new(
         partition_id,
         schema.clone(),
         expr,
         metrics_set,
-        Arc::new(context.session_config().clone()),
-        context.runtime_env(),
+        context.clone(),
         fetch,
     );
     while let Some(batch) = input.next().await {
@@ -922,6 +919,7 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
     use datafusion_common::cast::{as_primitive_array, as_string_array};
+    use datafusion_execution::runtime_env::RuntimeEnv;
     use futures::FutureExt;
     use std::collections::HashMap;
 

@@ -112,7 +112,7 @@ impl ExecutionPlan for NdJsonExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let batch_size = context.session_config().batch_size();
+        let batch_size = context.batch_size();
         let (projected_schema, _) = self.base_config.project();
 
         let object_store = context

@@ -372,12 +372,12 @@ impl ExecutionPlan for ParquetExec {
                     })
             })?;
 
-        let config_options = ctx.session_config().config_options();
+        let config_options = ctx.config_options();
 
         let opener = ParquetOpener {
             partition_index,
             projection: Arc::from(projection),
-            batch_size: ctx.session_config().batch_size(),
+            batch_size: ctx.batch_size(),
             limit: self.base_config.limit,
             predicate: self.predicate.clone(),
             pruning_predicate: self.pruning_predicate.clone(),

@@ -58,9 +58,10 @@ impl TaskContext {
         scalar_functions: HashMap<String, Arc<ScalarUDF>>,
         aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
         runtime: Arc<RuntimeEnv>,
-        extensions: Extensions,
+        extensions: AnyMap,
+        config_extensions: Extensions,
     ) -> Result<Self> {
-        let mut config_options = ConfigOptions::new().with_extensions(extensions);
+        let mut config_options = ConfigOptions::new().with_extensions(config_extensions);
         for (k, v) in task_props {
             config_options.set(&k, &v)?;
         }
@@ -69,11 +70,32 @@ impl TaskContext {
             task_id: Some(task_id),
             session_id,
             config_options,
-            extensions: Default::default(),
+            extensions,
             scalar_functions,
             aggregate_functions,
             runtime,
         })
+    }
+
+    /// Create a new task context instance
+    pub fn new(
+        session_id: String,
+        task_id: Option<String>,
+        config_options: ConfigOptions,
+        extensions: AnyMap,
+        scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+        aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Self {
+        Self {
+            session_id,
+            task_id,
+            config_options,
+            extensions,
+            scalar_functions,
+            aggregate_functions,
+            runtime,
+        }
     }
 
     /// Return a handle to the configuration options.
@@ -99,6 +121,16 @@ impl TaskContext {
     /// Return the [RuntimeEnv] associated with this [TaskContext]
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
         self.runtime.clone()
+    }
+
+    /// Get the currently configured batch size
+    pub fn batch_size(&self) -> usize {
+        self.config_options.execution.batch_size
+    }
+
+    /// Get the current extensions
+    pub fn extensions(&self) -> &AnyMap {
+        &self.extensions
     }
 }
 

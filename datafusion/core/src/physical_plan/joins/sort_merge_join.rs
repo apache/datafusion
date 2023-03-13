@@ -303,7 +303,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         let buffered = buffered.execute(partition, context.clone())?;
 
         // create output buffer
-        let batch_size = context.session_config().batch_size();
+        let batch_size = context.batch_size();
 
         // create join stream
         Ok(Box::pin(SMJStream::try_new(
