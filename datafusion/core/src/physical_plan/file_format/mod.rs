@@ -45,6 +45,10 @@ use crate::datasource::{
     listing::{FileRange, PartitionedFile},
     object_store::ObjectStoreUrl,
 };
+use crate::physical_plan::tree_node::{
+    TreeNodeVisitable, TreeNodeVisitor, VisitRecursion,
+};
+use crate::physical_plan::ExecutionPlan;
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
@@ -66,6 +70,50 @@ use super::{ColumnStatistics, Statistics};
 /// Convert logical type of partition column to physical type: `Dictionary(UInt16, val_type)`
 pub fn partition_type_wrap(val_type: DataType) -> DataType {
     DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val_type))
+}
+
+/// Get all of the [`PartitionedFile`] to be scanned for an [`ExecutionPlan`]
+pub fn get_scan_files(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Vec<Vec<Vec<PartitionedFile>>>> {
+    let mut collector = FileScanCollector::new();
+    collector = plan.accept(collector)?;
+    Ok(collector.file_groups)
+}
+
+struct FileScanCollector {
+    file_groups: Vec<Vec<Vec<PartitionedFile>>>,
+}
+
+impl FileScanCollector {
+    fn new() -> Self {
+        Self {
+            file_groups: vec![],
+        }
+    }
+}
+
+impl TreeNodeVisitor for FileScanCollector {
+    type N = Arc<dyn ExecutionPlan>;
+
+    fn pre_visit(mut self, node: &Self::N) -> Result<VisitRecursion<Self>> {
+        let plan_any = node.as_any();
+        let file_groups =
+            if let Some(parquet_exec) = plan_any.downcast_ref::<ParquetExec>() {
+                parquet_exec.base_config().file_groups.clone()
+            } else if let Some(avro_exec) = plan_any.downcast_ref::<AvroExec>() {
+                avro_exec.base_config().file_groups.clone()
+            } else if let Some(json_exec) = plan_any.downcast_ref::<NdJsonExec>() {
+                json_exec.base_config().file_groups.clone()
+            } else if let Some(csv_exec) = plan_any.downcast_ref::<CsvExec>() {
+                csv_exec.base_config().file_groups.clone()
+            } else {
+                return Ok(VisitRecursion::Continue(self));
+            };
+
+        self.file_groups.push(file_groups);
+        Ok(VisitRecursion::Stop(self))
+    }
 }
 
 /// The base configurations to provide when creating a physical plan for

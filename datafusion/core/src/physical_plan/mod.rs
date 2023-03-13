@@ -657,10 +657,12 @@ pub mod rewrite;
 pub mod sorts;
 pub mod stream;
 pub mod streaming;
+pub mod tree_node;
 pub mod udaf;
 pub mod union;
 pub mod unnest;
 pub mod values;
+pub mod visitable;
 pub mod windows;
 
 use crate::execution::context::TaskContext;
