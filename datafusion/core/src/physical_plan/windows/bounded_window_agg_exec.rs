@@ -312,28 +312,54 @@ impl ExecutionPlan for BoundedWindowAggExec {
 }
 
 pub trait PartitionSearchTrait: Send {
-    fn calculate_out_columns(&mut self, input_buffer: &mut RecordBatch) -> Result<Option<Vec<ArrayRef>>>;
+    fn calculate_out_columns(
+        &mut self,
+        input_buffer: &mut RecordBatch,
+        window_agg_states: &[PartitionWindowAggStates],
+        partition_buffers: &mut PartitionBatches,
+        window_expr: &[Arc<dyn WindowExpr>],
+    ) -> Result<Option<Vec<ArrayRef>>>;
+
+    fn evaluate_partition_batches(
+        &mut self,
+        record_batch: &RecordBatch,
+        window_expr: &[Arc<dyn WindowExpr>],
+        ordered_partition_by_indices: &[usize],
+    ) -> Result<Vec<(Vec<ScalarValue>, RecordBatch)>>;
+
+    fn prune(&mut self, n_out: usize) -> Result<()> {
+        Ok(())
+    }
 }
 
-pub struct LinearSearch{}
+pub struct LinearSearch {
+    // Keeps the hash of input buffer calculated from the PARTITION BY columns
+    // its length is equal to the RecordBatch length.
+    input_buffer_hashes: Vec<u64>,
+    random_state: RandomState,
+}
 
-impl PartitionSearchTrait for LinearSearch{
+impl PartitionSearchTrait for LinearSearch {
     /// This method constructs output columns using the result of each window expression
-    fn calculate_out_columns(&mut self) -> Result<Option<Vec<ArrayRef>>> {
+    fn calculate_out_columns(
+        &mut self,
+        input_buffer: &mut RecordBatch,
+        window_agg_states: &[PartitionWindowAggStates],
+        partition_buffers: &mut PartitionBatches,
+        window_expr: &[Arc<dyn WindowExpr>],
+    ) -> Result<Option<Vec<ArrayRef>>> {
         let partition_by_columns =
-            self.evaluate_partition_by_column_values(&self.input_buffer)?;
-        let n_window_col = self.window_agg_states.len();
+            self.evaluate_partition_by_column_values(&input_buffer, window_expr)?;
+        let n_window_col = window_agg_states.len();
         // `row_map` stores hash id and partition index starting from 0 to n. unique to each partition.
         // partition index corresponds to index of the partition in the vector `partition_indices`
         let mut row_map: RawTable<(u64, usize)> = RawTable::with_capacity(0);
         // `partition_indices` store vector of tuple. First entry is the partition key (unique for each partition)
         // second entry is indices of the rows which partition is constructed in the input record batch
         // Third entry is the how many outputs are generated for the partition.
-        let mut partition_indices: Vec<(Vec<ScalarValue>, Vec<usize>, usize)> =
-            vec![];
-        let err = || {
-            DataFusionError::Execution("Expects to have partition".to_string())
-        };
+        let mut partition_indices: Vec<(Vec<ScalarValue>, Vec<usize>, usize)> = vec![];
+        let err = || DataFusionError::Execution("Expects to have partition".to_string());
+        assert_eq!(input_buffer.num_rows(), self.input_buffer_hashes.len());
         for (row_idx, hash) in self.input_buffer_hashes.iter().enumerate() {
             let entry = row_map.get_mut(*hash, |(_hash, group_idx)| {
                 let row = get_row_at_idx(&partition_by_columns, row_idx).unwrap();
@@ -341,8 +367,7 @@ impl PartitionSearchTrait for LinearSearch{
             });
             match entry {
                 Some((_hash, group_idx)) => {
-                    let (_row, indices, n_out) =
-                        &mut partition_indices[*group_idx];
+                    let (_row, indices, n_out) = &mut partition_indices[*group_idx];
                     if indices.len() >= *n_out {
                         break;
                     }
@@ -355,8 +380,7 @@ impl PartitionSearchTrait for LinearSearch{
                         |(hash, _group_index)| *hash,
                     );
                     let row = get_row_at_idx(&partition_by_columns, row_idx)?;
-                    let min_out = self
-                        .window_agg_states
+                    let min_out = window_agg_states
                         .iter()
                         .map(|window_agg_state| {
                             window_agg_state
@@ -376,16 +400,13 @@ impl PartitionSearchTrait for LinearSearch{
         let mut new_columns = vec![vec![]; n_window_col];
         let mut all_indices = vec![];
         for (row, indices, _) in partition_indices {
-            for (idx, window_agg_state) in
-            self.window_agg_states.iter().enumerate()
-            {
+            for (idx, window_agg_state) in window_agg_states.iter().enumerate() {
                 let partition = window_agg_state.get(&row).ok_or_else(err)?;
-                let values =
-                    partition.state.out_col.slice(0, indices.len()).clone();
+                let values = partition.state.out_col.slice(0, indices.len()).clone();
                 new_columns[idx].push(values);
             }
             let partition_batch_state =
-                self.partition_buffers.get_mut(&row).ok_or_else(err)?;
+                partition_buffers.get_mut(&row).ok_or_else(err)?;
             // Store how many rows are generated for each partition
             partition_batch_state.n_out_row = indices.len();
 
@@ -401,9 +422,7 @@ impl PartitionSearchTrait for LinearSearch{
         let new_columns = new_columns
             .iter()
             .map(|elems| {
-                concat(
-                    &elems.iter().map(|elem| elem.as_ref()).collect::<Vec<_>>(),
-                )
+                concat(&elems.iter().map(|elem| elem.as_ref()).collect::<Vec<_>>())
                     .map_err(DataFusionError::ArrowError)
             })
             .collect::<Result<Vec<_>>>()?;
@@ -413,8 +432,7 @@ impl PartitionSearchTrait for LinearSearch{
         let new_columns = get_arrayref_at_indices(&new_columns, &sorted_indices)?;
 
         let n_out = new_columns[0].len();
-        let res = self
-            .input_buffer
+        let res = input_buffer
             .columns()
             .iter()
             .map(|elem| elem.slice(0, n_out))
@@ -422,14 +440,43 @@ impl PartitionSearchTrait for LinearSearch{
             .collect::<Vec<_>>();
         Ok(Some(res))
     }
+
+    fn evaluate_partition_batches(
+        &mut self,
+        record_batch: &RecordBatch,
+        window_expr: &[Arc<dyn WindowExpr>],
+        ordered_partition_by_indices: &[usize],
+    ) -> Result<Vec<(Vec<ScalarValue>, RecordBatch)>> {
+        let mut res = vec![];
+        let num_rows = record_batch.num_rows();
+        let partition_bys =
+            self.evaluate_partition_by_column_values(record_batch, window_expr)?;
+        // In Linear or PartiallySorted mode we are sure that partition_by columns are not empty.
+        // Calculate indices for each partition
+        let per_partition_indices =
+            self.get_per_partition_indices(&partition_bys, record_batch)?;
+        // Construct new record batch from the rows at the calculated indices for each partition.
+        for indices in per_partition_indices.into_iter() {
+            let row = get_row_at_idx(&partition_bys, indices[0])?;
+            let partition_batch = get_record_batch_at_indices(record_batch, &indices)?;
+            res.push((row, partition_batch));
+        }
+        Ok(res)
+    }
+
+    fn prune(&mut self, n_out: usize) -> Result<()> {
+        self.input_buffer_hashes.drain(0..n_out);
+        Ok(())
+    }
 }
 
-impl LinearSearch{
+impl LinearSearch {
     fn evaluate_partition_by_column_values(
         &self,
         record_batch: &RecordBatch,
+        window_expr: &[Arc<dyn WindowExpr>],
     ) -> Result<Vec<ArrayRef>> {
-        self.window_expr[0]
+        window_expr[0]
             .partition_by()
             .iter()
             .map(|elem| {
@@ -444,23 +491,57 @@ impl LinearSearch{
             })
             .collect::<Result<Vec<ArrayRef>>>()
     }
+
+    fn get_per_partition_indices(
+        &mut self,
+        columns: &[ArrayRef],
+        batch: &RecordBatch,
+    ) -> Result<Vec<Vec<usize>>> {
+        let mut batch_hashes = vec![0; batch.num_rows()];
+        create_hashes(columns, &self.random_state, &mut batch_hashes)?;
+        self.input_buffer_hashes.extend_from_slice(&batch_hashes);
+        let mut row_map: RawTable<(u64, usize)> = RawTable::with_capacity(0);
+        // res stores indices for each partition.
+        let mut res: Vec<Vec<usize>> = vec![];
+        for (row_idx, hash) in batch_hashes.into_iter().enumerate() {
+            let entry = row_map.get_mut(hash, |(_hash, group_idx)| {
+                equal_rows(row_idx, res[*group_idx][0], columns, columns, true).unwrap()
+            });
+            match entry {
+                Some((_hash, group_idx)) => res[*group_idx].push(row_idx),
+                None => {
+                    row_map.insert(hash, (hash, res.len()), |(hash, _group_index)| *hash);
+                    res.push(vec![row_idx]);
+                }
+            }
+        }
+        Ok(res)
+    }
 }
 
-pub struct SortedSearch{}
+pub struct SortedSearch {
+    partition_by_sort_keys: Vec<PhysicalSortExpr>,
+}
 
-impl PartitionSearchTrait for SortedSearch{
+impl PartitionSearchTrait for SortedSearch {
     /// This method constructs output columns using the result of each window expression
-    fn calculate_out_columns(&mut self) -> Result<Option<Vec<ArrayRef>>> {
-        let n_out = self.calculate_n_out_row()?;
+    fn calculate_out_columns(
+        &mut self,
+        input_buffer: &mut RecordBatch,
+        window_agg_states: &[PartitionWindowAggStates],
+        partition_buffers: &mut PartitionBatches,
+        window_expr: &[Arc<dyn WindowExpr>],
+    ) -> Result<Option<Vec<ArrayRef>>> {
+        let n_out = self.calculate_n_out_row(window_agg_states, partition_buffers)?;
         if n_out == 0 {
             Ok(None)
         } else {
-            self.input_buffer
+            input_buffer
                 .columns()
                 .iter()
                 .map(|elem| Ok(elem.slice(0, n_out)))
                 .chain(
-                    self.window_agg_states
+                    window_agg_states
                         .iter()
                         .map(|elem| get_aggregate_result_out_column(elem, n_out)),
                 )
@@ -468,12 +549,133 @@ impl PartitionSearchTrait for SortedSearch{
                 .map(Some)
         }
     }
+
+    fn evaluate_partition_batches(
+        &mut self,
+        record_batch: &RecordBatch,
+        window_expr: &[Arc<dyn WindowExpr>],
+        ordered_partition_by_indices: &[usize],
+    ) -> Result<Vec<(Vec<ScalarValue>, RecordBatch)>> {
+        let mut res = vec![];
+        let num_rows = record_batch.num_rows();
+        // In Sorted case all partition by columns should have ordering, otherwise we cannot
+        // determine boundaries
+        assert_eq!(
+            self.partition_by_sort_keys.len(),
+            ordered_partition_by_indices.len()
+        );
+        let partition_columns = self
+            .partition_by_sort_keys
+            .iter()
+            .map(|elem| elem.evaluate_to_sort_column(record_batch))
+            .collect::<Result<Vec<_>>>()?;
+        let partition_columns_ordered =
+            get_at_indices(&partition_columns, ordered_partition_by_indices)?;
+        let partition_points =
+            self.evaluate_partition_points(num_rows, &partition_columns_ordered)?;
+        let partition_bys = partition_columns
+            .into_iter()
+            .map(|arr| arr.values)
+            .collect::<Vec<ArrayRef>>();
+        for range in partition_points {
+            let row = get_row_at_idx(&partition_bys, range.start)?;
+            let len = range.end - range.start;
+            let slice = record_batch.slice(range.start, len);
+            res.push((row, slice));
+        }
+        Ok(res)
+    }
 }
 
-fn get_search_impl(search_mode: &PartitionSearchMode) -> Box<dyn PartitionSearchTrait>{
-    match search_mode{
-        PartitionSearchMode::Sorted => Box::new(SortedSearch{}),
-        PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted => Box::new(LinearSearch{}),
+impl SortedSearch {
+    /// Calculates how many rows [SortedPartitionByBoundedWindowStream]
+    /// can produce as output.
+    fn calculate_n_out_row(
+        &mut self,
+        window_agg_states: &[PartitionWindowAggStates],
+        partition_buffers: &mut PartitionBatches,
+    ) -> Result<usize> {
+        // Different window aggregators may produce results with different rates.
+        // We produce the overall batch result with the same speed as slowest one.
+        let mut counts = vec![];
+        let out_col_counts = window_agg_states
+            .iter()
+            .map(|window_agg_state| {
+                // Store how many elements are generated for the current
+                // window expression:
+                let mut cur_window_expr_out_result_len = 0;
+                // We iterate over `window_agg_state`, which is an IndexMap.
+                // Iterations follow the insertion order, hence we preserve
+                // sorting when partition columns are sorted.
+                let mut per_partition_out_results = HashMap::new();
+                for (row, WindowState { state, .. }) in window_agg_state.iter() {
+                    cur_window_expr_out_result_len += state.out_col.len();
+                    let count = per_partition_out_results.entry(row.clone()).or_insert(0);
+                    if *count < state.out_col.len() {
+                        *count = state.out_col.len();
+                    }
+                    // If we do not generate all results for the current
+                    // partition, we do not generate results for next
+                    // partition --  otherwise we will lose input ordering.
+                    if state.n_row_result_missing > 0 {
+                        break;
+                    }
+                }
+                counts.push(per_partition_out_results);
+                cur_window_expr_out_result_len
+            })
+            .collect::<Vec<_>>();
+        if let Some(min_idx) = out_col_counts
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(Ordering::Equal))
+            .map(|(index, _)| index)
+        {
+            let err =
+                || DataFusionError::Execution("Expects to have partition".to_string());
+            let per_partition_out_results = &counts[min_idx];
+            for (row, count) in per_partition_out_results.iter() {
+                let partition_batch = partition_buffers.get_mut(row).ok_or_else(err)?;
+                partition_batch.n_out_row = *count;
+            }
+            Ok(out_col_counts[min_idx])
+        } else {
+            Ok(0)
+        }
+    }
+
+    /// evaluate the partition points given the sort columns; if the sort columns are
+    /// empty then the result will be a single element vec of the whole column rows.
+    fn evaluate_partition_points(
+        &self,
+        num_rows: usize,
+        partition_columns: &[SortColumn],
+    ) -> Result<Vec<Range<usize>>> {
+        Ok(if partition_columns.is_empty() {
+            vec![Range {
+                start: 0,
+                end: num_rows,
+            }]
+        } else {
+            lexicographical_partition_ranges(partition_columns)?.collect()
+        })
+    }
+}
+
+fn get_search_impl(
+    search_mode: &PartitionSearchMode,
+    partition_by_sort_keys: Vec<PhysicalSortExpr>,
+) -> Box<dyn PartitionSearchTrait> {
+    match search_mode {
+        PartitionSearchMode::Sorted => Box::new(SortedSearch {
+            partition_by_sort_keys,
+        }),
+        PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted => {
+            Box::new(LinearSearch {
+                input_buffer_hashes: vec![],
+                random_state: Default::default(),
+            })
+        }
     }
 }
 
@@ -498,9 +700,9 @@ pub struct BoundedWindowAggStream {
     /// The record batch executor receives as input (i.e. the columns needed
     /// while calculating aggregation results).
     input_buffer: RecordBatch,
-    // Keeps the hash of input buffer calculated from the PARTITION BY columns
-    // its length is equal to the RecordBatch length.
-    input_buffer_hashes: Vec<u64>,
+    // // Keeps the hash of input buffer calculated from the PARTITION BY columns
+    // // its length is equal to the RecordBatch length.
+    // input_buffer_hashes: Vec<u64>,
     /// We separate `input_buffer` based on partitions (as
     /// determined by PARTITION BY columns) and store them per partition
     /// in `partition_batches`. We use this variable when calculating results
@@ -672,13 +874,18 @@ impl BoundedWindowAggStream {
         self.prune_partition_batches()?;
         // Prune `self.input_buffer`:
         self.prune_input_batch(n_out)?;
+        self.search_mode2.prune(n_out)?;
         Ok(())
     }
 
     fn update_partition_batch(&mut self, record_batch: RecordBatch) -> Result<()> {
         let num_rows = record_batch.num_rows();
         if num_rows > 0 {
-            let partition_batches = self.evaluate_partition_batches(&record_batch)?;
+            let partition_batches = self.search_mode2.evaluate_partition_batches(
+                &record_batch,
+                &self.window_expr,
+                &self.ordered_partition_by_indices,
+            )?;
             for (partition_row, partition_batch) in partition_batches {
                 if let Some(partition_batch_state) =
                     self.partition_buffers.get_mut(&partition_row)
@@ -766,12 +973,12 @@ impl BoundedWindowAggStream {
     ) -> Result<Self> {
         let state = window_expr.iter().map(|_| IndexMap::new()).collect();
         let empty_batch = RecordBatch::new_empty(schema.clone());
-        let search_mode2 = get_search_impl(&search_mode);
+        let search_mode2 = get_search_impl(&search_mode, partition_by_sort_keys.clone());
         Ok(Self {
             schema,
             input,
             input_buffer: empty_batch,
-            input_buffer_hashes: vec![],
+            // input_buffer_hashes: vec![],
             partition_buffers: IndexMap::new(),
             window_agg_states: state,
             finished: false,
@@ -794,7 +1001,12 @@ impl BoundedWindowAggStream {
         }
 
         let schema = self.schema.clone();
-        let columns_to_show = self.calculate_out_columns()?;
+        let columns_to_show = self.search_mode2.calculate_out_columns(
+            &mut self.input_buffer,
+            &self.window_agg_states,
+            &mut self.partition_buffers,
+            &self.window_expr,
+        )?;
         if let Some(columns_to_show) = columns_to_show {
             let n_generated = columns_to_show[0].len();
             self.prune_state(n_generated)?;
@@ -830,59 +1042,59 @@ impl BoundedWindowAggStream {
         Poll::Ready(Some(result))
     }
 
-    /// Calculates how many rows [SortedPartitionByBoundedWindowStream]
-    /// can produce as output.
-    fn calculate_n_out_row(&mut self) -> Result<usize> {
-        // Different window aggregators may produce results with different rates.
-        // We produce the overall batch result with the same speed as slowest one.
-        let mut counts = vec![];
-        let out_col_counts = self
-            .window_agg_states
-            .iter()
-            .map(|window_agg_state| {
-                // Store how many elements are generated for the current
-                // window expression:
-                let mut cur_window_expr_out_result_len = 0;
-                // We iterate over `window_agg_state`, which is an IndexMap.
-                // Iterations follow the insertion order, hence we preserve
-                // sorting when partition columns are sorted.
-                let mut per_partition_out_results = HashMap::new();
-                for (row, WindowState { state, .. }) in window_agg_state.iter() {
-                    cur_window_expr_out_result_len += state.out_col.len();
-                    let count = per_partition_out_results.entry(row.clone()).or_insert(0);
-                    if *count < state.out_col.len() {
-                        *count = state.out_col.len();
-                    }
-                    // If we do not generate all results for the current
-                    // partition, we do not generate results for next
-                    // partition --  otherwise we will lose input ordering.
-                    if state.n_row_result_missing > 0 {
-                        break;
-                    }
-                }
-                counts.push(per_partition_out_results);
-                cur_window_expr_out_result_len
-            })
-            .collect::<Vec<_>>();
-        if let Some(min_idx) = out_col_counts
-            .iter()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(Ordering::Equal))
-            .map(|(index, _)| index)
-        {
-            let err =
-                || DataFusionError::Execution("Expects to have partition".to_string());
-            let per_partition_out_results = &counts[min_idx];
-            for (row, count) in per_partition_out_results.iter() {
-                let partition_batch =
-                    self.partition_buffers.get_mut(row).ok_or_else(err)?;
-                partition_batch.n_out_row = *count;
-            }
-            Ok(out_col_counts[min_idx])
-        } else {
-            Ok(0)
-        }
-    }
+    // /// Calculates how many rows [SortedPartitionByBoundedWindowStream]
+    // /// can produce as output.
+    // fn calculate_n_out_row(&mut self) -> Result<usize> {
+    //     // Different window aggregators may produce results with different rates.
+    //     // We produce the overall batch result with the same speed as slowest one.
+    //     let mut counts = vec![];
+    //     let out_col_counts = self
+    //         .window_agg_states
+    //         .iter()
+    //         .map(|window_agg_state| {
+    //             // Store how many elements are generated for the current
+    //             // window expression:
+    //             let mut cur_window_expr_out_result_len = 0;
+    //             // We iterate over `window_agg_state`, which is an IndexMap.
+    //             // Iterations follow the insertion order, hence we preserve
+    //             // sorting when partition columns are sorted.
+    //             let mut per_partition_out_results = HashMap::new();
+    //             for (row, WindowState { state, .. }) in window_agg_state.iter() {
+    //                 cur_window_expr_out_result_len += state.out_col.len();
+    //                 let count = per_partition_out_results.entry(row.clone()).or_insert(0);
+    //                 if *count < state.out_col.len() {
+    //                     *count = state.out_col.len();
+    //                 }
+    //                 // If we do not generate all results for the current
+    //                 // partition, we do not generate results for next
+    //                 // partition --  otherwise we will lose input ordering.
+    //                 if state.n_row_result_missing > 0 {
+    //                     break;
+    //                 }
+    //             }
+    //             counts.push(per_partition_out_results);
+    //             cur_window_expr_out_result_len
+    //         })
+    //         .collect::<Vec<_>>();
+    //     if let Some(min_idx) = out_col_counts
+    //         .iter()
+    //         .enumerate()
+    //         .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(Ordering::Equal))
+    //         .map(|(index, _)| index)
+    //     {
+    //         let err =
+    //             || DataFusionError::Execution("Expects to have partition".to_string());
+    //         let per_partition_out_results = &counts[min_idx];
+    //         for (row, count) in per_partition_out_results.iter() {
+    //             let partition_batch =
+    //                 self.partition_buffers.get_mut(row).ok_or_else(err)?;
+    //             partition_batch.n_out_row = *count;
+    //         }
+    //         Ok(out_col_counts[min_idx])
+    //     } else {
+    //         Ok(0)
+    //     }
+    // }
 
     /// Prunes the sections of the record batch (for each partition)
     /// that we no longer need to calculate the window function result.
@@ -965,12 +1177,12 @@ impl BoundedWindowAggStream {
             .map(|elem| elem.slice(n_out, n_to_keep))
             .collect::<Vec<_>>();
 
-        if matches!(
-            self.search_mode,
-            PartitionSearchMode::PartiallySorted | PartitionSearchMode::Linear
-        ) {
-            self.input_buffer_hashes.drain(0..n_out);
-        }
+        // if matches!(
+        //     self.search_mode,
+        //     PartitionSearchMode::PartiallySorted | PartitionSearchMode::Linear
+        // ) {
+        //     self.input_buffer_hashes.drain(0..n_out);
+        // }
         self.input_buffer =
             RecordBatch::try_new(self.input_buffer.schema(), batch_to_keep)?;
         Ok(())
@@ -1008,77 +1220,77 @@ impl BoundedWindowAggStream {
         Ok(())
     }
 
-    /// evaluate the partition points given the sort columns; if the sort columns are
-    /// empty then the result will be a single element vec of the whole column rows.
-    fn evaluate_partition_points(
-        &self,
-        num_rows: usize,
-        partition_columns: &[SortColumn],
-    ) -> Result<Vec<Range<usize>>> {
-        Ok(if partition_columns.is_empty() {
-            vec![Range {
-                start: 0,
-                end: num_rows,
-            }]
-        } else {
-            lexicographical_partition_ranges(partition_columns)?.collect()
-        })
-    }
+    // /// evaluate the partition points given the sort columns; if the sort columns are
+    // /// empty then the result will be a single element vec of the whole column rows.
+    // fn evaluate_partition_points(
+    //     &self,
+    //     num_rows: usize,
+    //     partition_columns: &[SortColumn],
+    // ) -> Result<Vec<Range<usize>>> {
+    //     Ok(if partition_columns.is_empty() {
+    //         vec![Range {
+    //             start: 0,
+    //             end: num_rows,
+    //         }]
+    //     } else {
+    //         lexicographical_partition_ranges(partition_columns)?.collect()
+    //     })
+    // }
 
-    fn evaluate_partition_batches(
-        &mut self,
-        record_batch: &RecordBatch,
-    ) -> Result<Vec<(Vec<ScalarValue>, RecordBatch)>> {
-        let mut res = vec![];
-        let num_rows = record_batch.num_rows();
-        match &self.search_mode {
-            PartitionSearchMode::Sorted => {
-                // In Sorted case all partition by columns should have ordering, otherwise we cannot
-                // determine boundaries
-                assert_eq!(
-                    self.partition_by_sort_keys.len(),
-                    self.ordered_partition_by_indices.len()
-                );
-                let partition_columns = self
-                    .partition_by_sort_keys
-                    .iter()
-                    .map(|elem| elem.evaluate_to_sort_column(record_batch))
-                    .collect::<Result<Vec<_>>>()?;
-                let partition_columns_ordered = get_at_indices(
-                    &partition_columns,
-                    &self.ordered_partition_by_indices,
-                )?;
-                let partition_points =
-                    self.evaluate_partition_points(num_rows, &partition_columns_ordered)?;
-                let partition_bys = partition_columns
-                    .into_iter()
-                    .map(|arr| arr.values)
-                    .collect::<Vec<ArrayRef>>();
-                for range in partition_points {
-                    let row = get_row_at_idx(&partition_bys, range.start)?;
-                    let len = range.end - range.start;
-                    let slice = record_batch.slice(range.start, len);
-                    res.push((row, slice));
-                }
-            }
-            PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted => {
-                let partition_bys =
-                    self.evaluate_partition_by_column_values(record_batch)?;
-                // In Linear or PartiallySorted mode we are sure that partition_by columns are not empty.
-                // Calculate indices for each partition
-                let per_partition_indices =
-                    self.get_per_partition_indices(&partition_bys, record_batch)?;
-                // Construct new record batch from the rows at the calculated indices for each partition.
-                for indices in per_partition_indices.into_iter() {
-                    let row = get_row_at_idx(&partition_bys, indices[0])?;
-                    let partition_batch =
-                        get_record_batch_at_indices(record_batch, &indices)?;
-                    res.push((row, partition_batch));
-                }
-            }
-        }
-        Ok(res)
-    }
+    // fn evaluate_partition_batches(
+    //     &mut self,
+    //     record_batch: &RecordBatch,
+    // ) -> Result<Vec<(Vec<ScalarValue>, RecordBatch)>> {
+    //     let mut res = vec![];
+    //     let num_rows = record_batch.num_rows();
+    //     match &self.search_mode {
+    //         PartitionSearchMode::Sorted => {
+    //             // In Sorted case all partition by columns should have ordering, otherwise we cannot
+    //             // determine boundaries
+    //             assert_eq!(
+    //                 self.partition_by_sort_keys.len(),
+    //                 self.ordered_partition_by_indices.len()
+    //             );
+    //             let partition_columns = self
+    //                 .partition_by_sort_keys
+    //                 .iter()
+    //                 .map(|elem| elem.evaluate_to_sort_column(record_batch))
+    //                 .collect::<Result<Vec<_>>>()?;
+    //             let partition_columns_ordered = get_at_indices(
+    //                 &partition_columns,
+    //                 &self.ordered_partition_by_indices,
+    //             )?;
+    //             let partition_points =
+    //                 self.evaluate_partition_points(num_rows, &partition_columns_ordered)?;
+    //             let partition_bys = partition_columns
+    //                 .into_iter()
+    //                 .map(|arr| arr.values)
+    //                 .collect::<Vec<ArrayRef>>();
+    //             for range in partition_points {
+    //                 let row = get_row_at_idx(&partition_bys, range.start)?;
+    //                 let len = range.end - range.start;
+    //                 let slice = record_batch.slice(range.start, len);
+    //                 res.push((row, slice));
+    //             }
+    //         }
+    //         PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted => {
+    //             let partition_bys =
+    //                 self.evaluate_partition_by_column_values(record_batch)?;
+    //             // In Linear or PartiallySorted mode we are sure that partition_by columns are not empty.
+    //             // Calculate indices for each partition
+    //             let per_partition_indices =
+    //                 self.get_per_partition_indices(&partition_bys, record_batch)?;
+    //             // Construct new record batch from the rows at the calculated indices for each partition.
+    //             for indices in per_partition_indices.into_iter() {
+    //                 let row = get_row_at_idx(&partition_bys, indices[0])?;
+    //                 let partition_batch =
+    //                     get_record_batch_at_indices(record_batch, &indices)?;
+    //                 res.push((row, partition_batch));
+    //             }
+    //         }
+    //     }
+    //     Ok(res)
+    // }
 
     // fn evaluate_partition_by_column_values(
     //     &self,
@@ -1100,31 +1312,31 @@ impl BoundedWindowAggStream {
     //         .collect::<Result<Vec<ArrayRef>>>()
     // }
 
-    fn get_per_partition_indices(
-        &mut self,
-        columns: &[ArrayRef],
-        batch: &RecordBatch,
-    ) -> Result<Vec<Vec<usize>>> {
-        let mut batch_hashes = vec![0; batch.num_rows()];
-        create_hashes(columns, &self.random_state, &mut batch_hashes)?;
-        self.input_buffer_hashes.extend_from_slice(&batch_hashes);
-        let mut row_map: RawTable<(u64, usize)> = RawTable::with_capacity(0);
-        // res stores indices for each partition.
-        let mut res: Vec<Vec<usize>> = vec![];
-        for (row_idx, hash) in batch_hashes.into_iter().enumerate() {
-            let entry = row_map.get_mut(hash, |(_hash, group_idx)| {
-                equal_rows(row_idx, res[*group_idx][0], columns, columns, true).unwrap()
-            });
-            match entry {
-                Some((_hash, group_idx)) => res[*group_idx].push(row_idx),
-                None => {
-                    row_map.insert(hash, (hash, res.len()), |(hash, _group_index)| *hash);
-                    res.push(vec![row_idx]);
-                }
-            }
-        }
-        Ok(res)
-    }
+    // fn get_per_partition_indices(
+    //     &mut self,
+    //     columns: &[ArrayRef],
+    //     batch: &RecordBatch,
+    // ) -> Result<Vec<Vec<usize>>> {
+    //     let mut batch_hashes = vec![0; batch.num_rows()];
+    //     create_hashes(columns, &self.random_state, &mut batch_hashes)?;
+    //     self.input_buffer_hashes.extend_from_slice(&batch_hashes);
+    //     let mut row_map: RawTable<(u64, usize)> = RawTable::with_capacity(0);
+    //     // res stores indices for each partition.
+    //     let mut res: Vec<Vec<usize>> = vec![];
+    //     for (row_idx, hash) in batch_hashes.into_iter().enumerate() {
+    //         let entry = row_map.get_mut(hash, |(_hash, group_idx)| {
+    //             equal_rows(row_idx, res[*group_idx][0], columns, columns, true).unwrap()
+    //         });
+    //         match entry {
+    //             Some((_hash, group_idx)) => res[*group_idx].push(row_idx),
+    //             None => {
+    //                 row_map.insert(hash, (hash, res.len()), |(hash, _group_index)| *hash);
+    //                 res.push(vec![row_idx]);
+    //             }
+    //         }
+    //     }
+    //     Ok(res)
+    // }
 }
 
 impl RecordBatchStream for BoundedWindowAggStream {
