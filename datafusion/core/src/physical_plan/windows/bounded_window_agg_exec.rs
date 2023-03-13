@@ -331,6 +331,79 @@ pub trait PartitionSearchTrait: Send {
     fn prune(&mut self, _n_out: usize) -> Result<()> {
         Ok(())
     }
+
+    fn update_partition_batch(
+        &mut self,
+        input_buffer: &mut RecordBatch,
+        record_batch: RecordBatch,
+        window_expr: &[Arc<dyn WindowExpr>],
+        ordered_partition_by_indices: &[usize],
+        partition_buffers: &mut PartitionBatches,
+        search_mode: &PartitionSearchMode,
+    ) -> Result<()> {
+        let num_rows = record_batch.num_rows();
+        if num_rows > 0 {
+            let partition_batches = self.evaluate_partition_batches(
+                &record_batch,
+                window_expr,
+                ordered_partition_by_indices,
+            )?;
+            for (partition_row, partition_batch) in partition_batches {
+                if let Some(partition_batch_state) =
+                    partition_buffers.get_mut(&partition_row)
+                {
+                    partition_batch_state.record_batch = concat_batches(
+                        &record_batch.schema(),
+                        [&partition_batch_state.record_batch, &partition_batch],
+                    )?;
+                } else {
+                    let partition_batch_state = PartitionBatchState {
+                        record_batch: partition_batch,
+                        is_end: false,
+                        n_out_row: 0,
+                    };
+                    partition_buffers.insert(partition_row, partition_batch_state);
+                };
+            }
+        }
+        match &search_mode {
+            PartitionSearchMode::Sorted => {
+                let n_partitions = partition_buffers.len();
+                for (idx, (_, partition_batch_state)) in
+                    partition_buffers.iter_mut().enumerate()
+                {
+                    partition_batch_state.is_end |= idx < n_partitions - 1;
+                }
+            }
+            PartitionSearchMode::PartiallySorted => {
+                if let Some((last_row, _)) = partition_buffers.last() {
+                    let last_sorted_cols = ordered_partition_by_indices
+                        .iter()
+                        .map(|idx| last_row[*idx].clone())
+                        .collect::<Vec<_>>();
+                    for (row, partition_batch_state) in partition_buffers.iter_mut() {
+                        let sorted_cols = ordered_partition_by_indices
+                            .iter()
+                            .map(|idx| row[*idx].clone())
+                            .collect::<Vec<_>>();
+                        if sorted_cols != last_sorted_cols {
+                            // It is guaranteed that we will no longer receive value for these partitions
+                            partition_batch_state.is_end = true;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        };
+
+        *input_buffer = if input_buffer.num_rows() == 0 {
+            record_batch
+        } else {
+            concat_batches(&input_buffer.schema(), [&input_buffer, &record_batch])?
+        };
+
+        Ok(())
+    }
 }
 
 pub struct LinearSearch {
@@ -750,75 +823,6 @@ impl BoundedWindowAggStream {
         self.search_mode2.prune(n_out)?;
         Ok(())
     }
-
-    fn update_partition_batch(&mut self, record_batch: RecordBatch) -> Result<()> {
-        let num_rows = record_batch.num_rows();
-        if num_rows > 0 {
-            let partition_batches = self.search_mode2.evaluate_partition_batches(
-                &record_batch,
-                &self.window_expr,
-                &self.ordered_partition_by_indices,
-            )?;
-            for (partition_row, partition_batch) in partition_batches {
-                if let Some(partition_batch_state) =
-                    self.partition_buffers.get_mut(&partition_row)
-                {
-                    partition_batch_state.record_batch = concat_batches(
-                        &self.input.schema(),
-                        [&partition_batch_state.record_batch, &partition_batch],
-                    )?;
-                } else {
-                    let partition_batch_state = PartitionBatchState {
-                        record_batch: partition_batch,
-                        is_end: false,
-                        n_out_row: 0,
-                    };
-                    self.partition_buffers
-                        .insert(partition_row, partition_batch_state);
-                };
-            }
-        }
-        match &self.search_mode {
-            PartitionSearchMode::Sorted => {
-                let n_partitions = self.partition_buffers.len();
-                for (idx, (_, partition_batch_state)) in
-                    self.partition_buffers.iter_mut().enumerate()
-                {
-                    partition_batch_state.is_end |= idx < n_partitions - 1;
-                }
-            }
-            PartitionSearchMode::PartiallySorted => {
-                if let Some((last_row, _)) = self.partition_buffers.last() {
-                    let last_sorted_cols = self
-                        .ordered_partition_by_indices
-                        .iter()
-                        .map(|idx| last_row[*idx].clone())
-                        .collect::<Vec<_>>();
-                    for (row, partition_batch_state) in self.partition_buffers.iter_mut()
-                    {
-                        let sorted_cols = self
-                            .ordered_partition_by_indices
-                            .iter()
-                            .map(|idx| row[*idx].clone())
-                            .collect::<Vec<_>>();
-                        if sorted_cols != last_sorted_cols {
-                            // It is guaranteed that we will no longer receive value for these partitions
-                            partition_batch_state.is_end = true;
-                        }
-                    }
-                }
-            }
-            _ => {}
-        };
-
-        self.input_buffer = if self.input_buffer.num_rows() == 0 {
-            record_batch
-        } else {
-            concat_batches(&self.input.schema(), [&self.input_buffer, &record_batch])?
-        };
-
-        Ok(())
-    }
 }
 
 impl Stream for BoundedWindowAggStream {
@@ -898,7 +902,14 @@ impl BoundedWindowAggStream {
 
         let result = match ready!(self.input.poll_next_unpin(cx)) {
             Some(Ok(batch)) => {
-                self.update_partition_batch(batch)?;
+                self.search_mode2.update_partition_batch(
+                    &mut self.input_buffer,
+                    batch,
+                    &self.window_expr,
+                    &self.ordered_partition_by_indices,
+                    &mut self.partition_buffers,
+                    &self.search_mode,
+                )?;
                 self.compute_aggregates()
             }
             Some(Err(e)) => Err(e),
