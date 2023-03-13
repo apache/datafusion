@@ -670,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -699,7 +699,6 @@ dependencies = [
  "object_store",
  "parking_lot",
  "parquet",
- "paste",
  "percent-encoding",
  "pin-project-lite",
  "rand",
@@ -717,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -735,7 +734,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -748,31 +747,33 @@ dependencies = [
 
 [[package]]
 name = "datafusion-execution"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
+ "dashmap",
  "datafusion-common",
  "datafusion-expr",
  "hashbrown 0.13.2",
  "log",
+ "object_store",
  "parking_lot",
  "rand",
  "tempfile",
+ "url",
 ]
 
 [[package]]
 name = "datafusion-expr"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
  "ahash",
  "arrow",
  "datafusion-common",
- "log",
  "sqlparser",
 ]
 
 [[package]]
 name = "datafusion-optimizer"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -788,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -806,7 +807,6 @@ dependencies = [
  "itertools",
  "lazy_static",
  "md-5",
- "num-traits",
  "paste",
  "petgraph",
  "rand",
@@ -818,7 +818,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-row"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -828,7 +828,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "19.0.0"
+version = "20.0.0"
 dependencies = [
  "arrow-schema",
  "datafusion-common",
@@ -2175,6 +2175,7 @@ name = "serde"
 version = "1.0.155"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71f2b4817415c6d4210bfe1c7bfcf4801b2d904cb4d0e1a8fdb651013c9e86b8"
+
 dependencies = [
  "serde_derive",
 ]
@@ -2184,6 +2185,7 @@ name = "serde_derive"
 version = "1.0.155"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d071a94a3fac4aff69d023a7f411e33f40f3483f8c5190b1953822b6b76d7630"
+
 dependencies = [
  "proc-macro2",
  "quote",

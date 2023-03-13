@@ -27,7 +27,7 @@ use arrow::record_batch::RecordBatch;
 
 use crate::execution::context::TaskContext;
 use crate::execution::memory_pool::MemoryConsumer;
-use crate::physical_plan::common::SharedMemoryReservation;
+use crate::physical_plan::common::{OperatorMemoryReservation, SharedMemoryReservation};
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
@@ -60,6 +60,8 @@ pub struct CrossJoinExec {
     schema: SchemaRef,
     /// Build-side data
     left_fut: OnceAsync<JoinLeftData>,
+    /// Memory reservation for build-side data
+    reservation: OperatorMemoryReservation,
     /// Execution plan metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -83,6 +85,7 @@ impl CrossJoinExec {
             right,
             schema,
             left_fut: Default::default(),
+            reservation: Default::default(),
             metrics: ExecutionPlanMetricsSet::default(),
         }
     }
@@ -221,17 +224,29 @@ impl ExecutionPlan for CrossJoinExec {
         let stream = self.right.execute(partition, context.clone())?;
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
-        let reservation = Arc::new(Mutex::new(
-            MemoryConsumer::new(format!("CrossJoinStream[{partition}]"))
-                .register(context.memory_pool()),
-        ));
+
+        // Initialization of operator-level reservation
+        {
+            let mut reservation_lock = self.reservation.lock();
+            if reservation_lock.is_none() {
+                *reservation_lock = Some(Arc::new(Mutex::new(
+                    MemoryConsumer::new("CrossJoinExec").register(context.memory_pool()),
+                )));
+            };
+        }
+
+        let reservation = self.reservation.lock().clone().ok_or_else(|| {
+            DataFusionError::Internal(
+                "Operator-level memory reservation is not initialized".to_string(),
+            )
+        })?;
 
         let left_fut = self.left_fut.once(|| {
             load_left_input(
                 self.left.clone(),
                 context,
                 join_metrics.clone(),
-                reservation.clone(),
+                reservation,
             )
         });
 
@@ -242,7 +257,6 @@ impl ExecutionPlan for CrossJoinExec {
             right_batch: Arc::new(parking_lot::Mutex::new(None)),
             left_index: 0,
             join_metrics,
-            reservation,
         }))
     }
 
@@ -346,8 +360,6 @@ struct CrossJoinStream {
     right_batch: Arc<parking_lot::Mutex<Option<RecordBatch>>>,
     /// join execution metrics
     join_metrics: BuildProbeJoinMetrics,
-    /// memory reservation
-    reservation: SharedMemoryReservation,
 }
 
 impl RecordBatchStream for CrossJoinStream {
@@ -452,10 +464,7 @@ impl CrossJoinStream {
 
                     Some(result)
                 }
-                other => {
-                    self.reservation.lock().free();
-                    other
-                }
+                other => other,
             })
     }
 }
@@ -683,6 +692,7 @@ mod tests {
             err.to_string(),
             "External error: Resources exhausted: Failed to allocate additional"
         );
+        assert_contains!(err.to_string(), "CrossJoinExec");
 
         Ok(())
     }

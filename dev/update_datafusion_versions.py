@@ -32,6 +32,7 @@ crates = {
     'datafusion-cli': 'datafusion-cli/Cargo.toml',
     'datafusion-common': 'datafusion/common/Cargo.toml',
     'datafusion-expr': 'datafusion/expr/Cargo.toml',
+    'datafusion-execution': 'datafusion/execution/Cargo.toml',
     'datafusion-jit': 'datafusion/jit/Cargo.toml',
     'datafusion-optimizer': 'datafusion/optimizer/Cargo.toml',
     'datafusion-physical-expr': 'datafusion/physical-expr/Cargo.toml',
@@ -49,7 +50,9 @@ def update_datafusion_version(cargo_toml: str, new_version: str):
         data = f.read()
 
     doc = tomlkit.parse(data)
-    doc.get('package')['version'] = new_version
+    pkg = doc.get('package')
+    if 'workspace' not in pkg['version']:
+        pkg['version'] = new_version
 
     with open(cargo_toml, 'w') as f:
         f.write(tomlkit.dumps(doc))
