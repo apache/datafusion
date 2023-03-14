@@ -164,7 +164,6 @@ pub trait AggregateWindowExpr: WindowExpr {
     fn aggregate_evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         let mut accumulator = self.get_accumulator()?;
         let mut last_range = Range { start: 0, end: 0 };
-        let mut idx = 0;
         let sort_options: Vec<SortOptions> =
             self.order_by().iter().map(|o| o.options).collect();
         let mut window_frame_ctx =
@@ -174,7 +173,7 @@ pub trait AggregateWindowExpr: WindowExpr {
             batch,
             &mut last_range,
             &mut window_frame_ctx,
-            &mut idx,
+            0,
             false,
         )
     }
@@ -222,7 +221,7 @@ pub trait AggregateWindowExpr: WindowExpr {
                 // Start search from the last range
                 &mut state.window_frame_range,
                 window_frame_ctx,
-                &mut state.last_calculated_index,
+                state.last_calculated_index,
                 !partition_batch_state.is_end,
             )?;
             state.update(&out_col, partition_batch_state)?;
@@ -238,17 +237,17 @@ pub trait AggregateWindowExpr: WindowExpr {
         record_batch: &RecordBatch,
         last_range: &mut Range<usize>,
         window_frame_ctx: &mut WindowFrameContext,
-        idx: &mut usize,
+        mut idx: usize,
         not_end: bool,
     ) -> Result<ArrayRef> {
         let (values, order_bys) = self.get_values_orderbys(record_batch)?;
         // We iterate on each row to perform a running calculation.
         let length = values[0].len();
         let mut row_wise_results: Vec<ScalarValue> = vec![];
-        while *idx < length {
+        while idx < length {
             // Start search from the last_range. This squeezes searched range.
             let cur_range =
-                window_frame_ctx.calculate_range(&order_bys, last_range, length, *idx)?;
+                window_frame_ctx.calculate_range(&order_bys, last_range, length, idx)?;
             // Exit if the range extends all the way:
             if cur_range.end == length && not_end {
                 break;
@@ -262,7 +261,7 @@ pub trait AggregateWindowExpr: WindowExpr {
             // Update last range
             *last_range = cur_range;
             row_wise_results.push(value);
-            *idx += 1;
+            idx += 1;
         }
         if row_wise_results.is_empty() {
             let field = self.field()?;
@@ -405,6 +404,7 @@ impl WindowAggState {
         out_col: &ArrayRef,
         partition_batch_state: &PartitionBatchState,
     ) -> Result<()> {
+        self.last_calculated_index += out_col.len();
         self.out_col = concat(&[&self.out_col, &out_col])?;
         self.n_row_result_missing =
             partition_batch_state.record_batch.num_rows() - self.last_calculated_index;

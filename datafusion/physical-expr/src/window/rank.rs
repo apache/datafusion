@@ -118,11 +118,10 @@ pub(crate) struct RankEvaluator {
 }
 
 impl PartitionEvaluator for RankEvaluator {
-    fn get_range(&self, state: &WindowAggState, _n_rows: usize) -> Result<Range<usize>> {
-        Ok(Range {
-            start: state.last_calculated_index,
-            end: state.last_calculated_index + 1,
-        })
+    fn get_range(&self, idx: usize, _n_rows: usize) -> Result<Range<usize>> {
+        let start = idx;
+        let end = idx + 1;
+        Ok(Range { start, end })
     }
 
     fn state(&self) -> Result<BuiltinWindowState> {
@@ -132,17 +131,19 @@ impl PartitionEvaluator for RankEvaluator {
     fn update_state(
         &mut self,
         state: &WindowAggState,
+        idx: usize,
         range_columns: &[ArrayRef],
         sort_partition_points: &[Range<usize>],
     ) -> Result<()> {
-        // find range inside `sort_partition_points` containing `state.last_calculated_index`
+        // find range inside `sort_partition_points` containing `idx`
         let chunk_idx = sort_partition_points
             .iter()
-            .position(|elem| {
-                elem.start <= state.last_calculated_index
-                    && state.last_calculated_index < elem.end
-            })
-            .ok_or_else(|| DataFusionError::Execution("Expects sort_partition_points to contain state.last_calculated_index".to_string()))?;
+            .position(|elem| elem.start <= idx && idx < elem.end)
+            .ok_or_else(|| {
+                DataFusionError::Execution(
+                    "Expects sort_partition_points to contain idx".to_string(),
+                )
+            })?;
         let chunk = &sort_partition_points[chunk_idx];
         let last_rank_data = range_columns
             .iter()

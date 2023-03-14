@@ -191,7 +191,7 @@ impl WindowExpr for BuiltInWindowExpr {
                             idx,
                         )
                 } else {
-                    evaluator.get_range(state, num_rows)
+                    evaluator.get_range(idx, num_rows)
                 }?;
 
                 // Exit if the range extends all the way:
@@ -200,9 +200,8 @@ impl WindowExpr for BuiltInWindowExpr {
                 }
                 // Update last range
                 state.window_frame_range = frame_range;
-                evaluator.update_state(state, &order_bys, &sort_partition_points)?;
+                evaluator.update_state(state, idx, &order_bys, &sort_partition_points)?;
                 row_wise_results.push(evaluator.evaluate_stateful(&values)?);
-                state.last_calculated_index += 1;
             }
             let out_col = if row_wise_results.is_empty() {
                 new_empty_array(out_type)

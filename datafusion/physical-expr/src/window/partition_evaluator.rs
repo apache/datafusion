@@ -41,6 +41,7 @@ pub trait PartitionEvaluator: Debug + Send {
     fn update_state(
         &mut self,
         _state: &WindowAggState,
+        _idx: usize,
         _range_columns: &[ArrayRef],
         _sort_partition_points: &[Range<usize>],
     ) -> Result<()> {
@@ -54,7 +55,7 @@ pub trait PartitionEvaluator: Debug + Send {
         ))
     }
 
-    fn get_range(&self, _state: &WindowAggState, _n_rows: usize) -> Result<Range<usize>> {
+    fn get_range(&self, _idx: usize, _n_rows: usize) -> Result<Range<usize>> {
         Err(DataFusionError::NotImplemented(
             "get_range is not implemented for this window function".to_string(),
         ))
