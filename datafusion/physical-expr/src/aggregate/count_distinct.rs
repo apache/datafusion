@@ -284,7 +284,7 @@ where
         let arr = as_dictionary_array::<K>(&values[0])?;
         let nvalues = arr.values().len();
         // map keys to whether their corresponding value has been seen or not
-        let mut seen_map = (0..nvalues).map(|_| false).collect::<Vec<_>>();
+        let mut seen_map = vec![(false; nvalues];
         for idx in arr.keys_iter().flatten() {
             seen_map[idx] = true;
         }
