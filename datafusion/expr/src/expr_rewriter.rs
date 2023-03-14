@@ -664,7 +664,8 @@ mod test {
     fn normalize_cols_non_exist() {
         // test normalizing columns when the name doesn't exist
         let expr = col("a") + col("b");
-        let schema_a = make_schema_with_empty_metadata(vec![make_field("tableA", "a")]);
+        let schema_a =
+            make_schema_with_empty_metadata(vec![make_field("\"tableA\"", "a")]);
         let schemas = vec![schema_a];
         let schemas = schemas.iter().collect::<Vec<_>>();
 
@@ -674,7 +675,7 @@ mod test {
                 .to_string();
         assert_eq!(
             error,
-            "Schema error: No field named 'b'. Valid fields are 'tableA'.'a'."
+            r#"Schema error: No field named "b". Valid fields are "tableA"."a"."#
         );
     }
 
@@ -690,7 +691,7 @@ mod test {
     }
 
     fn make_field(relation: &str, column: &str) -> DFField {
-        DFField::new(Some(relation), column, DataType::Int8, false)
+        DFField::new(Some(relation.to_string()), column, DataType::Int8, false)
     }
 
     #[test]

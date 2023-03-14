@@ -282,7 +282,7 @@ impl SessionContext {
         self.session_id.clone()
     }
 
-    /// Return the [`TableFactoryProvider`] that is registered for the
+    /// Return the [`TableProviderFactory`] that is registered for the
     /// specified file type, if any.
     pub fn table_factory(
         &self,
@@ -1933,7 +1933,7 @@ impl SessionState {
             self.config.options.sql_parser.parse_float_as_decimal;
         for reference in references {
             let table = reference.table();
-            let resolved = self.resolve_table_ref(reference.as_table_reference());
+            let resolved = self.resolve_table_ref(&reference);
             if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
                 if let Ok(schema) = self.schema_for_ref(resolved) {
                     if let Some(table) = schema.table(table).await {
