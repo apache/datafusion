@@ -31,8 +31,7 @@ use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 
-type DistinctScalarValues = ScalarValue;
-type ValueSet = HashSet<DistinctScalarValues, RandomState>;
+type ValueSet = HashSet<ScalarValue, RandomState>;
 /// Expression for a COUNT(DISTINCT) aggregation.
 #[derive(Debug)]
 pub struct DistinctCount {
@@ -128,8 +127,9 @@ impl AggregateExpr for DistinctCount {
                         datatypes::UInt64Type,
                     >::new(val_type)),
                     _ => {
-                        // just checked that datatype is a valid dict key type
-                        unreachable!()
+                        return Err(DataFusionError::Internal(
+                            "Dict key has invalid datatype".to_string(),
+                        ))
                     }
                 }
             }
@@ -150,7 +150,7 @@ impl AggregateExpr for DistinctCount {
 // This method is faster than full_size(), however it is not suitable for variable length
 // values like strings or complex types
 fn values_fixed_size(values: &ValueSet) -> usize {
-    (std::mem::size_of::<DistinctScalarValues>() * values.capacity())
+    (std::mem::size_of::<ScalarValue>() * values.capacity())
         + values
             .iter()
             .next()
@@ -160,7 +160,7 @@ fn values_fixed_size(values: &ValueSet) -> usize {
 // calculates the size as accurate as possible, call to this method is expensive
 // but necessary to correctly account for variable length strings
 fn values_full_size(values: &ValueSet) -> usize {
-    (std::mem::size_of::<DistinctScalarValues>() * values.capacity())
+    (std::mem::size_of::<ScalarValue>() * values.capacity())
         + values
             .iter()
             .map(|vals| ScalarValue::size(vals) - std::mem::size_of_val(vals))
@@ -284,14 +284,12 @@ where
         let arr = as_dictionary_array::<K>(&values[0])?;
         let nvalues = arr.values().len();
         // map keys to whether their corresponding value has been seen or not
-        let mut seen_map = vec![(false; nvalues];
+        let mut seen_map = vec![false; nvalues];
         for idx in arr.keys_iter().flatten() {
-            seen_map[idx] = true;
-        }
-        for (idx, seen) in seen_map.into_iter().enumerate() {
-            if seen {
+            if !seen_map[idx] {
                 let scalar = ScalarValue::try_from_array(arr.values(), idx)?;
                 self.values.insert(scalar);
+                seen_map[idx] = true;
             }
         }
         Ok(())
