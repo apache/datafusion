@@ -39,12 +39,15 @@ use datafusion_expr::{avg, col, count, lit, max, sum, Expr, ExprSchemable};
 async fn describe() -> Result<()> {
     let ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();
+    ctx.register_parquet(
+        "alltypes_tiny_pages",
+        &format!("{testdata}/alltypes_tiny_pages.parquet"),
+        ParquetReadOptions::default(),
+    )
+    .await?;
 
     let describe_record_batch = ctx
-        .read_parquet(
-            &format!("{testdata}/alltypes_tiny_pages.parquet"),
-            ParquetReadOptions::default(),
-        )
+        .table("alltypes_tiny_pages")
         .await?
         .describe()
         .await?
@@ -66,6 +69,30 @@ async fn describe() -> Result<()> {
         "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
     ];
     assert_batches_eq!(expected, &describe_record_batch);
+
+    //add test case for only boolean boolean/binary column
+    let result = ctx
+        .sql("select 'a' as a,true as b")
+        .await?
+        .describe()
+        .await?
+        .collect()
+        .await?;
+    #[rustfmt::skip]
+        let expected = vec![
+        "+------------+------+------+",
+        "| describe   | a    | b    |",
+        "+------------+------+------+",
+        "| count      | 1    | 1    |",
+        "| null_count | 1    | 1    |",
+        "| mean       | null | null |",
+        "| std        | null | null |",
+        "| min        | a    | null |",
+        "| max        | a    | null |",
+        "| median     | null | null |",
+        "+------------+------+------+",
+    ];
+    assert_batches_eq!(expected, &result);
 
     Ok(())
 }
