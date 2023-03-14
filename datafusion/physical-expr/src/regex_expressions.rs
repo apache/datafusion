@@ -267,8 +267,8 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
         string_array.len(),
         string_array
             .data_ref()
-            .null_buffer()
-            .map(|b| b.bit_slice(string_array.offset(), string_array.len())),
+            .nulls()
+            .map(|nulls| nulls.inner().sliced()),
         0,
         vec![new_offsets.finish(), vals.finish()],
         vec![],
