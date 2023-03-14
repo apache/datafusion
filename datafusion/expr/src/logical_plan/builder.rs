@@ -18,15 +18,13 @@
 //! This module provides a builder for creating LogicalPlans
 
 use crate::expr_rewriter::{
-    coerce_plan_expr_for_schema, normalize_col, normalize_col_with_schemas,
-    normalize_cols, rewrite_sort_cols_by_aggs,
+    coerce_plan_expr_for_schema, normalize_col,
+    normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
+    rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{
-    columnize_expr, compare_sort_expr, ensure_any_column_reference_is_unambiguous,
-    exprlist_to_fields, from_plan,
-};
-use crate::{and, binary_expr, Operator};
+use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields, from_plan};
+use crate::{and, binary_expr, DmlStatement, Operator, WriteOp};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
@@ -42,8 +40,8 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-    ToDFSchema,
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
+    ScalarValue, ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -178,8 +176,7 @@ impl LogicalPlanBuilder {
             .map(|(j, data_type)| {
                 // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
                 let name = &format!("column{}", j + 1);
-                DFField::new(
-                    None,
+                DFField::new_unqualified(
                     name,
                     data_type.clone().unwrap_or(DataType::Utf8),
                     true,
@@ -201,6 +198,21 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         Self::scan_with_filters(table_name, table_source, projection, vec![])
+    }
+
+    /// Create a [DmlStatement] for inserting the contents of this builder into the named table
+    pub fn insert_into(
+        input: LogicalPlan,
+        table_name: impl Into<OwnedTableReference>,
+        table_schema: &Schema,
+    ) -> Result<Self> {
+        let table_schema = table_schema.clone().to_dfschema_ref()?;
+        Ok(Self::from(LogicalPlan::Dml(DmlStatement {
+            table_name: table_name.into(),
+            table_schema,
+            op: WriteOp::Insert,
+            input: Arc::new(input),
+        })))
     }
 
     /// Convert a table provider into a builder with a TableScan
@@ -226,7 +238,10 @@ impl LogicalPlanBuilder {
                 DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
-                            DFField::from_qualified(&table_name, schema.field(*i).clone())
+                            DFField::from_qualified(
+                                table_name.to_string(),
+                                schema.field(*i).clone(),
+                            )
                         })
                         .collect(),
                     schema.metadata().clone(),
@@ -552,15 +567,17 @@ impl LogicalPlanBuilder {
         self.join_detailed(right, join_type, join_keys, filter, false)
     }
 
-    fn normalize(
+    pub(crate) fn normalize(
         plan: &LogicalPlan,
         column: impl Into<Column> + Clone,
     ) -> Result<Column> {
-        let schemas = plan.all_schemas();
+        let schema = plan.schema();
+        let fallback_schemas = plan.fallback_normalize_schemas();
         let using_columns = plan.using_columns()?;
-        column
-            .into()
-            .normalize_with_schemas(&schemas, &using_columns)
+        column.into().normalize_with_schemas_and_ambiguity_check(
+            &[&[schema], &fallback_schemas],
+            &using_columns,
+        )
     }
 
     /// Apply a join with on constraint and specified null equality
@@ -580,18 +597,10 @@ impl LogicalPlanBuilder {
         }
 
         let filter = if let Some(expr) = filter {
-            // ambiguous check
-            ensure_any_column_reference_is_unambiguous(
-                &expr,
-                &[self.schema(), right.schema()],
-            )?;
-
-            // normalize all columns in expression
-            let using_columns = expr.to_columns()?;
-            let filter = normalize_col_with_schemas(
+            let filter = normalize_col_with_schemas_and_ambiguity_check(
                 expr,
-                &[self.schema(), right.schema()],
-                &[using_columns],
+                &[&[self.schema(), right.schema()]],
+                &[],
             )?;
             Some(filter)
         } else {
@@ -947,16 +956,16 @@ impl LogicalPlanBuilder {
                 let right_key = r.into();
 
                 let left_using_columns = left_key.to_columns()?;
-                let normalized_left_key = normalize_col_with_schemas(
+                let normalized_left_key = normalize_col_with_schemas_and_ambiguity_check(
                     left_key,
-                    &[self.plan.schema(), right.schema()],
+                    &[&[self.plan.schema(), right.schema()]],
                     &[left_using_columns],
                 )?;
 
                 let right_using_columns = right_key.to_columns()?;
-                let normalized_right_key = normalize_col_with_schemas(
+                let normalized_right_key = normalize_col_with_schemas_and_ambiguity_check(
                     right_key,
-                    &[self.plan.schema(), right.schema()],
+                    &[&[self.plan.schema(), right.schema()]],
                     &[right_using_columns],
                 )?;
 
@@ -1098,7 +1107,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
                     })?;
 
             Ok(DFField::new(
-                left_field.qualifier().map(|x| x.as_ref()),
+                left_field.qualifier().cloned(),
                 left_field.name(),
                 data_type,
                 nullable,
@@ -1284,7 +1293,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
         DataType::List(field)
         | DataType::FixedSizeList(field, _)
         | DataType::LargeList(field) => DFField::new(
-            unnest_field.qualifier().map(String::as_str),
+            unnest_field.qualifier().cloned(),
             unnest_field.name(),
             field.data_type().clone(),
             unnest_field.is_nullable(),
@@ -1325,7 +1334,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
 mod tests {
     use crate::{expr, expr_fn::exists};
     use arrow::datatypes::{DataType, Field};
-    use datafusion_common::SchemaError;
+    use datafusion_common::{OwnedTableReference, SchemaError, TableReference};
 
     use crate::logical_plan::StringifiedPlan;
 
@@ -1600,10 +1609,13 @@ mod tests {
 
         match plan {
             Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
-                qualifier,
-                name,
+                field:
+                    Column {
+                        relation: Some(OwnedTableReference::Bare { table }),
+                        name,
+                    },
             })) => {
-                assert_eq!("employee_csv", qualifier.unwrap().as_str());
+                assert_eq!("employee_csv", table);
                 assert_eq!("id", &name);
                 Ok(())
             }
@@ -1626,10 +1638,13 @@ mod tests {
 
         match plan {
             Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
-                qualifier,
-                name,
+                field:
+                    Column {
+                        relation: Some(OwnedTableReference::Bare { table }),
+                        name,
+                    },
             })) => {
-                assert_eq!("employee_csv", qualifier.unwrap().as_str());
+                assert_eq!("employee_csv", table);
                 assert_eq!("state", &name);
                 Ok(())
             }
@@ -1730,7 +1745,7 @@ mod tests {
         // Check unnested field is a scalar
         let field = plan
             .schema()
-            .field_with_name(Some("test_table"), "strings")
+            .field_with_name(Some(&TableReference::bare("test_table")), "strings")
             .unwrap();
         assert_eq!(&DataType::Utf8, field.data_type());
 
@@ -1749,7 +1764,7 @@ mod tests {
         // Check unnested struct list field should be a struct.
         let field = plan
             .schema()
-            .field_with_name(Some("test_table"), "structs")
+            .field_with_name(Some(&TableReference::bare("test_table")), "structs")
             .unwrap();
         assert!(matches!(field.data_type(), DataType::Struct(_)));
 
