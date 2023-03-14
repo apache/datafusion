@@ -1326,6 +1326,7 @@ NULL NULL NULL NULL Row 2
 statement error Error during planning: The function Sum does not support inputs of type Timestamp\(Nanosecond, None\)
 SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t;
 
+# aggregate_timestamps_count
 query IIII
 SELECT count(nanos), count(micros), count(millis), count(secs) FROM t;
 ----
