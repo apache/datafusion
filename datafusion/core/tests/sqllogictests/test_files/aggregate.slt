@@ -1423,10 +1423,14 @@ SELECT max(nanos), max(micros), max(millis), max(secs) FROM t
 statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Time64\(Nanosecond\).
 SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t
 
-
-
 statement ok
 drop table t_source;
 
 statement ok
 drop table t;
+
+query error DataFusion error: Execution error: median requires at least one non-null value
+select median(a) from (select 1 as a where 1=0);
+
+query error DataFusion error: Execution error: aggregate function needs at least one non-null element
+select approx_median(a) from (select 1 as a where 1=0);

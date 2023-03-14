@@ -40,13 +40,17 @@ async fn describe() -> Result<()> {
     let ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();
 
-    let df = ctx
+    let describe_record_batch = ctx
         .read_parquet(
             &format!("{testdata}/alltypes_tiny_pages.parquet"),
             ParquetReadOptions::default(),
         )
+        .await?
+        .describe()
+        .await?
+        .collect()
         .await?;
-    let describe_record_batch = df.describe().await.unwrap().collect().await.unwrap();
+
     #[rustfmt::skip]
         let expected = vec![
         "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",

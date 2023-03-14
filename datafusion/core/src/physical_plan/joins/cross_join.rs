@@ -26,8 +26,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 
 use crate::execution::context::TaskContext;
-use crate::execution::memory_pool::MemoryConsumer;
-use crate::physical_plan::common::{OperatorMemoryReservation, SharedMemoryReservation};
+use crate::execution::memory_pool::{SharedOptionalMemoryReservation, TryGrow};
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
@@ -38,7 +37,6 @@ use crate::physical_plan::{
 use crate::{error::Result, scalar::ScalarValue};
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
-use parking_lot::Mutex;
 
 use super::utils::{
     adjust_right_output_partitioning, cross_join_equivalence_properties,
@@ -61,7 +59,7 @@ pub struct CrossJoinExec {
     /// Build-side data
     left_fut: OnceAsync<JoinLeftData>,
     /// Memory reservation for build-side data
-    reservation: OperatorMemoryReservation,
+    reservation: SharedOptionalMemoryReservation,
     /// Execution plan metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -106,7 +104,7 @@ async fn load_left_input(
     left: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
     metrics: BuildProbeJoinMetrics,
-    reservation: SharedMemoryReservation,
+    reservation: SharedOptionalMemoryReservation,
 ) -> Result<JoinLeftData> {
     // merge all left parts into a single stream
     let merge = {
@@ -125,7 +123,7 @@ async fn load_left_input(
             |mut acc, batch| async {
                 let batch_size = batch.get_array_memory_size();
                 // Reserve memory for incoming batch
-                acc.3.lock().try_grow(batch_size)?;
+                acc.3.try_grow(batch_size)?;
                 // Update metrics
                 acc.2.build_mem_used.add(batch_size);
                 acc.2.build_input_batches.add(1);
@@ -226,27 +224,15 @@ impl ExecutionPlan for CrossJoinExec {
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
         // Initialization of operator-level reservation
-        {
-            let mut reservation_lock = self.reservation.lock();
-            if reservation_lock.is_none() {
-                *reservation_lock = Some(Arc::new(Mutex::new(
-                    MemoryConsumer::new("CrossJoinExec").register(context.memory_pool()),
-                )));
-            };
-        }
-
-        let reservation = self.reservation.lock().clone().ok_or_else(|| {
-            DataFusionError::Internal(
-                "Operator-level memory reservation is not initialized".to_string(),
-            )
-        })?;
+        self.reservation
+            .initialize("CrossJoinExec", context.memory_pool());
 
         let left_fut = self.left_fut.once(|| {
             load_left_input(
                 self.left.clone(),
                 context,
                 join_metrics.clone(),
-                reservation,
+                self.reservation.clone(),
             )
         });
 
