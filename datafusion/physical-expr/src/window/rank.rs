@@ -25,6 +25,7 @@ use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::array::{Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use std::any::Any;
 use std::iter;
@@ -145,10 +146,7 @@ impl PartitionEvaluator for RankEvaluator {
                 )
             })?;
         let chunk = &sort_partition_points[chunk_idx];
-        let last_rank_data = range_columns
-            .iter()
-            .map(|c| ScalarValue::try_from_array(c, chunk.end - 1))
-            .collect::<Result<Vec<_>>>()?;
+        let last_rank_data = get_row_at_idx(range_columns, chunk.end - 1)?;
         let empty = self.state.last_rank_data.is_empty();
         if empty || self.state.last_rank_data != last_rank_data {
             self.state.last_rank_data = last_rank_data;
