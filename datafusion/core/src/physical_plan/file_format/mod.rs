@@ -77,7 +77,7 @@ pub fn get_scan_files(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Vec<Vec<Vec<PartitionedFile>>>> {
     let mut collector = FileScanCollector::new();
-    collector = plan.accept(collector)?;
+    plan.accept(&mut collector)?;
     Ok(collector.file_groups)
 }
 
@@ -96,7 +96,7 @@ impl FileScanCollector {
 impl TreeNodeVisitor for FileScanCollector {
     type N = Arc<dyn ExecutionPlan>;
 
-    fn pre_visit(mut self, node: &Self::N) -> Result<VisitRecursion<Self>> {
+    fn pre_visit(&mut self, node: &Self::N) -> Result<VisitRecursion> {
         let plan_any = node.as_any();
         let file_groups =
             if let Some(parquet_exec) = plan_any.downcast_ref::<ParquetExec>() {
@@ -108,11 +108,11 @@ impl TreeNodeVisitor for FileScanCollector {
             } else if let Some(csv_exec) = plan_any.downcast_ref::<CsvExec>() {
                 csv_exec.base_config().file_groups.clone()
             } else {
-                return Ok(VisitRecursion::Continue(self));
+                return Ok(VisitRecursion::Continue);
             };
 
         self.file_groups.push(file_groups);
-        Ok(VisitRecursion::Stop(self))
+        Ok(VisitRecursion::Stop)
     }
 }
 
