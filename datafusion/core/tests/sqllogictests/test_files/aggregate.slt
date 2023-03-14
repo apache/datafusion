@@ -1322,7 +1322,7 @@ NULL NULL NULL NULL Row 2
 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10 Row 3
 
 
-# aggregate_timestamps_sum() -> Result<()> {
+# aggregate_timestamps_sum
 statement error Error during planning: The function Sum does not support inputs of type Timestamp\(Nanosecond, None\)
 SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t;
 
@@ -1398,7 +1398,7 @@ select * from t;
 statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Time64\(Nanosecond\).
 SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t
 
-# aggregate_times_count() -> Result<()>
+# aggregate_times_count
 query IIII
 SELECT count(nanos), count(micros), count(millis), count(secs) FROM t
 ----
