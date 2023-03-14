@@ -431,7 +431,7 @@ mod tests {
             .project(proj)?
             .build()?;
 
-        let expected = "Error parsing 'I'M NOT A TIMESTAMP' as timestamp";
+        let expected = "Error parsing timestamp from 'I'M NOT A TIMESTAMP'";
         let actual = get_optimized_plan_err(&plan, &Utc::now());
         assert_contains!(actual, expected);
         Ok(())

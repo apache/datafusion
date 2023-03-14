@@ -1279,36 +1279,36 @@ async fn test_extract_date_part() -> Result<()> {
         "12.0"
     );
     test_expression!(
-        "EXTRACT(second FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
-        "12.12345678"
+        "EXTRACT(second FROM to_timestamp('2020-09-08T12:00:12.123456789+00:00'))",
+        "12.123456789"
     );
     test_expression!(
-        "EXTRACT(millisecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
-        "12123.45678"
+        "EXTRACT(millisecond FROM to_timestamp('2020-09-08T12:00:12.123456789+00:00'))",
+        "12123.456789"
     );
     test_expression!(
-        "EXTRACT(microsecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
-        "12123456.78"
+        "EXTRACT(microsecond FROM to_timestamp('2020-09-08T12:00:12.123456789+00:00'))",
+        "12123456.789"
     );
     test_expression!(
-        "EXTRACT(nanosecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
-        "1.212345678e10"
+        "EXTRACT(nanosecond FROM to_timestamp('2020-09-08T12:00:12.123456789+00:00'))",
+        "1.2123456789e10"
     );
     test_expression!(
-        "date_part('second', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
-        "12.12345678"
+        "date_part('second', to_timestamp('2020-09-08T12:00:12.123456789+00:00'))",
+        "12.123456789"
     );
     test_expression!(
-        "date_part('millisecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
-        "12123.45678"
+        "date_part('millisecond', to_timestamp('2020-09-08T12:00:12.123456789+00:00'))",
+        "12123.456789"
     );
     test_expression!(
-        "date_part('microsecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
-        "12123456.78"
+        "date_part('microsecond', to_timestamp('2020-09-08T12:00:12.123456789+00:00'))",
+        "12123456.789"
     );
     test_expression!(
-        "date_part('nanosecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
-        "1.212345678e10"
+        "date_part('nanosecond', to_timestamp('2020-09-08T12:00:12.123456789+00:00'))",
+        "1.2123456789e10"
     );
     Ok(())
 }
