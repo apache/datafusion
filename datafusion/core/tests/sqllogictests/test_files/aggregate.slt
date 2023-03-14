@@ -1013,9 +1013,9 @@ select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count
 4 29 1.260869565217 123 -117 23
 5 -194 -13.857142857143 118 -101 14
 
-# TODO: csv_query_array_agg_unsupported
-# statement error
-# SELECT array_agg(c13 ORDER BY c1) FROM aggregate_test_100;
+# csv_query_array_agg_unsupported
+statement error This feature is not implemented: ORDER BY not supported in ARRAY_AGG: c1
+SELECT array_agg(c13 ORDER BY c1) FROM aggregate_test_100;
 
 # csv_query_array_cube_agg_with_overflow
 query TIIRIII
@@ -1058,41 +1058,14 @@ NULL 4 29 1.260869565217 123 -117 23
 NULL 5 -194 -13.857142857143 118 -101 14
 NULL NULL 781 7.81 125 -117 100
 
+# TODO this querys output is non determinisitic (the order of the elements
+# differs run to run
+#
 # csv_query_array_agg_distinct
 # query T
 # SELECT array_agg(distinct c2) FROM aggregate_test_100
 # ----
 # [4, 2, 3, 5, 1]
-
-# TODO: aggregate_timestamps_sum
-
-# aggregate_timestamps_count
-# query IIII
-# SELECT count(nanos), count(micros), count(millis), count(secs) FROM t
-# ----
-# 3 3 3 3
-
-# aggregate_timestamps_min
-# query TTTT
-# SELECT min(nanos), min(micros), min(millis), min(secs) FROM t
-# ----
-# 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10
-
-# # aggregate_timestamps_max
-# query TTTT
-# SELECT max(nanos), max(micros), max(millis), max(secs) FROM t
-# ----
-# 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10
-
-# TODO: aggregate_times_sum
-
-# TODO: aggregate_times_count
-
-# TODO: aggregate_times_min
-
-# TODO: aggregate_times_max
-
-# TODO: aggregate_timestamps_avg
 
 # aggregate_time_min_and_max
 query TT
@@ -1112,14 +1085,12 @@ select max(c1) from d_table
 ----
 110.009
 
-# FIX: doesn't check datatype
 # aggregate_decimal_sum
 query R
 select sum(c1) from d_table
 ----
 100
 
-# FIX: doesn't check datatype
 # aggregate_decimal_avg
 query R
 select avg(c1) from d_table
@@ -1191,19 +1162,17 @@ SELECT COUNT(DISTINCT c1) FROM test
 
 # TODO: aggregate_with_alias
 
-# FIX: CSV Writer error
 # array_agg_zero
-# query I
-# SELECT ARRAY_AGG([])
-# ----
-# []
+query ?
+SELECT ARRAY_AGG([])
+----
+[]
 
-# FIX: CSV Writer error
 # array_agg_one
-# query I
-# SELECT ARRAY_AGG([1])
-# ----
-# [[1]]
+query ?
+SELECT ARRAY_AGG([1])
+----
+[[1]]
 
 # test_approx_percentile_cont_decimal_support
 query TI
@@ -1214,7 +1183,6 @@ b 5
 c 4
 d 4
 e 4
-
 
 
 # array_agg_zero
