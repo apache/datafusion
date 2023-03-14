@@ -122,19 +122,19 @@ enum FileStreamState {
 }
 
 /// A timer that can be started and stopped.
-struct StartableTime {
-    metrics: Time,
+pub struct StartableTime {
+    pub(crate) metrics: Time,
     // use for record each part cost time, will eventually add into 'metrics'.
-    start: Option<Instant>,
+    pub(crate) start: Option<Instant>,
 }
 
 impl StartableTime {
-    fn start(&mut self) {
+    pub(crate) fn start(&mut self) {
         assert!(self.start.is_none());
         self.start = Some(Instant::now());
     }
 
-    fn stop(&mut self) {
+    pub(crate) fn stop(&mut self) {
         if let Some(start) = self.start.take() {
             self.metrics.add_elapsed(start);
         }

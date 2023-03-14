@@ -24,18 +24,25 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
-use crate::physical_plan::file_format::FileMeta;
+use crate::physical_plan::file_format::{FileMeta, FileSinkConfig};
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
+    DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    SendableRecordBatchStream, Statistics,
 };
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
 
 use bytes::Buf;
 
+use crate::datasource::file_format::csv::CsvSerializer;
+use crate::datasource::file_format::FileWriterMode;
 use crate::physical_plan::common::AbortOnDropSingle;
+use crate::physical_plan::file_format::file_writer_stream::FileSinkStream;
+use arrow::csv::WriterBuilder;
 use bytes::Bytes;
+use datafusion_physical_expr::expressions::col;
+use datafusion_physical_expr::PhysicalExpr;
 use futures::ready;
 use futures::{StreamExt, TryStreamExt};
 use object_store::{GetResult, ObjectStore};
@@ -358,10 +365,175 @@ pub async fn plan_to_csv(
     Ok(())
 }
 
+/// Execution plan for sinking to a CSV file
+#[derive(Debug, Clone)]
+pub struct CsvWriterExec {
+    input: Arc<dyn ExecutionPlan>,
+    schema: SchemaRef,
+    has_header: bool,
+    delimiter: u8,
+    file_compression_type: FileCompressionType,
+    table_partition: Vec<Arc<dyn PhysicalExpr>>,
+    base_config: FileSinkConfig,
+}
+
+impl CsvWriterExec {
+    /// Create a new CSV writer execution plan provided base and specific configurations
+    pub fn try_new(
+        input: Arc<dyn ExecutionPlan>,
+        base_config: FileSinkConfig,
+        has_header: bool,
+        delimiter: u8,
+        file_compression_type: FileCompressionType,
+    ) -> Result<Self> {
+        let schema = base_config.output_schema().clone();
+        let hash_exprs = base_config
+            .table_partition_cols
+            .iter()
+            .map(|(col_name, _)| col(col_name, &schema))
+            .collect::<Vec<Result<Arc<dyn PhysicalExpr>>>>();
+
+        let table_partition = hash_exprs.into_iter().collect::<Result<Vec<_>>>()?;
+
+        Ok(Self {
+            input,
+            base_config,
+            schema,
+            has_header,
+            table_partition,
+            delimiter,
+            file_compression_type,
+        })
+    }
+
+    /// Ref to the base configs
+    pub fn base_config(&self) -> &FileSinkConfig {
+        &self.base_config
+    }
+    /// true if the first line of each file is a header
+    pub fn has_header(&self) -> bool {
+        self.has_header
+    }
+    /// A column delimiter
+    pub fn delimiter(&self) -> u8 {
+        self.delimiter
+    }
+}
+
+impl ExecutionPlan for CsvWriterExec {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        if self.base_config.file_groups.len() > 1 {
+            vec![Distribution::HashPartitioned(self.table_partition.clone())]
+        } else {
+            vec![Distribution::SinglePartition]
+        }
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        // this is a leaf node and has no children
+        vec![self.input.clone()]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(CsvWriterExec::try_new(
+            children[0].clone(),
+            self.base_config.clone(),
+            self.has_header(),
+            self.delimiter(),
+            self.file_compression_type.clone(),
+        )?))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.base_config.object_store_url)?;
+
+        let header = if matches!(&self.base_config.writer_mode, FileWriterMode::Append) {
+            self.base_config.file_groups[partition].object_meta.size == 0
+                && self.has_header
+        } else {
+            self.has_header
+        };
+
+        let builder = WriterBuilder::new().with_delimiter(self.delimiter);
+        let serializer = CsvSerializer::new()
+            .with_builder(builder)
+            .with_header(header);
+
+        let metrics_set = ExecutionPlanMetricsSet::new();
+        let inner_stream = self.input.execute(partition, context)?;
+        let stream = FileSinkStream::try_new(
+            &self.base_config,
+            partition,
+            object_store,
+            serializer,
+            inner_stream,
+            self.file_compression_type.clone(),
+            &metrics_set,
+        )?;
+        Ok(Box::pin(stream) as SendableRecordBatchStream)
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        None
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(
+                    f,
+                    "CsvWriterExec: writer_mode={:?}, distribution={:?}, files={}",
+                    self.base_config.writer_mode,
+                    self.required_input_distribution()[0].clone(),
+                    super::FileGroupDisplay(&self.base_config.file_groups),
+                )
+            }
+        }
+    }
+
+    fn statistics(&self) -> Statistics {
+        Statistics::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::datasource::file_format::file_type::FileType;
+    use crate::physical_plan::displayable;
     use crate::physical_plan::file_format::chunked_store::ChunkedStore;
     use crate::prelude::*;
     use crate::test::{partitioned_csv_config, partitioned_file_groups};
@@ -862,5 +1034,68 @@ mod tests {
                 );
             }
         }
+    }
+
+    async fn register_aggregate_csv_by_sql(ctx: &SessionContext, table_name: &str) {
+        let testdata = arrow_test_data();
+
+        ctx.sql(&format!(
+            "CREATE EXTERNAL TABLE {table_name} (
+                c1  VARCHAR NOT NULL,
+                c2  TINYINT NOT NULL,
+                c3  SMALLINT NOT NULL,
+                c4  SMALLINT NOT NULL,
+                c5  INTEGER NOT NULL,
+                c6  BIGINT NOT NULL,
+                c7  SMALLINT NOT NULL,
+                c8  INT NOT NULL,
+                c9  INT UNSIGNED NOT NULL,
+                c10 BIGINT UNSIGNED NOT NULL,
+                c11 FLOAT NOT NULL,
+                c12 DOUBLE NOT NULL,
+                c13 VARCHAR NOT NULL
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            LOCATION '{testdata}/csv/aggregate_test_100.csv'
+        "
+        ))
+        .await
+        .expect("Creating dataframe for CREATE EXTERNAL TABLE");
+    }
+
+    #[tokio::test]
+    async fn test_listing_table_insert_into() -> Result<()> {
+        // Create session context
+        let config = SessionConfig::new().with_target_partitions(8);
+        let ctx = SessionContext::with_config(config);
+        // Create external table again without if not exist
+        register_aggregate_csv_by_sql(&ctx, "table_1").await;
+        register_aggregate_csv_by_sql(&ctx, "table_2").await;
+        let sql = "INSERT INTO table_2 SELECT * FROM table_1 ORDER by c1
+            ";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let expected = {
+            vec![
+                "CsvWriterExec: writer_mode=Append, distribution=SinglePartition, files=[ARROW_TEST_DATA/testing/data/csv/aggregate_test_100.csv]",
+                "  ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c5@4 as c5, c6@5 as c6, c7@6 as c7, c8@7 as c8, c9@8 as c9, c10@9 as c10, c11@10 as c11, c12@11 as c12, c13@12 as c13]",
+                "    SortExec: expr=[c1@0 ASC NULLS LAST]",
+                "      CsvExec: files={1 group: [[ARROW_TEST_DATA/testing/data/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        let actual_first = actual[0];
+        // We only assert some parts, "../testing/data/csv/aggregate_test_100.csv" is not the wrong part.
+        assert!(
+            actual_first.contains("CsvWriterExec")
+                && actual_first.contains("writer_mode=Append")
+                && actual_first.contains("distribution=SinglePartition"),
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        Ok(())
     }
 }

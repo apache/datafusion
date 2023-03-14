@@ -22,8 +22,10 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::{self, datatypes::SchemaRef};
+use arrow_array::RecordBatch;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 
@@ -36,10 +38,12 @@ use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore}
 
 use super::FileFormat;
 use crate::datasource::file_format::file_type::FileCompressionType;
-use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
+use crate::datasource::file_format::{BatchSerializer, DEFAULT_SCHEMA_INFER_MAX_RECORD};
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
+use crate::physical_plan::file_format::{
+    CsvExec, CsvWriterExec, FileScanConfig, FileSinkConfig,
+};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
@@ -220,6 +224,22 @@ impl FileFormat for CsvFormat {
         );
         Ok(Arc::new(exec))
     }
+
+    async fn create_writer_physical_plan(
+        &self,
+        input: Arc<dyn ExecutionPlan>,
+        _state: &SessionState,
+        conf: FileSinkConfig,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let exec = CsvWriterExec::try_new(
+            input,
+            conf,
+            self.has_header,
+            self.delimiter,
+            self.file_compression_type.to_owned(),
+        )?;
+        Ok(Arc::new(exec))
+    }
 }
 
 impl CsvFormat {
@@ -325,6 +345,75 @@ fn build_schema_helper(names: Vec<String>, types: &[HashSet<DataType>]) -> Schem
     Schema::new(fields)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+/// Takes a function and spawns it to a tokio blocking pool if available
+pub async fn maybe_spawn_blocking<F, T>(f: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(runtime) => runtime
+            .spawn_blocking(f)
+            .await
+            .map_err(|e| DataFusionError::Execution(e.to_string()))?,
+        Err(_) => f(),
+    }
+}
+
+impl Default for CsvSerializer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Define a struct for serializing CSV records to a stream
+pub struct CsvSerializer {
+    // CSV writer builder
+    builder: WriterBuilder,
+    // Inner buffer for avoiding re allocation
+    buffer: Vec<u8>,
+    // Flag to indicate whether the CSV header
+    header: bool,
+}
+
+impl CsvSerializer {
+    /// Constructor function for the CsvSerializer struct
+    pub fn new() -> Self {
+        Self {
+            builder: WriterBuilder::new(),
+            header: true,
+            buffer: Vec::with_capacity(4096),
+        }
+    }
+
+    /// Method for setting the CSV writer builder
+    pub fn with_builder(mut self, builder: WriterBuilder) -> Self {
+        self.builder = builder;
+        self
+    }
+
+    /// Method for setting the CSV writer header status
+    pub fn with_header(mut self, header: bool) -> Self {
+        self.header = header;
+        self
+    }
+}
+
+#[async_trait]
+impl BatchSerializer for CsvSerializer {
+    async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes> {
+        let builder = self.builder.clone();
+        {
+            let mut inner_writer =
+                builder.has_headers(self.header).build(&mut self.buffer);
+            inner_writer.write(&batch)?;
+        }
+        self.header = false;
+        Ok(Bytes::from(self.buffer.drain(..).collect::<Vec<u8>>()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_util::scan_format;
@@ -334,6 +423,7 @@ mod tests {
     use crate::physical_plan::collect;
     use crate::prelude::{CsvReadOptions, SessionConfig, SessionContext};
     use crate::test_util::arrow_test_data;
+    use arrow::compute::concat_batches;
     use bytes::Bytes;
     use chrono::DateTime;
     use datafusion_common::cast::as_string_array;
@@ -605,5 +695,53 @@ mod tests {
         let root = format!("{}/csv", crate::test_util::arrow_test_data());
         let format = CsvFormat::default();
         scan_format(state, &format, &root, file_name, projection, limit).await
+    }
+
+    #[tokio::test]
+    async fn test_csv_serializer() -> Result<()> {
+        let ctx = SessionContext::new();
+        let df = ctx
+            .read_csv(
+                &format!("{}/csv/aggregate_test_100.csv", arrow_test_data()),
+                CsvReadOptions::default().has_header(true),
+            )
+            .await?;
+        let batches = df
+            .select_columns(&["c2", "c3"])?
+            .limit(0, Some(10))?
+            .collect()
+            .await?;
+        let batch = concat_batches(&batches[0].schema(), &batches)?;
+        let mut serializer = CsvSerializer::new();
+        let bytes = serializer.serialize(batch).await?;
+        assert_eq!(
+            "c2,c3\n2,1\n5,-40\n1,29\n1,-85\n5,-82\n4,-111\n3,104\n3,13\n1,38\n4,-38\n",
+            String::from_utf8(bytes.into()).unwrap()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_csv_serializer_no_header() -> Result<()> {
+        let ctx = SessionContext::new();
+        let df = ctx
+            .read_csv(
+                &format!("{}/csv/aggregate_test_100.csv", arrow_test_data()),
+                CsvReadOptions::default().has_header(true),
+            )
+            .await?;
+        let batches = df
+            .select_columns(&["c2", "c3"])?
+            .limit(0, Some(10))?
+            .collect()
+            .await?;
+        let batch = concat_batches(&batches[0].schema(), &batches)?;
+        let mut serializer = CsvSerializer::new().with_header(false);
+        let bytes = serializer.serialize(batch).await?;
+        assert_eq!(
+            "2,1\n5,-40\n1,29\n1,-85\n5,-82\n4,-111\n3,104\n3,13\n1,38\n4,-38\n",
+            String::from_utf8(bytes.into()).unwrap()
+        );
+        Ok(())
     }
 }

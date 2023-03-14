@@ -22,11 +22,12 @@ mod avro;
 mod chunked_store;
 mod csv;
 mod file_stream;
+mod file_writer_stream;
 mod json;
 mod parquet;
 
 pub(crate) use self::csv::plan_to_csv;
-pub use self::csv::{CsvConfig, CsvExec, CsvOpener};
+pub use self::csv::{CsvConfig, CsvExec, CsvOpener, CsvWriterExec};
 pub(crate) use self::parquet::plan_to_parquet;
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 use arrow::{
@@ -38,9 +39,11 @@ use arrow::{
 pub use avro::AvroExec;
 use datafusion_physical_expr::PhysicalSortExpr;
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream};
+pub use file_writer_stream::WriterOpenFuture;
 pub(crate) use json::plan_to_json;
 pub use json::{JsonOpener, NdJsonExec};
 
+use crate::datasource::file_format::FileWriterMode;
 use crate::datasource::{
     listing::{FileRange, PartitionedFile},
     object_store::ObjectStoreUrl,
@@ -228,6 +231,31 @@ impl FileScanConfig {
     }
 }
 
+/// The base configurations to provide when creating a physical plan for
+/// any given file format.
+#[derive(Debug, Clone)]
+pub struct FileSinkConfig {
+    /// Object store URL, used to get an [`ObjectStore`] instance from
+    /// [`RuntimeEnv::object_store`]
+    pub object_store_url: ObjectStoreUrl,
+    /// A vector of [`PartitionedFile`] structs, each representing a file partition
+    pub file_groups: Vec<PartitionedFile>,
+    /// The schema of the output file
+    pub output_schema: SchemaRef,
+    /// A vector of column names and their corresponding data types,
+    /// representing the partitioning columns for the file
+    pub table_partition_cols: Vec<(String, DataType)>,
+    /// A writer mode that determines how data is written to the file
+    pub writer_mode: FileWriterMode,
+}
+
+impl FileSinkConfig {
+    /// Get output schema
+    pub fn output_schema(&self) -> &SchemaRef {
+        &self.output_schema
+    }
+}
+
 /// A wrapper to customize partitioned file display
 ///
 /// Prints in the format:
@@ -265,6 +293,37 @@ impl<'a> Display for FileGroupsDisplay<'a> {
             write!(f, "]")?;
         }
         write!(f, "]}}")?;
+        Ok(())
+    }
+}
+
+/// A wrapper to customize partitioned file display
+///
+/// Prints in the format:
+/// ```text
+/// {NUM_GROUPS groups: [[file1, file2,...], [fileN, fileM, ...], ...]}
+/// ```
+#[derive(Debug)]
+struct FileGroupDisplay<'a>(&'a [PartitionedFile]);
+
+impl<'a> Display for FileGroupDisplay<'a> {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        let group = self.0;
+        write!(f, "[")?;
+        let mut first_file = true;
+        for pf in group {
+            if !first_file {
+                write!(f, ", ")?;
+            }
+            first_file = false;
+
+            write!(f, "{}", pf.object_meta.location.as_ref())?;
+
+            if let Some(range) = pf.range.as_ref() {
+                write!(f, ":{}..{}", range.start, range.end)?;
+            }
+        }
+        write!(f, "]")?;
         Ok(())
     }
 }

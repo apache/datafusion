@@ -38,11 +38,13 @@ use datafusion_common::parsers::CompressionTypeVariant;
 #[cfg(feature = "compression")]
 use flate2::read::MultiGzDecoder;
 
+use async_compression::tokio::write::{BzEncoder, GzipEncoder, XzEncoder, ZstdEncoder};
 use futures::stream::BoxStream;
 use futures::StreamExt;
 #[cfg(feature = "compression")]
 use futures::TryStreamExt;
 use std::str::FromStr;
+use tokio::io::AsyncWrite;
 #[cfg(feature = "compression")]
 use tokio_util::io::{ReaderStream, StreamReader};
 #[cfg(feature = "compression")]
@@ -146,6 +148,30 @@ impl FileCompressionType {
             }
             UNCOMPRESSED => s.boxed(),
         })
+    }
+
+    /// Given a `AsyncWrite`, wrap the `AsyncWrite` which data are compressed with `FileCompressionType`.
+    pub fn convert_async_writer(
+        &self,
+        w: Box<dyn AsyncWrite + Send + Unpin>,
+    ) -> Box<dyn AsyncWrite + Send + Unpin> {
+        match self.variant {
+            #[cfg(feature = "compression")]
+            GZIP => Box::new(GzipEncoder::new(w)),
+            #[cfg(feature = "compression")]
+            BZIP2 => Box::new(BzEncoder::new(w)),
+            #[cfg(feature = "compression")]
+            XZ => Box::new(XzEncoder::new(w)),
+            #[cfg(feature = "compression")]
+            ZSTD => Box::new(ZstdEncoder::new(w)),
+            #[cfg(not(feature = "compression"))]
+            GZIP | BZIP2 | XZ | ZSTD => {
+                return Err(DataFusionError::NotImplemented(
+                    "Compression feature is not enabled".to_owned(),
+                ))
+            }
+            UNCOMPRESSED => w,
+        }
     }
 
     /// Given a `Stream`, create a `Stream` which data are decompressed with `FileCompressionType`.

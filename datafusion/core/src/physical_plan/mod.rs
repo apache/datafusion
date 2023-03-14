@@ -43,6 +43,13 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, pin::Pin};
 
+// Macro to simplify polling a future
+macro_rules! ready_poll {
+    ($e:expr, $cx:expr) => {
+        ready!(Box::pin($e).poll_unpin($cx))
+    };
+}
+
 /// Trait for types that stream [arrow::record_batch::RecordBatch]
 pub trait RecordBatchStream: Stream<Item = Result<RecordBatch>> {
     /// Returns the schema of this `RecordBatchStream`.

@@ -27,20 +27,30 @@ pub mod json;
 pub mod options;
 pub mod parquet;
 
+use arrow_array::RecordBatch;
 use std::any::Any;
-use std::fmt;
+use std::io::Error;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::{fmt, mem};
 
 use crate::arrow::datatypes::SchemaRef;
 use crate::error::Result;
-use crate::physical_plan::file_format::FileScanConfig;
+use crate::physical_plan::file_format::{
+    FileScanConfig, FileSinkConfig, WriterOpenFuture,
+};
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
 use crate::execution::context::SessionState;
 use async_trait::async_trait;
+use bytes::Bytes;
+use datafusion_common::DataFusionError;
 use datafusion_physical_expr::PhysicalExpr;
+use futures::ready;
+use futures::FutureExt;
 use object_store::{ObjectMeta, ObjectStore};
-
+use tokio::io::AsyncWrite;
 /// This trait abstracts all the file format specific implementations
 /// from the [`TableProvider`]. This helps code re-utilization across
 /// providers that support the the same file formats.
@@ -86,6 +96,177 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         conf: FileScanConfig,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Take a list of files and config to convert it to the appropriate writer executor
+    /// according to this file format.
+    async fn create_writer_physical_plan(
+        &self,
+        _input: Arc<dyn ExecutionPlan>,
+        _state: &SessionState,
+        _conf: FileSinkConfig,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let msg = "Writer not implemented for this format".to_owned();
+        Err(DataFusionError::NotImplemented(msg))
+    }
+}
+
+/// `AsyncPut` is a struct that implements asynchronous writing to an object store.
+/// It is specifically designed for the `object_store` crate's `put` method and sends
+/// the whole bytes at once when the buffer is flushed.
+pub struct AsyncPut {
+    /// Object metadata
+    object_meta: ObjectMeta,
+    /// A shared reference to the object store
+    store: Arc<dyn ObjectStore>,
+    /// A buffer that stores the bytes to be sent
+    current_buffer: Vec<u8>,
+    /// Used for async handling in flush method
+    inner_state: AsyncPutState,
+}
+
+impl AsyncPut {
+    /// Define a constructor for the AsyncPut struct
+    pub fn new(object_meta: ObjectMeta, store: Arc<dyn ObjectStore>) -> Self {
+        Self {
+            object_meta,
+            store,
+            current_buffer: vec![],
+            // Set the inner state to Buffer initially
+            inner_state: AsyncPutState::Buffer,
+        }
+    }
+
+    /// Separate implementation function that unpins the [`AsyncPut`] so
+    /// that partial borrows work correctly
+    fn poll_flush_inner(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), Error>> {
+        loop {
+            match &mut self.inner_state {
+                AsyncPutState::Buffer => {
+                    // Convert the current buffer to bytes and take ownership of it
+                    let bytes = Bytes::from(mem::take(&mut self.current_buffer));
+                    // Set the inner state to Put variant with the bytes
+                    self.inner_state = AsyncPutState::Put { bytes }
+                }
+                AsyncPutState::Put { bytes } => {
+                    // Send the bytes to the object store's put method
+                    return match ready!(self
+                        .store
+                        .put(&self.object_meta.location, bytes.clone())
+                        .poll_unpin(cx))
+                    {
+                        // If the put operation is successful, return a ready poll with an empty result
+                        Ok(_) => Poll::Ready(Ok(())),
+                        // If the put operation fails, return a ready poll with the error wrapped in a custom error type
+                        Err(e) => Poll::Ready(Err(Error::from(e))),
+                    };
+                }
+            }
+        }
+    }
+}
+
+/// An enum that represents the inner state of AsyncPut
+enum AsyncPutState {
+    /// Building Bytes struct in this state
+    Buffer,
+    /// Data in the buffer is being sent to the object store
+    Put { bytes: Bytes },
+}
+
+impl AsyncWrite for AsyncPut {
+    // Define the implementation of the AsyncWrite trait for the AsyncPut struct
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::result::Result<usize, Error>> {
+        // Get the length of the incoming buffer
+        let len = buf.len();
+        // Extend the current buffer with the incoming buffer
+        self.current_buffer.extend_from_slice(buf);
+        // Return a ready poll with the length of the incoming buffer
+        Poll::Ready(Ok(len))
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), Error>> {
+        // Call the poll_flush_inner method to handle the actual sending of data to the object store
+        self.poll_flush_inner(cx)
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), Error>> {
+        // Return a ready poll with an empty result
+        Poll::Ready(Ok(()))
+    }
+}
+/// An enum that defines different file writer modes.
+#[derive(Debug, Clone, Copy)]
+pub enum FileWriterMode {
+    /// Data is appended to an existing file.
+    Append,
+    /// Data is written to a new file.
+    Put,
+    /// Data is written to a new file in multiple parts.
+    PutMultipart,
+}
+
+impl FileWriterMode {
+    /// Define a method that creates a future for opening a writer for a file depending on the writer mode
+    pub fn build_async_writer(
+        &self,
+        object: &ObjectMeta,
+        store: &Arc<dyn ObjectStore>,
+    ) -> Result<WriterOpenFuture> {
+        // Clone the object and store references
+        let object = object.clone();
+        let store = Arc::clone(store);
+        // Clone the writer mode as an enum
+        let self_enum = *self;
+        // Return a result of a boxed future that matches the writer mode and returns the appropriate writer
+        Ok(Box::pin(async move {
+            match self_enum {
+                // If the mode is append, call the store's append method and return a ready poll
+                // with the result wrapped in a custom error type if it fails
+                FileWriterMode::Append => store
+                    .append(&object.location)
+                    .await
+                    .map_err(DataFusionError::ObjectStore),
+                // If the mode is put, create a new AsyncPut writer and return it wrapped in
+                // a boxed trait object
+                FileWriterMode::Put => {
+                    let writer = Box::new(AsyncPut::new(object, store))
+                        as Box<dyn AsyncWrite + Send + Unpin>;
+                    Ok(writer)
+                }
+                // If the mode is put multipart, call the store's put_multipart method and
+                // return the writer wrapped in a ready poll or return an error wrapped
+                // in a custom error type if it fails
+
+                // TODO: Handle multipart id.
+                FileWriterMode::PutMultipart => {
+                    match store.put_multipart(&object.location).await {
+                        Ok((_, writer)) => Ok(writer),
+                        Err(e) => Err(DataFusionError::ObjectStore(e)),
+                    }
+                }
+            }
+        }))
+    }
+}
+
+/// A trait that defines the methods required for a RecordBatch serializer.
+#[async_trait]
+pub trait BatchSerializer: Unpin {
+    /// Asynchronously serializes a `RecordBatch` and returns the serialized bytes.
+    async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes>;
 }
 
 #[cfg(test)]

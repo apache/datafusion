@@ -147,7 +147,6 @@ impl ExecutionPlan for MemoryWriteExec {
             )?))
         }
     }
-
     fn fmt_as(
         &self,
         t: DisplayFormatType,
