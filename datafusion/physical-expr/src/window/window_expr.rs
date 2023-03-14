@@ -167,12 +167,8 @@ pub trait AggregateWindowExpr: WindowExpr {
         let mut idx = 0;
         let sort_options: Vec<SortOptions> =
             self.order_by().iter().map(|o| o.options).collect();
-        let mut window_frame_ctx = WindowFrameContext::new(
-            self.get_window_frame().clone(),
-            sort_options,
-            // Start search from the last range
-            last_range.clone(),
-        );
+        let mut window_frame_ctx =
+            WindowFrameContext::new(self.get_window_frame().clone(), sort_options);
         self.get_result_column(
             &mut accumulator,
             batch,
@@ -218,16 +214,12 @@ pub trait AggregateWindowExpr: WindowExpr {
             let window_frame_ctx = state.window_frame_ctx.get_or_insert_with(|| {
                 let sort_options: Vec<SortOptions> =
                     self.order_by().iter().map(|o| o.options).collect();
-                WindowFrameContext::new(
-                    self.get_window_frame().clone(),
-                    sort_options,
-                    // Start search from the last range
-                    state.window_frame_range.clone(),
-                )
+                WindowFrameContext::new(self.get_window_frame().clone(), sort_options)
             });
             let out_col = self.get_result_column(
                 accumulator,
                 record_batch,
+                // Start search from the last range
                 &mut state.window_frame_range,
                 window_frame_ctx,
                 &mut state.last_calculated_index,
@@ -254,7 +246,9 @@ pub trait AggregateWindowExpr: WindowExpr {
         let length = values[0].len();
         let mut row_wise_results: Vec<ScalarValue> = vec![];
         while *idx < length {
-            let cur_range = window_frame_ctx.calculate_range(&order_bys, length, *idx)?;
+            // Start search from the last_range. This squeezes searched range.
+            let cur_range =
+                window_frame_ctx.calculate_range(&order_bys, last_range, length, *idx)?;
             // Exit if the range extends all the way:
             if cur_range.end == length && not_end {
                 break;
@@ -265,7 +259,8 @@ pub trait AggregateWindowExpr: WindowExpr {
                 &values,
                 accumulator,
             )?;
-            last_range.clone_from(&cur_range);
+            // Update last range
+            *last_range = cur_range;
             row_wise_results.push(value);
             *idx += 1;
         }
@@ -383,12 +378,7 @@ impl WindowAggState {
         match self.window_frame_ctx.as_mut() {
             // Rows have no state do nothing
             Some(WindowFrameContext::Rows(_)) => {}
-            Some(WindowFrameContext::Range { state, .. }) => {
-                state.last_range = Range {
-                    start: state.last_range.start.saturating_sub(n_prune),
-                    end: state.last_range.end.saturating_sub(n_prune),
-                };
-            }
+            Some(WindowFrameContext::Range { .. }) => {}
             Some(WindowFrameContext::Groups { state, .. }) => {
                 let mut n_group_to_del = 0;
                 for (_, end_idx) in &state.group_end_indices {

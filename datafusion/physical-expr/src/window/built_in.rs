@@ -104,17 +104,20 @@ impl WindowExpr for BuiltInWindowExpr {
             let mut row_wise_results = vec![];
 
             let (values, order_bys) = self.get_values_orderbys(batch)?;
-            let mut window_frame_ctx = WindowFrameContext::new(
-                self.window_frame.clone(),
-                sort_options,
-                Range { start: 0, end: 0 },
-            );
+            let mut window_frame_ctx =
+                WindowFrameContext::new(self.window_frame.clone(), sort_options);
+            let mut last_range = Range { start: 0, end: 0 };
             // We iterate on each row to calculate window frame range and and window function result
             for idx in 0..num_rows {
-                let range =
-                    window_frame_ctx.calculate_range(&order_bys, num_rows, idx)?;
+                let range = window_frame_ctx.calculate_range(
+                    &order_bys,
+                    &last_range,
+                    num_rows,
+                    idx,
+                )?;
                 let value = evaluator.evaluate_inside_range(&values, &range)?;
                 row_wise_results.push(value);
+                last_range = range;
             }
             ScalarValue::iter_to_array(row_wise_results.into_iter())
         } else if evaluator.include_rank() {
@@ -178,11 +181,15 @@ impl WindowExpr for BuiltInWindowExpr {
                             WindowFrameContext::new(
                                 self.window_frame.clone(),
                                 sort_options.clone(),
-                                // Start search from the last range
-                                state.window_frame_range.clone(),
                             )
                         })
-                        .calculate_range(&order_bys, num_rows, idx)
+                        .calculate_range(
+                            &order_bys,
+                            // Start search from the last range
+                            &state.window_frame_range,
+                            num_rows,
+                            idx,
+                        )
                 } else {
                     evaluator.get_range(state, num_rows)
                 }?;
@@ -191,6 +198,7 @@ impl WindowExpr for BuiltInWindowExpr {
                 if frame_range.end == num_rows && !partition_batch_state.is_end {
                     break;
                 }
+                // Update last range
                 state.window_frame_range = frame_range;
                 evaluator.update_state(state, &order_bys, &sort_partition_points)?;
                 row_wise_results.push(evaluator.evaluate_stateful(&values)?);

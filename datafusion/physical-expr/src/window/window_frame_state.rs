@@ -52,16 +52,12 @@ pub enum WindowFrameContext {
 
 impl WindowFrameContext {
     /// Create a new state object for the given window frame.
-    pub fn new(
-        window_frame: Arc<WindowFrame>,
-        sort_options: Vec<SortOptions>,
-        last_range: Range<usize>,
-    ) -> Self {
+    pub fn new(window_frame: Arc<WindowFrame>, sort_options: Vec<SortOptions>) -> Self {
         match window_frame.units {
             WindowFrameUnits::Rows => WindowFrameContext::Rows(window_frame),
             WindowFrameUnits::Range => WindowFrameContext::Range {
                 window_frame,
-                state: WindowFrameStateRange::new(sort_options, last_range),
+                state: WindowFrameStateRange::new(sort_options),
             },
             WindowFrameUnits::Groups => WindowFrameContext::Groups {
                 window_frame,
@@ -74,6 +70,7 @@ impl WindowFrameContext {
     pub fn calculate_range(
         &mut self,
         range_columns: &[ArrayRef],
+        last_range: &Range<usize>,
         length: usize,
         idx: usize,
     ) -> Result<Range<usize>> {
@@ -87,7 +84,13 @@ impl WindowFrameContext {
             WindowFrameContext::Range {
                 window_frame,
                 ref mut state,
-            } => state.calculate_range(window_frame, range_columns, length, idx),
+            } => state.calculate_range(
+                window_frame,
+                last_range,
+                range_columns,
+                length,
+                idx,
+            ),
             // Sort options is not used in GROUPS mode calculations as the
             // inequality of two rows indicates a group change, and ordering
             // or position of NULLs do not impact inequality.
@@ -159,33 +162,29 @@ impl WindowFrameContext {
 }
 
 /// This structure encapsulates all the state information we require as we scan
-/// ranges of data while processing RANGE frames. Attribute `last_range` stores
-/// the resulting indices from the previous search. Since the indices only
-/// advance forward, we start from `last_range` subsequently. Thus, the overall
-/// time complexity of linear search amortizes to O(n) where n denotes the total
-/// row count.
+/// ranges of data while processing RANGE frames.
 /// Attribute `sort_options` stores the column ordering specified by the ORDER
 /// BY clause. This information is used to calculate the range.
 #[derive(Debug, Default)]
 pub struct WindowFrameStateRange {
-    pub last_range: Range<usize>,
     sort_options: Vec<SortOptions>,
 }
 
 impl WindowFrameStateRange {
     /// Create a new object to store the search state.
-    fn new(sort_options: Vec<SortOptions>, last_range: Range<usize>) -> Self {
-        Self {
-            // Stores the search range we calculate for future use.
-            last_range,
-            sort_options,
-        }
+    fn new(sort_options: Vec<SortOptions>) -> Self {
+        Self { sort_options }
     }
 
     /// This function calculates beginning/ending indices for the frame of the current row.
+    // Argument `last_range` stores the resulting indices from the previous search. Since the indices only
+    // advance forward, we start from `last_range` subsequently. Thus, the overall
+    // time complexity of linear search amortizes to O(n) where n denotes the total
+    // row count.
     fn calculate_range(
         &mut self,
         window_frame: &Arc<WindowFrame>,
+        last_range: &Range<usize>,
         range_columns: &[ArrayRef],
         length: usize,
         idx: usize,
@@ -198,6 +197,7 @@ impl WindowFrameStateRange {
                 } else {
                     self.calculate_index_of_row::<true, true>(
                         range_columns,
+                        last_range,
                         idx,
                         Some(n),
                         length,
@@ -206,6 +206,7 @@ impl WindowFrameStateRange {
             }
             WindowFrameBound::CurrentRow => self.calculate_index_of_row::<true, true>(
                 range_columns,
+                last_range,
                 idx,
                 None,
                 length,
@@ -213,6 +214,7 @@ impl WindowFrameStateRange {
             WindowFrameBound::Following(ref n) => self
                 .calculate_index_of_row::<true, false>(
                     range_columns,
+                    last_range,
                     idx,
                     Some(n),
                     length,
@@ -222,12 +224,14 @@ impl WindowFrameStateRange {
             WindowFrameBound::Preceding(ref n) => self
                 .calculate_index_of_row::<false, true>(
                     range_columns,
+                    last_range,
                     idx,
                     Some(n),
                     length,
                 )?,
             WindowFrameBound::CurrentRow => self.calculate_index_of_row::<false, false>(
                 range_columns,
+                last_range,
                 idx,
                 None,
                 length,
@@ -239,6 +243,7 @@ impl WindowFrameStateRange {
                 } else {
                     self.calculate_index_of_row::<false, false>(
                         range_columns,
+                        last_range,
                         idx,
                         Some(n),
                         length,
@@ -246,9 +251,6 @@ impl WindowFrameStateRange {
                 }
             }
         };
-        // Store the resulting range so we can start from here subsequently:
-        self.last_range.start = start;
-        self.last_range.end = end;
         Ok(Range { start, end })
     }
 
@@ -258,6 +260,7 @@ impl WindowFrameStateRange {
     fn calculate_index_of_row<const SIDE: bool, const SEARCH_SIDE: bool>(
         &mut self,
         range_columns: &[ArrayRef],
+        last_range: &Range<usize>,
         idx: usize,
         delta: Option<&ScalarValue>,
         length: usize,
@@ -298,9 +301,9 @@ impl WindowFrameStateRange {
             current_row_values
         };
         let search_start = if SIDE {
-            self.last_range.start
+            last_range.start
         } else {
-            self.last_range.end
+            last_range.end
         };
         let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
             let cmp = compare_rows(current, target, &self.sort_options)?;
