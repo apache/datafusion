@@ -2388,7 +2388,7 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
             Self {
                 schema: DFSchemaRef::new(
                     DFSchema::new_with_metadata(
-                        vec![DFField::new(None, "a", DataType::Int32, false)],
+                        vec![DFField::new_unqualified("a", DataType::Int32, false)],
                         HashMap::new(),
                     )
                     .unwrap(),
@@ -2523,7 +2523,7 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
                         .projected_schema
                         .as_ref()
                         .clone()
-                        .replace_qualifier(name);
+                        .replace_qualifier(name.to_string());
                     scan.projected_schema = Arc::new(new_schema);
                     LogicalPlan::TableScan(scan)
                 }

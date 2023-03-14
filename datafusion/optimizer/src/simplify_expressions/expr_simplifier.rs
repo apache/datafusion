@@ -2427,14 +2427,14 @@ mod tests {
         Arc::new(
             DFSchema::new_with_metadata(
                 vec![
-                    DFField::new(None, "c1", DataType::Utf8, true),
-                    DFField::new(None, "c2", DataType::Boolean, true),
-                    DFField::new(None, "c3", DataType::Int64, true),
-                    DFField::new(None, "c4", DataType::UInt32, true),
-                    DFField::new(None, "c1_non_null", DataType::Utf8, false),
-                    DFField::new(None, "c2_non_null", DataType::Boolean, false),
-                    DFField::new(None, "c3_non_null", DataType::Int64, false),
-                    DFField::new(None, "c4_non_null", DataType::UInt32, false),
+                    DFField::new_unqualified("c1", DataType::Utf8, true),
+                    DFField::new_unqualified("c2", DataType::Boolean, true),
+                    DFField::new_unqualified("c3", DataType::Int64, true),
+                    DFField::new_unqualified("c4", DataType::UInt32, true),
+                    DFField::new_unqualified("c1_non_null", DataType::Utf8, false),
+                    DFField::new_unqualified("c2_non_null", DataType::Boolean, false),
+                    DFField::new_unqualified("c3_non_null", DataType::Int64, false),
+                    DFField::new_unqualified("c4_non_null", DataType::UInt32, false),
                 ],
                 HashMap::new(),
             )

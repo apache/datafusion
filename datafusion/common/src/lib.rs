@@ -34,7 +34,10 @@ pub mod utils;
 use arrow::compute::SortOptions;
 pub use column::Column;
 pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema};
-pub use error::{field_not_found, DataFusionError, Result, SchemaError, SharedResult};
+pub use error::{
+    field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
+    SharedResult,
+};
 pub use parsers::parse_interval;
 pub use scalar::{ScalarType, ScalarValue};
 pub use stats::{ColumnStatistics, Statistics};
