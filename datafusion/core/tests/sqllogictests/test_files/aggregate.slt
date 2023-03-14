@@ -1074,28 +1074,28 @@ select min(t), max(t) from  (select '00:00:00' as t union select '00:00:01' unio
 00:00:00 00:00:02
 
 # aggregate_decimal_min
-query R
-select min(c1) from d_table
+query RT
+select min(c1), arrow_typeof(min(c1)) from d_table
 ----
--100.009
+-100.009 Decimal128(10, 3)
 
 # aggregate_decimal_max
-query R
-select max(c1) from d_table
+query RT
+select max(c1), arrow_typeof(max(c1)) from d_table
 ----
-110.009
+110.009 Decimal128(10, 3)
 
 # aggregate_decimal_sum
-query R
-select sum(c1) from d_table
+query RT
+select sum(c1), arrow_typeof(sum(c1)) from d_table
 ----
-100
+100 Decimal128(20, 3)
 
 # aggregate_decimal_avg
-query R
-select avg(c1) from d_table
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from d_table
 ----
-5
+5 Decimal128(14, 7)
 
 # FIX: different test table
 # aggregate
