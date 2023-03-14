@@ -553,7 +553,7 @@ macro_rules! unsigned_subtraction_error {
 
 macro_rules! impl_op {
     ($LHS:expr, $RHS:expr, +) => {
-        impl_op_symmetric!($LHS, $RHS, +)
+        impl_op_dissociated!($LHS, $RHS, +)
     };
     ($LHS:expr, $RHS:expr, -) => {
         match ($LHS, $RHS) {
@@ -611,12 +611,12 @@ macro_rules! impl_op {
                 tz_rhs,
                 IntervalMode::Nano,
             ),
-            _ => impl_op_symmetric!($LHS, $RHS, -)
+            _ => impl_op_dissociated!($LHS, $RHS, -)
         }
     };
 }
 
-macro_rules! impl_op_symmetric {
+macro_rules! impl_op_dissociated {
     ($LHS:expr, $RHS:expr, $OPERATION:tt) => {
         match ($LHS, $RHS) {
             // Binary operations on arguments with the same type:
