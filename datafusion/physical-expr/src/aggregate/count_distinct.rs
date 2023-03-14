@@ -158,6 +158,7 @@ fn values_fixed_size(values: &ValueSet) -> usize {
             .unwrap_or(0)
 }
 // calculates the size as accurate as possible, call to this method is expensive
+// but necessary to correctly account for variable length strings
 fn values_full_size(values: &ValueSet) -> usize {
     (std::mem::size_of::<DistinctScalarValues>() * values.capacity())
         + values
