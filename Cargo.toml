@@ -46,7 +46,7 @@ rust-version = "1.64"
 
 [workspace.dependencies]
 arrow = { version = "34.0.0", features = ["prettyprint"] }
-arrow-buffer = "34.0.0"
+arrow-buffer = "35.0.0"
 arrow-schema = "34.0.0"
 parquet = { version = "34.0.0", features = ["arrow", "async"] }
 
