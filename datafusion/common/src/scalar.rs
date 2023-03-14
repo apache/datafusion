@@ -856,7 +856,7 @@ enum IntervalMode {
 /// - When subtracting timestamps at seconds/milliseconds precision, the output
 ///   interval will have the type [`IntervalDayTimeType`].
 /// - When subtracting timestamps at microseconds/nanoseconds precision, the
-///   output interval will have the type [`IntervalMonthDayNano`].
+///   output interval will have the type [`IntervalMonthDayNanoType`].
 fn ts_sub_to_interval(
     lhs_ts: i64,
     rhs_ts: i64,
@@ -5195,16 +5195,18 @@ mod tests {
     ) -> Vec<(ScalarValue, ScalarValue, ScalarValue)> {
         vec![
             (
-                // 1st test case
+                // 1st test case, having the same time but different with timezones
+                // Since they are timestamps with nanosecond precision, expected type is
+                // [`IntervalMonthDayNanoType`]
                 ScalarValue::TimestampNanosecond(
                     Some(
                         NaiveDate::from_ymd_opt(2023, 1, 1)
                             .unwrap()
-                            .and_hms_nano_opt(1, 0, 0, 000_000_000)
+                            .and_hms_nano_opt(12, 0, 0, 000_000_000)
                             .unwrap()
                             .timestamp_nanos(),
                     ),
-                    Some("+01:00".to_string()),
+                    Some("+12:00".to_string()),
                 ),
                 ScalarValue::TimestampNanosecond(
                     Some(
@@ -5220,7 +5222,7 @@ mod tests {
                     IntervalMonthDayNanoType::make_value(0, 0, 0),
                 )),
             ),
-            // 2nd test case
+            // 2nd test case, january with 31 days plus february with 28 days, with timezone
             (
                 ScalarValue::TimestampMicrosecond(
                     Some(
@@ -5246,11 +5248,11 @@ mod tests {
                     IntervalMonthDayNanoType::make_value(0, sign * 59, 0),
                 )),
             ),
-            // 3rd test case
+            // 3rd test case, 29-days long february minus previous, year with timezone
             (
                 ScalarValue::TimestampMillisecond(
                     Some(
-                        NaiveDate::from_ymd_opt(2023, 2, 11)
+                        NaiveDate::from_ymd_opt(2024, 2, 29)
                             .unwrap()
                             .and_hms_milli_opt(10, 10, 0, 000)
                             .unwrap()
@@ -5260,7 +5262,7 @@ mod tests {
                 ),
                 ScalarValue::TimestampMillisecond(
                     Some(
-                        NaiveDate::from_ymd_opt(2023, 1, 1)
+                        NaiveDate::from_ymd_opt(2023, 12, 31)
                             .unwrap()
                             .and_hms_milli_opt(1, 0, 0, 000)
                             .unwrap()
@@ -5269,15 +5271,16 @@ mod tests {
                     Some("+01:00".to_string()),
                 ),
                 ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                    sign * 41,
+                    sign * 60,
                     0,
                 ))),
             ),
-            // 4th test case
+            // 4th test case, leap years occur mostly every 4 years, but every 100 years
+            // we skip a leap year unless the year is divisible by 400, so 31 + 28 = 59
             (
                 ScalarValue::TimestampSecond(
                     Some(
-                        NaiveDate::from_ymd_opt(2023, 3, 1)
+                        NaiveDate::from_ymd_opt(2100, 3, 1)
                             .unwrap()
                             .and_hms_opt(0, 0, 0)
                             .unwrap()
@@ -5287,7 +5290,7 @@ mod tests {
                 ),
                 ScalarValue::TimestampSecond(
                     Some(
-                        NaiveDate::from_ymd_opt(2023, 1, 1)
+                        NaiveDate::from_ymd_opt(2100, 1, 1)
                             .unwrap()
                             .and_hms_opt(23, 58, 0)
                             .unwrap()
@@ -5300,17 +5303,18 @@ mod tests {
                     0,
                 ))),
             ),
-            // 5th test case
+            // 5th test case, without timezone positively seemed, but with timezone,
+            // negative resulting interval
             (
                 ScalarValue::TimestampMillisecond(
                     Some(
-                        NaiveDate::from_ymd_opt(2023, 3, 1)
+                        NaiveDate::from_ymd_opt(2023, 1, 1)
                             .unwrap()
-                            .and_hms_milli_opt(23, 58, 0, 250)
+                            .and_hms_milli_opt(6, 00, 0, 000)
                             .unwrap()
                             .timestamp_millis(),
                     ),
-                    Some("+11:59".to_string()),
+                    Some("+06:00".to_string()),
                 ),
                 ScalarValue::TimestampMillisecond(
                     Some(
@@ -5320,20 +5324,20 @@ mod tests {
                             .unwrap()
                             .timestamp_millis(),
                     ),
-                    Some("-11:59".to_string()),
+                    Some("-12:00".to_string()),
                 ),
                 ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                    sign * 59,
-                    sign * 250,
+                    0,
+                    sign * -43_200_000,
                 ))),
             ),
-            // 6th test case
+            // 6th test case, no problem before unix epoch beginning
             (
                 ScalarValue::TimestampMicrosecond(
                     Some(
-                        NaiveDate::from_ymd_opt(2023, 3, 1)
+                        NaiveDate::from_ymd_opt(1970, 1, 1)
                             .unwrap()
-                            .and_hms_micro_opt(0, 0, 0, 15)
+                            .and_hms_micro_opt(1, 2, 3, 15)
                             .unwrap()
                             .timestamp_micros(),
                     ),
@@ -5341,7 +5345,7 @@ mod tests {
                 ),
                 ScalarValue::TimestampMicrosecond(
                     Some(
-                        NaiveDate::from_ymd_opt(2023, 1, 1)
+                        NaiveDate::from_ymd_opt(1969, 1, 1)
                             .unwrap()
                             .and_hms_micro_opt(0, 0, 0, 000_000)
                             .unwrap()
@@ -5352,18 +5356,18 @@ mod tests {
                 ScalarValue::IntervalMonthDayNano(Some(
                     IntervalMonthDayNanoType::make_value(
                         0,
-                        sign * 59,
-                        sign as i64 * 15_000,
+                        365 * sign,
+                        sign as i64 * 3_723_000_015_000,
                     ),
                 )),
             ),
-            // 7th test case
+            // 7th test case, no problem with big intervals
             (
                 ScalarValue::TimestampNanosecond(
                     Some(
-                        NaiveDate::from_ymd_opt(2023, 3, 1)
+                        NaiveDate::from_ymd_opt(2100, 1, 1)
                             .unwrap()
-                            .and_hms_nano_opt(0, 0, 0, 22)
+                            .and_hms_nano_opt(0, 0, 0, 0)
                             .unwrap()
                             .timestamp_nanos(),
                     ),
@@ -5371,7 +5375,7 @@ mod tests {
                 ),
                 ScalarValue::TimestampNanosecond(
                     Some(
-                        NaiveDate::from_ymd_opt(2023, 1, 31)
+                        NaiveDate::from_ymd_opt(2000, 1, 1)
                             .unwrap()
                             .and_hms_nano_opt(0, 0, 0, 000_000_000)
                             .unwrap()
@@ -5380,14 +5384,14 @@ mod tests {
                     None,
                 ),
                 ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(0, sign * 29, sign as i64 * 22),
+                    IntervalMonthDayNanoType::make_value(0, sign * 36525, 0),
                 )),
             ),
-            // 8th test case
+            // 8th test case, no problem detecting 366-days long years
             (
                 ScalarValue::TimestampSecond(
                     Some(
-                        NaiveDate::from_ymd_opt(2023, 3, 1)
+                        NaiveDate::from_ymd_opt(2041, 1, 1)
                             .unwrap()
                             .and_hms_opt(0, 0, 0)
                             .unwrap()
@@ -5397,34 +5401,7 @@ mod tests {
                 ),
                 ScalarValue::TimestampSecond(
                     Some(
-                        NaiveDate::from_ymd_opt(2021, 12, 30)
-                            .unwrap()
-                            .and_hms_opt(0, 0, 30)
-                            .unwrap()
-                            .timestamp(),
-                    ),
-                    None,
-                ),
-                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                    sign * 425,
-                    sign * 86370000,
-                ))),
-            ),
-            // 9th test case
-            (
-                ScalarValue::TimestampSecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2023, 12, 1)
-                            .unwrap()
-                            .and_hms_opt(0, 0, 0)
-                            .unwrap()
-                            .timestamp(),
-                    ),
-                    None,
-                ),
-                ScalarValue::TimestampSecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(1980, 11, 1)
+                        NaiveDate::from_ymd_opt(2040, 1, 1)
                             .unwrap()
                             .and_hms_opt(0, 0, 0)
                             .unwrap()
@@ -5433,9 +5410,33 @@ mod tests {
                     None,
                 ),
                 ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                    sign * 15735,
+                    sign * 366,
                     0,
                 ))),
+            ),
+            // 9th test case, no problem with unrealistic timezones
+            (
+                ScalarValue::TimestampSecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 1, 3)
+                            .unwrap()
+                            .and_hms_opt(0, 0, 0)
+                            .unwrap()
+                            .timestamp(),
+                    ),
+                    Some("+23:59".to_string()),
+                ),
+                ScalarValue::TimestampSecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 1, 1)
+                            .unwrap()
+                            .and_hms_opt(0, 2, 0)
+                            .unwrap()
+                            .timestamp(),
+                    ),
+                    Some("-23:59".to_string()),
+                ),
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 0))),
             ),
         ]
     }
