@@ -30,6 +30,7 @@ use crate::{
         aggregate_statistics::AggregateStatistics, join_selection::JoinSelection,
         optimizer::PhysicalOptimizerRule,
     },
+    physical_plan::file_format::FileWriterSaveMode,
 };
 use datafusion_expr::{DescribeTable, StringifiedPlan};
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
@@ -1090,8 +1091,9 @@ impl SessionContext {
         plan: Arc<dyn ExecutionPlan>,
         path: impl AsRef<str>,
         writer_properties: Option<WriterProperties>,
+        save_mode: FileWriterSaveMode,
     ) -> Result<()> {
-        plan_to_parquet(self.task_ctx(), plan, path, writer_properties).await
+        plan_to_parquet(self.task_ctx(), plan, path, writer_properties, save_mode).await
     }
 
     /// Get a new TaskContext to run in this session
