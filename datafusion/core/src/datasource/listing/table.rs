@@ -328,6 +328,8 @@ impl ListingOptions {
     /// each individual file (such as dates), they are typically
     /// dictionary encoded for efficiency.
     ///
+    /// - The partition columns are solely extracted from the file path. Especially they are NOT part of the parquet files itself.
+    ///
     /// # Example
     ///
     /// ```
