@@ -47,7 +47,7 @@ impl DecorrelateWhereExists {
     ///
     /// Returns a tuple (subqueries, non-subquery expressions)
     fn extract_subquery_exprs(
-        &self,
+        &mut self,
         predicate: &Expr,
         config: &dyn OptimizerConfig,
     ) -> Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
@@ -76,7 +76,7 @@ impl DecorrelateWhereExists {
 
 impl OptimizerRule for DecorrelateWhereExists {
     fn try_optimize(
-        &self,
+        &mut self,
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {

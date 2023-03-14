@@ -40,7 +40,7 @@ impl EliminateFilter {
 
 impl OptimizerRule for EliminateFilter {
     fn try_optimize(
-        &self,
+        &mut self,
         plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {

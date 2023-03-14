@@ -63,7 +63,7 @@ impl OptimizerRule for TypeCoercion {
     }
 
     fn try_optimize(
-        &self,
+        &mut self,
         plan: &LogicalPlan,
         _: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {

@@ -58,7 +58,7 @@ pub struct CommonSubexprEliminate {}
 
 impl CommonSubexprEliminate {
     fn rewrite_expr(
-        &self,
+        &mut self,
         exprs_list: &[&[Expr]],
         arrays_list: &[&[Vec<(usize, String)>]],
         input: &LogicalPlan,
@@ -95,7 +95,7 @@ impl CommonSubexprEliminate {
 
 impl OptimizerRule for CommonSubexprEliminate {
     fn try_optimize(
-        &self,
+        &mut self,
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {

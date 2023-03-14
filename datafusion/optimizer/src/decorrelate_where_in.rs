@@ -50,7 +50,7 @@ impl DecorrelateWhereIn {
     ///
     /// Returns a tuple (subqueries, non-subquery expressions)
     fn extract_subquery_exprs(
-        &self,
+        &mut self,
         predicate: &Expr,
         config: &dyn OptimizerConfig,
     ) -> datafusion_common::Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
@@ -85,7 +85,7 @@ impl DecorrelateWhereIn {
 
 impl OptimizerRule for DecorrelateWhereIn {
     fn try_optimize(
-        &self,
+        &mut self,
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {

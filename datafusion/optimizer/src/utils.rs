@@ -41,7 +41,7 @@ use std::sync::Arc;
 ///
 /// Returning `Ok(None)` indicates that the plan can't be optimized by the `optimizer`.
 pub fn optimize_children(
-    optimizer: &impl OptimizerRule,
+    optimizer: &mut impl OptimizerRule,
     plan: &LogicalPlan,
     config: &dyn OptimizerConfig,
 ) -> Result<Option<LogicalPlan>> {

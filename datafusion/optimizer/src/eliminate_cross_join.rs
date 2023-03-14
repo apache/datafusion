@@ -50,7 +50,7 @@ impl EliminateCrossJoin {
 ///
 impl OptimizerRule for EliminateCrossJoin {
     fn try_optimize(
-        &self,
+        &mut self,
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {

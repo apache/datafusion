@@ -58,7 +58,7 @@ pub trait OptimizerRule {
     /// Try and rewrite `plan` to an optimized form, returning None if the plan cannot be
     /// optimized by this rule.
     fn try_optimize(
-        &self,
+        &mut self,
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>>;
@@ -538,7 +538,7 @@ mod tests {
 
     impl OptimizerRule for BadRule {
         fn try_optimize(
-            &self,
+            &mut self,
             _: &LogicalPlan,
             _: &dyn OptimizerConfig,
         ) -> Result<Option<LogicalPlan>> {
@@ -555,7 +555,7 @@ mod tests {
 
     impl OptimizerRule for GetTableScanRule {
         fn try_optimize(
-            &self,
+            &mut self,
             _: &LogicalPlan,
             _: &dyn OptimizerConfig,
         ) -> Result<Option<LogicalPlan>> {

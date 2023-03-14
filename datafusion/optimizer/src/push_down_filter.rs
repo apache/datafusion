@@ -517,7 +517,7 @@ impl OptimizerRule for PushDownFilter {
     }
 
     fn try_optimize(
-        &self,
+        &mut self,
         plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {

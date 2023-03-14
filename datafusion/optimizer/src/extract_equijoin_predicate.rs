@@ -41,7 +41,7 @@ impl ExtractEquijoinPredicate {
 
 impl OptimizerRule for ExtractEquijoinPredicate {
     fn try_optimize(
-        &self,
+        &mut self,
         plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
