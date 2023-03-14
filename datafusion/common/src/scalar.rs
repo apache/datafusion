@@ -45,6 +45,12 @@ use arrow::{
 };
 use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime};
 
+// Constants we use throughout this file:
+const MILLISECS_IN_ONE_DAY: i64 = 86_400_000;
+const NANOSECS_IN_ONE_DAY: i64 = 86_400_000_000_000;
+const MILLISECS_IN_ONE_MONTH: i64 = 2_592_000_000; // assuming 30 days.
+const NANOSECS_IN_ONE_MONTH: i128 = 2_592_000_000_000_000; // assuming 30 days.
+
 /// Represents a dynamically typed, nullable single value.
 /// This is the single-valued counter-part to arrow's [`Array`].
 ///
@@ -199,10 +205,28 @@ impl PartialEq for ScalarValue {
             (TimestampNanosecond(v1, _), TimestampNanosecond(v2, _)) => v1.eq(v2),
             (TimestampNanosecond(_, _), _) => false,
             (IntervalYearMonth(v1), IntervalYearMonth(v2)) => v1.eq(v2),
+            (IntervalYearMonth(v1), IntervalDayTime(v2)) => {
+                ym_to_milli(v1).eq(&dt_to_milli(v2))
+            }
+            (IntervalYearMonth(v1), IntervalMonthDayNano(v2)) => {
+                ym_to_nano(v1).eq(&mdn_to_nano(v2))
+            }
             (IntervalYearMonth(_), _) => false,
             (IntervalDayTime(v1), IntervalDayTime(v2)) => v1.eq(v2),
+            (IntervalDayTime(v1), IntervalYearMonth(v2)) => {
+                dt_to_milli(v1).eq(&ym_to_milli(v2))
+            }
+            (IntervalDayTime(v1), IntervalMonthDayNano(v2)) => {
+                dt_to_nano(v1).eq(&mdn_to_nano(v2))
+            }
             (IntervalDayTime(_), _) => false,
             (IntervalMonthDayNano(v1), IntervalMonthDayNano(v2)) => v1.eq(v2),
+            (IntervalMonthDayNano(v1), IntervalYearMonth(v2)) => {
+                mdn_to_nano(v1).eq(&ym_to_nano(v2))
+            }
+            (IntervalMonthDayNano(v1), IntervalDayTime(v2)) => {
+                mdn_to_nano(v1).eq(&dt_to_nano(v2))
+            }
             (IntervalMonthDayNano(_), _) => false,
             (Struct(v1, t1), Struct(v2, t2)) => v1.eq(v2) && t1.eq(t2),
             (Struct(_, _), _) => false,
@@ -304,10 +328,28 @@ impl PartialOrd for ScalarValue {
             }
             (TimestampNanosecond(_, _), _) => None,
             (IntervalYearMonth(v1), IntervalYearMonth(v2)) => v1.partial_cmp(v2),
+            (IntervalYearMonth(v1), IntervalDayTime(v2)) => {
+                ym_to_milli(v1).partial_cmp(&dt_to_milli(v2))
+            }
+            (IntervalYearMonth(v1), IntervalMonthDayNano(v2)) => {
+                ym_to_nano(v1).partial_cmp(&mdn_to_nano(v2))
+            }
             (IntervalYearMonth(_), _) => None,
             (IntervalDayTime(v1), IntervalDayTime(v2)) => v1.partial_cmp(v2),
+            (IntervalDayTime(v1), IntervalYearMonth(v2)) => {
+                dt_to_milli(v1).partial_cmp(&ym_to_milli(v2))
+            }
+            (IntervalDayTime(v1), IntervalMonthDayNano(v2)) => {
+                dt_to_nano(v1).partial_cmp(&mdn_to_nano(v2))
+            }
             (IntervalDayTime(_), _) => None,
             (IntervalMonthDayNano(v1), IntervalMonthDayNano(v2)) => v1.partial_cmp(v2),
+            (IntervalMonthDayNano(v1), IntervalYearMonth(v2)) => {
+                mdn_to_nano(v1).partial_cmp(&ym_to_nano(v2))
+            }
+            (IntervalMonthDayNano(v1), IntervalDayTime(v2)) => {
+                mdn_to_nano(v1).partial_cmp(&dt_to_nano(v2))
+            }
             (IntervalMonthDayNano(_), _) => None,
             (Struct(v1, t1), Struct(v2, t2)) => {
                 if t1.eq(t2) {
@@ -330,6 +372,52 @@ impl PartialOrd for ScalarValue {
             (Null, _) => None,
         }
     }
+}
+
+/// This function computes the duration (in milliseconds) of the given
+/// year-month-interval.
+#[inline]
+fn ym_to_milli(val: &Option<i32>) -> Option<i64> {
+    val.map(|value| (value as i64) * MILLISECS_IN_ONE_MONTH)
+}
+
+/// This function computes the duration (in nanoseconds) of the given
+/// year-month-interval.
+#[inline]
+fn ym_to_nano(val: &Option<i32>) -> Option<i128> {
+    val.map(|value| (value as i128) * NANOSECS_IN_ONE_MONTH)
+}
+
+/// This function computes the duration (in milliseconds) of the given
+/// daytime-interval.
+#[inline]
+fn dt_to_milli(val: &Option<i64>) -> Option<i64> {
+    val.map(|val| {
+        let (days, millis) = IntervalDayTimeType::to_parts(val);
+        (days as i64) * MILLISECS_IN_ONE_DAY + (millis as i64)
+    })
+}
+
+/// This function computes the duration (in nanoseconds) of the given
+/// daytime-interval.
+#[inline]
+fn dt_to_nano(val: &Option<i64>) -> Option<i128> {
+    val.map(|val| {
+        let (days, millis) = IntervalDayTimeType::to_parts(val);
+        (days as i128) * (NANOSECS_IN_ONE_DAY as i128) + (millis as i128) * 1_000_000
+    })
+}
+
+/// This function computes the duration (in nanoseconds) of the given
+/// month-day-nano-interval. Assumes a month is 30 days long.
+#[inline]
+fn mdn_to_nano(val: &Option<i128>) -> Option<i128> {
+    val.map(|val| {
+        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(val);
+        (months as i128) * NANOSECS_IN_ONE_MONTH
+            + (days as i128) * (NANOSECS_IN_ONE_DAY as i128)
+            + (nanos as i128)
+    })
 }
 
 impl Eq for ScalarValue {}
@@ -568,6 +656,43 @@ macro_rules! impl_op_symmetric {
             (ScalarValue::Int8(lhs), ScalarValue::Int8(rhs)) => {
                 primitive_op!(lhs, rhs, Int8, $OPERATION)
             }
+            (
+                ScalarValue::IntervalYearMonth(Some(lhs)),
+                ScalarValue::IntervalYearMonth(Some(rhs)),
+            ) => Ok(ScalarValue::IntervalYearMonth(Some(
+                IntervalYearMonthType::make_value(0, lhs + rhs * get_sign!($OPERATION)),
+            ))),
+            (
+                ScalarValue::IntervalDayTime(Some(lhs)),
+                ScalarValue::IntervalDayTime(Some(rhs)),
+            ) => {
+                let sign = get_sign!($OPERATION);
+                let (lhs_days, lhs_millis) = IntervalDayTimeType::to_parts(*lhs);
+                let (rhs_days, rhs_millis) = IntervalDayTimeType::to_parts(*rhs);
+                Ok(ScalarValue::IntervalDayTime(Some(
+                    IntervalDayTimeType::make_value(
+                        lhs_days + rhs_days * sign,
+                        lhs_millis + rhs_millis * sign,
+                    ),
+                )))
+            }
+            (
+                ScalarValue::IntervalMonthDayNano(Some(lhs)),
+                ScalarValue::IntervalMonthDayNano(Some(rhs)),
+            ) => {
+                let sign = get_sign!($OPERATION);
+                let (lhs_months, lhs_days, lhs_nanos) =
+                    IntervalMonthDayNanoType::to_parts(*lhs);
+                let (rhs_months, rhs_days, rhs_nanos) =
+                    IntervalMonthDayNanoType::to_parts(*rhs);
+                Ok(ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(
+                        lhs_months + rhs_months * sign,
+                        lhs_days + rhs_days * sign,
+                        lhs_nanos + rhs_nanos * (sign as i64),
+                    ),
+                )))
+            }
             // Binary operations on arguments with different types:
             (ScalarValue::Date32(Some(days)), _) => {
                 let value = date32_add(*days, $RHS, get_sign!($OPERATION))?;
@@ -609,6 +734,30 @@ macro_rules! impl_op_symmetric {
                 let value = nanoseconds_add(*ts_ns, $LHS, get_sign!($OPERATION))?;
                 Ok(ScalarValue::TimestampNanosecond(Some(value), zone.clone()))
             }
+            (
+                ScalarValue::IntervalYearMonth(Some(lhs)),
+                ScalarValue::IntervalDayTime(Some(rhs)),
+            ) => op_ym_dt(*lhs, *rhs, get_sign!($OPERATION), false),
+            (
+                ScalarValue::IntervalYearMonth(Some(lhs)),
+                ScalarValue::IntervalMonthDayNano(Some(rhs)),
+            ) => op_ym_mdn(*lhs, *rhs, get_sign!($OPERATION), false),
+            (
+                ScalarValue::IntervalDayTime(Some(lhs)),
+                ScalarValue::IntervalYearMonth(Some(rhs)),
+            ) => op_ym_dt(*rhs, *lhs, get_sign!($OPERATION), true),
+            (
+                ScalarValue::IntervalDayTime(Some(lhs)),
+                ScalarValue::IntervalMonthDayNano(Some(rhs)),
+            ) => op_dt_mdn(*lhs, *rhs, get_sign!($OPERATION), false),
+            (
+                ScalarValue::IntervalMonthDayNano(Some(lhs)),
+                ScalarValue::IntervalYearMonth(Some(rhs)),
+            ) => op_ym_mdn(*rhs, *lhs, get_sign!($OPERATION), true),
+            (
+                ScalarValue::IntervalMonthDayNano(Some(lhs)),
+                ScalarValue::IntervalDayTime(Some(rhs)),
+            ) => op_dt_mdn(*rhs, *lhs, get_sign!($OPERATION), true),
             _ => Err(DataFusionError::Internal(format!(
                 "Operator {} is not implemented for types {:?} and {:?}",
                 stringify!($OPERATION),
@@ -617,6 +766,72 @@ macro_rules! impl_op_symmetric {
             ))),
         }
     };
+}
+
+/// This function adds/subtracts two "raw" intervals (`lhs` and `rhs`) of different
+/// types ([`IntervalYearMonthType`] and [`IntervalDayTimeType`], respectively).
+/// The argument `sign` chooses between addition and subtraction, the argument
+/// `commute` swaps `lhs` and `rhs`. The return value is an interval [`ScalarValue`]
+/// with type data type [`IntervalMonthDayNanoType`].
+#[inline]
+fn op_ym_dt(mut lhs: i32, rhs: i64, sign: i32, commute: bool) -> Result<ScalarValue> {
+    let (mut days, millis) = IntervalDayTimeType::to_parts(rhs);
+    let mut nanos = (millis as i64) * 1_000_000;
+    if commute {
+        lhs *= sign;
+    } else {
+        days *= sign;
+        nanos *= sign as i64;
+    };
+    Ok(ScalarValue::IntervalMonthDayNano(Some(
+        IntervalMonthDayNanoType::make_value(lhs, days, nanos),
+    )))
+}
+
+/// This function adds/subtracts two "raw" intervals (`lhs` and `rhs`) of different
+/// types ([`IntervalYearMonthType`] and [`IntervalMonthDayNanoType`], respectively).
+/// The argument `sign` chooses between addition and subtraction, the argument
+/// `commute` swaps `lhs` and `rhs`. The return value is an interval [`ScalarValue`]
+/// with type data type [`IntervalMonthDayNanoType`].
+#[inline]
+fn op_ym_mdn(lhs: i32, rhs: i128, sign: i32, commute: bool) -> Result<ScalarValue> {
+    let (mut months, mut days, mut nanos) = IntervalMonthDayNanoType::to_parts(rhs);
+    if commute {
+        months += lhs * sign;
+    } else {
+        months = lhs + (months * sign);
+        days *= sign;
+        nanos *= sign as i64;
+    }
+    Ok(ScalarValue::IntervalMonthDayNano(Some(
+        IntervalMonthDayNanoType::make_value(months, days, nanos),
+    )))
+}
+
+/// This function adds/subtracts two "raw" intervals (`lhs` and `rhs`) of different
+/// types ([`IntervalDayTimeType`] and [`IntervalMonthDayNanoType`], respectively).
+/// The argument `sign` chooses between addition and subtraction, the argument
+/// `commute` swaps `lhs` and `rhs`. The return value is an interval [`ScalarValue`]
+/// with type data type [`IntervalMonthDayNanoType`].
+#[inline]
+fn op_dt_mdn(lhs: i64, rhs: i128, sign: i32, commute: bool) -> Result<ScalarValue> {
+    let (lhs_days, lhs_millis) = IntervalDayTimeType::to_parts(lhs);
+    let (rhs_months, rhs_days, rhs_nanos) = IntervalMonthDayNanoType::to_parts(rhs);
+
+    let result = if commute {
+        IntervalMonthDayNanoType::make_value(
+            rhs_months,
+            lhs_days * sign + rhs_days,
+            (lhs_millis * sign) as i64 * 1_000_000 + rhs_nanos,
+        )
+    } else {
+        IntervalMonthDayNanoType::make_value(
+            rhs_months * sign,
+            lhs_days + rhs_days * sign,
+            (lhs_millis as i64) * 1_000_000 + rhs_nanos * (sign as i64),
+        )
+    };
+    Ok(ScalarValue::IntervalMonthDayNano(Some(result)))
 }
 
 macro_rules! get_sign {
@@ -655,7 +870,6 @@ fn ts_sub_to_interval(
 
     match mode {
         IntervalMode::Milli => {
-            const MILLISECS_IN_ONE_DAY: i64 = 86_400_000;
             let as_millisecs = delta_secs.num_milliseconds();
             Ok(ScalarValue::IntervalDayTime(Some(
                 IntervalDayTimeType::make_value(
@@ -665,7 +879,6 @@ fn ts_sub_to_interval(
             )))
         }
         IntervalMode::Nano => {
-            const NANOSECS_IN_ONE_DAY: i64 = 86_400_000_000_000;
             let as_nanosecs = delta_secs.num_nanoseconds().ok_or_else(|| {
                 DataFusionError::Execution(String::from(
                     "Can not compute timestamp differences with nanosecond precision",
@@ -3883,6 +4096,53 @@ mod tests {
             ])),
             None
         );
+        // Different type of intervals can be compared.
+        assert!(
+            IntervalYearMonth(Some(IntervalYearMonthType::make_value(1, 2)))
+                < IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
+                    14, 0, 1
+                ))),
+        );
+        assert!(
+            IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, 4)))
+                >= IntervalDayTime(Some(IntervalDayTimeType::make_value(119, 1)))
+        );
+        assert!(
+            IntervalDayTime(Some(IntervalDayTimeType::make_value(12, 86_399_999)))
+                >= IntervalDayTime(Some(IntervalDayTimeType::make_value(12, 0)))
+        );
+        assert!(
+            IntervalYearMonth(Some(IntervalYearMonthType::make_value(2, 12)))
+                == IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
+                    36, 0, 0
+                ))),
+        );
+        assert!(
+            IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, 0)))
+                != IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 1)))
+        );
+        assert!(
+            IntervalYearMonth(Some(IntervalYearMonthType::make_value(1, 4)))
+                == IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, 16))),
+        );
+        assert!(
+            IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, 3)))
+                > IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
+                    2,
+                    28,
+                    999_999_999
+                ))),
+        );
+        assert!(
+            IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, 1)))
+                > IntervalDayTime(Some(IntervalDayTimeType::make_value(29, 9_999))),
+        );
+        assert!(
+            IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(1, 12, 34)))
+                > IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
+                    0, 142, 34
+                )))
+        );
     }
 
     #[test]
@@ -4664,6 +4924,224 @@ mod tests {
     }
 
     #[test]
+    fn test_scalar_interval_add() {
+        let cases = [
+            (
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
+                    1, 12,
+                ))),
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
+                    1, 12,
+                ))),
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
+                    2, 24,
+                ))),
+            ),
+            (
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                    1, 999,
+                ))),
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                    1, 999,
+                ))),
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                    2, 1998,
+                ))),
+            ),
+            (
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(12, 15, 123_456),
+                )),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(12, 15, 123_456),
+                )),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(24, 30, 246_912),
+                )),
+            ),
+            (
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
+                    0, 1,
+                ))),
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                    29, 86_390,
+                ))),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(1, 29, 86_390_000_000),
+                )),
+            ),
+            (
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
+                    0, 1,
+                ))),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(2, 10, 999_999_999),
+                )),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(3, 10, 999_999_999),
+                )),
+            ),
+            (
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                    400, 123_456,
+                ))),
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
+                    1, 1,
+                ))),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(13, 400, 123_456_000_000),
+                )),
+            ),
+            (
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                    65, 321,
+                ))),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(2, 5, 1_000_000),
+                )),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(2, 70, 322_000_000),
+                )),
+            ),
+            (
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(12, 15, 123_456),
+                )),
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
+                    2, 0,
+                ))),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(36, 15, 123_456),
+                )),
+            ),
+            (
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(12, 15, 100_000),
+                )),
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                    370, 1,
+                ))),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(12, 385, 1_100_000),
+                )),
+            ),
+        ];
+        for (lhs, rhs, expected) in cases.iter() {
+            let result = lhs.add(rhs).unwrap();
+            let result_commute = rhs.add(lhs).unwrap();
+            assert_eq!(*expected, result, "lhs:{:?} + rhs:{:?}", lhs, rhs);
+            assert_eq!(*expected, result_commute, "lhs:{:?} + rhs:{:?}", rhs, lhs);
+        }
+    }
+
+    #[test]
+    fn test_scalar_interval_sub() {
+        let cases = [
+            (
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
+                    1, 12,
+                ))),
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
+                    1, 12,
+                ))),
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
+                    0, 0,
+                ))),
+            ),
+            (
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                    1, 999,
+                ))),
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                    1, 999,
+                ))),
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 0))),
+            ),
+            (
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(12, 15, 123_456),
+                )),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(12, 15, 123_456),
+                )),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(0, 0, 0),
+                )),
+            ),
+            (
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
+                    0, 1,
+                ))),
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                    29, 999_999,
+                ))),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(1, -29, -999_999_000_000),
+                )),
+            ),
+            (
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
+                    0, 1,
+                ))),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(2, 10, 999_999_999),
+                )),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(-1, -10, -999_999_999),
+                )),
+            ),
+            (
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                    400, 123_456,
+                ))),
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
+                    1, 1,
+                ))),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(-13, 400, 123_456_000_000),
+                )),
+            ),
+            (
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                    65, 321,
+                ))),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(2, 5, 1_000_000),
+                )),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(-2, 60, 320_000_000),
+                )),
+            ),
+            (
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(12, 15, 123_456),
+                )),
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
+                    2, 0,
+                ))),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(-12, 15, 123_456),
+                )),
+            ),
+            (
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(12, 15, 100_000),
+                )),
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                    370, 1,
+                ))),
+                ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNanoType::make_value(12, -355, -900_000),
+                )),
+            ),
+        ];
+        for (lhs, rhs, expected) in cases.iter() {
+            let result = lhs.sub(rhs).unwrap();
+            assert_eq!(*expected, result, "lhs:{:?} - rhs:{:?}", lhs, rhs);
+        }
+    }
+
+    #[test]
     fn timestamp_op_tests() {
         // positive interval, edge cases
         let test_data = get_timestamp_test_data(1);
@@ -5030,9 +5508,7 @@ mod tests {
         let mut intervals = vec![];
         let mut rng = rand::thread_rng();
         const SECS_IN_ONE_DAY: i32 = 86_400;
-        const MILLISECS_IN_ONE_DAY: i32 = 86_400_000;
         const MICROSECS_IN_ONE_DAY: i64 = 86_400_000_000;
-        const NANOSECS_IN_ONE_DAY: i64 = 86_400_000_000_000;
         for i in 0..vector_size {
             if i % 4 == 0 {
                 let days = rng.gen_range(0..5000);
@@ -5043,7 +5519,7 @@ mod tests {
                 )))
             } else if i % 4 == 1 {
                 let days = rng.gen_range(0..5000);
-                let millisec = rng.gen_range(0..MILLISECS_IN_ONE_DAY);
+                let millisec = rng.gen_range(0..(MILLISECS_IN_ONE_DAY as i32));
                 intervals.push(ScalarValue::IntervalDayTime(Some(
                     IntervalDayTimeType::make_value(days, millisec),
                 )))
