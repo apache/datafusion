@@ -59,11 +59,11 @@ pub struct PartitionedFile {
     ///
     /// These MUST have the same count, order, and type than the [`table_partition_cols`].
     ///
-    /// You may use [`partition_value_wrap`] to wrap them if you have used [`partition_type_wrap`] to wrap the column type.
+    /// You may use [`wrap_partition_value_in_dict`] to wrap them if you have used [`wrap_partition_type_in_dict`] to wrap the column type.
     ///
     ///
-    /// [`partition_type_wrap`]: crate::physical_plan::file_format::partition_type_wrap
-    /// [`partition_value_wrap`]: crate::physical_plan::file_format::partition_value_wrap
+    /// [`wrap_partition_type_in_dict`]: crate::physical_plan::file_format::wrap_partition_type_in_dict
+    /// [`wrap_partition_value_in_dict`]: crate::physical_plan::file_format::wrap_partition_value_in_dict
     /// [`table_partition_cols`]: table::ListingOptions::table_partition_cols
     pub partition_values: Vec<ScalarValue>,
     /// An optional file range for a more fine-grained parallel execution

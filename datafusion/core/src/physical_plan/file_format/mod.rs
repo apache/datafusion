@@ -70,8 +70,8 @@ use super::{ColumnStatistics, Statistics};
 /// You CAN use this to specify types for partition columns. However you MAY also choose not to dictionary-encode the
 /// data or to use a different dictionary type.
 ///
-/// Use [`partition_value_wrap`] to wrap the values.
-pub fn partition_type_wrap(val_type: DataType) -> DataType {
+/// Use [`wrap_partition_value_in_dict`] to wrap the values.
+pub fn wrap_partition_type_in_dict(val_type: DataType) -> DataType {
     DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val_type))
 }
 
@@ -80,8 +80,8 @@ pub fn partition_type_wrap(val_type: DataType) -> DataType {
 /// You CAN use this to specify types for partition columns. However you MAY also choose not to dictionary-encode the
 /// data or to use a different dictionary type.
 ///
-/// Use [`partition_type_wrap`] to wrap the types.
-pub fn partition_value_wrap(val: ScalarValue) -> ScalarValue {
+/// Use [`wrap_partition_type_in_dict`] to wrap the types.
+pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
     ScalarValue::Dictionary(Box::new(DataType::UInt16), Box::new(val))
 }
 
@@ -704,7 +704,10 @@ mod tests {
             Arc::clone(&file_schema),
             None,
             Statistics::default(),
-            vec![("date".to_owned(), partition_type_wrap(DataType::Utf8))],
+            vec![(
+                "date".to_owned(),
+                wrap_partition_type_in_dict(DataType::Utf8),
+            )],
         );
 
         let (proj_schema, proj_statistics) = conf.project();
@@ -750,7 +753,10 @@ mod tests {
                 ),
                 ..Default::default()
             },
-            vec![("date".to_owned(), partition_type_wrap(DataType::Utf8))],
+            vec![(
+                "date".to_owned(),
+                wrap_partition_type_in_dict(DataType::Utf8),
+            )],
         );
 
         let (proj_schema, proj_statistics) = conf.project();
@@ -781,9 +787,18 @@ mod tests {
             ("c", &vec![10, 11, 12]),
         );
         let partition_cols = vec![
-            ("year".to_owned(), partition_type_wrap(DataType::Utf8)),
-            ("month".to_owned(), partition_type_wrap(DataType::Utf8)),
-            ("day".to_owned(), partition_type_wrap(DataType::Utf8)),
+            (
+                "year".to_owned(),
+                wrap_partition_type_in_dict(DataType::Utf8),
+            ),
+            (
+                "month".to_owned(),
+                wrap_partition_type_in_dict(DataType::Utf8),
+            ),
+            (
+                "day".to_owned(),
+                wrap_partition_type_in_dict(DataType::Utf8),
+            ),
         ];
         // create a projected schema
         let conf = config_for_projection(
@@ -815,9 +830,15 @@ mod tests {
                 // file_batch is ok here because we kept all the file cols in the projection
                 file_batch,
                 &[
-                    partition_value_wrap(ScalarValue::Utf8(Some("2021".to_owned()))),
-                    partition_value_wrap(ScalarValue::Utf8(Some("10".to_owned()))),
-                    partition_value_wrap(ScalarValue::Utf8(Some("26".to_owned()))),
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                        "2021".to_owned(),
+                    ))),
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                        "10".to_owned(),
+                    ))),
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                        "26".to_owned(),
+                    ))),
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
@@ -843,9 +864,15 @@ mod tests {
                 // file_batch is ok here because we kept all the file cols in the projection
                 file_batch,
                 &[
-                    partition_value_wrap(ScalarValue::Utf8(Some("2021".to_owned()))),
-                    partition_value_wrap(ScalarValue::Utf8(Some("10".to_owned()))),
-                    partition_value_wrap(ScalarValue::Utf8(Some("27".to_owned()))),
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                        "2021".to_owned(),
+                    ))),
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                        "10".to_owned(),
+                    ))),
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                        "27".to_owned(),
+                    ))),
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
@@ -873,9 +900,15 @@ mod tests {
                 // file_batch is ok here because we kept all the file cols in the projection
                 file_batch,
                 &[
-                    partition_value_wrap(ScalarValue::Utf8(Some("2021".to_owned()))),
-                    partition_value_wrap(ScalarValue::Utf8(Some("10".to_owned()))),
-                    partition_value_wrap(ScalarValue::Utf8(Some("28".to_owned()))),
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                        "2021".to_owned(),
+                    ))),
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                        "10".to_owned(),
+                    ))),
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                        "28".to_owned(),
+                    ))),
                 ],
             )
             .expect("Projection of partition columns into record batch failed");

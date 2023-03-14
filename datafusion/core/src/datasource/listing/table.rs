@@ -299,7 +299,7 @@ impl ListingOptions {
 
     /// Set table partition column names on [`ListingOptions`] and returns self.
     ///
-    /// You may use [`partition_type_wrap`] to request a dictionary-encoded type.
+    /// You may use [`wrap_partition_type_in_dict`] to request a dictionary-encoded type.
     ///
     /// ```
     /// # use std::sync::Arc;
@@ -318,7 +318,7 @@ impl ListingOptions {
     /// ```
     ///
     ///
-    /// [`partition_type_wrap`]: crate::physical_plan::file_format::partition_type_wrap
+    /// [`wrap_partition_type_in_dict`]: crate::physical_plan::file_format::wrap_partition_type_in_dict
     pub fn with_table_partition_cols(
         mut self,
         table_partition_cols: Vec<(String, DataType)>,
