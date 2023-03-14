@@ -144,7 +144,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 last_field,
                 fractional_seconds_precision,
             ),
-            SQLExpr::Identifier(id) => self.sql_identifier_to_expr(id),
+            SQLExpr::Identifier(id) => self.sql_identifier_to_expr(id, schema, planner_context),
 
             SQLExpr::MapAccess { column, keys } => {
                 if let SQLExpr::Identifier(id) = *column {
@@ -161,7 +161,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 plan_indexed(expr, indexes)
             }
 
-            SQLExpr::CompoundIdentifier(ids) => self.sql_compound_identifier_to_expr(ids, schema),
+            SQLExpr::CompoundIdentifier(ids) => self.sql_compound_identifier_to_expr(ids, schema, planner_context),
 
             SQLExpr::Case {
                 operand,

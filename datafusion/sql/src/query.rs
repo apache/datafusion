@@ -17,7 +17,7 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::normalize_ident;
-use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query};
 
@@ -30,17 +30,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         query: Query,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        self.query_to_plan_with_schema(query, planner_context, None)
-    }
-
-    /// Generate a logical plan from a SQL subquery
-    pub(crate) fn subquery_to_plan(
-        &self,
-        query: Query,
-        planner_context: &mut PlannerContext,
-        outer_query_schema: &DFSchema,
-    ) -> Result<LogicalPlan> {
-        self.query_to_plan_with_schema(query, planner_context, Some(outer_query_schema))
+        self.query_to_plan_with_schema(query, planner_context)
     }
 
     /// Generate a logic plan from an SQL query.
@@ -50,7 +40,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         query: Query,
         planner_context: &mut PlannerContext,
-        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         let set_expr = query.body;
         if let Some(with) = query.with {
@@ -82,8 +71,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 planner_context.ctes.insert(cte_name, logical_plan);
             }
         }
-        let plan =
-            self.set_expr_to_plan(*set_expr, planner_context, outer_query_schema)?;
+        let plan = self.set_expr_to_plan(*set_expr, planner_context)?;
         let plan = self.order_by(plan, query.order_by)?;
         self.limit(plan, query.offset, query.limit)
     }

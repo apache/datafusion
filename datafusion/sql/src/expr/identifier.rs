@@ -26,7 +26,12 @@ use datafusion_expr::{Case, Expr, GetIndexedField};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
-    pub(super) fn sql_identifier_to_expr(&self, id: Ident) -> Result<Expr> {
+    pub(super) fn sql_identifier_to_expr(
+        &self,
+        id: Ident,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
         if id.value.starts_with('@') {
             // TODO: figure out if ScalarVariables should be insensitive.
             let var_names = vec![id.value];
@@ -44,11 +49,41 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // interpret names with '.' as if they were
             // compound identifiers, but this is not a compound
             // identifier. (e.g. it is "foo.bar" not foo.bar)
-
-            Ok(Expr::Column(Column {
-                relation: None,
-                name: normalize_ident(id),
-            }))
+            let normalize_ident = normalize_ident(id);
+            match schema.field_with_unqualified_name(normalize_ident.as_str()) {
+                Ok(_) => {
+                    // found a match without a qualified name, this is a inner table column
+                    Ok(Expr::Column(Column {
+                        relation: None,
+                        name: normalize_ident,
+                    }))
+                }
+                Err(_) => {
+                    let outer_query_schema_opt =
+                        planner_context.outer_query_schema.clone();
+                    if let Some(outer) = outer_query_schema_opt.as_ref() {
+                        match outer.field_with_unqualified_name(normalize_ident.as_str())
+                        {
+                            Ok(field) => {
+                                // found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
+                                Ok(Expr::OuterReferenceColumn(
+                                    field.data_type().clone(),
+                                    field.qualified_column(),
+                                ))
+                            }
+                            Err(_) => Ok(Expr::Column(Column {
+                                relation: None,
+                                name: normalize_ident,
+                            })),
+                        }
+                    } else {
+                        Ok(Expr::Column(Column {
+                            relation: None,
+                            name: normalize_ident,
+                        }))
+                    }
+                }
+            }
         }
     }
 
@@ -56,6 +91,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         ids: Vec<Ident>,
         schema: &DFSchema,
+        planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         if ids[0].value.starts_with('@') {
             let var_names: Vec<_> = ids.into_iter().map(normalize_ident).collect();
@@ -102,11 +138,32 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             ScalarValue::Utf8(Some(name)),
                         )))
                     } else {
-                        // table.column identifier
-                        Ok(Expr::Column(Column {
-                            relation: Some(relation),
-                            name,
-                        }))
+                        let outer_query_schema_opt =
+                            planner_context.outer_query_schema.clone();
+                        if let Some(outer) = outer_query_schema_opt.as_ref() {
+                            match outer.field_with_qualified_name(&relation, &name) {
+                                Ok(field) => {
+                                    // found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
+                                    Ok(Expr::OuterReferenceColumn(
+                                        field.data_type().clone(),
+                                        Column {
+                                            relation: Some(relation),
+                                            name,
+                                        },
+                                    ))
+                                }
+                                Err(_) => Ok(Expr::Column(Column {
+                                    relation: Some(relation),
+                                    name,
+                                })),
+                            }
+                        } else {
+                            // table.column identifier
+                            Ok(Expr::Column(Column {
+                                relation: Some(relation),
+                                name,
+                            }))
+                        }
                     }
                 }
             }

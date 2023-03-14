@@ -72,11 +72,14 @@ impl ScalarSubqueryToJoin {
                                 Ok(subquery) => subquery,
                                 _ => return Ok(()),
                             };
-                            let subquery = self
+                            let subquery_plan = self
                                 .try_optimize(&subquery.subquery, config)?
                                 .map(Arc::new)
                                 .unwrap_or_else(|| subquery.subquery.clone());
-                            let subquery = Subquery { subquery };
+                            let subquery = Subquery {
+                                subquery: subquery_plan,
+                                outer_ref_columns: subquery.outer_ref_columns.clone(),
+                            };
                             let res = SubqueryInfo::new(subquery, expr, *op, lhs);
                             subqueries.push(res);
                             Ok(())
@@ -330,7 +333,6 @@ fn optimize_scalar(
         new_plan = new_plan.filter(expr)?
     }
     let new_plan = new_plan.build()?;
-
     Ok(Some(new_plan))
 }
 

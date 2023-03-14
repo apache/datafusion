@@ -24,8 +24,8 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::plan;
 use crate::utils::{
-    self, exprlist_to_fields, from_plan, grouping_set_expr_count,
-    grouping_set_to_exprlist,
+    self, exprlist_to_fields, find_out_reference_exprs, from_plan,
+    grouping_set_expr_count, grouping_set_to_exprlist,
 };
 use crate::{
     build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
@@ -263,6 +263,31 @@ impl LogicalPlan {
         })
         // closure always returns OK
         .unwrap();
+        exprs
+    }
+
+    /// Returns all the out reference(correlated) expressions (recursively) in the current
+    /// logical plan nodes and all its descendant nodes.
+    pub fn all_out_ref_exprs(self: &LogicalPlan) -> Vec<Expr> {
+        let mut exprs = vec![];
+        self.inspect_expressions(|e| {
+            find_out_reference_exprs(e).into_iter().for_each(|e| {
+                if !exprs.contains(&e) {
+                    exprs.push(e)
+                }
+            });
+            Ok(()) as Result<(), DataFusionError>
+        })
+        // closure always returns OK
+        .unwrap();
+        self.inputs()
+            .into_iter()
+            .flat_map(|child| child.all_out_ref_exprs())
+            .for_each(|e| {
+                if !exprs.contains(&e) {
+                    exprs.push(e)
+                }
+            });
         exprs
     }
 
@@ -752,7 +777,10 @@ impl LogicalPlan {
                         qry.subquery
                             .replace_params_with_values(&param_values.to_vec())?,
                     );
-                    Ok(Expr::ScalarSubquery(plan::Subquery { subquery }))
+                    Ok(Expr::ScalarSubquery(plan::Subquery {
+                        subquery,
+                        outer_ref_columns: qry.outer_ref_columns.clone(),
+                    }))
                 }
                 _ => Ok(expr),
             }
@@ -1919,14 +1947,11 @@ impl Join {
 pub struct Subquery {
     /// The subquery
     pub subquery: Arc<LogicalPlan>,
+    /// The outer references used in the subquery
+    pub outer_ref_columns: Vec<Expr>,
 }
 
 impl Subquery {
-    pub fn new(plan: LogicalPlan) -> Self {
-        Subquery {
-            subquery: Arc::new(plan),
-        }
-    }
     pub fn try_from_expr(plan: &Expr) -> datafusion_common::Result<&Subquery> {
         match plan {
             Expr::ScalarSubquery(it) => Ok(it),
