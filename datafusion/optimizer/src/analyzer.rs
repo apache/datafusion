@@ -64,8 +64,7 @@ impl Analyzer {
         &self,
         plan: &LogicalPlan,
         config: &ConfigOptions,
-    ) -> Result<LogicalPlan>
-where {
+    ) -> Result<LogicalPlan> {
         let start_time = Instant::now();
         let mut new_plan = plan.clone();
 
@@ -103,6 +102,13 @@ fn check_plan(plan: &LogicalPlan) -> Result<()> {
     })
 }
 
+/// Do necessary check on subquery expressions and fail the invalid plan
+/// 1) Check whether the outer plan is in the allowed outer plans list to use subquery expressions,
+///    the allowed while list: [Projection, Filter, Window, Aggregate, Sort, Join].
+/// 2) Check whether the inner plan is in the allowed inner plans list to use correlated(outer) expressions.
+/// 3) Check and validate unsupported cases to use the correlated(outer) expressions inside the subquery(inner) plans/inner expressions.
+/// For example, we do not want to support to use correlated expressions as the Join conditions in the subquery plan when the Join
+/// is a Full Out Join
 fn check_subquery_expr(
     outer_plan: &LogicalPlan,
     inner_plan: &LogicalPlan,
@@ -181,7 +187,7 @@ fn check_correlations_in_subquery(
             })
         }
         _ => Err(DataFusionError::Plan(
-            "Supported operator in the subquery plan.".to_string(),
+            "Unsupported operator in the subquery plan.".to_string(),
         )),
     }
 }
