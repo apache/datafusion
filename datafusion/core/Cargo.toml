@@ -88,7 +88,6 @@ num_cpus = "1.13.0"
 object_store = "0.5.4"
 parking_lot = "0.12"
 parquet = { workspace = true }
-paste = "^1.0"
 percent-encoding = "2.2.0"
 pin-project-lite = "^0.2.7"
 rand = "0.8"
@@ -114,7 +113,6 @@ ctor = "0.1.22"
 doc-comment = "0.3"
 env_logger = "0.10"
 half = "2.2.1"
-parquet-test-utils = { path = "../../parquet-test-utils" }
 postgres-protocol = "0.6.4"
 postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
 rstest = "0.16.0"

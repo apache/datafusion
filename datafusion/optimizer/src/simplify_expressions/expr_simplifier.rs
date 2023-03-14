@@ -390,6 +390,22 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 lit(negated)
             }
 
+            // expr IN ((subquery)) -> expr IN (subquery), see ##5529
+            Expr::InList {
+                expr,
+                mut list,
+                negated,
+            } if list.len() == 1
+                && matches!(list.first(), Some(Expr::ScalarSubquery { .. })) =>
+            {
+                let Expr::ScalarSubquery(subquery) = list.remove(0) else { unreachable!() };
+                Expr::InSubquery {
+                    expr,
+                    subquery,
+                    negated,
+                }
+            }
+
             // if expr is a single column reference:
             // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
             Expr::InList {
@@ -1110,6 +1126,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::test::test_table_scan_with_name;
     use arrow::{
         array::{ArrayRef, Int32Array},
         datatypes::{DataType, Field, Schema},
@@ -1470,24 +1487,17 @@ mod tests {
 
     #[test]
     fn test_simplify_multiply_by_one() {
-        let expr_a = binary_expr(col("c2"), Operator::Multiply, lit(1));
-        let expr_b = binary_expr(lit(1), Operator::Multiply, col("c2"));
+        let expr_a = col("c2") * lit(1);
+        let expr_b = lit(1) * col("c2");
         let expected = col("c2");
 
         assert_eq!(simplify(expr_a), expected);
         assert_eq!(simplify(expr_b), expected);
 
-        let expr = binary_expr(
-            col("c2"),
-            Operator::Multiply,
-            Expr::Literal(ScalarValue::Decimal128(Some(10000000000), 38, 10)),
-        );
+        let expr = col("c2") * lit(ScalarValue::Decimal128(Some(10000000000), 38, 10));
         assert_eq!(simplify(expr), expected);
-        let expr = binary_expr(
-            Expr::Literal(ScalarValue::Decimal128(Some(10000000000), 31, 10)),
-            Operator::Multiply,
-            col("c2"),
-        );
+
+        let expr = lit(ScalarValue::Decimal128(Some(10000000000), 31, 10)) * col("c2");
         assert_eq!(simplify(expr), expected);
     }
 
@@ -1496,12 +1506,12 @@ mod tests {
         let null = Expr::Literal(ScalarValue::Null);
         // A * null --> null
         {
-            let expr = binary_expr(col("c2"), Operator::Multiply, null.clone());
+            let expr = col("c2") * null.clone();
             assert_eq!(simplify(expr), null);
         }
         // null * A --> null
         {
-            let expr = binary_expr(null.clone(), Operator::Multiply, col("c2"));
+            let expr = null.clone() * col("c2");
             assert_eq!(simplify(expr), null);
         }
     }
@@ -1510,41 +1520,37 @@ mod tests {
     fn test_simplify_multiply_by_zero() {
         // cannot optimize A * null (null * A) if A is nullable
         {
-            let expr_a = binary_expr(col("c2"), Operator::Multiply, lit(0));
-            let expr_b = binary_expr(lit(0), Operator::Multiply, col("c2"));
+            let expr_a = col("c2") * lit(0);
+            let expr_b = lit(0) * col("c2");
 
             assert_eq!(simplify(expr_a.clone()), expr_a);
             assert_eq!(simplify(expr_b.clone()), expr_b);
         }
         // 0 * A --> 0 if A is not nullable
         {
-            let expr = binary_expr(lit(0), Operator::Multiply, col("c2_non_null"));
+            let expr = lit(0) * col("c2_non_null");
             assert_eq!(simplify(expr), lit(0));
         }
         // A * 0 --> 0 if A is not nullable
         {
-            let expr = binary_expr(col("c2_non_null"), Operator::Multiply, lit(0));
+            let expr = col("c2_non_null") * lit(0);
             assert_eq!(simplify(expr), lit(0));
         }
         // A * Decimal128(0) --> 0 if A is not nullable
         {
-            let expr = binary_expr(
-                col("c2_non_null"),
-                Operator::Multiply,
-                Expr::Literal(ScalarValue::Decimal128(Some(0), 31, 10)),
-            );
+            let expr = col("c2_non_null") * lit(ScalarValue::Decimal128(Some(0), 31, 10));
             assert_eq!(
                 simplify(expr),
-                Expr::Literal(ScalarValue::Decimal128(Some(0), 31, 10))
+                lit(ScalarValue::Decimal128(Some(0), 31, 10))
             );
             let expr = binary_expr(
-                Expr::Literal(ScalarValue::Decimal128(Some(0), 31, 10)),
+                lit(ScalarValue::Decimal128(Some(0), 31, 10)),
                 Operator::Multiply,
                 col("c2_non_null"),
             );
             assert_eq!(
                 simplify(expr),
-                Expr::Literal(ScalarValue::Decimal128(Some(0), 31, 10))
+                lit(ScalarValue::Decimal128(Some(0), 31, 10))
             );
         }
     }
@@ -1554,32 +1560,28 @@ mod tests {
         let expr = binary_expr(col("c2"), Operator::Divide, lit(1));
         let expected = col("c2");
         assert_eq!(simplify(expr), expected);
-        let expr = binary_expr(
-            col("c2"),
-            Operator::Divide,
-            Expr::Literal(ScalarValue::Decimal128(Some(10000000000), 31, 10)),
-        );
+        let expr = col("c2") / lit(ScalarValue::Decimal128(Some(10000000000), 31, 10));
         assert_eq!(simplify(expr), expected);
     }
 
     #[test]
     fn test_simplify_divide_null() {
         // A / null --> null
-        let null = Expr::Literal(ScalarValue::Null);
+        let null = lit(ScalarValue::Null);
         {
-            let expr = binary_expr(col("c"), Operator::Divide, null.clone());
+            let expr = col("c") / null.clone();
             assert_eq!(simplify(expr), null);
         }
         // null / A --> null
         {
-            let expr = binary_expr(null.clone(), Operator::Divide, col("c"));
+            let expr = null.clone() / col("c");
             assert_eq!(simplify(expr), null);
         }
     }
 
     #[test]
     fn test_simplify_divide_by_same() {
-        let expr = binary_expr(col("c2"), Operator::Divide, col("c2"));
+        let expr = col("c2") / col("c2");
         // if c2 is null, c2 / c2 = null, so can't simplify
         let expected = expr.clone();
 
@@ -1589,8 +1591,8 @@ mod tests {
     #[test]
     fn test_simplify_divide_zero_by_zero() {
         // 0 / 0 -> null
-        let expr = binary_expr(lit(0), Operator::Divide, lit(0));
-        let expected = Expr::Literal(ScalarValue::Int32(None));
+        let expr = lit(0) / lit(0);
+        let expected = lit(ScalarValue::Int32(None));
 
         assert_eq!(simplify(expr), expected);
     }
@@ -1601,29 +1603,29 @@ mod tests {
     )]
     fn test_simplify_divide_by_zero() {
         // A / 0 -> DivideByZeroError
-        let expr = binary_expr(col("c2_non_null"), Operator::Divide, lit(0));
+        let expr = col("c2_non_null") / lit(0);
 
         simplify(expr);
     }
 
     #[test]
     fn test_simplify_modulo_by_null() {
-        let null = Expr::Literal(ScalarValue::Null);
+        let null = lit(ScalarValue::Null);
         // A % null --> null
         {
-            let expr = binary_expr(col("c2"), Operator::Modulo, null.clone());
+            let expr = col("c2") % null.clone();
             assert_eq!(simplify(expr), null);
         }
         // null % A --> null
         {
-            let expr = binary_expr(null.clone(), Operator::Modulo, col("c2"));
+            let expr = null.clone() % col("c2");
             assert_eq!(simplify(expr), null);
         }
     }
 
     #[test]
     fn test_simplify_modulo_by_one() {
-        let expr = binary_expr(col("c2"), Operator::Modulo, lit(1));
+        let expr = col("c2") % lit(1);
         // if c2 is null, c2 % 1 = null, so can't simplify
         let expected = expr.clone();
 
@@ -1632,58 +1634,55 @@ mod tests {
 
     #[test]
     fn test_simplify_modulo_by_one_non_null() {
-        let expr = binary_expr(col("c2_non_null"), Operator::Modulo, lit(1));
+        let expr = col("c2_non_null") % lit(1);
         let expected = lit(0);
         assert_eq!(simplify(expr), expected);
-        let expr = binary_expr(
-            col("c2_non_null"),
-            Operator::Modulo,
-            Expr::Literal(ScalarValue::Decimal128(Some(10000000000), 31, 10)),
-        );
+        let expr =
+            col("c2_non_null") % lit(ScalarValue::Decimal128(Some(10000000000), 31, 10));
         assert_eq!(simplify(expr), expected);
     }
 
     #[test]
     fn test_simplify_bitwise_xor_by_null() {
-        let null = Expr::Literal(ScalarValue::Null);
+        let null = lit(ScalarValue::Null);
         // A ^ null --> null
         {
-            let expr = binary_expr(col("c2"), Operator::BitwiseXor, null.clone());
+            let expr = col("c2") ^ null.clone();
             assert_eq!(simplify(expr), null);
         }
         // null ^ A --> null
         {
-            let expr = binary_expr(null.clone(), Operator::BitwiseXor, col("c2"));
+            let expr = null.clone() ^ col("c2");
             assert_eq!(simplify(expr), null);
         }
     }
 
     #[test]
     fn test_simplify_bitwise_shift_right_by_null() {
-        let null = Expr::Literal(ScalarValue::Null);
+        let null = lit(ScalarValue::Null);
         // A >> null --> null
         {
-            let expr = binary_expr(col("c2"), Operator::BitwiseShiftRight, null.clone());
+            let expr = col("c2") >> null.clone();
             assert_eq!(simplify(expr), null);
         }
         // null >> A --> null
         {
-            let expr = binary_expr(null.clone(), Operator::BitwiseShiftRight, col("c2"));
+            let expr = null.clone() >> col("c2");
             assert_eq!(simplify(expr), null);
         }
     }
 
     #[test]
     fn test_simplify_bitwise_shift_left_by_null() {
-        let null = Expr::Literal(ScalarValue::Null);
+        let null = lit(ScalarValue::Null);
         // A << null --> null
         {
-            let expr = binary_expr(col("c2"), Operator::BitwiseShiftLeft, null.clone());
+            let expr = col("c2") << null.clone();
             assert_eq!(simplify(expr), null);
         }
         // null << A --> null
         {
-            let expr = binary_expr(null.clone(), Operator::BitwiseShiftLeft, col("c2"));
+            let expr = null.clone() << col("c2");
             assert_eq!(simplify(expr), null);
         }
     }
@@ -1692,12 +1691,12 @@ mod tests {
     fn test_simplify_bitwise_and_by_zero() {
         // A & 0 --> 0
         {
-            let expr = binary_expr(col("c2_non_null"), Operator::BitwiseAnd, lit(0));
+            let expr = col("c2_non_null") & lit(0);
             assert_eq!(simplify(expr), lit(0));
         }
         // 0 & A --> 0
         {
-            let expr = binary_expr(lit(0), Operator::BitwiseAnd, col("c2_non_null"));
+            let expr = lit(0) & col("c2_non_null");
             assert_eq!(simplify(expr), lit(0));
         }
     }
@@ -1706,12 +1705,12 @@ mod tests {
     fn test_simplify_bitwise_or_by_zero() {
         // A | 0 --> A
         {
-            let expr = binary_expr(col("c2_non_null"), Operator::BitwiseOr, lit(0));
+            let expr = col("c2_non_null") | lit(0);
             assert_eq!(simplify(expr), col("c2_non_null"));
         }
         // 0 | A --> A
         {
-            let expr = binary_expr(lit(0), Operator::BitwiseOr, col("c2_non_null"));
+            let expr = lit(0) | col("c2_non_null");
             assert_eq!(simplify(expr), col("c2_non_null"));
         }
     }
@@ -1720,12 +1719,12 @@ mod tests {
     fn test_simplify_bitwise_xor_by_zero() {
         // A ^ 0 --> A
         {
-            let expr = binary_expr(col("c2_non_null"), Operator::BitwiseXor, lit(0));
+            let expr = col("c2_non_null") ^ lit(0);
             assert_eq!(simplify(expr), col("c2_non_null"));
         }
         // 0 ^ A --> A
         {
-            let expr = binary_expr(lit(0), Operator::BitwiseXor, col("c2_non_null"));
+            let expr = lit(0) ^ col("c2_non_null");
             assert_eq!(simplify(expr), col("c2_non_null"));
         }
     }
@@ -1734,8 +1733,7 @@ mod tests {
     fn test_simplify_bitwise_bitwise_shift_right_by_zero() {
         // A >> 0 --> A
         {
-            let expr =
-                binary_expr(col("c2_non_null"), Operator::BitwiseShiftRight, lit(0));
+            let expr = col("c2_non_null") >> lit(0);
             assert_eq!(simplify(expr), col("c2_non_null"));
         }
     }
@@ -1744,23 +1742,22 @@ mod tests {
     fn test_simplify_bitwise_bitwise_shift_left_by_zero() {
         // A << 0 --> A
         {
-            let expr =
-                binary_expr(col("c2_non_null"), Operator::BitwiseShiftLeft, lit(0));
+            let expr = col("c2_non_null") << lit(0);
             assert_eq!(simplify(expr), col("c2_non_null"));
         }
     }
 
     #[test]
     fn test_simplify_bitwise_and_by_null() {
-        let null = Expr::Literal(ScalarValue::Null);
+        let null = lit(ScalarValue::Null);
         // A & null --> null
         {
-            let expr = binary_expr(col("c2"), Operator::BitwiseAnd, null.clone());
+            let expr = col("c2") & null.clone();
             assert_eq!(simplify(expr), null);
         }
         // null & A --> null
         {
-            let expr = binary_expr(null.clone(), Operator::BitwiseAnd, col("c2"));
+            let expr = null.clone() & col("c2");
             assert_eq!(simplify(expr), null);
         }
     }
@@ -1769,39 +1766,21 @@ mod tests {
     fn test_simplify_composed_bitwise_and() {
         // ((c2 > 5) & (c1 < 6)) & (c2 > 5) --> (c2 > 5) & (c1 < 6)
 
-        let expr = binary_expr(
-            binary_expr(
-                col("c2").gt(lit(5)),
-                Operator::BitwiseAnd,
-                col("c1").lt(lit(6)),
-            ),
-            Operator::BitwiseAnd,
+        let expr = bitwise_and(
+            bitwise_and(col("c2").gt(lit(5)), col("c1").lt(lit(6))),
             col("c2").gt(lit(5)),
         );
-        let expected = binary_expr(
-            col("c2").gt(lit(5)),
-            Operator::BitwiseAnd,
-            col("c1").lt(lit(6)),
-        );
+        let expected = bitwise_and(col("c2").gt(lit(5)), col("c1").lt(lit(6)));
 
         assert_eq!(simplify(expr), expected);
 
         // (c2 > 5) & ((c2 > 5) & (c1 < 6)) --> (c2 > 5) & (c1 < 6)
 
-        let expr = binary_expr(
+        let expr = bitwise_and(
             col("c2").gt(lit(5)),
-            Operator::BitwiseAnd,
-            binary_expr(
-                col("c2").gt(lit(5)),
-                Operator::BitwiseAnd,
-                col("c1").lt(lit(6)),
-            ),
+            bitwise_and(col("c2").gt(lit(5)), col("c1").lt(lit(6))),
         );
-        let expected = binary_expr(
-            col("c2").gt(lit(5)),
-            Operator::BitwiseAnd,
-            col("c1").lt(lit(6)),
-        );
+        let expected = bitwise_and(col("c2").gt(lit(5)), col("c1").lt(lit(6)));
         assert_eq!(simplify(expr), expected);
     }
 
@@ -1809,39 +1788,21 @@ mod tests {
     fn test_simplify_composed_bitwise_or() {
         // ((c2 > 5) | (c1 < 6)) | (c2 > 5) --> (c2 > 5) | (c1 < 6)
 
-        let expr = binary_expr(
-            binary_expr(
-                col("c2").gt(lit(5)),
-                Operator::BitwiseOr,
-                col("c1").lt(lit(6)),
-            ),
-            Operator::BitwiseOr,
+        let expr = bitwise_or(
+            bitwise_or(col("c2").gt(lit(5)), col("c1").lt(lit(6))),
             col("c2").gt(lit(5)),
         );
-        let expected = binary_expr(
-            col("c2").gt(lit(5)),
-            Operator::BitwiseOr,
-            col("c1").lt(lit(6)),
-        );
+        let expected = bitwise_or(col("c2").gt(lit(5)), col("c1").lt(lit(6)));
 
         assert_eq!(simplify(expr), expected);
 
         // (c2 > 5) | ((c2 > 5) | (c1 < 6)) --> (c2 > 5) | (c1 < 6)
 
-        let expr = binary_expr(
+        let expr = bitwise_or(
             col("c2").gt(lit(5)),
-            Operator::BitwiseOr,
-            binary_expr(
-                col("c2").gt(lit(5)),
-                Operator::BitwiseOr,
-                col("c1").lt(lit(6)),
-            ),
+            bitwise_or(col("c2").gt(lit(5)), col("c1").lt(lit(6))),
         );
-        let expected = binary_expr(
-            col("c2").gt(lit(5)),
-            Operator::BitwiseOr,
-            col("c1").lt(lit(6)),
-        );
+        let expected = bitwise_or(col("c2").gt(lit(5)), col("c1").lt(lit(6)));
 
         assert_eq!(simplify(expr), expected);
     }
@@ -1851,24 +1812,17 @@ mod tests {
         // with an even number of the column "c2"
         // c2 ^ ((c2 ^ (c2 | c1)) ^ (c1 & c2)) --> (c2 | c1) ^ (c1 & c2)
 
-        let expr = binary_expr(
+        let expr = bitwise_xor(
             col("c2"),
-            Operator::BitwiseXor,
-            binary_expr(
-                binary_expr(
-                    col("c2"),
-                    Operator::BitwiseXor,
-                    binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
-                ),
-                Operator::BitwiseXor,
-                binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
+            bitwise_xor(
+                bitwise_xor(col("c2"), bitwise_or(col("c2"), col("c1"))),
+                bitwise_and(col("c1"), col("c2")),
             ),
         );
 
-        let expected = binary_expr(
-            binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
-            Operator::BitwiseXor,
-            binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
+        let expected = bitwise_xor(
+            bitwise_or(col("c2"), col("c1")),
+            bitwise_and(col("c1"), col("c2")),
         );
 
         assert_eq!(simplify(expr), expected);
@@ -1876,31 +1830,19 @@ mod tests {
         // with an odd number of the column "c2"
         // c2 ^ (c2 ^ (c2 | c1)) ^ ((c1 & c2) ^ c2) --> c2 ^ ((c2 | c1) ^ (c1 & c2))
 
-        let expr = binary_expr(
+        let expr = bitwise_xor(
             col("c2"),
-            Operator::BitwiseXor,
-            binary_expr(
-                binary_expr(
-                    col("c2"),
-                    Operator::BitwiseXor,
-                    binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
-                ),
-                Operator::BitwiseXor,
-                binary_expr(
-                    binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
-                    Operator::BitwiseXor,
-                    col("c2"),
-                ),
+            bitwise_xor(
+                bitwise_xor(col("c2"), bitwise_or(col("c2"), col("c1"))),
+                bitwise_xor(bitwise_and(col("c1"), col("c2")), col("c2")),
             ),
         );
 
-        let expected = binary_expr(
+        let expected = bitwise_xor(
             col("c2"),
-            Operator::BitwiseXor,
-            binary_expr(
-                binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
-                Operator::BitwiseXor,
-                binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
+            bitwise_xor(
+                bitwise_or(col("c2"), col("c1")),
+                bitwise_and(col("c1"), col("c2")),
             ),
         );
 
@@ -1909,24 +1851,17 @@ mod tests {
         // with an even number of the column "c2"
         // ((c2 ^ (c2 | c1)) ^ (c1 & c2)) ^ c2 --> (c2 | c1) ^ (c1 & c2)
 
-        let expr = binary_expr(
-            binary_expr(
-                binary_expr(
-                    col("c2"),
-                    Operator::BitwiseXor,
-                    binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
-                ),
-                Operator::BitwiseXor,
-                binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
+        let expr = bitwise_xor(
+            bitwise_xor(
+                bitwise_xor(col("c2"), bitwise_or(col("c2"), col("c1"))),
+                bitwise_and(col("c1"), col("c2")),
             ),
-            Operator::BitwiseXor,
             col("c2"),
         );
 
-        let expected = binary_expr(
-            binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
-            Operator::BitwiseXor,
-            binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
+        let expected = bitwise_xor(
+            bitwise_or(col("c2"), col("c1")),
+            bitwise_and(col("c1"), col("c2")),
         );
 
         assert_eq!(simplify(expr), expected);
@@ -1934,31 +1869,19 @@ mod tests {
         // with an odd number of the column "c2"
         // (c2 ^ (c2 | c1)) ^ ((c1 & c2) ^ c2) ^ c2 --> ((c2 | c1) ^ (c1 & c2)) ^ c2
 
-        let expr = binary_expr(
-            binary_expr(
-                binary_expr(
-                    col("c2"),
-                    Operator::BitwiseXor,
-                    binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
-                ),
-                Operator::BitwiseXor,
-                binary_expr(
-                    binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
-                    Operator::BitwiseXor,
-                    col("c2"),
-                ),
+        let expr = bitwise_xor(
+            bitwise_xor(
+                bitwise_xor(col("c2"), bitwise_or(col("c2"), col("c1"))),
+                bitwise_xor(bitwise_and(col("c1"), col("c2")), col("c2")),
             ),
-            Operator::BitwiseXor,
             col("c2"),
         );
 
-        let expected = binary_expr(
-            binary_expr(
-                binary_expr(col("c2"), Operator::BitwiseOr, col("c1")),
-                Operator::BitwiseXor,
-                binary_expr(col("c1"), Operator::BitwiseAnd, col("c2")),
+        let expected = bitwise_xor(
+            bitwise_xor(
+                bitwise_or(col("c2"), col("c1")),
+                bitwise_and(col("c1"), col("c2")),
             ),
-            Operator::BitwiseXor,
             col("c2"),
         );
 
@@ -1968,40 +1891,24 @@ mod tests {
     #[test]
     fn test_simplify_negated_bitwise_and() {
         // !c4 & c4 --> 0
-        let expr = binary_expr(
-            Expr::Negative(Box::new(col("c4_non_null"))),
-            Operator::BitwiseAnd,
-            col("c4_non_null"),
-        );
-        let expected = Expr::Literal(ScalarValue::UInt32(Some(0)));
+        let expr = (-col("c4_non_null")) & col("c4_non_null");
+        let expected = lit(0u32);
 
         assert_eq!(simplify(expr), expected);
         // c4 & !c4 --> 0
-        let expr = binary_expr(
-            col("c4_non_null"),
-            Operator::BitwiseAnd,
-            Expr::Negative(Box::new(col("c4_non_null"))),
-        );
-        let expected = Expr::Literal(ScalarValue::UInt32(Some(0)));
+        let expr = col("c4_non_null") & (-col("c4_non_null"));
+        let expected = lit(0u32);
 
         assert_eq!(simplify(expr), expected);
 
         // !c3 & c3 --> 0
-        let expr = binary_expr(
-            Expr::Negative(Box::new(col("c3_non_null"))),
-            Operator::BitwiseAnd,
-            col("c3_non_null"),
-        );
-        let expected = Expr::Literal(ScalarValue::Int64(Some(0)));
+        let expr = (-col("c3_non_null")) & col("c3_non_null");
+        let expected = lit(0i64);
 
         assert_eq!(simplify(expr), expected);
         // c3 & !c3 --> 0
-        let expr = binary_expr(
-            col("c3_non_null"),
-            Operator::BitwiseAnd,
-            Expr::Negative(Box::new(col("c3_non_null"))),
-        );
-        let expected = Expr::Literal(ScalarValue::Int64(Some(0)));
+        let expr = col("c3_non_null") & (-col("c3_non_null"));
+        let expected = lit(0i64);
 
         assert_eq!(simplify(expr), expected);
     }
@@ -2009,42 +1916,26 @@ mod tests {
     #[test]
     fn test_simplify_negated_bitwise_or() {
         // !c4 | c4 --> -1
-        let expr = binary_expr(
-            Expr::Negative(Box::new(col("c4_non_null"))),
-            Operator::BitwiseOr,
-            col("c4_non_null"),
-        );
-        let expected = Expr::Literal(ScalarValue::Int32(Some(-1)));
+        let expr = (-col("c4_non_null")) | col("c4_non_null");
+        let expected = lit(-1i32);
 
         assert_eq!(simplify(expr), expected);
 
         // c4 | !c4 --> -1
-        let expr = binary_expr(
-            col("c4_non_null"),
-            Operator::BitwiseOr,
-            Expr::Negative(Box::new(col("c4_non_null"))),
-        );
-        let expected = Expr::Literal(ScalarValue::Int32(Some(-1)));
+        let expr = col("c4_non_null") | (-col("c4_non_null"));
+        let expected = lit(-1i32);
 
         assert_eq!(simplify(expr), expected);
 
         // !c3 | c3 --> -1
-        let expr = binary_expr(
-            Expr::Negative(Box::new(col("c3_non_null"))),
-            Operator::BitwiseOr,
-            col("c3_non_null"),
-        );
-        let expected = Expr::Literal(ScalarValue::Int64(Some(-1)));
+        let expr = (-col("c3_non_null")) | col("c3_non_null");
+        let expected = lit(-1i64);
 
         assert_eq!(simplify(expr), expected);
 
         // c3 | !c3 --> -1
-        let expr = binary_expr(
-            col("c3_non_null"),
-            Operator::BitwiseOr,
-            Expr::Negative(Box::new(col("c3_non_null"))),
-        );
-        let expected = Expr::Literal(ScalarValue::Int64(Some(-1)));
+        let expr = col("c3_non_null") | (-col("c3_non_null"));
+        let expected = lit(-1i64);
 
         assert_eq!(simplify(expr), expected);
     }
@@ -2052,42 +1943,26 @@ mod tests {
     #[test]
     fn test_simplify_negated_bitwise_xor() {
         // !c4 ^ c4 --> -1
-        let expr = binary_expr(
-            Expr::Negative(Box::new(col("c4_non_null"))),
-            Operator::BitwiseXor,
-            col("c4_non_null"),
-        );
-        let expected = Expr::Literal(ScalarValue::Int32(Some(-1)));
+        let expr = (-col("c4_non_null")) ^ col("c4_non_null");
+        let expected = lit(-1i32);
 
         assert_eq!(simplify(expr), expected);
 
         // c4 ^ !c4 --> -1
-        let expr = binary_expr(
-            col("c4_non_null"),
-            Operator::BitwiseXor,
-            Expr::Negative(Box::new(col("c4_non_null"))),
-        );
-        let expected = Expr::Literal(ScalarValue::Int32(Some(-1)));
+        let expr = col("c4_non_null") ^ (-col("c4_non_null"));
+        let expected = lit(-1i32);
 
         assert_eq!(simplify(expr), expected);
 
         // !c3 ^ c3 --> -1
-        let expr = binary_expr(
-            Expr::Negative(Box::new(col("c3_non_null"))),
-            Operator::BitwiseXor,
-            col("c3_non_null"),
-        );
-        let expected = Expr::Literal(ScalarValue::Int64(Some(-1)));
+        let expr = (-col("c3_non_null")) ^ col("c3_non_null");
+        let expected = lit(-1i64);
 
         assert_eq!(simplify(expr), expected);
 
         // c3 ^ !c3 --> -1
-        let expr = binary_expr(
-            col("c3_non_null"),
-            Operator::BitwiseXor,
-            Expr::Negative(Box::new(col("c3_non_null"))),
-        );
-        let expected = Expr::Literal(ScalarValue::Int64(Some(-1)));
+        let expr = col("c3_non_null") ^ (-col("c3_non_null"));
+        let expected = lit(-1i64);
 
         assert_eq!(simplify(expr), expected);
     }
@@ -2095,14 +1970,9 @@ mod tests {
     #[test]
     fn test_simplify_bitwise_and_or() {
         // (c2 < 3) & ((c2 < 3) | c1) -> (c2 < 3)
-        let expr = binary_expr(
+        let expr = bitwise_and(
             col("c2_non_null").lt(lit(3)),
-            Operator::BitwiseAnd,
-            binary_expr(
-                col("c2_non_null").lt(lit(3)),
-                Operator::BitwiseOr,
-                col("c1_non_null"),
-            ),
+            bitwise_or(col("c2_non_null").lt(lit(3)), col("c1_non_null")),
         );
         let expected = col("c2_non_null").lt(lit(3));
 
@@ -2112,14 +1982,9 @@ mod tests {
     #[test]
     fn test_simplify_bitwise_or_and() {
         // (c2 < 3) | ((c2 < 3) & c1) -> (c2 < 3)
-        let expr = binary_expr(
+        let expr = bitwise_or(
             col("c2_non_null").lt(lit(3)),
-            Operator::BitwiseOr,
-            binary_expr(
-                col("c2_non_null").lt(lit(3)),
-                Operator::BitwiseAnd,
-                col("c1_non_null"),
-            ),
+            bitwise_and(col("c2_non_null").lt(lit(3)), col("c1_non_null")),
         );
         let expected = col("c2_non_null").lt(lit(3));
 
@@ -2148,13 +2013,13 @@ mod tests {
     fn test_simplify_simple_bitwise_xor() {
         // c4 ^ c4 -> 0
         let expr = (col("c4")).bitwise_xor(col("c4"));
-        let expected = Expr::Literal(ScalarValue::UInt32(Some(0)));
+        let expected = lit(0u32);
 
         assert_eq!(simplify(expr), expected);
 
         // c3 ^ c3 -> 0
         let expr = col("c3").bitwise_xor(col("c3"));
-        let expected = Expr::Literal(ScalarValue::Int64(Some(0)));
+        let expected = lit(0i64);
 
         assert_eq!(simplify(expr), expected);
     }
@@ -2164,7 +2029,7 @@ mod tests {
         expected = "called `Result::unwrap()` on an `Err` value: ArrowError(DivideByZero)"
     )]
     fn test_simplify_modulo_by_zero_non_null() {
-        let expr = binary_expr(col("c2_non_null"), Operator::Modulo, lit(0));
+        let expr = col("c2_non_null") % lit(0);
         simplify(expr);
     }
 
@@ -2180,13 +2045,11 @@ mod tests {
     #[test]
     fn test_simplify_composed_and() {
         // ((c2 > 5) AND (c1 < 6)) AND (c2 > 5)
-        let expr = binary_expr(
-            binary_expr(col("c2").gt(lit(5)), Operator::And, col("c1").lt(lit(6))),
-            Operator::And,
+        let expr = and(
+            and(col("c2").gt(lit(5)), col("c1").lt(lit(6))),
             col("c2").gt(lit(5)),
         );
-        let expected =
-            binary_expr(col("c2").gt(lit(5)), Operator::And, col("c1").lt(lit(6)));
+        let expected = and(col("c2").gt(lit(5)), col("c1").lt(lit(6)));
 
         assert_eq!(simplify(expr), expected);
     }
@@ -2194,11 +2057,7 @@ mod tests {
     #[test]
     fn test_simplify_negated_and() {
         // (c2 > 5) AND !(c2 > 5) --> (c2 > 5) AND (c2 <= 5)
-        let expr = binary_expr(
-            col("c2").gt(lit(5)),
-            Operator::And,
-            Expr::not(col("c2").gt(lit(5))),
-        );
+        let expr = and(col("c2").gt(lit(5)), Expr::not(col("c2").gt(lit(5))));
         let expected = col("c2").gt(lit(5)).and(col("c2").lt_eq(lit(5)));
 
         assert_eq!(simplify(expr), expected);
@@ -2207,17 +2066,17 @@ mod tests {
     #[test]
     fn test_simplify_or_and() {
         let l = col("c2").gt(lit(5));
-        let r = binary_expr(col("c1").lt(lit(6)), Operator::And, col("c2").gt(lit(5)));
+        let r = and(col("c1").lt(lit(6)), col("c2").gt(lit(5)));
 
         // (c2 > 5) OR ((c1 < 6) AND (c2 > 5))
-        let expr = binary_expr(l.clone(), Operator::Or, r.clone());
+        let expr = or(l.clone(), r.clone());
 
         // no rewrites if c1 can be null
         let expected = expr.clone();
         assert_eq!(simplify(expr), expected);
 
         // ((c1 < 6) AND (c2 > 5)) OR (c2 > 5)
-        let expr = binary_expr(l, Operator::Or, r);
+        let expr = or(l, r);
 
         // no rewrites if c1 can be null
         let expected = expr.clone();
@@ -2227,14 +2086,10 @@ mod tests {
     #[test]
     fn test_simplify_or_and_non_null() {
         let l = col("c2_non_null").gt(lit(5));
-        let r = binary_expr(
-            col("c1_non_null").lt(lit(6)),
-            Operator::And,
-            col("c2_non_null").gt(lit(5)),
-        );
+        let r = and(col("c1_non_null").lt(lit(6)), col("c2_non_null").gt(lit(5)));
 
         // (c2 > 5) OR ((c1 < 6) AND (c2 > 5)) --> c2 > 5
-        let expr = binary_expr(l.clone(), Operator::Or, r.clone());
+        let expr = or(l.clone(), r.clone());
 
         // This is only true if `c1 < 6` is not nullable / can not be null.
         let expected = col("c2_non_null").gt(lit(5));
@@ -2242,7 +2097,7 @@ mod tests {
         assert_eq!(simplify(expr), expected);
 
         // ((c1 < 6) AND (c2 > 5)) OR (c2 > 5) --> c2 > 5
-        let expr = binary_expr(l, Operator::Or, r);
+        let expr = or(l, r);
 
         assert_eq!(simplify(expr), expected);
     }
@@ -2250,17 +2105,17 @@ mod tests {
     #[test]
     fn test_simplify_and_or() {
         let l = col("c2").gt(lit(5));
-        let r = binary_expr(col("c1").lt(lit(6)), Operator::Or, col("c2").gt(lit(5)));
+        let r = or(col("c1").lt(lit(6)), col("c2").gt(lit(5)));
 
         // (c2 > 5) AND ((c1 < 6) OR (c2 > 5)) --> c2 > 5
-        let expr = binary_expr(l.clone(), Operator::And, r.clone());
+        let expr = and(l.clone(), r.clone());
 
         // no rewrites if c1 can be null
         let expected = expr.clone();
         assert_eq!(simplify(expr), expected);
 
         // ((c1 < 6) OR (c2 > 5)) AND (c2 > 5) --> c2 > 5
-        let expr = binary_expr(l, Operator::And, r);
+        let expr = and(l, r);
         let expected = expr.clone();
         assert_eq!(simplify(expr), expected);
     }
@@ -2268,14 +2123,10 @@ mod tests {
     #[test]
     fn test_simplify_and_or_non_null() {
         let l = col("c2_non_null").gt(lit(5));
-        let r = binary_expr(
-            col("c1_non_null").lt(lit(6)),
-            Operator::Or,
-            col("c2_non_null").gt(lit(5)),
-        );
+        let r = or(col("c1_non_null").lt(lit(6)), col("c2_non_null").gt(lit(5)));
 
         // (c2 > 5) AND ((c1 < 6) OR (c2 > 5)) --> c2 > 5
-        let expr = binary_expr(l.clone(), Operator::And, r.clone());
+        let expr = and(l.clone(), r.clone());
 
         // This is only true if `c1 < 6` is not nullable / can not be null.
         let expected = col("c2_non_null").gt(lit(5));
@@ -2283,14 +2134,14 @@ mod tests {
         assert_eq!(simplify(expr), expected);
 
         // ((c1 < 6) OR (c2 > 5)) AND (c2 > 5) --> c2 > 5
-        let expr = binary_expr(l, Operator::And, r);
+        let expr = and(l, r);
 
         assert_eq!(simplify(expr), expected);
     }
 
     #[test]
     fn test_simplify_null_and_false() {
-        let expr = binary_expr(lit_bool_null(), Operator::And, lit(false));
+        let expr = and(lit_bool_null(), lit(false));
         let expr_eq = lit(false);
 
         assert_eq!(simplify(expr), expr_eq);
@@ -2298,8 +2149,8 @@ mod tests {
 
     #[test]
     fn test_simplify_divide_null_by_null() {
-        let null = Expr::Literal(ScalarValue::Int32(None));
-        let expr_plus = binary_expr(null.clone(), Operator::Divide, null.clone());
+        let null = lit(ScalarValue::Int32(None));
+        let expr_plus = null.clone() / null.clone();
         let expr_eq = null;
 
         assert_eq!(simplify(expr_plus), expr_eq);
@@ -2307,16 +2158,21 @@ mod tests {
 
     #[test]
     fn test_simplify_simplify_arithmetic_expr() {
-        let expr_plus = binary_expr(lit(1), Operator::Plus, lit(1));
-        let expr_eq = binary_expr(lit(1), Operator::Eq, lit(1));
+        let expr_plus = lit(1) + lit(1);
 
         assert_eq!(simplify(expr_plus), lit(2));
+    }
+
+    #[test]
+    fn test_simplify_simplify_eq_expr() {
+        let expr_eq = binary_expr(lit(1), Operator::Eq, lit(1));
+
         assert_eq!(simplify(expr_eq), lit(true));
     }
 
     #[test]
     fn test_simplify_concat_ws() {
-        let null = Expr::Literal(ScalarValue::Utf8(None));
+        let null = lit(ScalarValue::Utf8(None));
         // the delimiter is not a literal
         {
             let expr = concat_ws(col("c"), vec![lit("a"), null.clone(), lit("b")]);
@@ -2357,7 +2213,7 @@ mod tests {
 
     #[test]
     fn test_simplify_concat_ws_with_null() {
-        let null = Expr::Literal(ScalarValue::Utf8(None));
+        let null = lit(ScalarValue::Utf8(None));
         // null delimiter -> null
         {
             let expr = concat_ws(null.clone(), vec![col("c1"), col("c2")]);
@@ -2388,7 +2244,7 @@ mod tests {
 
     #[test]
     fn test_simplify_concat() {
-        let null = Expr::Literal(ScalarValue::Utf8(None));
+        let null = lit(ScalarValue::Utf8(None));
         let expr = concat(&[
             null.clone(),
             col("c0"),
@@ -2848,6 +2704,51 @@ mod tests {
         assert_eq!(
             simplify(in_list(col("c1"), vec![lit(1), lit(2)], true)),
             col("c1").not_eq(lit(2)).and(col("c1").not_eq(lit(1)))
+        );
+
+        let subquery = Arc::new(test_table_scan_with_name("test").unwrap());
+        assert_eq!(
+            simplify(in_list(
+                col("c1"),
+                vec![scalar_subquery(subquery.clone())],
+                false
+            )),
+            in_subquery(col("c1"), subquery.clone())
+        );
+        assert_eq!(
+            simplify(in_list(
+                col("c1"),
+                vec![scalar_subquery(subquery.clone())],
+                true
+            )),
+            not_in_subquery(col("c1"), subquery)
+        );
+
+        let subquery1 =
+            scalar_subquery(Arc::new(test_table_scan_with_name("test1").unwrap()));
+        let subquery2 =
+            scalar_subquery(Arc::new(test_table_scan_with_name("test2").unwrap()));
+
+        // c1 NOT IN (<subquery1>, <subquery2>) -> c1 != <subquery2> AND c1 != <subquery1>
+        assert_eq!(
+            simplify(in_list(
+                col("c1"),
+                vec![subquery1.clone(), subquery2.clone()],
+                true
+            )),
+            col("c1")
+                .not_eq(subquery2.clone())
+                .and(col("c1").not_eq(subquery1.clone()))
+        );
+
+        // c1 IN (<subquery1>, <subquery2>) -> c1 == <subquery2> OR c1 == <subquery1>
+        assert_eq!(
+            simplify(in_list(
+                col("c1"),
+                vec![subquery1.clone(), subquery2.clone()],
+                false
+            )),
+            col("c1").eq(subquery2).or(col("c1").eq(subquery1))
         );
     }
 

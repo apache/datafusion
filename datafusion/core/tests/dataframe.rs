@@ -33,20 +33,24 @@ use datafusion::prelude::JoinType;
 use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion_expr::expr::{GroupingSet, Sort};
-use datafusion_expr::{avg, col, count, lit, sum, Expr, ExprSchemable};
+use datafusion_expr::{avg, col, count, lit, max, sum, Expr, ExprSchemable};
 
 #[tokio::test]
 async fn describe() -> Result<()> {
     let ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();
 
-    let df = ctx
+    let describe_record_batch = ctx
         .read_parquet(
             &format!("{testdata}/alltypes_tiny_pages.parquet"),
             ParquetReadOptions::default(),
         )
+        .await?
+        .describe()
+        .await?
+        .collect()
         .await?;
-    let describe_record_batch = df.describe().await.unwrap().collect().await.unwrap();
+
     #[rustfmt::skip]
         let expected = vec![
         "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
@@ -201,6 +205,7 @@ async fn sort_on_distinct_columns() -> Result<()> {
     assert_batches_eq!(expected, &results);
     Ok(())
 }
+
 #[tokio::test]
 async fn sort_on_distinct_unprojected_columns() -> Result<()> {
     let schema = Schema::new(vec![
@@ -214,23 +219,95 @@ async fn sort_on_distinct_unprojected_columns() -> Result<()> {
             Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
             Arc::new(Int32Array::from_slice([2, 3, 4, 5])),
         ],
-    )
-    .unwrap();
+    )?;
 
     // Cannot sort on a column after distinct that would add a new column
     let ctx = SessionContext::new();
-    ctx.register_batch("t", batch).unwrap();
+    ctx.register_batch("t", batch)?;
     let err = ctx
         .table("t")
-        .await
-        .unwrap()
-        .select(vec![col("a")])
-        .unwrap()
-        .distinct()
-        .unwrap()
+        .await?
+        .select(vec![col("a")])?
+        .distinct()?
         .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))])
         .unwrap_err();
     assert_eq!(err.to_string(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions b must appear in select list");
+    Ok(())
+}
+
+#[tokio::test]
+async fn sort_on_ambiguous_column() -> Result<()> {
+    let err = create_test_table("t1")
+        .await?
+        .join(
+            create_test_table("t2").await?,
+            JoinType::Inner,
+            &["a"],
+            &["a"],
+            None,
+        )?
+        .sort(vec![col("b").sort(true, true)])
+        .unwrap_err();
+
+    let expected = "Schema error: Ambiguous reference to unqualified field 'b'";
+    assert_eq!(err.to_string(), expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn group_by_ambiguous_column() -> Result<()> {
+    let err = create_test_table("t1")
+        .await?
+        .join(
+            create_test_table("t2").await?,
+            JoinType::Inner,
+            &["a"],
+            &["a"],
+            None,
+        )?
+        .aggregate(vec![col("b")], vec![max(col("a"))])
+        .unwrap_err();
+
+    let expected = "Schema error: Ambiguous reference to unqualified field 'b'";
+    assert_eq!(err.to_string(), expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn filter_on_ambiguous_column() -> Result<()> {
+    let err = create_test_table("t1")
+        .await?
+        .join(
+            create_test_table("t2").await?,
+            JoinType::Inner,
+            &["a"],
+            &["a"],
+            None,
+        )?
+        .filter(col("b").eq(lit(1)))
+        .unwrap_err();
+
+    let expected = "Schema error: Ambiguous reference to unqualified field 'b'";
+    assert_eq!(err.to_string(), expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn select_ambiguous_column() -> Result<()> {
+    let err = create_test_table("t1")
+        .await?
+        .join(
+            create_test_table("t2").await?,
+            JoinType::Inner,
+            &["a"],
+            &["a"],
+            None,
+        )?
+        .select(vec![col("b")])
+        .unwrap_err();
+
+    let expected = "Schema error: Ambiguous reference to unqualified field 'b'";
+    assert_eq!(err.to_string(), expected);
     Ok(())
 }
 
@@ -316,7 +393,7 @@ async fn test_grouping_sets() -> Result<()> {
         vec![col("a"), col("b")],
     ]));
 
-    let df = create_test_table()
+    let df = create_test_table("test")
         .await?
         .aggregate(vec![grouping_set_expr], vec![count(col("a"))])?
         .sort(vec![
@@ -746,7 +823,7 @@ async fn unnest_aggregate_columns() -> Result<()> {
     Ok(())
 }
 
-async fn create_test_table() -> Result<DataFrame> {
+async fn create_test_table(name: &str) -> Result<DataFrame> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Int32, false),
@@ -768,9 +845,9 @@ async fn create_test_table() -> Result<DataFrame> {
 
     let ctx = SessionContext::new();
 
-    ctx.register_batch("test", batch)?;
+    ctx.register_batch(name, batch)?;
 
-    ctx.table("test").await
+    ctx.table(name).await
 }
 
 async fn aggregates_table(ctx: &SessionContext) -> Result<DataFrame> {
