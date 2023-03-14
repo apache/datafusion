@@ -2290,22 +2290,6 @@ mod tests {
         register_parquet(&ctx, &files, 2).await?;
         register_parquet(&ctx, &files, 3).await?;
 
-        // let filename = files
-        // .iter()
-        // .filter(|f| f.file_name().to_str().unwrap().ends_with("-0.parquet"))
-        // .next()
-        // .unwrap()
-        // .path();
-
-        // let filename = filename
-        // .to_str()
-        // .unwrap();
-        // ctx.register_parquet(
-        //     "part0",
-        //     filename,
-        //     ParquetReadOptions::default(),
-        // ).await?;
-
         ctx.register_parquet("allparts", &out_dir, ParquetReadOptions::default())
             .await?;
 
