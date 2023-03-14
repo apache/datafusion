@@ -28,7 +28,7 @@ use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ExprSchema,
     OwnedTableReference, Result, TableReference, ToDFSchema,
 };
-use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
+use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::{Analyze, Prepare};
 use datafusion_expr::utils::expr_to_columns;
@@ -652,9 +652,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let schema = Arc::new(schema.clone());
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
-                let filter_expr = normalize_col_with_schemas(
+                let filter_expr = normalize_col_with_schemas_and_ambiguity_check(
                     filter_expr,
-                    &[&schema],
+                    &[&[&schema]],
                     &[using_columns],
                 )?;
                 LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan))?)
@@ -737,9 +737,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )?;
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
-                let filter_expr = normalize_col_with_schemas(
+                let filter_expr = normalize_col_with_schemas_and_ambiguity_check(
                     filter_expr,
-                    &[&table_schema],
+                    &[&[&table_schema]],
                     &[using_columns],
                 )?;
                 LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan))?)

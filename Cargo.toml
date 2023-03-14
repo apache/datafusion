@@ -31,12 +31,11 @@ members = [
     "datafusion/substrait",
     "datafusion-examples",
     "test-utils",
-    "parquet-test-utils",
     "benchmarks",
 ]
 
 [workspace.package]
-version = "19.0.0"
+version = "20.0.0"
 edition = "2021"
 readme = "README.md"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
