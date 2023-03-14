@@ -51,10 +51,11 @@ use crate::{
 };
 use arrow::array::new_null_array;
 use arrow::record_batch::RecordBatchOptions;
-use log::{debug, info};
+use log::{debug, info, warn};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::{
+    borrow::Cow,
     collections::HashMap,
     fmt::{Display, Formatter, Result as FmtResult},
     marker::PhantomData,
@@ -63,6 +64,26 @@ use std::{
 };
 
 use super::{ColumnStatistics, Statistics};
+
+/// Convert logical type of partition column to physical type: `Dictionary(UInt16, val_type)`.
+///
+/// You CAN use this to specify types for partition columns. However you MAY also choose not to dictionary-encode the
+/// data or to use a different dictionary type.
+///
+/// Use [`partition_value_wrap`] to wrap the values.
+pub fn partition_type_wrap(val_type: DataType) -> DataType {
+    DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val_type))
+}
+
+/// Convert scalar value of partition columns to physical type: `Dictionary(UInt16, val_type)` .
+///
+/// You CAN use this to specify types for partition columns. However you MAY also choose not to dictionary-encode the
+/// data or to use a different dictionary type.
+///
+/// Use [`partition_type_wrap`] to wrap the types.
+pub fn partition_value_wrap(val: ScalarValue) -> ScalarValue {
+    ScalarValue::Dictionary(Box::new(DataType::UInt16), Box::new(val))
+}
 
 /// The base configurations to provide when creating a physical plan for
 /// any given file format.
@@ -394,11 +415,27 @@ impl PartitionColumnProjector {
         }
         let mut cols = file_batch.columns().to_vec();
         for &(pidx, sidx) in &self.projected_partition_indexes {
+            let mut partition_value = Cow::Borrowed(&partition_values[pidx]);
+
+            // check if user forgot to dict-encode the partition value
+            let field = self.projected_schema.field(sidx);
+            let expected_data_type = field.data_type();
+            let actual_data_type = partition_value.get_datatype();
+            if let DataType::Dictionary(key_type, _) = expected_data_type {
+                if !matches!(actual_data_type, DataType::Dictionary(_, _)) {
+                    warn!("Partition value for column {} was not dictionary-encoded, applied auto-fix.", field.name());
+                    partition_value = Cow::Owned(ScalarValue::Dictionary(
+                        key_type.clone(),
+                        Box::new(partition_value.as_ref().clone()),
+                    ));
+                }
+            }
+
             cols.insert(
                 sidx,
                 create_output_array(
                     &mut self.key_buffer_cache,
-                    &partition_values[pidx],
+                    partition_value.as_ref(),
                     file_batch.num_rows(),
                 ),
             )
@@ -852,6 +889,34 @@ mod tests {
             "+---+---+---+------+-----+",
         ];
         crate::assert_batches_eq!(expected, &[projected_batch]);
+
+        // forgot to dictionary-wrap the scalar value
+        let file_batch = build_table_i32(
+            ("a", &vec![0, 1, 2]),
+            ("b", &vec![-2, -1, 0]),
+            ("c", &vec![10, 11, 12]),
+        );
+        let projected_batch = proj
+            .project(
+                // file_batch is ok here because we kept all the file cols in the projection
+                file_batch,
+                &[
+                    ScalarValue::Utf8(Some("2021".to_owned())),
+                    ScalarValue::Utf8(Some("10".to_owned())),
+                    ScalarValue::Utf8(Some("26".to_owned())),
+                ],
+            )
+            .expect("Projection of partition columns into record batch failed");
+        let expected = vec![
+            "+---+----+----+------+-----+",
+            "| a | b  | c  | year | day |",
+            "+---+----+----+------+-----+",
+            "| 0 | -2 | 10 | 2021 | 26  |",
+            "| 1 | -1 | 11 | 2021 | 26  |",
+            "| 2 | 0  | 12 | 2021 | 26  |",
+            "+---+----+----+------+-----+",
+        ];
+        crate::assert_batches_eq!(expected, &[projected_batch]);
     }
 
     #[test]
@@ -969,14 +1034,5 @@ mod tests {
             range: None,
             extensions: None,
         }
-    }
-
-    /// Convert logical type of partition column to physical type: `Dictionary(UInt16, val_type)`
-    fn partition_type_wrap(val_type: DataType) -> DataType {
-        DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val_type))
-    }
-
-    fn partition_value_wrap(val: ScalarValue) -> ScalarValue {
-        ScalarValue::Dictionary(Box::new(DataType::UInt16), Box::new(val))
     }
 }

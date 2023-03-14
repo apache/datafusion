@@ -55,7 +55,16 @@ pub struct FileRange {
 pub struct PartitionedFile {
     /// Path for the file (e.g. URL, filesystem path, etc)
     pub object_meta: ObjectMeta,
-    /// Values of partition columns to be appended to each row
+    /// Values of partition columns to be appended to each row.
+    ///
+    /// These MUST have the same count, order, and type than the [`table_partition_cols`].
+    ///
+    /// You may use [`partition_value_wrap`] to wrap them if you have used [`partition_type_wrap`] to wrap the column type.
+    ///
+    ///
+    /// [`partition_type_wrap`]: crate::physical_plan::file_format::partition_type_wrap
+    /// [`partition_value_wrap`]: crate::physical_plan::file_format::partition_value_wrap
+    /// [`table_partition_cols`]: table::ListingOptions::table_partition_cols
     pub partition_values: Vec<ScalarValue>,
     /// An optional file range for a more fine-grained parallel execution
     pub range: Option<FileRange>,

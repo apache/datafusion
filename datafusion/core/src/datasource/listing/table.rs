@@ -299,6 +299,8 @@ impl ListingOptions {
 
     /// Set table partition column names on [`ListingOptions`] and returns self.
     ///
+    /// You may use [`partition_type_wrap`] to request a dictionary-encoded type.
+    ///
     /// ```
     /// # use std::sync::Arc;
     /// # use arrow::datatypes::DataType;
@@ -314,6 +316,9 @@ impl ListingOptions {
     /// assert_eq!(listing_options.table_partition_cols, vec![("col_a".to_string(), DataType::Utf8),
     ///     ("col_b".to_string(), DataType::Utf8)]);
     /// ```
+    ///
+    ///
+    /// [`partition_type_wrap`]: crate::physical_plan::file_format::partition_type_wrap
     pub fn with_table_partition_cols(
         mut self,
         table_partition_cols: Vec<(String, DataType)>,
