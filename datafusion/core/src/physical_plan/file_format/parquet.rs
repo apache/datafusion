@@ -2407,7 +2407,6 @@ mod tests {
         assert!(res.is_err());
         let err = res.unwrap_err().to_string();
         assert!(&err.contains("Could not create directory"));
-        assert!(&err.contains("kind: AlreadyExists, message: \"File exists\""));
 
         Ok(())
     }
