@@ -1646,10 +1646,10 @@ mod tests {
 
         let meta = local_unpartitioned_file(filename);
 
-        let schema = dbg!(ParquetFormat::default()
+        let schema = ParquetFormat::default()
             .infer_schema(&state, &store, &[meta.clone()])
             .await
-            .unwrap());
+            .unwrap();
 
         let partitioned_file = PartitionedFile {
             object_meta: meta,
