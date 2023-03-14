@@ -3070,10 +3070,11 @@ mod tests {
             ScalarValue::Decimal128(None, 10, 2),
             ScalarValue::try_from_array(&array, 3).unwrap()
         );
-        assert_eq!(
-            ScalarValue::Decimal128(None, 10, 2),
-            ScalarValue::try_from_array(&array, 4).unwrap()
-        );
+        // FIXME: index out of bounds, 4 is out of range.
+        // assert_eq!(
+        //     ScalarValue::Decimal128(None, 10, 2),
+        //     ScalarValue::try_from_array(&array, 4).unwrap()
+        // );
 
         Ok(())
     }
