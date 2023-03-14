@@ -106,7 +106,9 @@ impl From<ObjectMeta> for PartitionedFile {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_execution::object_store::ObjectStoreRegistry;
+    use datafusion_execution::object_store::{
+        DefaultObjectStoreRegistry, ObjectStoreRegistry,
+    };
     use object_store::local::LocalFileSystem;
 
     use super::*;
@@ -124,31 +126,31 @@ mod tests {
 
     #[test]
     fn test_get_by_url_hdfs() {
-        let sut = ObjectStoreRegistry::default();
+        let sut = DefaultObjectStoreRegistry::default();
         sut.register_store("hdfs", "localhost:8020", Arc::new(LocalFileSystem::new()));
         let url = ListingTableUrl::parse("hdfs://localhost:8020/key").unwrap();
-        sut.get_by_url(&url).unwrap();
+        sut.get_by_url(url.as_ref()).unwrap();
     }
 
     #[test]
     fn test_get_by_url_s3() {
-        let sut = ObjectStoreRegistry::default();
+        let sut = DefaultObjectStoreRegistry::default();
         sut.register_store("s3", "bucket", Arc::new(LocalFileSystem::new()));
         let url = ListingTableUrl::parse("s3://bucket/key").unwrap();
-        sut.get_by_url(&url).unwrap();
+        sut.get_by_url(url.as_ref()).unwrap();
     }
 
     #[test]
     fn test_get_by_url_file() {
-        let sut = ObjectStoreRegistry::default();
+        let sut = DefaultObjectStoreRegistry::default();
         let url = ListingTableUrl::parse("file:///bucket/key").unwrap();
-        sut.get_by_url(&url).unwrap();
+        sut.get_by_url(url.as_ref()).unwrap();
     }
 
     #[test]
     fn test_get_by_url_local() {
-        let sut = ObjectStoreRegistry::default();
+        let sut = DefaultObjectStoreRegistry::default();
         let url = ListingTableUrl::parse("../").unwrap();
-        sut.get_by_url(&url).unwrap();
+        sut.get_by_url(url.as_ref()).unwrap();
     }
 }

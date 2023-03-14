@@ -24,6 +24,7 @@ use crate::{
 };
 
 use datafusion_common::DataFusionError;
+use datafusion_execution::object_store::DefaultObjectStoreRegistry;
 use datafusion_execution::{
     memory_pool::{GreedyMemoryPool, MemoryPool, UnboundedMemoryPool},
     object_store::ObjectStoreRegistry,
@@ -42,7 +43,7 @@ pub struct RuntimeEnv {
     /// Manage temporary files during query execution
     pub disk_manager: Arc<DiskManager>,
     /// Object Store Registry
-    pub object_store_registry: Arc<ObjectStoreRegistry>,
+    pub object_store_registry: Arc<dyn ObjectStoreRegistry>,
 }
 
 impl Debug for RuntimeEnv {
@@ -85,8 +86,11 @@ impl RuntimeEnv {
         host: impl AsRef<str>,
         object_store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        self.object_store_registry
-            .register_store(scheme, host, object_store)
+        self.object_store_registry.register_store(
+            scheme.as_ref(),
+            host.as_ref(),
+            object_store,
+        )
     }
 
     /// Retrieves a `ObjectStore` instance for a url by consulting the
@@ -94,7 +98,7 @@ impl RuntimeEnv {
     /// details.
     pub fn object_store(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
         self.object_store_registry
-            .get_by_url(url)
+            .get_by_url(url.as_ref())
             .map_err(DataFusionError::from)
     }
 }
@@ -105,7 +109,7 @@ impl Default for RuntimeEnv {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 /// Execution runtime configuration
 pub struct RuntimeConfig {
     /// DiskManager to manage temporary disk file usage
@@ -115,13 +119,23 @@ pub struct RuntimeConfig {
     /// Defaults to using an [`UnboundedMemoryPool`] if `None`
     pub memory_pool: Option<Arc<dyn MemoryPool>>,
     /// ObjectStoreRegistry to get object store based on url
-    pub object_store_registry: Arc<ObjectStoreRegistry>,
+    pub object_store_registry: Arc<dyn ObjectStoreRegistry>,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RuntimeConfig {
     /// New with default values
     pub fn new() -> Self {
-        Default::default()
+        Self {
+            disk_manager: Default::default(),
+            memory_pool: Default::default(),
+            object_store_registry: Arc::new(DefaultObjectStoreRegistry::default()),
+        }
     }
 
     /// Customize disk manager
@@ -139,7 +153,7 @@ impl RuntimeConfig {
     /// Customize object store registry
     pub fn with_object_store_registry(
         mut self,
-        object_store_registry: Arc<ObjectStoreRegistry>,
+        object_store_registry: Arc<dyn ObjectStoreRegistry>,
     ) -> Self {
         self.object_store_registry = object_store_registry;
         self

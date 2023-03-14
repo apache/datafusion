@@ -18,8 +18,11 @@
 use datafusion::error::Result;
 use std::{env, str::FromStr, sync::Arc};
 
-use datafusion::{datasource::object_store::ObjectStoreProvider, error::DataFusionError};
-use object_store::{aws::AmazonS3Builder, gcp::GoogleCloudStorageBuilder};
+use datafusion::datasource::object_store::{
+    DefaultObjectStoreRegistry, ObjectStoreRegistry,
+};
+use datafusion::error::DataFusionError;
+use object_store::{aws::AmazonS3Builder, gcp::GoogleCloudStorageBuilder, ObjectStore};
 use url::Url;
 
 #[derive(Debug, PartialEq, Eq, clap::ArgEnum, Clone)]
@@ -43,20 +46,53 @@ impl FromStr for ObjectStoreScheme {
     }
 }
 
-#[derive(Debug)]
-pub struct DatafusionCliObjectStoreProvider {}
+#[derive(Debug, Default)]
+pub struct DatafusionCliObjectStoreRegistry {
+    inner: DefaultObjectStoreRegistry,
+}
 
-/// ObjectStoreProvider for S3 and GCS
-impl ObjectStoreProvider for DatafusionCliObjectStoreProvider {
-    fn get_by_url(&self, url: &Url) -> Result<Arc<dyn object_store::ObjectStore>> {
-        ObjectStoreScheme::from_str(url.scheme()).map(|scheme| match scheme {
-            ObjectStoreScheme::S3 => build_s3_object_store(url),
-            ObjectStoreScheme::GCS => build_gcs_object_store(url),
-        })?
+impl DatafusionCliObjectStoreRegistry {
+    pub fn new() -> Self {
+        Default::default()
     }
 }
 
-fn build_s3_object_store(url: &Url) -> Result<Arc<dyn object_store::ObjectStore>> {
+impl ObjectStoreRegistry for DatafusionCliObjectStoreRegistry {
+    fn register_store(
+        &self,
+        scheme: &str,
+        host: &str,
+        store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore>> {
+        self.inner.register_store(scheme, host, store)
+    }
+
+    fn put_with_url(
+        &self,
+        url: &Url,
+        store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore>> {
+        self.inner.put_with_url(url, store)
+    }
+
+    fn get_by_url(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
+        self.inner.get_by_url(url).or_else(|_| {
+            let store =
+                ObjectStoreScheme::from_str(url.scheme()).map(
+                    |scheme| match scheme {
+                        ObjectStoreScheme::S3 => build_s3_object_store(url),
+                        ObjectStoreScheme::GCS => build_gcs_object_store(url),
+                    },
+                )??;
+
+            self.put_with_url(url, store.clone());
+
+            Ok(store)
+        })
+    }
+}
+
+fn build_s3_object_store(url: &Url) -> Result<Arc<dyn ObjectStore>> {
     let host = get_host_name(url)?;
     match AmazonS3Builder::from_env().with_bucket_name(host).build() {
         Ok(s3) => Ok(Arc::new(s3)),
@@ -64,7 +100,7 @@ fn build_s3_object_store(url: &Url) -> Result<Arc<dyn object_store::ObjectStore>
     }
 }
 
-fn build_gcs_object_store(url: &Url) -> Result<Arc<dyn object_store::ObjectStore>> {
+fn build_gcs_object_store(url: &Url) -> Result<Arc<dyn ObjectStore>> {
     let host = get_host_name(url)?;
     let mut builder = GoogleCloudStorageBuilder::new().with_bucket_name(host);
 
@@ -90,16 +126,16 @@ fn get_host_name(url: &Url) -> Result<&str> {
 mod tests {
     use std::{env, str::FromStr};
 
-    use datafusion::datasource::object_store::ObjectStoreProvider;
+    use datafusion::datasource::object_store::ObjectStoreRegistry;
     use url::Url;
 
-    use super::DatafusionCliObjectStoreProvider;
+    use super::DatafusionCliObjectStoreRegistry;
 
     #[test]
     fn s3_provider_no_host() {
         let no_host_url = "s3:///";
-        let provider = DatafusionCliObjectStoreProvider {};
-        let err = provider
+        let registry = DatafusionCliObjectStoreRegistry::new();
+        let err = registry
             .get_by_url(&Url::from_str(no_host_url).unwrap())
             .unwrap_err();
         assert!(err
@@ -110,8 +146,8 @@ mod tests {
     #[test]
     fn gs_provider_no_host() {
         let no_host_url = "gs:///";
-        let provider = DatafusionCliObjectStoreProvider {};
-        let err = provider
+        let registry = DatafusionCliObjectStoreRegistry::new();
+        let err = registry
             .get_by_url(&Url::from_str(no_host_url).unwrap())
             .unwrap_err();
         assert!(err
@@ -122,8 +158,8 @@ mod tests {
     #[test]
     fn gcs_provider_no_host() {
         let no_host_url = "gcs:///";
-        let provider = DatafusionCliObjectStoreProvider {};
-        let err = provider
+        let registry = DatafusionCliObjectStoreRegistry::new();
+        let err = registry
             .get_by_url(&Url::from_str(no_host_url).unwrap())
             .unwrap_err();
         assert!(err
@@ -134,8 +170,8 @@ mod tests {
     #[test]
     fn unknown_object_store_type() {
         let unknown = "unknown://bucket_name/path";
-        let provider = DatafusionCliObjectStoreProvider {};
-        let err = provider
+        let registry = DatafusionCliObjectStoreRegistry::new();
+        let err = registry
             .get_by_url(&Url::from_str(unknown).unwrap())
             .unwrap_err();
         assert!(err
@@ -146,15 +182,15 @@ mod tests {
     #[test]
     fn s3_region_validation() {
         let s3 = "s3://bucket_name/path";
-        let provider = DatafusionCliObjectStoreProvider {};
-        let err = provider
+        let registry = DatafusionCliObjectStoreRegistry::new();
+        let err = registry
             .get_by_url(&Url::from_str(s3).unwrap())
             .unwrap_err();
         assert!(err.to_string().contains("Generic S3 error: Missing region"));
 
         env::set_var("AWS_REGION", "us-east-1");
         let url = Url::from_str(s3).expect("Unable to parse s3 url");
-        let res = provider.get_by_url(&url);
+        let res = registry.get_by_url(&url);
         let msg = match res {
             Err(e) => format!("{e}"),
             Ok(_) => "".to_string(),
