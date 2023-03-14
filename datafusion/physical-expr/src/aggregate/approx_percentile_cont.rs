@@ -367,6 +367,11 @@ impl Accumulator for ApproxPercentileAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
+        if self.digest.count() == 0.0 {
+            return Err(DataFusionError::Execution(
+                "aggregate function needs at least one non-null element".to_string(),
+            ));
+        }
         let q = self.digest.estimate_quantile(self.percentile);
 
         // These acceptable return types MUST match the validation in
