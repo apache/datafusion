@@ -25,6 +25,6 @@ set datafusion.optimizer.repartition_joins = false;
 
 include ./join.slt
 
-# default config is 'true'
+# turn on repartition_joins
 statement ok
 set datafusion.optimizer.repartition_joins = true;
