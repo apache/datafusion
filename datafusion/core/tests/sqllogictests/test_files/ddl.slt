@@ -553,3 +553,15 @@ set datafusion.sql_parser.parse_float_as_decimal = false;
 
 statement ok
 set datafusion.sql_parser.enable_ident_normalization = true;
+
+
+statement ok
+create table foo(x int);
+
+statement ok
+insert into foo values (null);
+
+query I
+select * from foo;
+----
+NULL

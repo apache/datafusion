@@ -35,8 +35,9 @@ use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DescribeTable, DmlStatement, DropTable, DropView, Explain, ExprSchemable, Filter,
-    LogicalPlan, LogicalPlanBuilder, PlanType, SetVariable, ToStringifiedPlan, WriteOp,
+    DescribeTable, DmlStatement, DropTable, DropView, EmptyRelation, Explain,
+    ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, PlanType, SetVariable,
+    ToStringifiedPlan, WriteOp,
 };
 use sqlparser::ast;
 use sqlparser::ast::{
@@ -44,6 +45,7 @@ use sqlparser::ast::{
     SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableFactor,
     TableWithJoins, UnaryOperator, Value,
 };
+
 use sqlparser::parser::ParserError::ParserError;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -114,7 +116,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             } => self.set_variable_to_plan(local, hivevar, &variable, value),
 
             Statement::CreateTable {
-                query: Some(query),
+                query,
                 name,
                 columns,
                 constraints,
@@ -127,42 +129,66 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 && table_properties.is_empty()
                 && with_options.is_empty() =>
             {
-                let plan = self.query_to_plan(*query, planner_context)?;
-                let input_schema = plan.schema();
+                match query {
+                    Some(query) => {
+                        let plan = self.query_to_plan(*query, planner_context)?;
+                        let input_schema = plan.schema();
 
-                let plan = if !columns.is_empty() {
-                    let schema = self.build_schema(columns)?.to_dfschema_ref()?;
-                    if schema.fields().len() != input_schema.fields().len() {
-                        return Err(DataFusionError::Plan(format!(
+                        let plan = if !columns.is_empty() {
+                            let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+                            if schema.fields().len() != input_schema.fields().len() {
+                                return Err(DataFusionError::Plan(format!(
                             "Mismatch: {} columns specified, but result has {} columns",
                             schema.fields().len(),
                             input_schema.fields().len()
                         )));
-                    }
-                    let input_fields = input_schema.fields();
-                    let project_exprs = schema
-                        .fields()
-                        .iter()
-                        .zip(input_fields)
-                        .map(|(field, input_field)| {
-                            cast(col(input_field.name()), field.data_type().clone())
-                                .alias(field.name())
-                        })
-                        .collect::<Vec<_>>();
-                    LogicalPlanBuilder::from(plan.clone())
-                        .project(project_exprs)?
-                        .build()?
-                } else {
-                    plan
-                };
+                            }
+                            let input_fields = input_schema.fields();
+                            let project_exprs = schema
+                                .fields()
+                                .iter()
+                                .zip(input_fields)
+                                .map(|(field, input_field)| {
+                                    cast(
+                                        col(input_field.name()),
+                                        field.data_type().clone(),
+                                    )
+                                    .alias(field.name())
+                                })
+                                .collect::<Vec<_>>();
+                            LogicalPlanBuilder::from(plan.clone())
+                                .project(project_exprs)?
+                                .build()?
+                        } else {
+                            plan
+                        };
 
-                Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                    name: self.object_name_to_table_reference(name)?,
-                    input: Arc::new(plan),
-                    if_not_exists,
-                    or_replace,
-                }))
+                        Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+                            name: self.object_name_to_table_reference(name)?,
+                            input: Arc::new(plan),
+                            if_not_exists,
+                            or_replace,
+                        }))
+                    }
+
+                    None => {
+                        let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+                        let plan = EmptyRelation {
+                            produce_one_row: false,
+                            schema,
+                        };
+                        let plan = LogicalPlan::EmptyRelation(plan);
+
+                        Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+                            name: self.object_name_to_table_reference(name)?,
+                            input: Arc::new(plan),
+                            if_not_exists,
+                            or_replace,
+                        }))
+                    }
+                }
             }
+
             Statement::CreateView {
                 or_replace,
                 name,

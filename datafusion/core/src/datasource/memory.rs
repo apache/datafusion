@@ -170,13 +170,6 @@ impl TableProvider for MemTable {
         // Create a physical plan from the logical plan.
         let plan = state.create_physical_plan(input).await?;
 
-        // Check that the schema of the plan matches the schema of this table.
-        if !plan.schema().eq(&self.schema) {
-            return Err(DataFusionError::Plan(
-                "Inserting query must have the same schema with the table.".to_string(),
-            ));
-        }
-
         // Get the number of partitions in the plan and the table.
         let plan_partition_count = plan.output_partitioning().partition_count();
         let table_partition_count = self.batches.read().await.len();
