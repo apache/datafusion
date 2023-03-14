@@ -195,13 +195,13 @@ fn _regexp_replace_early_abort<T: OffsetSizeTrait>(
     input_array: &GenericStringArray<T>,
 ) -> Result<ArrayRef> {
     // Mimicking the existing behavior of regexp_replace, if any of the scalar arguments
-    // are actuall null, then the result will be an array of the same size but with nulls.
+    // are actually null, then the result will be an array of the same size but with nulls.
     //
     // Also acts like an early abort mechanism when the input array is empty.
     Ok(new_null_array(input_array.data_type(), input_array.len()))
 }
 
-/// Special cased regex_replace implementation for the scenerio where
+/// Special cased regex_replace implementation for the scenario where
 /// the pattern, replacement and flags are static (arrays that are derived
 /// from scalars). This means we can skip regex caching system and basically
 /// hold a single Regex object for the replace operation. This also speeds
@@ -267,8 +267,8 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
         string_array.len(),
         string_array
             .data_ref()
-            .null_buffer()
-            .map(|b| b.bit_slice(string_array.offset(), string_array.len())),
+            .nulls()
+            .map(|nulls| nulls.inner().sliced()),
         0,
         vec![new_offsets.finish(), vals.finish()],
         vec![],
@@ -491,7 +491,7 @@ mod tests {
     #[test]
     fn test_static_pattern_regexp_replace_pattern_error() {
         let values = StringArray::from(vec!["abc"; 5]);
-        // Delibaretely using an invalid pattern to see how the single pattern
+        // Deliberately using an invalid pattern to see how the single pattern
         // error is propagated on regexp_replace.
         let patterns = StringArray::from(vec!["["; 5]);
         let replacements = StringArray::from(vec!["foo"; 5]);
