@@ -662,7 +662,6 @@ pub mod udaf;
 pub mod union;
 pub mod unnest;
 pub mod values;
-pub mod visitable;
 pub mod windows;
 
 use crate::execution::context::TaskContext;

@@ -17,6 +17,8 @@
 
 //! This module provides common traits for visiting or rewriting tree nodes easily.
 
+pub mod visitable;
+
 use datafusion_common::Result;
 
 /// Implements the [visitor
@@ -53,8 +55,23 @@ pub trait TreeNodeVisitor: Sized {
 
 /// trait for types that can be visited by [`TreeNodeVisitor`]
 pub trait TreeNodeVisitable: Sized {
-    /// accept a visitor, calling `visit` on all children of this
-    fn accept<V: TreeNodeVisitor<N = Self>>(&self, visitor: V) -> Result<V>;
+    /// Return the children of this tree node
+    fn get_children(&self) -> Vec<Self>;
+
+    /// Accept a visitor, calling `visit` on all children of this
+    fn accept<V: TreeNodeVisitor<N = Self>>(&self, visitor: V) -> Result<V> {
+        let mut visitor = match visitor.pre_visit(self)? {
+            VisitRecursion::Continue(visitor) => visitor,
+            // If the recursion should stop, do not visit children
+            VisitRecursion::Stop(visitor) => return Ok(visitor),
+        };
+
+        for child in self.get_children() {
+            visitor = child.accept(visitor)?;
+        }
+
+        visitor.post_visit(self)
+    }
 }
 
 /// Controls how the visitor recursion should proceed.

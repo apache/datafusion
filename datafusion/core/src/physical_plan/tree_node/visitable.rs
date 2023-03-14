@@ -15,31 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! ExecutionPlan visitor
+//! Tree node visitable implementations
 
-use crate::physical_plan::tree_node::{
-    TreeNodeVisitable, TreeNodeVisitor, VisitRecursion,
-};
+use crate::physical_plan::tree_node::TreeNodeVisitable;
 use crate::physical_plan::ExecutionPlan;
 use std::sync::Arc;
 
 impl TreeNodeVisitable for Arc<dyn ExecutionPlan> {
-    /// Performs a depth first walk of a node and
-    /// its children, see [`TreeNodeVisitor`] for more details
-    fn accept<V: TreeNodeVisitor<N = Arc<dyn ExecutionPlan>>>(
-        &self,
-        visitor: V,
-    ) -> datafusion_common::Result<V> {
-        let mut visitor = match visitor.pre_visit(self)? {
-            VisitRecursion::Continue(visitor) => visitor,
-            // If the recursion should stop, do not visit children
-            VisitRecursion::Stop(visitor) => return Ok(visitor),
-        };
-
-        for child in self.children() {
-            visitor = child.accept(visitor)?;
-        }
-
-        visitor.post_visit(self)
+    fn get_children(&self) -> Vec<Self> {
+        self.children()
     }
 }
