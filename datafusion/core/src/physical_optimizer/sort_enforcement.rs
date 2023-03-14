@@ -47,7 +47,7 @@ use crate::physical_plan::windows::{
     BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
 };
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
-use datafusion_common::{reverse_sort_options, DataFusionError};
+use datafusion_common::DataFusionError;
 use datafusion_physical_expr::utils::{
     convert_to_expr, get_indices_of_matching_exprs, ordering_satisfy,
     ordering_satisfy_concrete,
@@ -563,14 +563,12 @@ fn analyze_window_sort_removal(
             "Expects to receive either WindowAggExec of BoundedWindowAggExec".to_string(),
         ));
     };
+    let sort_keys = sort_keys.as_deref().unwrap_or(&[]);
+
+    // Find order by columns among sort_keys.
     let mut orderby_sort_keys = vec![];
     for item in window_expr[0].order_by() {
-        if let Some(elem) = sort_keys
-            .as_deref()
-            .unwrap_or(&[])
-            .iter()
-            .find(|e| e.expr.eq(&item.expr))
-        {
+        if let Some(elem) = sort_keys.iter().find(|e| e.expr.eq(&item.expr)) {
             orderby_sort_keys.push(elem.clone());
         }
     }
@@ -620,27 +618,27 @@ fn analyze_window_sort_removal(
                 partition_search_mode,
             )?) as _
         } else {
-            match (partition_search_mode, sort_keys) {
-                (PartitionSearchMode::Linear, Some(sort_keys)) => {
-                    // For `WindowAggExec` to work correctly POARTITION BY columns should be sorted.
-                    // Hence if `PartitionSearchMode` is `Linear` we should satisfy required ordering.
-                    // Effectively `WindowAggExec` works only in PartitionSearchMode::Sorted mode.
-                    add_sort_above(&mut new_child, sort_keys.clone())?;
-                    Arc::new(WindowAggExec::try_new(
-                        window_expr,
-                        new_child,
-                        new_schema,
-                        partition_keys.to_vec(),
-                        Some(sort_keys.clone()),
-                    )?) as _
-                }
-                (_, _) => Arc::new(WindowAggExec::try_new(
+            match partition_search_mode {
+                PartitionSearchMode::Sorted => Arc::new(WindowAggExec::try_new(
                     window_expr,
                     new_child,
                     new_schema,
                     partition_keys.to_vec(),
                     physical_ordering,
                 )?) as _,
+                _ => {
+                    // For `WindowAggExec` to work correctly PARTITION BY columns should be sorted.
+                    // Hence if `PartitionSearchMode` is not `Sorted` we should satisfy required ordering.
+                    // Effectively `WindowAggExec` works only in PartitionSearchMode::Sorted mode.
+                    add_sort_above(&mut new_child, sort_keys.to_vec())?;
+                    Arc::new(WindowAggExec::try_new(
+                        window_expr,
+                        new_child,
+                        new_schema,
+                        partition_keys.to_vec(),
+                        Some(sort_keys.to_vec()),
+                    )?) as _
+                }
             }
         };
         return Ok(Some(PlanWithCorrespondingSort::new(new_plan)));
@@ -670,31 +668,32 @@ fn can_skip_ordering(
             let orderby_exprs = convert_to_expr(orderby_keys);
             let physical_ordering_exprs = convert_to_expr(physical_ordering);
             let equal_properties = || sort_input.equivalence_properties();
-            let orderby_indices = get_indices_of_matching_exprs(
+            // indices of the order by expressions among input ordering expressions
+            let ob_indices = get_indices_of_matching_exprs(
                 &orderby_exprs,
                 &physical_ordering_exprs,
                 equal_properties,
             );
-            let partitionby_indices = get_indices_of_matching_exprs(
+            // indices of the partition by expressions among input ordering expressions
+            let pb_indices = get_indices_of_matching_exprs(
                 partitionby_exprs,
                 &physical_ordering_exprs,
                 equal_properties,
             );
             let ordered_merged_indices =
-                get_ordered_merged_indices(&partitionby_indices, &orderby_indices);
+                get_ordered_merged_indices(&pb_indices, &ob_indices);
             let is_merge_consecutive = is_consecutive_from_zero(&ordered_merged_indices);
             let all_partition =
-                compare_set_equality(&ordered_merged_indices, &partitionby_indices);
-            let contains_all_orderbys = orderby_indices.len() == orderby_keys.len();
-            let col_indices_only_at_orderby =
-                get_set_diff_indices(&orderby_indices, &partitionby_indices);
-            let is_orderby_diff_consecutive =
-                is_consecutive(&col_indices_only_at_orderby);
+                compare_set_equality(&ordered_merged_indices, &pb_indices);
+            let contains_all_orderbys = ob_indices.len() == orderby_keys.len();
+            // Indices of order by columns that doesn't seen in partition by
+            let unique_ob_indices = get_set_diff_indices(&ob_indices, &pb_indices);
+            let is_unique_ob_indices_consecutive = is_consecutive(&unique_ob_indices);
             let input_orderby_columns =
-                get_at_indices(physical_ordering, &col_indices_only_at_orderby)?;
+                get_at_indices(physical_ordering, &unique_ob_indices)?;
             let expected_orderby_columns = get_at_indices(
                 orderby_keys,
-                &find_match_indices(&col_indices_only_at_orderby, &orderby_indices),
+                &find_match_indices(&unique_ob_indices, &ob_indices),
             )?;
             let schema = sort_input.schema();
             let nullables = input_orderby_columns
@@ -720,7 +719,7 @@ fn can_skip_ordering(
             )
             .all(|(input, expected, is_nullable)| {
                 if *is_nullable {
-                    input.options == reverse_sort_options(expected.options)
+                    input.options == !expected.options
                 } else {
                     // have reversed direction
                     input.options.descending != expected.options.descending
@@ -729,42 +728,34 @@ fn can_skip_ordering(
             let is_aligned = is_same_ordering || should_reverse;
 
             // Determine If 0th column in the sort_keys comes from partition by
-            let is_first_partition_by = partitionby_indices.contains(&0);
-            let can_skip_sort = (is_merge_consecutive
-                || (all_partition && is_first_partition_by))
+            let is_first_pb = pb_indices.contains(&0);
+            let can_skip_sort = (is_merge_consecutive || (all_partition && is_first_pb))
                 && contains_all_orderbys
                 && is_aligned
-                && is_orderby_diff_consecutive;
+                && is_unique_ob_indices_consecutive;
             if !can_skip_sort {
                 return Ok(None);
             }
 
-            let ordered_partitionby_indices = partitionby_indices
-                .iter()
-                .copied()
-                .sorted()
-                .collect::<Vec<_>>();
-            let partition_by_consecutive =
-                is_consecutive_from_zero(&ordered_partitionby_indices);
-            let contains_all_partition_bys =
-                partitionby_indices.len() == partitionby_exprs.len();
-            let mode = if (is_first_partition_by
-                && partition_by_consecutive
-                && contains_all_partition_bys)
+            let ordered_pb_indices =
+                pb_indices.iter().copied().sorted().collect::<Vec<_>>();
+            let is_pb_consecutive = is_consecutive_from_zero(&ordered_pb_indices);
+            let contains_all_partition_bys = pb_indices.len() == partitionby_exprs.len();
+            let mode = if (is_first_pb && is_pb_consecutive && contains_all_partition_bys)
                 || partitionby_exprs.is_empty()
             {
-                let first_n = calc_ordering_range(&ordered_partitionby_indices);
+                let first_n = calc_ordering_range(&ordered_pb_indices);
                 assert_eq!(first_n, partitionby_exprs.len());
                 PartitionSearchMode::Sorted
-            } else if is_first_partition_by {
-                let first_n = calc_ordering_range(&ordered_partitionby_indices);
+            } else if is_first_pb {
+                let first_n = calc_ordering_range(&ordered_pb_indices);
                 assert!(first_n < partitionby_exprs.len());
                 PartitionSearchMode::PartiallySorted
             } else {
                 PartitionSearchMode::Linear
             };
 
-            // Linear and PartitallySorted implementations are not beneficial for finite source cases
+            // Linear and PartiallySorted implementations are not beneficial for finite source cases
             // (e.g non-streaming). Hence use these implementations only in streaming case to not break pipeline.
             if !is_unbounded && !matches!(mode, PartitionSearchMode::Sorted) {
                 return Ok(None);

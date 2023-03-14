@@ -68,13 +68,13 @@ use indexmap::IndexMap;
 use log::debug;
 
 #[derive(Debug, Clone, PartialEq)]
-/// Specifies partition column propoerties in terms of input ordering
+/// Specifies partition column properties in terms of input ordering
 pub enum PartitionSearchMode {
-    /// None of the columns of the partition columns is ordered.
+    /// None of the columns among the partition columns is ordered.
     Linear,
     /// Some columns of the partition columns are ordered but not all
     PartiallySorted,
-    /// All Partition columns are ordered
+    /// All Partition columns are ordered (Also empty case)
     Sorted,
 }
 
@@ -98,6 +98,11 @@ pub struct BoundedWindowAggExec {
     /// Partition by mode
     partition_search_mode: PartitionSearchMode,
     /// Partition by indices that define ordering
+    // For example, if input ordering is ORDER BY a,b
+    // and window expression contains PARTITION BY b,a
+    // `ordered_partition_by_indices` would be 1, 0.
+    // Similarly, if window expression contains PARTITION BY a,b
+    // `ordered_partition_by_indices` would be 0, 1.
     ordered_partition_by_indices: Vec<usize>,
 }
 
@@ -351,21 +356,20 @@ trait PartitionSearcher: Send {
             let partition_batches =
                 self.evaluate_partition_batches(&record_batch, window_expr)?;
             for (partition_row, partition_batch) in partition_batches {
-                if let Some(partition_batch_state) =
-                    partition_buffers.get_mut(&partition_row)
-                {
-                    partition_batch_state.record_batch = concat_batches(
-                        &record_batch.schema(),
-                        [&partition_batch_state.record_batch, &partition_batch],
-                    )?;
-                } else {
-                    let partition_batch_state = PartitionBatchState {
-                        record_batch: partition_batch,
-                        is_end: false,
-                        n_out_row: 0,
-                    };
-                    partition_buffers.insert(partition_row, partition_batch_state);
-                };
+                let partition_batch_state =
+                    partition_buffers.entry(partition_row).or_insert_with(|| {
+                        let empty_batch =
+                            RecordBatch::new_empty(partition_batch.schema());
+                        PartitionBatchState {
+                            record_batch: empty_batch,
+                            is_end: false,
+                            n_out_row: 0,
+                        }
+                    });
+                partition_batch_state.record_batch = concat_batches(
+                    &partition_batch.schema(),
+                    [&partition_batch_state.record_batch, &partition_batch],
+                )?;
             }
         }
         self.mark_partition_end(partition_buffers);
@@ -382,7 +386,7 @@ trait PartitionSearcher: Send {
 
 pub struct LinearSearch {
     // Keeps the hash of input buffer calculated from the PARTITION BY columns
-    // its length is equal to the RecordBatch length.
+    // its length is equal to the `input_buffer` length.
     input_buffer_hashes: Vec<u64>,
     // Used during hash value calculation
     random_state: RandomState,
@@ -391,6 +395,9 @@ pub struct LinearSearch {
     // For instance, if input is ordered by a,b and window expression is
     // PARTITION BY b,a this stores (1, 0).
     ordered_partition_by_indices: Vec<usize>,
+    // Linear search has two version: PartiallySorted and Linear (e.g Unsorted)
+    // the only difference is that in PartiallySorted we can prune some partitions
+    // This flag enables check for additional pruning.
     is_partially_sorted: bool,
 }
 
@@ -432,7 +439,9 @@ impl PartitionSearcher for LinearSearch {
             return Ok(None);
         }
 
-        // Concat results for each column
+        // Concat results for each column.
+        // Converts Vec<Vec<ArrayRef>> to Vec<ArrayRef> where inner Vec<ArrayRef>
+        // is converted to ArrayRef.
         let new_columns = new_columns
             .iter()
             .map(|elems| {
@@ -476,6 +485,7 @@ impl PartitionSearcher for LinearSearch {
     }
 
     fn prune(&mut self, n_out: usize) -> Result<()> {
+        // Delete hashes for the rows that are outputted.
         self.input_buffer_hashes.drain(0..n_out);
         Ok(())
     }
@@ -495,6 +505,9 @@ impl PartitionSearcher for LinearSearch {
                         .iter()
                         .map(|idx| row[*idx].clone())
                         .collect::<Vec<_>>();
+                    // All the partition other than last_sorted_cols can be marked as end.
+                    // We are sure that we will no longer receive value for these partitions
+                    // (Receiving new value would violate ordering invariant)
                     if sorted_cols != last_sorted_cols {
                         // It is guaranteed that we will no longer receive value for these partitions
                         partition_batch_state.is_end = true;
@@ -535,17 +548,21 @@ impl LinearSearch {
         create_hashes(columns, &self.random_state, &mut batch_hashes)?;
         self.input_buffer_hashes.extend_from_slice(&batch_hashes);
         let mut row_map: RawTable<(u64, usize)> = RawTable::with_capacity(0);
-        // res stores indices for each partition.
+        // res stores PartitionKey and row indices (indices where these partition occurs in the `batch`) for each partition.
         let mut res: Vec<(PartitionKey, Vec<usize>)> = vec![];
         for (row_idx, hash) in batch_hashes.into_iter().enumerate() {
             let entry = row_map.get_mut(hash, |(_hash, group_idx)| {
+                // In case of hash collusion. Get the partition where PartitionKey is same.
+                // We can safely get first index of the partition indices (During initialization one partition indices has size 1)
                 equal_rows(row_idx, res[*group_idx].1[0], columns, columns, true).unwrap()
             });
             match entry {
+                // Existing partition. Update indices for the corresponding partition.
                 Some((_hash, group_idx)) => res[*group_idx].1.push(row_idx),
                 None => {
                     row_map.insert(hash, (hash, res.len()), |(hash, _group_index)| *hash);
                     let row = get_row_at_idx(columns, row_idx)?;
+                    // This is a new partition its only index is row_idx for now.
                     res.push((row, vec![row_idx]));
                 }
             }
@@ -562,14 +579,12 @@ impl LinearSearch {
     ) -> Result<Vec<(Vec<ScalarValue>, Vec<usize>)>> {
         let partition_by_columns =
             self.evaluate_partition_by_column_values(input_buffer, window_expr)?;
-        // `row_map` stores hash id, partition index starting from 0 to n(In the returned vector), and how many outputs each partition can emit.
+        // `row_map` stores hash id, partition index starting from 0, and how many outputs each partition can emit.
         // partition index corresponds to index of the partition in the vector `partition_indices`
         let mut row_map: RawTable<(u64, usize, usize)> = RawTable::with_capacity(0);
         // `partition_indices` store vector of tuple. First entry is the partition key (unique for each partition)
         // second entry is indices of the rows which partition is constructed in the input record batch
-        // Third entry is the how many outputs are generated for the partition.
         let mut partition_indices: Vec<(Vec<ScalarValue>, Vec<usize>)> = vec![];
-        assert_eq!(input_buffer.num_rows(), self.input_buffer_hashes.len());
         for (row_idx, hash) in self.input_buffer_hashes.iter().enumerate() {
             let entry = row_map.get_mut(*hash, |(_hash, group_idx, _n_out)| {
                 let row = get_row_at_idx(&partition_by_columns, row_idx).unwrap();
@@ -612,6 +627,7 @@ impl LinearSearch {
 }
 
 pub struct SortedSearch {
+    // Stores partition by columns and their ordering information
     partition_by_sort_keys: Vec<PhysicalSortExpr>,
     // Input ordering and partition by key ordering may not always same
     // this vector stores the mapping between them.
@@ -654,17 +670,13 @@ impl PartitionSearcher for SortedSearch {
     ) -> Result<Vec<(Vec<ScalarValue>, RecordBatch)>> {
         let mut res = vec![];
         let num_rows = record_batch.num_rows();
-        // In Sorted case all partition by columns should have ordering, otherwise we cannot
-        // determine boundaries
-        assert_eq!(
-            self.partition_by_sort_keys.len(),
-            self.ordered_partition_by_indices.len()
-        );
+        // Calculate result of partition by column expressions
         let partition_columns = self
             .partition_by_sort_keys
             .iter()
             .map(|elem| elem.evaluate_to_sort_column(record_batch))
             .collect::<Result<Vec<_>>>()?;
+        // Reorder `partition_columns` such that its ordering matches input ordering.
         let partition_columns_ordered =
             get_at_indices(&partition_columns, &self.ordered_partition_by_indices)?;
         let partition_points =
@@ -683,6 +695,9 @@ impl PartitionSearcher for SortedSearch {
     }
 
     fn mark_partition_end(&mut self, partition_buffers: &mut PartitionBatches) {
+        // In Sorted case. We can mark all partitions besides last partition as ended.
+        // We are sure that those partitions will never receive any values.
+        // (Otherwise ordering invariant is violated.)
         let n_partitions = partition_buffers.len();
         for (idx, (_, partition_batch_state)) in partition_buffers.iter_mut().enumerate()
         {
@@ -692,7 +707,7 @@ impl PartitionSearcher for SortedSearch {
 }
 
 impl SortedSearch {
-    /// Calculates how many rows [SortedPartitionByBoundedWindowStream]
+    /// Calculates how many rows [SortedSearch]
     /// can produce as output.
     fn calculate_n_out_row(
         &mut self,
@@ -729,16 +744,10 @@ impl SortedSearch {
                 cur_window_expr_out_result_len
             })
             .collect::<Vec<_>>();
-        if let Some(min_idx) = out_col_counts
-            .iter()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(Ordering::Equal))
-            .map(|(index, _)| index)
-        {
+        if let Some(min_idx) = argmin(&out_col_counts) {
             let err =
                 || DataFusionError::Execution("Expects to have partition".to_string());
-            let per_partition_out_results = &counts[min_idx];
-            for (row, count) in per_partition_out_results.iter() {
+            for (row, count) in counts[min_idx].iter() {
                 let partition_batch = partition_buffers.get_mut(row).ok_or_else(err)?;
                 partition_batch.n_out_row = *count;
             }
@@ -766,6 +775,7 @@ impl SortedSearch {
     }
 }
 
+// Given search mode initialize and return search alogrithm.
 fn get_search_algo(
     search_mode: &PartitionSearchMode,
     partition_by_sort_keys: Vec<PhysicalSortExpr>,
@@ -777,14 +787,13 @@ fn get_search_algo(
             ordered_partition_by_indices,
         }),
         PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted => {
+            let is_partially_sorted =
+                matches!(search_mode, PartitionSearchMode::PartiallySorted);
             Box::new(LinearSearch {
                 input_buffer_hashes: vec![],
                 random_state: Default::default(),
                 ordered_partition_by_indices,
-                is_partially_sorted: matches!(
-                    search_mode,
-                    PartitionSearchMode::PartiallySorted
-                ),
+                is_partially_sorted,
             })
         }
     }
@@ -847,6 +856,7 @@ impl BoundedWindowAggStream {
         self.prune_partition_batches()?;
         // Prune `self.input_buffer`:
         self.prune_input_batch(n_out)?;
+        // Prune internal state of search algorithm.
         self.search_mode.prune(n_out)?;
         Ok(())
     }
@@ -953,8 +963,6 @@ impl BoundedWindowAggStream {
     /// Prunes the sections of the record batch (for each partition)
     /// that we no longer need to calculate the window function result.
     fn prune_partition_batches(&mut self) -> Result<()> {
-        // Implementation is same for Linear and Sorted Versions
-
         // Remove partitions which we know already ended (is_end flag is true).
         // Since the retain method preserves insertion order, we still have
         // ordering in between partitions after removal.
@@ -1022,7 +1030,7 @@ impl BoundedWindowAggStream {
     /// Prunes the section of the input batch whose aggregate results
     /// are calculated and emitted.
     fn prune_input_batch(&mut self, n_out: usize) -> Result<()> {
-        // Implementation is same for both Linear and Sorted version
+        // Prune first n_out rows from the input_buffer
         let n_to_keep = self.input_buffer.num_rows() - n_out;
         let batch_to_keep = self
             .input_buffer
@@ -1075,12 +1083,24 @@ impl RecordBatchStream for BoundedWindowAggStream {
     }
 }
 
-pub fn argsort<T: Ord>(data: &[T]) -> Vec<usize> {
+// similar to numpy argsort
+fn argsort<T: Ord>(data: &[T]) -> Vec<usize> {
     let mut indices = (0..data.len()).collect::<Vec<_>>();
     indices.sort_by_key(|&i| &data[i]);
     indices
 }
 
+// get the index of minimum entry. If empty return None.
+fn argmin<T: PartialOrd>(data: &[T]) -> Option<usize> {
+    let index_of_min: Option<usize> = data
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(Ordering::Equal))
+        .map(|(index, _)| index);
+    index_of_min
+}
+
+// Construct a new RecordBatch from the rows of the `record_batch` at the `indices`.
 fn get_record_batch_at_indices(
     record_batch: &RecordBatch,
     indices: &[usize],
@@ -1090,6 +1110,7 @@ fn get_record_batch_at_indices(
         .map_err(DataFusionError::ArrowError)
 }
 
+// Construct a new Vec<ArrayRef> from the rows of the `arrays` at the `indices`.
 fn get_arrayref_at_indices(
     arrays: &[ArrayRef],
     indices: &[usize],

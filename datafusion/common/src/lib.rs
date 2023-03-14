@@ -31,7 +31,6 @@ mod table_reference;
 pub mod test_util;
 pub mod utils;
 
-use arrow::compute::SortOptions;
 pub use column::Column;
 pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema};
 pub use error::{field_not_found, DataFusionError, Result, SchemaError, SharedResult};
@@ -64,13 +63,4 @@ macro_rules! downcast_value {
             ))
         })?
     }};
-}
-
-/// Computes the "reverse" of given `SortOptions`.
-// TODO: If/when arrow supports `!` for `SortOptions`, we can remove this.
-pub fn reverse_sort_options(options: SortOptions) -> SortOptions {
-    SortOptions {
-        descending: !options.descending,
-        nulls_first: !options.nulls_first,
-    }
 }
