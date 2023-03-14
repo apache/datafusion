@@ -34,7 +34,7 @@ use crate::physical_plan::joins::{
     convert_sort_expr_with_filter_schema, HashJoinExec, PartitionMode,
     SymmetricHashJoinExec,
 };
-use crate::physical_plan::rewrite::TreeNodeRewritable;
+use crate::physical_plan::tree_node::TreeNodeRewritable;
 use crate::physical_plan::ExecutionPlan;
 use datafusion_common::DataFusionError;
 use datafusion_expr::logical_plan::JoinType;

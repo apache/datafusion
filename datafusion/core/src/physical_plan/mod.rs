@@ -653,7 +653,6 @@ pub mod metrics;
 pub mod planner;
 pub mod projection;
 pub mod repartition;
-pub mod rewrite;
 pub mod sorts;
 pub mod stream;
 pub mod streaming;
