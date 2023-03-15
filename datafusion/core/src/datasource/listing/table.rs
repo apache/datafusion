@@ -44,7 +44,6 @@ use crate::datasource::{
 };
 use crate::logical_expr::TableProviderFilterPushDown;
 use crate::physical_plan;
-use crate::physical_plan::file_format::partition_type_wrap;
 use crate::{
     error::{DataFusionError, Result},
     execution::context::SessionState,
@@ -330,6 +329,8 @@ impl ListingOptions {
     ///
     /// # Example
     ///
+    /// You may use [`wrap_partition_type_in_dict`] to request a dictionary-encoded type.
+    ///
     /// ```
     /// # use std::sync::Arc;
     /// # use arrow::datatypes::DataType;
@@ -349,6 +350,7 @@ impl ListingOptions {
     /// ```
     ///
     /// [Hive Partitioning]: https://docs.cloudera.com/HDPDocuments/HDP2/HDP-2.1.3/bk_system-admin-guide/content/hive_partitioned_tables.html
+    /// [`wrap_partition_type_in_dict`]: crate::physical_plan::file_format::wrap_partition_type_in_dict
     pub fn with_table_partition_cols(
         mut self,
         table_partition_cols: Vec<(String, DataType)>,
@@ -572,11 +574,7 @@ impl ListingTable {
         // Add the partition columns to the file schema
         let mut table_fields = file_schema.fields().clone();
         for (part_col_name, part_col_type) in &options.table_partition_cols {
-            table_fields.push(Field::new(
-                part_col_name,
-                partition_type_wrap(part_col_type.clone()),
-                false,
-            ));
+            table_fields.push(Field::new(part_col_name, part_col_type.clone(), false));
         }
         let infinite_source = options.infinite_source;
 
@@ -1046,10 +1044,7 @@ mod tests {
 
         let opt = ListingOptions::new(Arc::new(AvroFormat {}))
             .with_file_extension(FileType::AVRO.get_ext())
-            .with_table_partition_cols(vec![(
-                String::from("p1"),
-                partition_type_wrap(DataType::Utf8),
-            )])
+            .with_table_partition_cols(vec![(String::from("p1"), DataType::Utf8)])
             .with_target_partitions(4);
 
         let table_path = ListingTableUrl::parse("test:///table/").unwrap();

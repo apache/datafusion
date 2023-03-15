@@ -84,6 +84,30 @@ datafusion information_schema views VIEW
 datafusion public t BASE TABLE
 datafusion public t2 BASE TABLE
 
+query TTTT rowsort
+SELECT * from information_schema.tables WHERE tables.table_schema='information_schema';
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+
+query TTTT rowsort
+SELECT * from information_schema.tables WHERE information_schema.tables.table_schema='information_schema';
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+
+query TTTT rowsort
+SELECT * from information_schema.tables WHERE datafusion.information_schema.tables.table_schema='information_schema';
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+
 # Cleanup
 statement ok
 drop table t

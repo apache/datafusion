@@ -24,7 +24,7 @@ use crate::expr_rewriter::{
 };
 use crate::type_coercion::binary::comparison_coercion;
 use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields, from_plan};
-use crate::{and, binary_expr, Operator};
+use crate::{and, binary_expr, DmlStatement, Operator, WriteOp};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
@@ -40,8 +40,8 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-    ToDFSchema,
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
+    ScalarValue, ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -176,8 +176,7 @@ impl LogicalPlanBuilder {
             .map(|(j, data_type)| {
                 // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
                 let name = &format!("column{}", j + 1);
-                DFField::new(
-                    None,
+                DFField::new_unqualified(
                     name,
                     data_type.clone().unwrap_or(DataType::Utf8),
                     true,
@@ -199,6 +198,21 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         Self::scan_with_filters(table_name, table_source, projection, vec![])
+    }
+
+    /// Create a [DmlStatement] for inserting the contents of this builder into the named table
+    pub fn insert_into(
+        input: LogicalPlan,
+        table_name: impl Into<OwnedTableReference>,
+        table_schema: &Schema,
+    ) -> Result<Self> {
+        let table_schema = table_schema.clone().to_dfschema_ref()?;
+        Ok(Self::from(LogicalPlan::Dml(DmlStatement {
+            table_name: table_name.into(),
+            table_schema,
+            op: WriteOp::Insert,
+            input: Arc::new(input),
+        })))
     }
 
     /// Convert a table provider into a builder with a TableScan
@@ -224,7 +238,10 @@ impl LogicalPlanBuilder {
                 DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
-                            DFField::from_qualified(&table_name, schema.field(*i).clone())
+                            DFField::from_qualified(
+                                table_name.to_string(),
+                                schema.field(*i).clone(),
+                            )
                         })
                         .collect(),
                     schema.metadata().clone(),
@@ -1090,7 +1107,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
                     })?;
 
             Ok(DFField::new(
-                left_field.qualifier().map(|x| x.as_ref()),
+                left_field.qualifier().cloned(),
                 left_field.name(),
                 data_type,
                 nullable,
@@ -1276,7 +1293,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
         DataType::List(field)
         | DataType::FixedSizeList(field, _)
         | DataType::LargeList(field) => DFField::new(
-            unnest_field.qualifier().map(String::as_str),
+            unnest_field.qualifier().cloned(),
             unnest_field.name(),
             field.data_type().clone(),
             unnest_field.is_nullable(),
@@ -1317,7 +1334,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
 mod tests {
     use crate::{expr, expr_fn::exists};
     use arrow::datatypes::{DataType, Field};
-    use datafusion_common::SchemaError;
+    use datafusion_common::{OwnedTableReference, SchemaError, TableReference};
 
     use crate::logical_plan::StringifiedPlan;
 
@@ -1592,10 +1609,13 @@ mod tests {
 
         match plan {
             Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
-                qualifier,
-                name,
+                field:
+                    Column {
+                        relation: Some(OwnedTableReference::Bare { table }),
+                        name,
+                    },
             })) => {
-                assert_eq!("employee_csv", qualifier.unwrap().as_str());
+                assert_eq!("employee_csv", table);
                 assert_eq!("id", &name);
                 Ok(())
             }
@@ -1618,10 +1638,13 @@ mod tests {
 
         match plan {
             Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
-                qualifier,
-                name,
+                field:
+                    Column {
+                        relation: Some(OwnedTableReference::Bare { table }),
+                        name,
+                    },
             })) => {
-                assert_eq!("employee_csv", qualifier.unwrap().as_str());
+                assert_eq!("employee_csv", table);
                 assert_eq!("state", &name);
                 Ok(())
             }
@@ -1722,7 +1745,7 @@ mod tests {
         // Check unnested field is a scalar
         let field = plan
             .schema()
-            .field_with_name(Some("test_table"), "strings")
+            .field_with_name(Some(&TableReference::bare("test_table")), "strings")
             .unwrap();
         assert_eq!(&DataType::Utf8, field.data_type());
 
@@ -1741,7 +1764,7 @@ mod tests {
         // Check unnested struct list field should be a struct.
         let field = plan
             .schema()
-            .field_with_name(Some("test_table"), "structs")
+            .field_with_name(Some(&TableReference::bare("test_table")), "structs")
             .unwrap();
         assert!(matches!(field.data_type(), DataType::Struct(_)));
 
