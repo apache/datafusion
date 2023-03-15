@@ -327,7 +327,7 @@ impl PhysicalOptimizerRule for EnforceSorting {
         } else {
             adjusted.plan
         };
-        // Execute a Top-Down process(Preorder Traversal) to ensure the sort requirements:
+        // Execute a Top-Down process (Preorder Traversal) to push down sorts if they are helpful:
         let sort_pushdown = SortPushDown::init(new_plan);
         let adjusted = sort_pushdown.transform_down(&pushdown_sorts)?;
         Ok(adjusted.plan)
@@ -1133,6 +1133,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_remove_unnecessary_sort1() -> Result<()> {
+        let schema = create_test_schema()?;
+        let source = memory_exec(&schema);
+        let sort_exprs = vec![sort_expr("nullable_col", &schema)];
+        let sort = sort_exec(sort_exprs.clone(), source);
+        let spm = sort_preserving_merge_exec(sort_exprs, sort);
+
+        let sort_exprs = vec![sort_expr("nullable_col", &schema)];
+        let sort = sort_exec(sort_exprs.clone(), spm);
+        let physical_plan = sort_preserving_merge_exec(sort_exprs, sort);
+        let expected_input = vec![
+            "SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "  SortExec: expr=[nullable_col@0 ASC], global=true",
+            "    SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "      SortExec: expr=[nullable_col@0 ASC], global=true",
+            "        MemoryExec: partitions=0, partition_sizes=[]",
+        ];
+        let expected_optimized = vec![
+            "SortExec: expr=[nullable_col@0 ASC], global=true",
+            "  MemoryExec: partitions=0, partition_sizes=[]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_remove_unnecessary_sort2() -> Result<()> {
         let schema = create_test_schema()?;
         let source = memory_exec(&schema);
@@ -1219,32 +1245,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_unnecessary_sort4() -> Result<()> {
-        let schema = create_test_schema()?;
-        let source = memory_exec(&schema);
-        let sort_exprs = vec![sort_expr("nullable_col", &schema)];
-        let sort = sort_exec(sort_exprs.clone(), source);
-        let spm = sort_preserving_merge_exec(sort_exprs, sort);
-
-        let sort_exprs = vec![sort_expr("nullable_col", &schema)];
-        let sort = sort_exec(sort_exprs.clone(), spm);
-        let physical_plan = sort_preserving_merge_exec(sort_exprs, sort);
-        let expected_input = vec![
-            "SortPreservingMergeExec: [nullable_col@0 ASC]",
-            "  SortExec: expr=[nullable_col@0 ASC], global=true",
-            "    SortPreservingMergeExec: [nullable_col@0 ASC]",
-            "      SortExec: expr=[nullable_col@0 ASC], global=true",
-            "        MemoryExec: partitions=0, partition_sizes=[]",
-        ];
-        let expected_optimized = vec![
-            "SortExec: expr=[nullable_col@0 ASC], global=true",
-            "  MemoryExec: partitions=0, partition_sizes=[]",
-        ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_remove_unnecessary_sort5() -> Result<()> {
         let schema = create_test_schema()?;
         let source1 = repartition_exec(memory_exec(&schema));
 

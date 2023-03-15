@@ -23,7 +23,7 @@ use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::tree_node::TreeNodeRewritable;
 use crate::physical_plan::union::UnionExec;
-use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
+use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
@@ -46,8 +46,6 @@ pub(crate) struct SortPushDown {
     pub plan: Arc<dyn ExecutionPlan>,
     /// Whether the plan could impact the final result ordering
     impact_result_ordering: bool,
-    /// Parent has the SinglePartition requirement to children
-    satisfy_single_distribution: bool,
     /// Parent required sort ordering
     required_ordering: Option<Vec<PhysicalSortRequirements>>,
     /// The adjusted request sort ordering to children.
@@ -64,7 +62,6 @@ impl SortPushDown {
         SortPushDown {
             plan,
             impact_result_ordering,
-            satisfy_single_distribution: false,
             required_ordering: None,
             adjusted_request_ordering: request_ordering,
         }
@@ -75,7 +72,6 @@ impl SortPushDown {
         SortPushDown {
             plan,
             impact_result_ordering: false,
-            satisfy_single_distribution: false,
             required_ordering: None,
             adjusted_request_ordering: request_ordering,
         }
@@ -89,27 +85,21 @@ impl SortPushDown {
             plan_children.into_iter(),
             self.adjusted_request_ordering.clone().into_iter(),
             self.plan.maintains_input_order().into_iter(),
-            self.plan.required_input_distribution().into_iter(),
         )
-        .map(
-            |(child, from_parent, maintains_input_order, required_dist)| {
-                let child_satisfy_single_distribution =
-                    matches!(required_dist, Distribution::SinglePartition);
-                let child_impact_result_ordering = if is_limit(&self.plan) {
-                    true
-                } else {
-                    maintains_input_order && self.impact_result_ordering
-                };
-                let child_request_ordering = child.required_input_ordering();
-                SortPushDown {
-                    plan: child,
-                    impact_result_ordering: child_impact_result_ordering,
-                    satisfy_single_distribution: child_satisfy_single_distribution,
-                    required_ordering: from_parent,
-                    adjusted_request_ordering: child_request_ordering,
-                }
-            },
-        )
+        .map(|(child, from_parent, maintains_input_order)| {
+            let child_impact_result_ordering = if is_limit(&self.plan) {
+                true
+            } else {
+                maintains_input_order && self.impact_result_ordering
+            };
+            let child_request_ordering = child.required_input_ordering();
+            SortPushDown {
+                plan: child,
+                impact_result_ordering: child_impact_result_ordering,
+                required_ordering: from_parent,
+                adjusted_request_ordering: child_request_ordering,
+            }
+        })
         .collect()
     }
 }
@@ -136,7 +126,6 @@ impl TreeNodeRewritable for SortPushDown {
             Ok(SortPushDown {
                 plan,
                 impact_result_ordering: self.impact_result_ordering,
-                satisfy_single_distribution: self.satisfy_single_distribution,
                 required_ordering: self.required_ordering,
                 adjusted_request_ordering: self.adjusted_request_ordering,
             })
