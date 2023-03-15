@@ -112,6 +112,11 @@ impl TreeNodeRewritable for SortPushDown {
 pub(crate) fn pushdown_sorts(requirements: SortPushDown) -> Result<Option<SortPushDown>> {
     let plan = &requirements.plan;
     let parent_required = requirements.required_ordering.as_deref();
+    let err = || {
+        DataFusionError::Execution(
+            "Expects parent requirement to contain something".to_string(),
+        )
+    };
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         let mut new_plan = plan.clone();
         if !ordering_satisfy_requirement(plan.output_ordering(), parent_required, || {
@@ -119,11 +124,12 @@ pub(crate) fn pushdown_sorts(requirements: SortPushDown) -> Result<Option<SortPu
         }) {
             // If the current plan is a SortExec, modify current SortExec to satisfy the parent requirements
             let parent_required_expr =
-                create_sort_expr_from_requirement(parent_required.unwrap());
+                create_sort_expr_from_requirement(parent_required.ok_or_else(err)?);
             new_plan = sort_exec.input.clone();
             add_sort_above(&mut new_plan, parent_required_expr)?;
         };
         let required_ordering = new_sort_requirements(new_plan.output_ordering());
+        // Since new_plan is SortExec we can get safely 0th index.
         let child = &new_plan.children()[0];
         if let Some(adjusted) =
             pushdown_requirement_to_children(child, required_ordering.as_deref())?
@@ -149,12 +155,9 @@ pub(crate) fn pushdown_sorts(requirements: SortPushDown) -> Result<Option<SortPu
             }))
         } else {
             // Can not satisfy the parent requirements, check whether the requirements can be pushed down. If not, add new SortExec.
-            let parent_required_expr =
-                create_sort_expr_from_requirement(parent_required.unwrap());
-            if let Some(adjusted) = pushdown_requirement_to_children(
-                plan,
-                requirements.required_ordering.as_deref(),
-            )? {
+            if let Some(adjusted) =
+                pushdown_requirement_to_children(plan, parent_required)?
+            {
                 Ok(Some(SortPushDown {
                     plan: plan.clone(),
                     adjusted_request_ordering: adjusted,
@@ -162,6 +165,8 @@ pub(crate) fn pushdown_sorts(requirements: SortPushDown) -> Result<Option<SortPu
                 }))
             } else {
                 // Can not push down requirements, add new SortExec
+                let parent_required_expr =
+                    create_sort_expr_from_requirement(parent_required.ok_or_else(err)?);
                 let mut new_plan = plan.clone();
                 add_sort_above(&mut new_plan, parent_required_expr)?;
                 Ok(Some(SortPushDown::init(new_plan)))
@@ -174,6 +179,11 @@ fn pushdown_requirement_to_children(
     plan: &Arc<dyn ExecutionPlan>,
     parent_required: Option<&[PhysicalSortRequirements]>,
 ) -> Result<Option<Vec<Option<Vec<PhysicalSortRequirements>>>>> {
+    let err = || {
+        DataFusionError::Execution(
+            "Expects parent requirement to contain something".to_string(),
+        )
+    };
     let maintains_input_order = plan.maintains_input_order();
     if is_window(plan) {
         let required_input_ordering = plan.required_input_ordering();
@@ -197,7 +207,7 @@ fn pushdown_requirement_to_children(
         // If the current plan is SortMergeJoinExec
         let left_columns_len = smj.left.schema().fields().len();
         let parent_required_expr =
-            create_sort_expr_from_requirement(parent_required.unwrap());
+            create_sort_expr_from_requirement(parent_required.ok_or_else(err)?);
         let expr_source_side =
             expr_source_sides(&parent_required_expr, smj.join_type, left_columns_len);
         match expr_source_side {
@@ -211,11 +221,12 @@ fn pushdown_requirement_to_children(
             }
             Some(JoinSide::Right) if maintains_input_order[1] => {
                 let new_right_required = match smj.join_type {
-                    JoinType::Inner | JoinType::Right => {
-                        shift_right_required(parent_required.unwrap(), left_columns_len)?
-                    }
+                    JoinType::Inner | JoinType::Right => shift_right_required(
+                        parent_required.ok_or_else(err)?,
+                        left_columns_len,
+                    )?,
                     JoinType::RightSemi | JoinType::RightAnti => {
-                        parent_required.unwrap().to_vec()
+                        parent_required.ok_or_else(err)?.to_vec()
                     }
                     _ => Err(DataFusionError::Plan(
                         "Unexpected SortMergeJoin type here".to_string(),
