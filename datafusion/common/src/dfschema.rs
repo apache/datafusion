@@ -108,13 +108,17 @@ impl DFSchema {
         Ok(Self { fields, metadata })
     }
 
-    /// Create a `DFSchema` from an Arrow schema
-    pub fn try_from_qualified_schema(qualifier: &str, schema: &Schema) -> Result<Self> {
+    /// Create a `DFSchema` from an Arrow schema and a given qualifier
+    pub fn try_from_qualified_schema<'a>(
+        qualifier: impl Into<TableReference<'a>>,
+        schema: &Schema,
+    ) -> Result<Self> {
+        let qualifier = qualifier.into();
         Self::new_with_metadata(
             schema
                 .fields()
                 .iter()
-                .map(|f| DFField::from_qualified(qualifier.to_string(), f.clone()))
+                .map(|f| DFField::from_qualified(qualifier.clone(), f.clone()))
                 .collect(),
             schema.metadata().clone(),
         )
@@ -662,12 +666,12 @@ impl DFField {
     }
 
     /// Create a qualified field from an existing Arrow field
-    pub fn from_qualified(
-        qualifier: impl Into<OwnedTableReference>,
+    pub fn from_qualified<'a>(
+        qualifier: impl Into<TableReference<'a>>,
         field: Field,
     ) -> Self {
         Self {
-            qualifier: Some(qualifier.into()),
+            qualifier: Some(qualifier.into().to_owned_reference()),
             field,
         }
     }

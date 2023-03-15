@@ -35,7 +35,38 @@ impl<'a> std::fmt::Display for ResolvedTableReference<'a> {
     }
 }
 
-/// Represents a path to a table that may require further resolution
+/// [`TableReference`]s represent a multi part identifier (path) to a
+/// table that may require further resolution.
+///
+/// # Creating [`TableReference`]
+///
+/// When converting strings to [`TableReference`]s, the string is
+/// parsed as though it were a SQL identifier, normalizing (convert to
+/// lowercase) any unquoted identifiers.
+///
+/// See [`TableReference::bare`] to create references without applying
+/// normalization semantics
+///
+/// # Examples
+/// ```
+/// # use datafusion_common::TableReference;
+/// // Get a table reference to 'mytable'
+/// let table_reference = TableReference::from("mytable");
+/// assert_eq!(table_reference, TableReference::bare("mytable"));
+///
+/// // Get a table reference to 'mytable' (note the capitalization)
+/// let table_reference = TableReference::from("MyTable");
+/// assert_eq!(table_reference, TableReference::bare("mytable"));
+///
+/// // Get a table reference to 'MyTable' (note the capitalization) using double quotes
+/// // (programatically it is better to use `TableReference::bare` for this)
+/// let table_reference = TableReference::from(r#""MyTable""#);
+/// assert_eq!(table_reference, TableReference::bare("MyTable"));
+///
+/// // Get a table reference to 'myschema.mytable' (note the capitalization)
+/// let table_reference = TableReference::from("MySchema.MyTable");
+/// assert_eq!(table_reference, TableReference::partial("myschema", "mytable"));
+///```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TableReference<'a> {
     /// An unqualified table reference, e.g. "table"
@@ -61,6 +92,16 @@ pub enum TableReference<'a> {
     },
 }
 
+/// This is a [`TableReference`] that has 'static lifetime (aka it
+/// owns the underlying string)
+///
+/// To  convert a [`TableReference`] to an [`OwnedTableReference`], use
+///
+/// ```
+/// # use datafusion_common::{OwnedTableReference, TableReference};
+/// let table_reference = TableReference::from("mytable");
+/// let owned_reference = table_reference.to_owned_reference();
+/// ```
 pub type OwnedTableReference = TableReference<'static>;
 
 impl std::fmt::Display for TableReference<'_> {
@@ -80,14 +121,23 @@ impl std::fmt::Display for TableReference<'_> {
 }
 
 impl<'a> TableReference<'a> {
-    /// Convenience method for creating a `Bare` variant of `TableReference`
+    /// Convenience method for creating a typed none `None`
+    pub fn none() -> Option<TableReference<'a>> {
+        None
+    }
+
+    /// Convenience method for creating a [`TableReference::Bare`]
+    ///
+    /// As described on [`TableReference`] this does *NO* parsing at
+    /// all -- so "Foo.Bar" stays as a reference to the table named
+    /// "Foo.Bar" (rather than "foo"."bar")
     pub fn bare(table: impl Into<Cow<'a, str>>) -> TableReference<'a> {
         TableReference::Bare {
             table: table.into(),
         }
     }
 
-    /// Convenience method for creating a `Partial` variant of `TableReference`
+    /// Convenience method for creating a [`TableReference::Partial`]
     pub fn partial(
         schema: impl Into<Cow<'a, str>>,
         table: impl Into<Cow<'a, str>>,
@@ -98,7 +148,7 @@ impl<'a> TableReference<'a> {
         }
     }
 
-    /// Convenience method for creating a `Full` variant of `TableReference`
+    /// Convenience method for creating a [`TableReference::Full`]
     pub fn full(
         catalog: impl Into<Cow<'a, str>>,
         schema: impl Into<Cow<'a, str>>,
@@ -136,12 +186,12 @@ impl<'a> TableReference<'a> {
         }
     }
 
-    /// Compare with another `TableReference` as if both are resolved.
+    /// Compare with another [`TableReference`] as if both are resolved.
     /// This allows comparing across variants, where if a field is not present
     /// in both variants being compared then it is ignored in the comparison.
     ///
-    /// e.g. this allows a `TableReference::Bare` to be considered equal to a
-    /// fully qualified `TableReference::Full` if the table names match.
+    /// e.g. this allows a [`TableReference::Bare`] to be considered equal to a
+    /// fully qualified [`TableReference::Full`] if the table names match.
     pub fn resolved_eq(&self, other: &Self) -> bool {
         match self {
             TableReference::Bare { table } => table == other.table(),
@@ -189,7 +239,8 @@ impl<'a> TableReference<'a> {
         }
     }
 
-    /// Converts directly into an [`OwnedTableReference`]
+    /// Converts directly into an [`OwnedTableReference`] by copying
+    /// the underlying data.
     pub fn to_owned_reference(&self) -> OwnedTableReference {
         match self {
             Self::Full {
@@ -212,6 +263,16 @@ impl<'a> TableReference<'a> {
     }
 
     /// Forms a string where the identifiers are quoted
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_common::TableReference;
+    /// let table_reference = TableReference::partial("myschema", "mytable");
+    /// assert_eq!(table_reference.to_quoted_string(), r#""myschema"."mytable""#);
+    ///
+    /// let table_reference = TableReference::partial("MySchema", "MyTable");
+    /// assert_eq!(table_reference.to_quoted_string(), r#""MySchema"."MyTable""#);
+    /// ```
     pub fn to_quoted_string(&self) -> String {
         match self {
             TableReference::Bare { table } => quote_identifier(table),
@@ -231,14 +292,8 @@ impl<'a> TableReference<'a> {
         }
     }
 
-    /// Forms a [`TableReference`] by attempting to parse `s` as a multipart identifier,
-    /// failing that then taking the entire unnormalized input as the identifier itself.
-    ///
-    /// Will normalize (convert to lowercase) any unquoted identifiers.
-    ///
-    /// e.g. `Foo` will be parsed as `foo`, and `"Foo"".bar"` will be parsed as
-    /// `Foo".bar` (note the preserved case and requiring two double quotes to represent
-    /// a single double quote in the identifier)
+    /// Forms a [`TableReference`] by parsing `s` as a multipart
+    /// identifier. See docs on [`TableReference`] for more details.
     pub fn parse_str(s: &'a str) -> Self {
         let mut parts = parse_identifiers_normalized(s);
 
@@ -260,7 +315,7 @@ impl<'a> TableReference<'a> {
     }
 }
 
-/// Parse a `String` into a OwnedTableReference
+/// Parse a `String` into a OwnedTableReference as a SQL identifier.
 impl From<String> for OwnedTableReference {
     fn from(s: String) -> Self {
         TableReference::parse_str(&s).to_owned_reference()

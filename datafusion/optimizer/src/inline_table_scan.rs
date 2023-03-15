@@ -57,7 +57,7 @@ impl OptimizerRule for InlineTableScan {
                         generate_projection_expr(projection, sub_plan)?;
                     let plan = LogicalPlanBuilder::from(sub_plan.clone())
                         .project(projection_exprs)?
-                        .alias(table_name)?;
+                        .alias(table_name.to_string())?;
                     Ok(Some(plan.build()?))
                 } else {
                     Ok(None)
