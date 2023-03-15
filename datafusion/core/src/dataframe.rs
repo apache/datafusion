@@ -20,11 +20,11 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
+use arrow::array::{ArrayRef, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
-use datafusion_common::DataFusionError;
+use futures::StreamExt;
 use parquet::file::properties::WriterProperties;
 
 use datafusion_common::from_slice::FromSlice;
@@ -627,22 +627,12 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn count(self) -> Result<usize> {
-        let rows = self
-            .aggregate(
-                vec![],
-                vec![datafusion_expr::count(Expr::Literal(ScalarValue::Null))],
-            )?
-            .collect()
-            .await?;
-        let len = *rows
-            .first()
-            .and_then(|r| r.columns().first())
-            .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
-            .and_then(|a| a.values().first())
-            .ok_or(DataFusionError::Internal(
-                "Unexpected output when collecting for count()".to_string(),
-            ))? as usize;
-        Ok(len)
+        let mut stream = self.execute_stream().await?;
+        let mut rows = 0;
+        while let Some(b) = stream.next().await {
+            rows += b?.num_rows();
+        }
+        Ok(rows)
     }
 
     /// Convert the logical plan represented by this DataFrame into a physical plan and
