@@ -41,7 +41,7 @@ use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use crate::physical_plan::tree_node::TreeNodeRewritable;
+use crate::physical_plan::tree_node::TreeNode;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
@@ -189,7 +189,11 @@ impl PlanWithCorrespondingSort {
     }
 }
 
-impl TreeNodeRewritable for PlanWithCorrespondingSort {
+impl TreeNode for PlanWithCorrespondingSort {
+    fn get_children(&self) -> Vec<Self> {
+        unimplemented!()
+    }
+
     fn map_children<F>(self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
@@ -289,7 +293,11 @@ impl PlanWithCorrespondingCoalescePartitions {
     }
 }
 
-impl TreeNodeRewritable for PlanWithCorrespondingCoalescePartitions {
+impl TreeNode for PlanWithCorrespondingCoalescePartitions {
+    fn get_children(&self) -> Vec<Self> {
+        unimplemented!()
+    }
+
     fn map_children<F>(self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,

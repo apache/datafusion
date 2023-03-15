@@ -32,7 +32,7 @@ use crate::physical_plan::{ExecutionPlan, PhysicalExpr};
 
 use super::optimizer::PhysicalOptimizerRule;
 use crate::error::Result;
-use crate::physical_plan::tree_node::TreeNodeRewritable;
+use crate::physical_plan::tree_node::TreeNode;
 
 /// For hash join with the partition mode [PartitionMode::Auto], JoinSelection rule will make
 /// a cost based decision to select which PartitionMode mode(Partitioned/CollectLeft) is optimal

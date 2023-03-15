@@ -45,9 +45,7 @@ use crate::datasource::{
     listing::{FileRange, PartitionedFile},
     object_store::ObjectStoreUrl,
 };
-use crate::physical_plan::tree_node::{
-    TreeNodeVisitable, TreeNodeVisitor, VisitRecursion,
-};
+use crate::physical_plan::tree_node::{Recursion, TreeNode};
 use crate::physical_plan::ExecutionPlan;
 use crate::{
     error::{DataFusionError, Result},
@@ -76,28 +74,9 @@ pub fn partition_type_wrap(val_type: DataType) -> DataType {
 pub fn get_scan_files(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Vec<Vec<Vec<PartitionedFile>>>> {
-    let mut collector = FileScanCollector::new();
-    plan.accept(&mut collector)?;
-    Ok(collector.file_groups)
-}
-
-struct FileScanCollector {
-    file_groups: Vec<Vec<Vec<PartitionedFile>>>,
-}
-
-impl FileScanCollector {
-    fn new() -> Self {
-        Self {
-            file_groups: vec![],
-        }
-    }
-}
-
-impl TreeNodeVisitor for FileScanCollector {
-    type N = Arc<dyn ExecutionPlan>;
-
-    fn pre_visit(&mut self, node: &Self::N) -> Result<VisitRecursion> {
-        let plan_any = node.as_any();
+    let mut collector: Vec<Vec<Vec<PartitionedFile>>> = vec![];
+    plan.collect(&mut |plan| {
+        let plan_any = plan.as_any();
         let file_groups =
             if let Some(parquet_exec) = plan_any.downcast_ref::<ParquetExec>() {
                 parquet_exec.base_config().file_groups.clone()
@@ -108,12 +87,13 @@ impl TreeNodeVisitor for FileScanCollector {
             } else if let Some(csv_exec) = plan_any.downcast_ref::<CsvExec>() {
                 csv_exec.base_config().file_groups.clone()
             } else {
-                return Ok(VisitRecursion::Continue);
+                return Ok(Recursion::Continue);
             };
 
-        self.file_groups.push(file_groups);
-        Ok(VisitRecursion::Stop)
-    }
+        collector.push(file_groups);
+        Ok(Recursion::Stop)
+    })?;
+    Ok(collector)
 }
 
 /// The base configurations to provide when creating a physical plan for

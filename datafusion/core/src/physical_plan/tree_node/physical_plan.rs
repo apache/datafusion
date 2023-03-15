@@ -15,14 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Tree node rewritable implementations
+//! Tree node implementation for physical plan
 
-use crate::physical_plan::tree_node::TreeNodeRewritable;
+use crate::physical_plan::tree_node::TreeNode;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use datafusion_common::Result;
 use std::sync::Arc;
 
-impl TreeNodeRewritable for Arc<dyn ExecutionPlan> {
+impl TreeNode for Arc<dyn ExecutionPlan> {
+    fn get_children(&self) -> Vec<Self> {
+        self.children()
+    }
+
     fn map_children<F>(self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,

@@ -17,75 +17,40 @@
 
 //! This module provides common traits for visiting or rewriting tree nodes easily.
 
-pub mod rewritable;
-pub mod visitable;
+pub mod physical_plan;
 
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 
-/// Implements the [visitor
-/// pattern](https://en.wikipedia.org/wiki/Visitor_pattern) for recursively walking [`TreeNodeVisitable`]s.
-///
-/// [`TreeNodeVisitor`] allows keeping the algorithms
-/// separate from the code to traverse the structure of the `TreeNodeVisitable`
-/// tree and makes it easier to add new types of tree node and
-/// algorithms by.
-///
-/// When passed to[`TreeNodeVisitable::accept`], [`TreeNodeVisitor::pre_visit`]
-/// and [`TreeNodeVisitor::post_visit`] are invoked recursively
-/// on an node tree.
-///
-/// If an [`Err`] result is returned, recursion is stopped
-/// immediately.
-///
-/// If [`Recursion::Stop`] is returned on a call to pre_visit, no
-/// children of that tree node are visited, nor is post_visit
-/// called on that tree node
-pub trait TreeNodeVisitor: Sized {
-    /// The node type which is visitable.
-    type N: TreeNodeVisitable;
-
-    /// Invoked before any children of `node` are visited.
-    fn pre_visit(&mut self, node: &Self::N) -> Result<VisitRecursion>;
-
-    /// Invoked after all children of `node` are visited. Default
-    /// implementation does nothing.
-    fn post_visit(&mut self, _node: &Self::N) -> Result<()> {
-        Ok(())
-    }
-}
-
-/// Trait for types that can be visited by [`TreeNodeVisitor`]
-pub trait TreeNodeVisitable: Sized {
+/// Trait for tree node. It can be [`ExecutionPlan`], [`PhysicalExpr`], [`LogicalExpr`], etc.
+pub trait TreeNode: Clone {
     /// Return the children of this tree node
     fn get_children(&self) -> Vec<Self>;
 
-    /// Accept a visitor, calling `visit` on all children of this
-    fn accept<V: TreeNodeVisitor<N = Self>>(&self, visitor: &mut V) -> Result<()> {
-        match visitor.pre_visit(self)? {
-            VisitRecursion::Continue => {}
+    /// Use pre-order to iterate the node on the tree so that we can stop fast for some cases.
+    ///
+    /// `op` can be used to collect some info from the tree node.
+    fn collect<F>(&self, op: &mut F) -> Result<()>
+    where
+        F: FnMut(&Self) -> Result<Recursion>,
+    {
+        match op(self)? {
+            Recursion::Continue => {}
             // If the recursion should stop, do not visit children
-            VisitRecursion::Stop => return Ok(()),
+            Recursion::Stop => return Ok(()),
+            r => {
+                return Err(DataFusionError::Execution(format!(
+                    "Recursion {r:?} is not supported for collect"
+                )))
+            }
         };
 
         for child in self.get_children() {
-            child.accept(visitor)?;
+            child.collect(op)?;
         }
 
-        visitor.post_visit(self)
+        Ok(())
     }
-}
 
-/// Controls how the visitor recursion should proceed.
-pub enum VisitRecursion {
-    /// Attempt to visit all the children, recursively.
-    Continue,
-    /// Do not visit the children of this tree node, though the walk
-    /// of parents of this tree node will not be affected
-    Stop,
-}
-
-/// Trait for marking tree node as rewritable
-pub trait TreeNodeRewritable: Clone {
     /// Convenience utils for writing optimizers rule: recursively apply the given `op` to the node tree.
     /// When `op` does not apply to a given node, it is left unchanged.
     /// The default tree traversal direction is transform_up(Postorder Traversal).
@@ -159,10 +124,10 @@ pub trait TreeNodeRewritable: Clone {
         rewriter: &mut R,
     ) -> Result<Self> {
         let need_mutate = match rewriter.pre_visit(&self)? {
-            RewriteRecursion::Mutate => return rewriter.mutate(self),
-            RewriteRecursion::Stop => return Ok(self),
-            RewriteRecursion::Continue => true,
-            RewriteRecursion::Skip => false,
+            Recursion::Mutate => return rewriter.mutate(self),
+            Recursion::Stop => return Ok(self),
+            Recursion::Continue => true,
+            Recursion::Skip => false,
         };
 
         let after_op_children =
@@ -182,17 +147,17 @@ pub trait TreeNodeRewritable: Clone {
         F: FnMut(Self) -> Result<Self>;
 }
 
-/// Trait for potentially recursively transform an [`TreeNodeRewritable`] node
-/// tree. When passed to `TreeNodeRewritable::transform_using`, `TreeNodeRewriter::mutate` is
+/// Trait for potentially recursively transform an [`TreeNode`] node
+/// tree. When passed to `TreeNode::transform_using`, `TreeNodeRewriter::mutate` is
 /// invoked recursively on all nodes of a tree.
 pub trait TreeNodeRewriter: Sized {
     /// The node type which is rewritable.
-    type N: TreeNodeRewritable;
+    type N: TreeNode;
 
     /// Invoked before (Preorder) any children of `node` are rewritten /
     /// visited. Default implementation returns `Ok(RewriteRecursion::Continue)`
-    fn pre_visit(&mut self, _node: &Self::N) -> Result<RewriteRecursion> {
-        Ok(RewriteRecursion::Continue)
+    fn pre_visit(&mut self, _node: &Self::N) -> Result<Recursion> {
+        Ok(Recursion::Continue)
     }
 
     /// Invoked after (Postorder) all children of `node` have been mutated and
@@ -200,9 +165,9 @@ pub trait TreeNodeRewriter: Sized {
     fn mutate(&mut self, node: Self::N) -> Result<Self::N>;
 }
 
-/// Controls how the [TreeNodeRewriter] recursion should proceed.
-#[allow(dead_code)]
-pub enum RewriteRecursion {
+/// Controls how the [TreeNode] recursion should proceed.
+#[derive(Debug)]
+pub enum Recursion {
     /// Continue rewrite / visit this node tree.
     Continue,
     /// Call 'op' immediately and return.

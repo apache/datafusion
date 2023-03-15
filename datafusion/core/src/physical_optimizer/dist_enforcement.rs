@@ -29,7 +29,7 @@ use crate::physical_plan::joins::{
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortOptions;
-use crate::physical_plan::tree_node::TreeNodeRewritable;
+use crate::physical_plan::tree_node::TreeNode;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
@@ -925,7 +925,11 @@ impl PlanWithKeyRequirements {
     }
 }
 
-impl TreeNodeRewritable for PlanWithKeyRequirements {
+impl TreeNode for PlanWithKeyRequirements {
+    fn get_children(&self) -> Vec<Self> {
+        unimplemented!()
+    }
+
     fn map_children<F>(self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
