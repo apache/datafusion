@@ -124,7 +124,7 @@ impl<'a> TableReference<'a> {
     /// Convenience method for creating a [`TableReference::Bare`]
     ///
     /// As described on [`TableReference`] this does *NO* parsing at
-    /// all -- so "Foo.Bar" stays as a reference to the table named
+    /// all, so "Foo.Bar" stays as a reference to the table named
     /// "Foo.Bar" (rather than "foo"."bar")
     pub fn bare(table: impl Into<Cow<'a, str>>) -> TableReference<'a> {
         TableReference::Bare {
@@ -132,7 +132,9 @@ impl<'a> TableReference<'a> {
         }
     }
 
-    /// Convenience method for creating a [`TableReference::Partial`]
+    /// Convenience method for creating a [`TableReference::Partial`].
+    ///
+    /// As described on [`TableReference`] this does parsing at all.
     pub fn partial(
         schema: impl Into<Cow<'a, str>>,
         table: impl Into<Cow<'a, str>>,
@@ -144,6 +146,8 @@ impl<'a> TableReference<'a> {
     }
 
     /// Convenience method for creating a [`TableReference::Full`]
+    ///
+    /// As described on [`TableReference`] this does parsing at all.
     pub fn full(
         catalog: impl Into<Cow<'a, str>>,
         schema: impl Into<Cow<'a, str>>,
