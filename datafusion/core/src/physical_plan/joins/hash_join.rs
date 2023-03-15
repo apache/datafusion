@@ -21,8 +21,17 @@
 use ahash::RandomState;
 
 use arrow::{
-    array::{ArrayData, PrimitiveArray, UInt32BufferBuilder, UInt64BufferBuilder},
-    datatypes::{UInt32Type, UInt64Type},
+    array::{
+        ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+        DictionaryArray, FixedSizeBinaryArray, LargeStringArray, PrimitiveArray,
+        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampSecondArray, UInt32BufferBuilder, UInt64BufferBuilder,
+    },
+    datatypes::{
+        Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
+        UInt8Type,
+    },
     util::bit_util,
 };
 use smallvec::{smallvec, SmallVec};
@@ -31,11 +40,18 @@ use std::{any::Any, usize, vec};
 
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
-use arrow::datatypes::DataType;
+use arrow::array::Array;
+use arrow::datatypes::{ArrowNativeType, DataType};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 
-use arrow::array::{UInt32Array, UInt64Array};
+use arrow::array::{
+    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+    StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
+    UInt8Array,
+};
+
+use datafusion_common::cast::{as_dictionary_array, as_string_array};
 
 use hashbrown::raw::RawTable;
 
@@ -60,6 +76,7 @@ use crate::error::{DataFusionError, Result};
 use crate::logical_expr::JoinType;
 
 use crate::arrow::array::BooleanBufferBuilder;
+use crate::arrow::datatypes::TimeUnit;
 use crate::execution::{
     context::TaskContext,
     memory_pool::{
@@ -75,7 +92,6 @@ use crate::physical_plan::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
 };
-use datafusion_physical_expr::hash_utils::equal_rows;
 use std::fmt;
 use std::task::Poll;
 
@@ -776,6 +792,338 @@ pub fn build_equal_condition_join_indices(
         PrimitiveArray::<UInt64Type>::from(build),
         PrimitiveArray::<UInt32Type>::from(probe),
     ))
+}
+
+macro_rules! equal_rows_elem {
+    ($array_type:ident, $l: ident, $r: ident, $left: ident, $right: ident, $null_equals_null: ident) => {{
+        let left_array = $l.as_any().downcast_ref::<$array_type>().unwrap();
+        let right_array = $r.as_any().downcast_ref::<$array_type>().unwrap();
+
+        match (left_array.is_null($left), right_array.is_null($right)) {
+            (false, false) => left_array.value($left) == right_array.value($right),
+            (true, true) => $null_equals_null,
+            _ => false,
+        }
+    }};
+}
+
+macro_rules! equal_rows_elem_with_string_dict {
+    ($key_array_type:ident, $l: ident, $r: ident, $left: ident, $right: ident, $null_equals_null: ident) => {{
+        let left_array: &DictionaryArray<$key_array_type> =
+            as_dictionary_array::<$key_array_type>($l).unwrap();
+        let right_array: &DictionaryArray<$key_array_type> =
+            as_dictionary_array::<$key_array_type>($r).unwrap();
+
+        let (left_values, left_values_index) = {
+            let keys_col = left_array.keys();
+            if keys_col.is_valid($left) {
+                let values_index = keys_col
+                    .value($left)
+                    .to_usize()
+                    .expect("Can not convert index to usize in dictionary");
+
+                (
+                    as_string_array(left_array.values()).unwrap(),
+                    Some(values_index),
+                )
+            } else {
+                (as_string_array(left_array.values()).unwrap(), None)
+            }
+        };
+        let (right_values, right_values_index) = {
+            let keys_col = right_array.keys();
+            if keys_col.is_valid($right) {
+                let values_index = keys_col
+                    .value($right)
+                    .to_usize()
+                    .expect("Can not convert index to usize in dictionary");
+
+                (
+                    as_string_array(right_array.values()).unwrap(),
+                    Some(values_index),
+                )
+            } else {
+                (as_string_array(right_array.values()).unwrap(), None)
+            }
+        };
+
+        match (left_values_index, right_values_index) {
+            (Some(left_values_index), Some(right_values_index)) => {
+                left_values.value(left_values_index)
+                    == right_values.value(right_values_index)
+            }
+            (None, None) => $null_equals_null,
+            _ => false,
+        }
+    }};
+}
+
+/// Left and right row have equal values
+/// If more data types are supported here, please also add the data types in can_hash function
+/// to generate hash join logical plan.
+fn equal_rows(
+    left: usize,
+    right: usize,
+    left_arrays: &[ArrayRef],
+    right_arrays: &[ArrayRef],
+    null_equals_null: bool,
+) -> Result<bool> {
+    let mut err = None;
+    let res = left_arrays
+        .iter()
+        .zip(right_arrays)
+        .all(|(l, r)| match l.data_type() {
+            DataType::Null => {
+                // lhs and rhs are both `DataType::Null`, so the equal result
+                // is dependent on `null_equals_null`
+                null_equals_null
+            }
+            DataType::Boolean => {
+                equal_rows_elem!(BooleanArray, l, r, left, right, null_equals_null)
+            }
+            DataType::Int8 => {
+                equal_rows_elem!(Int8Array, l, r, left, right, null_equals_null)
+            }
+            DataType::Int16 => {
+                equal_rows_elem!(Int16Array, l, r, left, right, null_equals_null)
+            }
+            DataType::Int32 => {
+                equal_rows_elem!(Int32Array, l, r, left, right, null_equals_null)
+            }
+            DataType::Int64 => {
+                equal_rows_elem!(Int64Array, l, r, left, right, null_equals_null)
+            }
+            DataType::UInt8 => {
+                equal_rows_elem!(UInt8Array, l, r, left, right, null_equals_null)
+            }
+            DataType::UInt16 => {
+                equal_rows_elem!(UInt16Array, l, r, left, right, null_equals_null)
+            }
+            DataType::UInt32 => {
+                equal_rows_elem!(UInt32Array, l, r, left, right, null_equals_null)
+            }
+            DataType::UInt64 => {
+                equal_rows_elem!(UInt64Array, l, r, left, right, null_equals_null)
+            }
+            DataType::Float32 => {
+                equal_rows_elem!(Float32Array, l, r, left, right, null_equals_null)
+            }
+            DataType::Float64 => {
+                equal_rows_elem!(Float64Array, l, r, left, right, null_equals_null)
+            }
+            DataType::Date32 => {
+                equal_rows_elem!(Date32Array, l, r, left, right, null_equals_null)
+            }
+            DataType::Date64 => {
+                equal_rows_elem!(Date64Array, l, r, left, right, null_equals_null)
+            }
+            DataType::Time32(time_unit) => match time_unit {
+                TimeUnit::Second => {
+                    equal_rows_elem!(Time32SecondArray, l, r, left, right, null_equals_null)
+                }
+                TimeUnit::Millisecond => {
+                    equal_rows_elem!(Time32MillisecondArray, l, r, left, right, null_equals_null)
+                }
+                _ => {
+                    err = Some(Err(DataFusionError::Internal(
+                        "Unsupported data type in hasher".to_string(),
+                    )));
+                    false
+                }
+            }
+            DataType::Time64(time_unit) => match time_unit {
+                TimeUnit::Microsecond => {
+                    equal_rows_elem!(Time64MicrosecondArray, l, r, left, right, null_equals_null)
+                }
+                TimeUnit::Nanosecond => {
+                    equal_rows_elem!(Time64NanosecondArray, l, r, left, right, null_equals_null)
+                }
+                _ => {
+                    err = Some(Err(DataFusionError::Internal(
+                        "Unsupported data type in hasher".to_string(),
+                    )));
+                    false
+                }
+            }
+            DataType::Timestamp(time_unit, None) => match time_unit {
+                TimeUnit::Second => {
+                    equal_rows_elem!(
+                        TimestampSecondArray,
+                        l,
+                        r,
+                        left,
+                        right,
+                        null_equals_null
+                    )
+                }
+                TimeUnit::Millisecond => {
+                    equal_rows_elem!(
+                        TimestampMillisecondArray,
+                        l,
+                        r,
+                        left,
+                        right,
+                        null_equals_null
+                    )
+                }
+                TimeUnit::Microsecond => {
+                    equal_rows_elem!(
+                        TimestampMicrosecondArray,
+                        l,
+                        r,
+                        left,
+                        right,
+                        null_equals_null
+                    )
+                }
+                TimeUnit::Nanosecond => {
+                    equal_rows_elem!(
+                        TimestampNanosecondArray,
+                        l,
+                        r,
+                        left,
+                        right,
+                        null_equals_null
+                    )
+                }
+            },
+            DataType::Utf8 => {
+                equal_rows_elem!(StringArray, l, r, left, right, null_equals_null)
+            }
+            DataType::LargeUtf8 => {
+                equal_rows_elem!(LargeStringArray, l, r, left, right, null_equals_null)
+            }
+            DataType::FixedSizeBinary(_) => {
+                equal_rows_elem!(FixedSizeBinaryArray, l, r, left, right, null_equals_null)
+            }
+            DataType::Decimal128(_, lscale) => match r.data_type() {
+                DataType::Decimal128(_, rscale) => {
+                    if lscale == rscale {
+                        equal_rows_elem!(
+                            Decimal128Array,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                    } else {
+                        err = Some(Err(DataFusionError::Internal(
+                            "Inconsistent Decimal data type in hasher, the scale should be same".to_string(),
+                        )));
+                        false
+                    }
+                }
+                _ => {
+                    err = Some(Err(DataFusionError::Internal(
+                        "Unsupported data type in hasher".to_string(),
+                    )));
+                    false
+                }
+            },
+            DataType::Dictionary(key_type, value_type)
+            if *value_type.as_ref() == DataType::Utf8 =>
+                {
+                    match key_type.as_ref() {
+                        DataType::Int8 => {
+                            equal_rows_elem_with_string_dict!(
+                            Int8Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                        }
+                        DataType::Int16 => {
+                            equal_rows_elem_with_string_dict!(
+                            Int16Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                        }
+                        DataType::Int32 => {
+                            equal_rows_elem_with_string_dict!(
+                            Int32Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                        }
+                        DataType::Int64 => {
+                            equal_rows_elem_with_string_dict!(
+                            Int64Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                        }
+                        DataType::UInt8 => {
+                            equal_rows_elem_with_string_dict!(
+                            UInt8Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                        }
+                        DataType::UInt16 => {
+                            equal_rows_elem_with_string_dict!(
+                            UInt16Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                        }
+                        DataType::UInt32 => {
+                            equal_rows_elem_with_string_dict!(
+                            UInt32Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                        }
+                        DataType::UInt64 => {
+                            equal_rows_elem_with_string_dict!(
+                            UInt64Type,
+                            l,
+                            r,
+                            left,
+                            right,
+                            null_equals_null
+                        )
+                        }
+                        _ => {
+                            // should not happen
+                            err = Some(Err(DataFusionError::Internal(
+                                "Unsupported data type in hasher".to_string(),
+                            )));
+                            false
+                        }
+                    }
+                }
+            other => {
+                // This is internal because we should have caught this before.
+                err = Some(Err(DataFusionError::Internal(format!(
+                    "Unsupported data type in hasher: {other}"
+                ))));
+                false
+            }
+        });
+
+    err.unwrap_or(Ok(res))
 }
 
 impl HashJoinStream {

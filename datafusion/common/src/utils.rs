@@ -18,8 +18,11 @@
 //! This module provides the bisect function, which implements binary search.
 
 use crate::{DataFusionError, Result, ScalarValue};
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, PrimitiveArray};
+use arrow::compute;
 use arrow::compute::SortOptions;
+use arrow::datatypes::UInt32Type;
+use arrow::record_batch::RecordBatch;
 use std::cmp::Ordering;
 
 /// Given column vectors, returns row at `idx`.
@@ -28,6 +31,34 @@ pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValu
         .iter()
         .map(|arr| ScalarValue::try_from_array(arr, idx))
         .collect()
+}
+
+/// Construct a new RecordBatch from the rows of the `record_batch` at the `indices`.
+pub fn get_record_batch_at_indices(
+    record_batch: &RecordBatch,
+    indices: &PrimitiveArray<UInt32Type>,
+) -> Result<RecordBatch> {
+    let new_columns = get_arrayref_at_indices(record_batch.columns(), indices)?;
+    RecordBatch::try_new(record_batch.schema(), new_columns)
+        .map_err(DataFusionError::ArrowError)
+}
+
+/// Construct a new Vec<ArrayRef> from the rows of the `arrays` at the `indices`.
+pub fn get_arrayref_at_indices(
+    arrays: &[ArrayRef],
+    indices: &PrimitiveArray<UInt32Type>,
+) -> Result<Vec<ArrayRef>> {
+    arrays
+        .iter()
+        .map(|array| {
+            compute::take(
+                array.as_ref(),
+                indices,
+                None, // None: no index check
+            )
+            .map_err(DataFusionError::ArrowError)
+        })
+        .collect::<Result<Vec<_>>>()
 }
 
 /// This function compares two tuples depending on the given sort options.

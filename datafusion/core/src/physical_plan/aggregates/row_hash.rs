@@ -41,12 +41,13 @@ use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 
 use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use arrow::array::ArrayRef;
 use arrow::array::{new_null_array, PrimitiveArray};
 use arrow::array::{Array, UInt32Builder};
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Schema, UInt32Type};
-use arrow::{array::ArrayRef, compute};
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use datafusion_common::utils::get_arrayref_at_indices;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::Accumulator;
 use datafusion_row::accessor::RowAccessor;
@@ -417,8 +418,9 @@ impl GroupedHashAggregateStream {
             }
             let batch_indices = batch_indices.finish();
 
-            let row_values = get_at_indices(&row_aggr_input_values, &batch_indices);
-            let normal_values = get_at_indices(&normal_aggr_input_values, &batch_indices);
+            let row_values = get_at_indices(&row_aggr_input_values, &batch_indices)?;
+            let normal_values =
+                get_at_indices(&normal_aggr_input_values, &batch_indices)?;
 
             // 2.1 for each key in this batch
             // 2.2 for each aggregation
@@ -702,23 +704,11 @@ fn read_as_batch(rows: &[Vec<u8>], schema: &Schema, row_type: RowType) -> Vec<Ar
 }
 
 fn get_at_indices(
-    input_values: &[Vec<Arc<dyn Array>>],
+    input_values: &[Vec<ArrayRef>],
     batch_indices: &PrimitiveArray<UInt32Type>,
-) -> Vec<Vec<Arc<dyn Array>>> {
+) -> Result<Vec<Vec<ArrayRef>>> {
     input_values
         .iter()
-        .map(|array| {
-            array
-                .iter()
-                .map(|array| {
-                    compute::take(
-                        array.as_ref(),
-                        batch_indices,
-                        None, // None: no index check
-                    )
-                    .unwrap()
-                })
-                .collect()
-        })
-        .collect()
+        .map(|array| get_arrayref_at_indices(array, batch_indices))
+        .collect::<Result<Vec<_>>>()
 }
