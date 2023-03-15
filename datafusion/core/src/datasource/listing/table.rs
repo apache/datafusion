@@ -330,6 +330,8 @@ impl ListingOptions {
     /// [`wrap_partition_type_in_dict`] to request a
     /// dictionary-encoded type.
     ///
+    /// - The partition columns are solely extracted from the file path. Especially they are NOT part of the parquet files itself.
+    ///
     /// # Example
     ///
     /// ```
