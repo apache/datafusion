@@ -255,6 +255,12 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         let table_name = table_name.into();
 
+        if table_name.table().is_empty() {
+            return Err(DataFusionError::Plan(
+                "table_name cannot be empty".to_string(),
+            ));
+        }
+
         let schema = table_source.schema();
 
         let projected_schema = projection
@@ -1412,6 +1418,18 @@ mod tests {
             LogicalPlanBuilder::scan("EMPLOYEE_CSV", table_source(&schema), projection)
                 .unwrap();
         assert_eq!(&expected, plan.schema().as_ref());
+    }
+
+    #[test]
+    fn plan_builder_empty_name() {
+        let schema = employee_schema();
+        let projection = None;
+        let err =
+            LogicalPlanBuilder::scan("", table_source(&schema), projection).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Error during planning: table_name cannot be empty"
+        );
     }
 
     #[test]

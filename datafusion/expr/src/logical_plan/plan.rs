@@ -2394,7 +2394,7 @@ mod tests {
             Field::new("state", DataType::Utf8, false),
         ]);
 
-        table_scan(TableReference::none(), table_ref, &schema, Some(vec![0, 1]))
+        table_scan(TableReference::none(), &schema, Some(vec![0, 1]))
             .unwrap()
             .filter(col("state").eq(lit("CO")))
             .unwrap()
