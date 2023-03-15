@@ -2389,13 +2389,12 @@ mod tests {
     }
 
     fn test_plan() -> LogicalPlan {
-        let table_ref: Option<TableReference<'_>> = None;
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("state", DataType::Utf8, false),
         ]);
 
-        table_scan(table_ref, &schema, Some(vec![0, 1]))
+        table_scan(TableReference::none(), table_ref, &schema, Some(vec![0, 1]))
             .unwrap()
             .filter(col("state").eq(lit("CO")))
             .unwrap()
