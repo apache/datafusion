@@ -790,26 +790,14 @@ impl ExecutionPlan for SortExec {
         t: DisplayFormatType,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-        // let is_global = !self.preserve_partitioning;
-        let is_global = self.output_partitioning().partition_count() <= 1;
         match t {
             DisplayFormatType::Default => {
                 let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
                 match self.fetch {
                     Some(fetch) => {
-                        write!(
-                            f,
-                            "SortExec: fetch={fetch}, expr=[{}], global={}",
-                            expr.join(","),
-                            is_global
-                        )
+                        write!(f, "SortExec: fetch={fetch}, expr=[{}]", expr.join(","),)
                     }
-                    None => write!(
-                        f,
-                        "SortExec: expr=[{}], global={}",
-                        expr.join(","),
-                        is_global
-                    ),
+                    None => write!(f, "SortExec: expr=[{}]", expr.join(","),),
                 }
             }
         }

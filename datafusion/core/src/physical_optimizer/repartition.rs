@@ -635,7 +635,7 @@ mod tests {
             "GlobalLimitExec: skip=0, fetch=100",
             "LocalLimitExec: fetch=100",
             // data is sorted so can't repartition here
-            "SortExec: expr=[c1@0 ASC], global=true",
+            "SortExec: expr=[c1@0 ASC]",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 
@@ -653,7 +653,7 @@ mod tests {
             "FilterExec: c1@0",
             // data is sorted so can't repartition here even though
             // filter would benefit from parallelism, the answers might be wrong
-            "SortExec: expr=[c1@0 ASC], global=true",
+            "SortExec: expr=[c1@0 ASC]",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 
@@ -741,7 +741,7 @@ mod tests {
         // need repartiton and resort as the data was not sorted correctly
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
-            "SortExec: expr=[c1@0 ASC], global=false",
+            "SortExec: expr=[c1@0 ASC]",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
@@ -841,7 +841,7 @@ mod tests {
         // needs to repartition / sort as the data was not sorted correctly
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
-            "SortExec: expr=[c1@0 ASC], global=false",
+            "SortExec: expr=[c1@0 ASC]",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ProjectionExec: expr=[c1@0 as c1]",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
@@ -874,7 +874,7 @@ mod tests {
             sort_preserving_merge_exec(sort_exec(projection_exec(parquet_exec()), true));
 
         let expected = &[
-            "SortExec: expr=[c1@0 ASC], global=true",
+            "SortExec: expr=[c1@0 ASC]",
             "ProjectionExec: expr=[c1@0 as c1]",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
@@ -891,7 +891,7 @@ mod tests {
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
             // Expect repartition on the input to the sort (as it can benefit from additional parallelism)
-            "SortExec: expr=[c1@0 ASC], global=false",
+            "SortExec: expr=[c1@0 ASC]",
             "FilterExec: c1@0",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
@@ -911,7 +911,7 @@ mod tests {
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
             // Expect repartition on the input to the sort (as it can benefit from additional parallelism)
-            "SortExec: expr=[c1@0 ASC], global=false",
+            "SortExec: expr=[c1@0 ASC]",
             "ProjectionExec: expr=[c1@0 as c1]",
             "FilterExec: c1@0",
             // repartition is lowest down
@@ -978,7 +978,7 @@ mod tests {
             "GlobalLimitExec: skip=0, fetch=100",
             "LocalLimitExec: fetch=100",
             // data is sorted so can't repartition here
-            "SortExec: expr=[c1@0 ASC], global=true",
+            "SortExec: expr=[c1@0 ASC]",
             // Doesn't parallelize for SortExec without preserve_partitioning
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
@@ -997,7 +997,7 @@ mod tests {
             "FilterExec: c1@0",
             // data is sorted so can't repartition here even though
             // filter would benefit from parallelism, the answers might be wrong
-            "SortExec: expr=[c1@0 ASC], global=true",
+            "SortExec: expr=[c1@0 ASC]",
             // SortExec doesn't benefit from input partitioning
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
