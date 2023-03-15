@@ -317,19 +317,20 @@ impl ListingOptions {
     ///
     ///# Notes
     ///
-    /// - If only one level (e.g. `year` in the example above) is specified, the other levels are ignored
-    /// but the files are still read.
+    /// - If only one level (e.g. `year` in the example above) is
+    /// specified, the other levels are ignored but the files are
+    /// still read.
     ///
     /// - Files that don't follow this partitioning scheme will be
     /// ignored.
     ///
     /// - Since the columns have the same value for all rows read from
     /// each individual file (such as dates), they are typically
-    /// dictionary encoded for efficiency.
+    /// dictionary encoded for efficiency. You may use
+    /// [`wrap_partition_type_in_dict`] to request a
+    /// dictionary-encoded type.
     ///
     /// # Example
-    ///
-    /// You may use [`wrap_partition_type_in_dict`] to request a dictionary-encoded type.
     ///
     /// ```
     /// # use std::sync::Arc;
