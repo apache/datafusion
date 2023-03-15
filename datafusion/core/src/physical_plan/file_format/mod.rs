@@ -69,22 +69,23 @@ use std::{
 
 use super::{ColumnStatistics, Statistics};
 
-/// Convert logical type of partition column to physical type: `Dictionary(UInt16, val_type)`.
+/// Convert type to a type suitable for use as a [`ListingTable`]
+/// partition column. Returns `Dictionary(UInt16, val_type)`, which is
+/// a reasonable trade off between a reasonable number of partition
+/// values and space efficiency.
 ///
-/// You CAN use this to specify types for partition columns. However you MAY also choose not to dictionary-encode the
-/// data or to use a different dictionary type.
+/// This use this to specify types for partition columns. However
+/// you MAY also choose not to dictionary-encode the data or to use a
+/// different dictionary type.
 ///
-/// Use [`wrap_partition_value_in_dict`] to wrap the values.
+/// Use [`wrap_partition_value_in_dict`] to wrap a [`ScalarValue`] in the same say.
 pub fn wrap_partition_type_in_dict(val_type: DataType) -> DataType {
     DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val_type))
 }
 
-/// Convert scalar value of partition columns to physical type: `Dictionary(UInt16, val_type)` .
-///
-/// You CAN use this to specify types for partition columns. However you MAY also choose not to dictionary-encode the
-/// data or to use a different dictionary type.
-///
-/// Use [`wrap_partition_type_in_dict`] to wrap the types.
+/// Convert a [`ScalarValue`] of partition columns to a type, as
+/// decribed in the documentation of [`wrap_partition_type_in_dict`],
+/// which can wrap the types.
 pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
     ScalarValue::Dictionary(Box::new(DataType::UInt16), Box::new(val))
 }

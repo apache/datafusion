@@ -212,10 +212,7 @@ pub struct ListingOptions {
     /// The file format
     pub format: Arc<dyn FileFormat>,
     /// The expected partition column names in the folder structure.
-    /// For example `Vec["a", "b"]` means that the two first levels of
-    /// partitioning expected should be named "a" and "b":
-    /// - If there is a third level of partitioning it will be ignored.
-    /// - Files that don't follow this partitioning will be ignored.
+    /// See [Self::with_table_partition_cols] for details
     pub table_partition_cols: Vec<(String, DataType)>,
     /// Set true to try to guess statistics from the files.
     /// This can add a lot of overhead as it will usually require files
@@ -297,9 +294,45 @@ impl ListingOptions {
         self
     }
 
-    /// Set table partition column names on [`ListingOptions`] and returns self.
+    /// Set `table partition columns` on [`ListingOptions`] and returns self.
     ///
-    /// You may use [`wrap_partition_type_in_dict`] to request a dictionary-encoded type.
+    /// "partition columns," used to support [Hive Partitioning], are
+    /// columns added to the data that is read, based on the folder
+    /// structure where the data resides.
+    ///
+    /// For example, give the following files in your filesystem:
+    ///
+    /// ```text
+    /// /mnt/nyctaxi/year=2022/month=01/tripdata.parquet
+    /// /mnt/nyctaxi/year=2021/month=12/tripdata.parquet
+    /// /mnt/nyctaxi/year=2021/month=11/tripdata.parquet
+    /// ```
+    ///
+    /// A [`ListingTable`] created at `/mnt/nyctaxi/` with partition
+    /// columns "year" and "month" will include new `year` and `month`
+    /// columns while reading the files. The `year` column would have
+    /// value `2022` and the `month` column would have value `01` for
+    /// the rows read from
+    /// `/mnt/nyctaxi/year=2022/month=01/tripdata.parquet`
+    ///
+    ///# Notes
+    ///
+    /// - If only one level (e.g. `year` in the example above) is
+    /// specified, the other levels are ignored but the files are
+    /// still read.
+    ///
+    /// - Files that don't follow this partitioning scheme will be
+    /// ignored.
+    ///
+    /// - Since the columns have the same value for all rows read from
+    /// each individual file (such as dates), they are typically
+    /// dictionary encoded for efficiency. You may use
+    /// [`wrap_partition_type_in_dict`] to request a
+    /// dictionary-encoded type.
+    ///
+    /// - The partition columns are solely extracted from the file path. Especially they are NOT part of the parquet files itself.
+    ///
+    /// # Example
     ///
     /// ```
     /// # use std::sync::Arc;
@@ -307,6 +340,8 @@ impl ListingOptions {
     /// # use datafusion::prelude::col;
     /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
+    /// // listing options for files with paths such as  `/mnt/data/col_a=x/col_b=y/data.parquet`
+    /// // `col_a` and `col_b` will be included in the data read from those files
     /// let listing_options = ListingOptions::new(Arc::new(
     ///     ParquetFormat::default()
     ///   ))
@@ -317,7 +352,7 @@ impl ListingOptions {
     ///     ("col_b".to_string(), DataType::Utf8)]);
     /// ```
     ///
-    ///
+    /// [Hive Partitioning]: https://docs.cloudera.com/HDPDocuments/HDP2/HDP-2.1.3/bk_system-admin-guide/content/hive_partitioned_tables.html
     /// [`wrap_partition_type_in_dict`]: crate::physical_plan::file_format::wrap_partition_type_in_dict
     pub fn with_table_partition_cols(
         mut self,
