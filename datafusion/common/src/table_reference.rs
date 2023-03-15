@@ -238,7 +238,7 @@ impl<'a> TableReference<'a> {
         }
     }
 
-    /// Converts directly into an [`OwnedTableReference`] by copying
+    /// Converts directly into an [`OwnedTableReference`] by cloning
     /// the underlying data.
     pub fn to_owned_reference(&self) -> OwnedTableReference {
         match self {
@@ -291,7 +291,7 @@ impl<'a> TableReference<'a> {
         }
     }
 
-    /// Forms a [`TableReference`] by parsing `s` as a multipart
+    /// Forms a [`TableReference`] by parsing `s` as a multipart SQL
     /// identifier. See docs on [`TableReference`] for more details.
     pub fn parse_str(s: &'a str) -> Self {
         let mut parts = parse_identifiers_normalized(s);
@@ -314,7 +314,7 @@ impl<'a> TableReference<'a> {
     }
 }
 
-/// Parse a `String` into a OwnedTableReference as a SQL identifier.
+/// Parse a `String` into a OwnedTableReference as a multipart SQL identifier.
 impl From<String> for OwnedTableReference {
     fn from(s: String) -> Self {
         TableReference::parse_str(&s).to_owned_reference()
