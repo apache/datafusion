@@ -1133,19 +1133,7 @@ fn pushdown_requirement_to_children(
             plan.children().len()
         ]))
     }
-    // // TODO: Add support for Projection push down
-    // else if let Some(ProjectionExec { expr, .. }) =
-    //     plan.as_any().downcast_ref::<ProjectionExec>()
-    // {
-    //     // For Projection, we need to transform the requirements to the columns before the Projection
-    //     // And then to push down the requirements
-    //     let new_adjusted = map_requirement_before_projection(parent_required, expr);
-    //     if new_adjusted.is_some() {
-    //         Ok(Some(vec![new_adjusted]))
-    //     } else {
-    //         Ok(None)
-    //     }
-    // }
+    // TODO: Add support for Projection push down
 }
 
 /// Determine the children requirements
@@ -1505,6 +1493,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_remove_unnecessary_sort() -> Result<()> {
+        let schema = create_test_schema()?;
+        let source = memory_exec(&schema);
+        let input = sort_exec(vec![sort_expr("non_nullable_col", &schema)], source);
+        let physical_plan = sort_exec(vec![sort_expr("nullable_col", &schema)], input);
+
+        let expected_input = vec![
+            "SortExec: expr=[nullable_col@0 ASC], global=true",
+            "  SortExec: expr=[non_nullable_col@1 ASC], global=true",
+            "    MemoryExec: partitions=0, partition_sizes=[]",
+        ];
+        let expected_optimized = vec![
+            "SortExec: expr=[nullable_col@0 ASC], global=true",
+            "  MemoryExec: partitions=0, partition_sizes=[]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_remove_unnecessary_sort_window_multilayer() -> Result<()> {
+        let schema = create_test_schema()?;
+        let source = memory_exec(&schema);
+
+        let sort_exprs = vec![sort_expr_options(
+            "non_nullable_col",
+            &source.schema(),
+            SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+        )];
+        let sort = sort_exec(sort_exprs.clone(), source);
+
+        let window_agg = bounded_window_exec("non_nullable_col", sort_exprs, sort);
+
+        let sort_exprs = vec![sort_expr_options(
+            "non_nullable_col",
+            &window_agg.schema(),
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        )];
+
+        let sort = sort_exec(sort_exprs.clone(), window_agg);
+
+        // Add dummy layer propagating Sort above, to test whether sort can be removed from multi layer before
+        let filter = filter_exec(
+            Arc::new(NotExpr::new(
+                col("non_nullable_col", schema.as_ref()).unwrap(),
+            )),
+            sort,
+        );
+
+        // let filter_exec = sort_exec;
+        let physical_plan = bounded_window_exec("non_nullable_col", sort_exprs, filter);
+
+        let expected_input = vec![
+            "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
+            "  FilterExec: NOT non_nullable_col@1",
+            "    SortExec: expr=[non_nullable_col@1 ASC NULLS LAST], global=true",
+            "      BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
+            "        SortExec: expr=[non_nullable_col@1 DESC], global=true",
+            "          MemoryExec: partitions=0, partition_sizes=[]",
+        ];
+
+        let expected_optimized = vec![
+            "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(NULL) }]",
+            "  FilterExec: NOT non_nullable_col@1",
+            "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
+            "      SortExec: expr=[non_nullable_col@1 DESC], global=true",
+            "        MemoryExec: partitions=0, partition_sizes=[]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_add_required_sort() -> Result<()> {
         let schema = create_test_schema()?;
         let source = memory_exec(&schema);
@@ -1516,26 +1583,6 @@ mod tests {
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  MemoryExec: partitions=0, partition_sizes=[]",
-        ];
-        let expected_optimized = vec![
-            "SortExec: expr=[nullable_col@0 ASC], global=true",
-            "  MemoryExec: partitions=0, partition_sizes=[]",
-        ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_remove_unnecessary_sort() -> Result<()> {
-        let schema = create_test_schema()?;
-        let source = memory_exec(&schema);
-        let input = sort_exec(vec![sort_expr("non_nullable_col", &schema)], source);
-        let physical_plan = sort_exec(vec![sort_expr("nullable_col", &schema)], input);
-
-        let expected_input = vec![
-            "SortExec: expr=[nullable_col@0 ASC], global=true",
-            "  SortExec: expr=[non_nullable_col@1 ASC], global=true",
-            "    MemoryExec: partitions=0, partition_sizes=[]",
         ];
         let expected_optimized = vec![
             "SortExec: expr=[nullable_col@0 ASC], global=true",
@@ -2254,6 +2301,8 @@ mod tests {
             "  SortExec: expr=[nullable_col@0 DESC NULLS LAST,non_nullable_col@1 DESC NULLS LAST], global=true",
             "    ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
+        // Since `UnionExec` doesn't preserve ordering in the plan above.
+        // We shouldn't keep SortExecs in the plan.
         let expected_optimized = vec![
             "UnionExec",
             "  ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
@@ -2531,65 +2580,6 @@ mod tests {
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_not_remove_top_sort_window_multilayer() -> Result<()> {
-        let schema = create_test_schema()?;
-        let source = memory_exec(&schema);
-
-        let sort_exprs = vec![sort_expr_options(
-            "non_nullable_col",
-            &source.schema(),
-            SortOptions {
-                descending: true,
-                nulls_first: true,
-            },
-        )];
-        let sort = sort_exec(sort_exprs.clone(), source);
-
-        let window_agg = bounded_window_exec("non_nullable_col", sort_exprs, sort);
-
-        let sort_exprs = vec![sort_expr_options(
-            "non_nullable_col",
-            &window_agg.schema(),
-            SortOptions {
-                descending: false,
-                nulls_first: false,
-            },
-        )];
-
-        let sort = sort_exec(sort_exprs.clone(), window_agg);
-
-        // Add dummy layer propagating Sort above, the top Sort should not be removed
-        let filter = filter_exec(
-            Arc::new(NotExpr::new(
-                col("non_nullable_col", schema.as_ref()).unwrap(),
-            )),
-            sort,
-        );
-
-        // let filter_exec = sort_exec;
-        let physical_plan = bounded_window_exec("non_nullable_col", sort_exprs, filter);
-
-        let expected_input = vec![
-            "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
-            "  FilterExec: NOT non_nullable_col@1",
-            "    SortExec: expr=[non_nullable_col@1 ASC NULLS LAST], global=true",
-            "      BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
-            "        SortExec: expr=[non_nullable_col@1 DESC], global=true",
-            "          MemoryExec: partitions=0, partition_sizes=[]",
-        ];
-
-        let expected_optimized = vec![
-            "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(NULL) }]",
-            "  FilterExec: NOT non_nullable_col@1",
-            "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
-            "      SortExec: expr=[non_nullable_col@1 DESC], global=true",
-            "        MemoryExec: partitions=0, partition_sizes=[]",
-        ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())
     }
 
