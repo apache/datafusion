@@ -2518,8 +2518,8 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
             match ctx.read_csv(path, options).await?.into_optimized_plan()? {
                 LogicalPlan::TableScan(ref scan) => {
                     let mut scan = scan.clone();
-                    let table_reference: TableReference<'_> = name.into();
-                    scan.table_name = table_reference.to_owned_reference();
+                    let table_reference = TableReference::from(name).to_owned_reference();
+                    scan.table_name = table_reference;
                     let new_schema = scan
                         .projected_schema
                         .as_ref()
