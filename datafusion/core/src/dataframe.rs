@@ -332,45 +332,28 @@ impl DataFrame {
         let original_schema_fields = self.schema().fields().iter();
 
         //define describe column
-        let mut describe_schemas = original_schema_fields
-            .clone()
-            .map(|field| {
-                if field.data_type().is_numeric() {
-                    Field::new(field.name(), DataType::Float64, true)
-                } else {
-                    Field::new(field.name(), DataType::Utf8, true)
-                }
-            })
-            .collect::<Vec<_>>();
-        describe_schemas.insert(0, Field::new("describe", DataType::Utf8, false));
+        let mut describe_schemas = vec![Field::new("describe", DataType::Utf8, false)];
+        describe_schemas.extend(original_schema_fields.clone().map(|field| {
+            if field.data_type().is_numeric() {
+                Field::new(field.name(), DataType::Float64, true)
+            } else {
+                Field::new(field.name(), DataType::Utf8, true)
+            }
+        }));
 
-        //count aggregation
-        let cnt = self.clone().aggregate(
-            vec![],
-            original_schema_fields
-                .clone()
-                .map(|f| count(col(f.name())))
-                .collect::<Vec<_>>(),
-        )?;
-        // The optimization of AggregateStatistics will rewrite the physical plan
-        // for the count function and ignore alias functions,
-        // as shown in https://github.com/apache/arrow-datafusion/issues/5444.
-        // This logic should be removed when #5444 is fixed.
-        let cnt = cnt.clone().select(
-            cnt.schema()
-                .fields()
-                .iter()
-                .zip(original_schema_fields.clone())
-                .map(|(count_field, orgin_field)| {
-                    col(count_field.name()).alias(orgin_field.name())
-                })
-                .collect::<Vec<_>>(),
-        )?;
-        //should be removed when #5444 is fixed
         //collect recordBatch
         let describe_record_batch = vec![
             // count aggregation
-            cnt.collect().await?,
+            self.clone()
+                .aggregate(
+                    vec![],
+                    original_schema_fields
+                        .clone()
+                        .map(|f| count(col(f.name())).alias(f.name()))
+                        .collect::<Vec<_>>(),
+                )?
+                .collect()
+                .await?,
             // null_count aggregation
             self.clone()
                 .aggregate(
@@ -448,10 +431,14 @@ impl DataFrame {
                 .await?,
         ];
 
-        let mut array_ref_vec: Vec<ArrayRef> = vec![];
+        // first column with function names
+        let mut array_ref_vec: Vec<ArrayRef> = vec![Arc::new(StringArray::from_slice(
+            supported_describe_functions.clone(),
+        ))];
         for field in original_schema_fields {
             let mut array_datas = vec![];
             for record_batch in describe_record_batch.iter() {
+                // safe unwrap since aggregate record batches should have at least 1 record
                 let column = record_batch.get(0).unwrap().column_by_name(field.name());
                 match column {
                     Some(c) => {
@@ -476,14 +463,6 @@ impl DataFrame {
                     .as_slice(),
             )?);
         }
-
-        //insert first column with function names
-        array_ref_vec.insert(
-            0,
-            Arc::new(StringArray::from_slice(
-                supported_describe_functions.clone(),
-            )),
-        );
 
         let describe_record_batch =
             RecordBatch::try_new(Arc::new(Schema::new(describe_schemas)), array_ref_vec)?;
@@ -1393,7 +1372,7 @@ mod tests {
         let join = left
             .join_on(right, JoinType::Inner, [col("c1").eq(col("c1"))])
             .expect_err("join didn't fail check");
-        let expected = "Schema error: Ambiguous reference to unqualified field 'c1'";
+        let expected = "Schema error: Ambiguous reference to unqualified field \"c1\"";
         assert_eq!(join.to_string(), expected);
 
         Ok(())

@@ -17,7 +17,8 @@
 
 //! Column
 
-use crate::{DFSchema, DataFusionError, Result, SchemaError};
+use crate::utils::{parse_identifiers_normalized, quote_identifier};
+use crate::{DFSchema, DataFusionError, OwnedTableReference, Result, SchemaError};
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fmt;
@@ -27,17 +28,33 @@ use std::sync::Arc;
 /// A named reference to a qualified field in a schema.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Column {
-    /// relation/table name.
-    pub relation: Option<String>,
+    /// relation/table reference.
+    pub relation: Option<OwnedTableReference>,
     /// field/column name.
     pub name: String,
 }
 
 impl Column {
-    /// Create Column from optional qualifier and name
-    pub fn new(relation: Option<impl Into<String>>, name: impl Into<String>) -> Self {
+    /// Create Column from optional qualifier and name. The optional qualifier, if present,
+    /// will be parsed and normalized by default.
+    ///
+    /// See full details on [`TableReference::parse_str`]
+    ///
+    /// [`TableReference::parse_str`]: crate::TableReference::parse_str
+    pub fn new(
+        relation: Option<impl Into<OwnedTableReference>>,
+        name: impl Into<String>,
+    ) -> Self {
         Self {
             relation: relation.map(|r| r.into()),
+            name: name.into(),
+        }
+    }
+
+    /// Convenience method for when there is no qualifier
+    pub fn new_unqualified(name: impl Into<String>) -> Self {
+        Self {
+            relation: None,
             name: name.into(),
         }
     }
@@ -53,26 +70,36 @@ impl Column {
     /// Deserialize a fully qualified name string into a column
     pub fn from_qualified_name(flat_name: impl Into<String>) -> Self {
         let flat_name = flat_name.into();
-        use sqlparser::tokenizer::Token;
+        let mut idents = parse_identifiers_normalized(&flat_name);
 
-        let dialect = sqlparser::dialect::GenericDialect {};
-        let mut tokenizer = sqlparser::tokenizer::Tokenizer::new(&dialect, &flat_name);
-        if let Ok(tokens) = tokenizer.tokenize() {
-            if let [Token::Word(relation), Token::Period, Token::Word(name)] =
-                tokens.as_slice()
-            {
-                return Column {
-                    relation: Some(relation.value.clone()),
-                    name: name.value.clone(),
-                };
-            }
-        }
-        // any expression that's not in the form of `foo.bar` will be treated as unqualified column
-        // name
-        Column {
-            relation: None,
-            name: flat_name,
-        }
+        let (relation, name) = match idents.len() {
+            1 => (None, idents.remove(0)),
+            2 => (
+                Some(OwnedTableReference::Bare {
+                    table: idents.remove(0).into(),
+                }),
+                idents.remove(0),
+            ),
+            3 => (
+                Some(OwnedTableReference::Partial {
+                    schema: idents.remove(0).into(),
+                    table: idents.remove(0).into(),
+                }),
+                idents.remove(0),
+            ),
+            4 => (
+                Some(OwnedTableReference::Full {
+                    catalog: idents.remove(0).into(),
+                    schema: idents.remove(0).into(),
+                    table: idents.remove(0).into(),
+                }),
+                idents.remove(0),
+            ),
+            // any expression that failed to parse or has more than 4 period delimited
+            // identifiers will be treated as an unqualified column name
+            _ => (None, flat_name),
+        };
+        Self { relation, name }
     }
 
     /// Serialize column into a flat name string
@@ -80,6 +107,18 @@ impl Column {
         match &self.relation {
             Some(r) => format!("{}.{}", r, self.name),
             None => self.name.clone(),
+        }
+    }
+
+    /// Serialize column into a quoted flat name string
+    pub fn quoted_flat_name(&self) -> String {
+        // TODO: quote identifiers only when special characters present
+        // see: https://github.com/apache/arrow-datafusion/issues/5523
+        match &self.relation {
+            Some(r) => {
+                format!("{}.{}", r.to_quoted_string(), quote_identifier(&self.name))
+            }
+            None => quote_identifier(&self.name),
         }
     }
 
@@ -151,7 +190,7 @@ impl Column {
         }
 
         Err(DataFusionError::SchemaError(SchemaError::FieldNotFound {
-            field: Column::new(self.relation.clone(), self.name),
+            field: Box::new(Column::new(self.relation.clone(), self.name)),
             valid_fields: schemas
                 .iter()
                 .flat_map(|s| s.fields().iter().map(|f| f.qualified_column()))
@@ -240,8 +279,7 @@ impl Column {
                     // If not due to USING columns then due to ambiguous column name
                     return Err(DataFusionError::SchemaError(
                         SchemaError::AmbiguousReference {
-                            qualifier: None,
-                            name: self.name,
+                            field: Column::new_unqualified(self.name),
                         },
                     ));
                 }
@@ -249,7 +287,7 @@ impl Column {
         }
 
         Err(DataFusionError::SchemaError(SchemaError::FieldNotFound {
-            field: self,
+            field: Box::new(self),
             valid_fields: schemas
                 .iter()
                 .flat_map(|s| s.iter())
@@ -304,7 +342,12 @@ mod tests {
         let fields = names
             .iter()
             .map(|(qualifier, name)| {
-                DFField::new(qualifier.to_owned(), name, DataType::Boolean, true)
+                DFField::new(
+                    qualifier.to_owned().map(|s| s.to_string()),
+                    name,
+                    DataType::Boolean,
+                    true,
+                )
             })
             .collect::<Vec<_>>();
         DFSchema::new_with_metadata(fields, HashMap::new())
@@ -362,9 +405,7 @@ mod tests {
                 &[],
             )
             .expect_err("should've failed to find field");
-        let expected = "Schema error: No field named 'z'. \
-        Valid fields are 't1'.'a', 't1'.'b', 't2'.'c', \
-        't2'.'d', 't3'.'a', 't3'.'b', 't3'.'c', 't3'.'d', 't3'.'e'.";
+        let expected = r#"Schema error: No field named "z". Valid fields are "t1"."a", "t1"."b", "t2"."c", "t2"."d", "t3"."a", "t3"."b", "t3"."c", "t3"."d", "t3"."e"."#;
         assert_eq!(err.to_string(), expected);
 
         // ambiguous column reference
@@ -375,7 +416,7 @@ mod tests {
                 &[],
             )
             .expect_err("should've found ambiguous field");
-        let expected = "Schema error: Ambiguous reference to unqualified field 'a'";
+        let expected = "Schema error: Ambiguous reference to unqualified field \"a\"";
         assert_eq!(err.to_string(), expected);
 
         Ok(())

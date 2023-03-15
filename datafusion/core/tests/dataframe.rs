@@ -40,13 +40,17 @@ async fn describe() -> Result<()> {
     let ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();
 
-    let df = ctx
+    let describe_record_batch = ctx
         .read_parquet(
             &format!("{testdata}/alltypes_tiny_pages.parquet"),
             ParquetReadOptions::default(),
         )
+        .await?
+        .describe()
+        .await?
+        .collect()
         .await?;
-    let describe_record_batch = df.describe().await.unwrap().collect().await.unwrap();
+
     #[rustfmt::skip]
         let expected = vec![
         "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
@@ -245,7 +249,7 @@ async fn sort_on_ambiguous_column() -> Result<()> {
         .sort(vec![col("b").sort(true, true)])
         .unwrap_err();
 
-    let expected = "Schema error: Ambiguous reference to unqualified field 'b'";
+    let expected = "Schema error: Ambiguous reference to unqualified field \"b\"";
     assert_eq!(err.to_string(), expected);
     Ok(())
 }
@@ -264,7 +268,7 @@ async fn group_by_ambiguous_column() -> Result<()> {
         .aggregate(vec![col("b")], vec![max(col("a"))])
         .unwrap_err();
 
-    let expected = "Schema error: Ambiguous reference to unqualified field 'b'";
+    let expected = "Schema error: Ambiguous reference to unqualified field \"b\"";
     assert_eq!(err.to_string(), expected);
     Ok(())
 }
@@ -283,7 +287,7 @@ async fn filter_on_ambiguous_column() -> Result<()> {
         .filter(col("b").eq(lit(1)))
         .unwrap_err();
 
-    let expected = "Schema error: Ambiguous reference to unqualified field 'b'";
+    let expected = "Schema error: Ambiguous reference to unqualified field \"b\"";
     assert_eq!(err.to_string(), expected);
     Ok(())
 }
@@ -302,7 +306,7 @@ async fn select_ambiguous_column() -> Result<()> {
         .select(vec![col("b")])
         .unwrap_err();
 
-    let expected = "Schema error: Ambiguous reference to unqualified field 'b'";
+    let expected = "Schema error: Ambiguous reference to unqualified field \"b\"";
     assert_eq!(err.to_string(), expected);
     Ok(())
 }

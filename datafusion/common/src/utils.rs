@@ -20,6 +20,10 @@
 use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::ArrayRef;
 use arrow::compute::SortOptions;
+use sqlparser::ast::Ident;
+use sqlparser::dialect::GenericDialect;
+use sqlparser::parser::{Parser, ParserError};
+use sqlparser::tokenizer::{Token, TokenWithLocation};
 use std::cmp::Ordering;
 
 /// Given column vectors, returns row at `idx`.
@@ -156,6 +160,78 @@ where
         low += 1;
     }
     Ok(low)
+}
+
+/// Wraps identifier string in double quotes, escaping any double quotes in
+/// the identifier by replacing it with two double quotes
+///
+/// e.g. identifier `tab.le"name` becomes `"tab.le""name"`
+pub fn quote_identifier(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+// TODO: remove when can use https://github.com/sqlparser-rs/sqlparser-rs/issues/805
+pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
+    let dialect = GenericDialect;
+    let mut parser = Parser::new(&dialect).try_with_sql(s)?;
+    let mut idents = vec![];
+
+    // expecting at least one word for identifier
+    match parser.next_token_no_skip() {
+        Some(TokenWithLocation {
+            token: Token::Word(w),
+            ..
+        }) => idents.push(w.to_ident()),
+        Some(TokenWithLocation { token, .. }) => {
+            return Err(ParserError::ParserError(format!(
+                "Unexpected token in identifier: {token}"
+            )))?
+        }
+        None => {
+            return Err(ParserError::ParserError(
+                "Empty input when parsing identifier".to_string(),
+            ))?
+        }
+    };
+
+    while let Some(TokenWithLocation { token, .. }) = parser.next_token_no_skip() {
+        match token {
+            // ensure that optional period is succeeded by another identifier
+            Token::Period => match parser.next_token_no_skip() {
+                Some(TokenWithLocation {
+                    token: Token::Word(w),
+                    ..
+                }) => idents.push(w.to_ident()),
+                Some(TokenWithLocation { token, .. }) => {
+                    return Err(ParserError::ParserError(format!(
+                        "Unexpected token following period in identifier: {token}"
+                    )))?
+                }
+                None => {
+                    return Err(ParserError::ParserError(
+                        "Trailing period in identifier".to_string(),
+                    ))?
+                }
+            },
+            _ => {
+                return Err(ParserError::ParserError(format!(
+                    "Unexpected token in identifier: {token}"
+                )))?
+            }
+        }
+    }
+    Ok(idents)
+}
+
+pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
+    parse_identifiers(s)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|id| match id.quote_style {
+            Some(_) => id.value,
+            None => id.value.to_ascii_lowercase(),
+        })
+        .collect::<Vec<_>>()
 }
 
 #[cfg(test)]
@@ -328,6 +404,64 @@ mod tests {
         assert_eq!(res, 2);
         let res = linear_search::<true>(&arrays, &search_tuple, &ords)?;
         assert_eq!(res, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_identifiers() -> Result<()> {
+        let s = "CATALOG.\"F(o)o. \"\"bar\".table";
+        let actual = parse_identifiers(s)?;
+        let expected = vec![
+            Ident {
+                value: "CATALOG".to_string(),
+                quote_style: None,
+            },
+            Ident {
+                value: "F(o)o. \"bar".to_string(),
+                quote_style: Some('"'),
+            },
+            Ident {
+                value: "table".to_string(),
+                quote_style: None,
+            },
+        ];
+        assert_eq!(expected, actual);
+
+        let s = "";
+        let err = parse_identifiers(s).expect_err("didn't fail to parse");
+        assert_eq!(
+            "SQL(ParserError(\"Empty input when parsing identifier\"))",
+            format!("{err:?}")
+        );
+
+        let s = "*schema.table";
+        let err = parse_identifiers(s).expect_err("didn't fail to parse");
+        assert_eq!(
+            "SQL(ParserError(\"Unexpected token in identifier: *\"))",
+            format!("{err:?}")
+        );
+
+        let s = "schema.table*";
+        let err = parse_identifiers(s).expect_err("didn't fail to parse");
+        assert_eq!(
+            "SQL(ParserError(\"Unexpected token in identifier: *\"))",
+            format!("{err:?}")
+        );
+
+        let s = "schema.table.";
+        let err = parse_identifiers(s).expect_err("didn't fail to parse");
+        assert_eq!(
+            "SQL(ParserError(\"Trailing period in identifier\"))",
+            format!("{err:?}")
+        );
+
+        let s = "schema.*";
+        let err = parse_identifiers(s).expect_err("didn't fail to parse");
+        assert_eq!(
+            "SQL(ParserError(\"Unexpected token following period in identifier: *\"))",
+            format!("{err:?}")
+        );
+
         Ok(())
     }
 }

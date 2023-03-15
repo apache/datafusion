@@ -26,13 +26,11 @@ use create_table::create_table;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
 use datafusion_sql::parser::{DFParser, Statement};
-use insert::insert;
 use sqllogictest::DBOutput;
 use sqlparser::ast::Statement as SQLStatement;
 
 mod create_table;
 mod error;
-mod insert;
 mod normalize;
 mod util;
 
@@ -85,7 +83,6 @@ async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DFOut
         if let Statement::Statement(statement) = statement0 {
             let statement = *statement;
             match statement {
-                SQLStatement::Insert { .. } => return insert(ctx, statement).await,
                 SQLStatement::CreateTable {
                     query,
                     constraints,
