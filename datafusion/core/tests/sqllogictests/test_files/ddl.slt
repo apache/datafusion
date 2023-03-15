@@ -63,7 +63,7 @@ statement error Table 'user' doesn't exist.
 DROP TABLE user;
 
 # Can not insert into a undefined table
-statement error No table named 'user'
+statement error DataFusion error: Error during planning: table 'datafusion.public.user' not found
 insert into user values(1, 20);
 
 ##########
@@ -421,9 +421,27 @@ statement ok
 DROP TABLE aggregate_simple
 
 
+# sql_table_insert
+statement ok
+CREATE TABLE abc AS VALUES (1,2,3), (4,5,6);
+
+statement ok
+CREATE TABLE xyz AS VALUES (1,3,3), (5,5,6);
+
+statement ok
+INSERT INTO abc SELECT * FROM xyz;
+
+query III
+SELECT * FROM abc
+----
+1 2 3
+4 5 6
+1 3 3
+5 5 6
+
 # Should create an empty table
 statement ok
-CREATE TABLE table_without_values(field1 BIGINT, field2 BIGINT);
+CREATE TABLE table_without_values(field1 BIGINT NULL, field2 BIGINT NULL);
 
 
 # Should skip existing table
@@ -444,8 +462,8 @@ CREATE OR REPLACE TABLE IF NOT EXISTS table_without_values(field1 BIGINT, field2
 statement ok
 insert into table_without_values values (1, 2), (2, 3), (2, 4);
 
-query II rowsort
-select * from table_without_values;
+query II
+select * from table_without_values
 ----
 1 2
 2 3
@@ -454,7 +472,7 @@ select * from table_without_values;
 
 # Should recreate existing table
 statement ok
-CREATE OR REPLACE TABLE table_without_values(field1 BIGINT, field2 BIGINT);
+CREATE OR REPLACE TABLE table_without_values(field1 BIGINT NULL, field2 BIGINT NULL);
 
 
 # Should insert into a recreated table

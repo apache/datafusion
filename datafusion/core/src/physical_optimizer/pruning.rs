@@ -46,7 +46,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{downcast_value, ScalarValue};
-use datafusion_physical_expr::rewrite::{TreeNodeRewritable, TreeNodeRewriter};
+use datafusion_physical_expr::rewrite::TreeNodeRewritable;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
 use log::trace;
@@ -643,28 +643,15 @@ fn rewrite_column_expr(
     column_old: &phys_expr::Column,
     column_new: &phys_expr::Column,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let mut rewriter = RewriteColumnExpr {
-        column_old,
-        column_new,
-    };
-    e.transform_using(&mut rewriter)
-}
-
-struct RewriteColumnExpr<'a> {
-    column_old: &'a phys_expr::Column,
-    column_new: &'a phys_expr::Column,
-}
-
-impl<'a> TreeNodeRewriter<Arc<dyn PhysicalExpr>> for RewriteColumnExpr<'a> {
-    fn mutate(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
+    e.transform(&|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<phys_expr::Column>() {
-            if column == self.column_old {
-                return Ok(Arc::new(self.column_new.clone()));
+            if column == column_old {
+                return Ok(Some(Arc::new(column_new.clone())));
             }
         }
 
-        Ok(expr)
-    }
+        Ok(None)
+    })
 }
 
 fn reverse_operator(op: Operator) -> Result<Operator> {

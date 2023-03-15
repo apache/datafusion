@@ -342,11 +342,11 @@ async fn parquet_query_with_max_min() {
     let sql = "SELECT max(c1) FROM foo";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+---------+",
-        "| MAX(c1) |",
-        "+---------+",
-        "| 3       |",
-        "+---------+",
+        "+-------------+",
+        "| MAX(foo.c1) |",
+        "+-------------+",
+        "| 3           |",
+        "+-------------+",
     ];
 
     assert_batches_eq!(expected, &actual);
@@ -366,11 +366,11 @@ async fn parquet_query_with_max_min() {
     let sql = "SELECT max(c3) FROM foo";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+---------+",
-        "| MAX(c3) |",
-        "+---------+",
-        "| 300     |",
-        "+---------+",
+        "+-------------+",
+        "| MAX(foo.c3) |",
+        "+-------------+",
+        "| 300         |",
+        "+-------------+",
     ];
 
     assert_batches_eq!(expected, &actual);

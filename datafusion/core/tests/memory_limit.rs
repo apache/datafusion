@@ -85,6 +85,16 @@ async fn join_by_key() {
 }
 
 #[tokio::test]
+async fn join_by_expression() {
+    run_limit_test(
+        "select t1.* from t t1 JOIN t t2 ON t1.service != t2.service",
+        "Resources exhausted: Failed to allocate additional",
+        1_000,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn cross_join() {
     run_limit_test(
         "select t1.* from t t1 CROSS JOIN t t2",
