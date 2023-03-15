@@ -144,9 +144,7 @@ impl Accumulator for MedianAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         if !self.all_values.iter().any(|v| !v.is_null()) {
-            return Err(DataFusionError::Execution(
-                "median requires at least one non-null value".into(),
-            ));
+            return ScalarValue::try_from(&self.data_type);
         }
 
         // Create an array of all the non null values and find the
