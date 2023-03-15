@@ -44,8 +44,6 @@ use std::sync::Arc;
 pub(crate) struct SortPushDown {
     /// Current plan
     pub plan: Arc<dyn ExecutionPlan>,
-    /// Whether the plan could impact the final result ordering
-    impact_result_ordering: bool,
     /// Parent required sort ordering
     required_ordering: Option<Vec<PhysicalSortRequirements>>,
     /// The adjusted request sort ordering to children.
@@ -55,23 +53,9 @@ pub(crate) struct SortPushDown {
 
 impl SortPushDown {
     pub fn init(plan: Arc<dyn ExecutionPlan>) -> Self {
-        let impact_result_ordering = plan.output_ordering().is_some()
-            || plan.output_partitioning().partition_count() <= 1
-            || is_limit(&plan);
         let request_ordering = plan.required_input_ordering();
         SortPushDown {
             plan,
-            impact_result_ordering,
-            required_ordering: None,
-            adjusted_request_ordering: request_ordering,
-        }
-    }
-
-    pub fn new_without_impact_result_ordering(plan: Arc<dyn ExecutionPlan>) -> Self {
-        let request_ordering = plan.required_input_ordering();
-        SortPushDown {
-            plan,
-            impact_result_ordering: false,
             required_ordering: None,
             adjusted_request_ordering: request_ordering,
         }
@@ -84,18 +68,11 @@ impl SortPushDown {
         izip!(
             plan_children.into_iter(),
             self.adjusted_request_ordering.clone().into_iter(),
-            self.plan.maintains_input_order().into_iter(),
         )
-        .map(|(child, from_parent, maintains_input_order)| {
-            let child_impact_result_ordering = if is_limit(&self.plan) {
-                true
-            } else {
-                maintains_input_order && self.impact_result_ordering
-            };
+        .map(|(child, from_parent)| {
             let child_request_ordering = child.required_input_ordering();
             SortPushDown {
                 plan: child,
-                impact_result_ordering: child_impact_result_ordering,
                 required_ordering: from_parent,
                 adjusted_request_ordering: child_request_ordering,
             }
@@ -125,7 +102,6 @@ impl TreeNodeRewritable for SortPushDown {
             let plan = with_new_children_if_necessary(self.plan, children_plans)?;
             Ok(SortPushDown {
                 plan,
-                impact_result_ordering: self.impact_result_ordering,
                 required_ordering: self.required_ordering,
                 adjusted_request_ordering: self.adjusted_request_ordering,
             })
@@ -157,13 +133,10 @@ pub(crate) fn pushdown_sorts(requirements: SortPushDown) -> Result<Option<SortPu
                 plan: child.clone(),
                 required_ordering,
                 adjusted_request_ordering: adjusted,
-                ..requirements
             }))
         } else {
             // Can not push down requirements
-            Ok(Some(SortPushDown::new_without_impact_result_ordering(
-                new_plan,
-            )))
+            Ok(Some(SortPushDown::init(new_plan)))
         }
     } else {
         // Executors other than SortExec
@@ -191,9 +164,7 @@ pub(crate) fn pushdown_sorts(requirements: SortPushDown) -> Result<Option<SortPu
                 // Can not push down requirements, add new SortExec
                 let mut new_plan = plan.clone();
                 add_sort_above(&mut new_plan, parent_required_expr)?;
-                Ok(Some(SortPushDown::new_without_impact_result_ordering(
-                    new_plan,
-                )))
+                Ok(Some(SortPushDown::init(new_plan)))
             }
         }
     }
