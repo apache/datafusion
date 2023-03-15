@@ -16,13 +16,8 @@
 // under the License.
 
 //! This module provides common traits for visiting or rewriting tree nodes easily.
-//!
-//! It's a duplication of the one in the crate `datafusion-common`.
-//! In the future, if the Orphan rule is relaxed for Arc<dyn T>, these duplicated codes can be removed.
 
-pub mod physical_plan;
-
-use datafusion_common::{DataFusionError, Result};
+use crate::{DataFusionError, Result};
 
 /// Trait for tree node. It can be [`ExecutionPlan`], [`PhysicalExpr`], [`LogicalExpr`], etc.
 pub trait TreeNode: Clone {

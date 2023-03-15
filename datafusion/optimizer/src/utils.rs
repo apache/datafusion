@@ -22,9 +22,10 @@ use datafusion_common::{plan_err, Column, DFSchemaRef, DataFusionError};
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr::{BinaryExpr, Sort};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
-use datafusion_expr::expr_visitor::inspect_expr_pre;
 use datafusion_expr::logical_plan::LogicalPlanBuilder;
-use datafusion_expr::utils::{check_all_columns_from_schema, from_plan};
+use datafusion_expr::utils::{
+    check_all_columns_from_schema, from_plan, inspect_expr_pre,
+};
 use datafusion_expr::{
     and,
     logical_plan::{Filter, LogicalPlan},

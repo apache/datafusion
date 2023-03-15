@@ -17,7 +17,7 @@
 
 //! This module provides common traits for visiting or rewriting tree nodes easily.
 //!
-//! It's a duplication of the one in the crate `datafusion`.
+//! It's a duplication of the one in the crate `datafusion-common`.
 //! In the future, if the Orphan rule is relaxed for Arc<dyn T>, these duplicated codes can be removed.
 
 pub mod physical_expr;
@@ -29,7 +29,7 @@ pub trait TreeNode: Clone {
     /// Return the children of this tree node
     fn get_children(&self) -> Vec<Self>;
 
-    /// Use pre-order to iterate the node on the tree so that we can stop fast for some cases.
+    /// Use preorder to iterate the node on the tree so that we can stop fast for some cases.
     ///
     /// `op` can be used to collect some info from the tree node.
     fn collect<F>(&self, op: &mut F) -> Result<()>
@@ -52,6 +52,52 @@ pub trait TreeNode: Clone {
         }
 
         Ok(())
+    }
+
+    /// Visit the tree node using the given [TreeNodeVisitor]
+    /// It performs a depth first walk of an node and its children.
+    ///
+    /// For an node tree such as
+    /// ```text
+    /// ParentNode
+    ///    left: ChildNode1
+    ///    right: ChildNode2
+    /// ```
+    ///
+    /// The nodes are visited using the following order
+    /// ```text
+    /// pre_visit(ParentNode)
+    /// pre_visit(ChildNode1)
+    /// post_visit(ChildNode1)
+    /// pre_visit(ChildNode2)
+    /// post_visit(ChildNode2)
+    /// post_visit(ParentNode)
+    /// ```
+    ///
+    /// If an Err result is returned, recursion is stopped immediately
+    ///
+    /// If [`Recursion::Stop`] is returned on a call to pre_visit, no
+    /// children of that node will be visited, nor is post_visit
+    /// called on that node
+    ///
+    /// If using the default [`post_visit`] with nothing to do, the [`collect`] should be preferred
+    fn collect_using<V: TreeNodeVisitor<N = Self>>(&self, visitor: &mut V) -> Result<()> {
+        match visitor.pre_visit(self)? {
+            Recursion::Continue => {}
+            // If the recursion should stop, do not visit children
+            Recursion::Stop => return Ok(()),
+            r => {
+                return Err(DataFusionError::Execution(format!(
+                    "Recursion {r:?} is not supported for collect_using"
+                )))
+            }
+        };
+
+        for child in self.get_children() {
+            child.collect_using(visitor)?;
+        }
+
+        visitor.post_visit(self)
     }
 
     /// Convenience utils for writing optimizers rule: recursively apply the given `op` to the node tree.
@@ -119,9 +165,10 @@ pub trait TreeNode: Clone {
     /// If an Err result is returned, recursion is stopped immediately
     ///
     /// If [`false`] is returned on a call to pre_visit, no
-    /// children of that node are visited, nor is mutate
+    /// children of that node will be visited, nor is mutate
     /// called on that node
     ///
+    /// If using the default [`pre_visit`] with [`true`] returned, the [`transform`] should be preferred
     fn transform_using<R: TreeNodeRewriter<N = Self>>(
         self,
         rewriter: &mut R,
@@ -148,6 +195,38 @@ pub trait TreeNode: Clone {
     fn map_children<F>(self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>;
+}
+
+/// Implements the [visitor
+/// pattern](https://en.wikipedia.org/wiki/Visitor_pattern) for recursively walking [`TreeNode`]s.
+///
+/// [`TreeNodeVisitor`] allows keeping the algorithms
+/// separate from the code to traverse the structure of the `TreeNode`
+/// tree and makes it easier to add new types of tree node and
+/// algorithms by.
+///
+/// When passed to[`TreeNode::accept`], [`TreeNode::pre_visit`]
+/// and [`TreeNode::post_visit`] are invoked recursively
+/// on an node tree.
+///
+/// If an [`Err`] result is returned, recursion is stopped
+/// immediately.
+///
+/// If [`Recursion::Stop`] is returned on a call to pre_visit, no
+/// children of that tree node are visited, nor is post_visit
+/// called on that tree node
+pub trait TreeNodeVisitor: Sized {
+    /// The node type which is visitable.
+    type N: TreeNode;
+
+    /// Invoked before any children of `node` are visited.
+    fn pre_visit(&mut self, node: &Self::N) -> Result<Recursion>;
+
+    /// Invoked after all children of `node` are visited. Default
+    /// implementation does nothing.
+    fn post_visit(&mut self, _node: &Self::N) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Trait for potentially recursively transform an [`TreeNode`] node

@@ -16,13 +16,12 @@
 // under the License.
 
 use crate::expr_rewriter::rewrite_expr;
-use crate::expr_visitor::inspect_expr_pre;
-use crate::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 ///! Logical plan types
 use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::plan;
+use crate::utils::inspect_expr_pre;
 use crate::utils::{
     self, exprlist_to_fields, from_plan, grouping_set_expr_count,
     grouping_set_to_exprlist,
@@ -32,6 +31,7 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::tree_node::{Recursion, TreeNode};
 use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
     ScalarValue,
@@ -658,50 +658,31 @@ impl LogicalPlan {
             param_types: HashMap<String, Option<DataType>>,
         }
 
-        struct ExprParamTypeVisitor {
-            param_types: HashMap<String, Option<DataType>>,
-        }
-
-        impl ExpressionVisitor for ExprParamTypeVisitor {
-            fn pre_visit(
-                mut self,
-                expr: &Expr,
-            ) -> datafusion_common::Result<Recursion<Self>>
-            where
-                Self: ExpressionVisitor,
-            {
-                if let Expr::Placeholder { id, data_type } = expr {
-                    let prev = self.param_types.get(id);
-                    match (prev, data_type) {
-                        (Some(Some(prev)), Some(dt)) => {
-                            if prev != dt {
-                                Err(DataFusionError::Plan(format!(
-                                    "Conflicting types for {id}"
-                                )))?;
-                            }
-                        }
-                        (_, Some(dt)) => {
-                            let _ = self.param_types.insert(id.clone(), Some(dt.clone()));
-                        }
-                        _ => {}
-                    }
-                }
-                Ok(Recursion::Continue(self))
-            }
-        }
-
         impl PlanVisitor for ParamTypeVisitor {
             type Error = DataFusionError;
 
             fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
                 let mut param_types = HashMap::new();
                 plan.inspect_expressions(|expr| {
-                    let mut visitor = ExprParamTypeVisitor {
-                        param_types: Default::default(),
-                    };
-                    visitor = expr.accept(visitor)?;
-                    param_types.extend(visitor.param_types);
-                    Ok(()) as Result<(), DataFusionError>
+                    expr.collect(&mut |expr| {
+                        if let Expr::Placeholder { id, data_type } = expr {
+                            let prev = param_types.get(id);
+                            match (prev, data_type) {
+                                (Some(Some(prev)), Some(dt)) => {
+                                    if prev != dt {
+                                        Err(DataFusionError::Plan(format!(
+                                            "Conflicting types for {id}"
+                                        )))?;
+                                    }
+                                }
+                                (_, Some(dt)) => {
+                                    param_types.insert(id.clone(), Some(dt.clone()));
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Recursion::Continue)
+                    })
                 })?;
                 self.param_types.extend(param_types);
                 Ok(true)
