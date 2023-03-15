@@ -60,7 +60,7 @@ pub struct CreateExternalTable {
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
     /// Ordered Columns
-    pub ordered_exprs: Vec<OrderByExpr>,
+    pub order_exprs: Vec<OrderByExpr>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
     /// File compression type (GZIP, BZIP2, XZ)
@@ -218,7 +218,7 @@ impl<'a> DFParser<'a> {
         }))
     }
 
-    /// Parse a SQL `CREATE` statementm handling `CREATE EXTERNAL TABLE`
+    /// Parse a SQL `CREATE` statement handling `CREATE EXTERNAL TABLE`
     pub fn parse_create(&mut self) -> Result<Statement, ParserError> {
         if self.parser.parse_keyword(Keyword::EXTERNAL) {
             self.parse_create_external_table()
@@ -256,20 +256,20 @@ impl<'a> DFParser<'a> {
         Ok(partitions)
     }
 
+    /// Parse the ordering clause of a `CREATE EXTERNAL TABLE` SQL statement
     pub fn parse_order_by_exprs(&mut self) -> Result<Vec<OrderByExpr>, ParserError> {
         let mut values = vec![];
         self.parser.expect_token(&Token::LParen)?;
         loop {
             values.push(self.parse_order_by_expr()?);
             if !self.parser.consume_token(&Token::Comma) {
-                break;
+                self.parser.expect_token(&Token::RParen)?;
+                return Ok(values);
             }
         }
-        self.parser.expect_token(&Token::RParen)?;
-        Ok(values)
     }
 
-    /// Parse an expression, optionally followed by ASC or DESC (used in ORDER BY)
+    /// Parse an ORDER BY sub-expression optionally followed by ASC or DESC.
     pub fn parse_order_by_expr(&mut self) -> Result<OrderByExpr, ParserError> {
         let expr = self.parser.parse_expr()?;
 
@@ -405,7 +405,7 @@ impl<'a> DFParser<'a> {
             vec![]
         };
 
-        let ordered_by_exprs = if self.parse_has_ordered() {
+        let order_exprs = if self.parse_has_order() {
             self.parse_order_by_exprs()?
         } else {
             vec![]
@@ -428,7 +428,7 @@ impl<'a> DFParser<'a> {
             delimiter,
             location,
             table_partition_cols,
-            ordered_exprs: ordered_by_exprs,
+            order_exprs,
             if_not_exists,
             file_compression_type,
             options,
@@ -512,7 +512,7 @@ impl<'a> DFParser<'a> {
             .parse_keywords(&[Keyword::PARTITIONED, Keyword::BY])
     }
 
-    fn parse_has_ordered(&mut self) -> bool {
+    fn parse_has_order(&mut self) -> bool {
         self.parser.parse_keywords(&[Keyword::WITH, Keyword::ORDER])
     }
 }
@@ -578,7 +578,7 @@ mod tests {
             delimiter: ',',
             location: "foo.csv".into(),
             table_partition_cols: vec![],
-            ordered_exprs: vec![
+            order_exprs: vec![
                 OrderByExpr {
                     expr: Identifier(Ident {
                         value: "c1".to_owned(),
@@ -613,7 +613,7 @@ mod tests {
             delimiter: ',',
             location: "foo.csv".into(),
             table_partition_cols: vec![],
-            ordered_exprs: vec![OrderByExpr {
+            order_exprs: vec![OrderByExpr {
                 expr: Expr::BinaryOp {
                     left: Box::new(Identifier(Ident {
                         value: "c1".to_owned(),
@@ -649,7 +649,7 @@ mod tests {
             delimiter: ',',
             location: "foo.csv".into(),
             table_partition_cols: vec![],
-            ordered_exprs: vec![],
+            order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
@@ -666,7 +666,7 @@ mod tests {
             delimiter: ',',
             location: "foo.csv".into(),
             table_partition_cols: vec![],
-            ordered_exprs: vec![],
+            order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
@@ -684,7 +684,7 @@ mod tests {
             delimiter: '|',
             location: "foo.csv".into(),
             table_partition_cols: vec![],
-            ordered_exprs: vec![],
+            order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
@@ -702,7 +702,7 @@ mod tests {
             delimiter: ',',
             location: "foo.csv".into(),
             table_partition_cols: vec!["p1".to_string(), "p2".to_string()],
-            ordered_exprs: vec![],
+            order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
@@ -723,7 +723,7 @@ mod tests {
                 delimiter: ',',
                 location: "foo.csv".into(),
                 table_partition_cols: vec![],
-                ordered_exprs: vec![],
+                order_exprs: vec![],
                 if_not_exists: false,
                 file_compression_type: UNCOMPRESSED,
                 options: HashMap::new(),
@@ -747,7 +747,7 @@ mod tests {
                 delimiter: ',',
                 location: "foo.csv".into(),
                 table_partition_cols: vec![],
-                ordered_exprs: vec![],
+                order_exprs: vec![],
                 if_not_exists: false,
                 file_compression_type: CompressionTypeVariant::from_str(
                     file_compression_type,
@@ -767,7 +767,7 @@ mod tests {
             delimiter: ',',
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
-            ordered_exprs: vec![],
+            order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
@@ -784,7 +784,7 @@ mod tests {
             delimiter: ',',
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
-            ordered_exprs: vec![],
+            order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
@@ -801,7 +801,7 @@ mod tests {
             delimiter: ',',
             location: "foo.avro".into(),
             table_partition_cols: vec![],
-            ordered_exprs: vec![],
+            order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
@@ -819,7 +819,7 @@ mod tests {
             delimiter: ',',
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
-            ordered_exprs: vec![],
+            order_exprs: vec![],
             if_not_exists: true,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
@@ -842,7 +842,7 @@ mod tests {
             delimiter: ',',
             location: "blahblah".into(),
             table_partition_cols: vec![],
-            ordered_exprs: vec![],
+            order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::from([("k1".into(), "v1".into())]),
@@ -860,7 +860,7 @@ mod tests {
             delimiter: ',',
             location: "blahblah".into(),
             table_partition_cols: vec![],
-            ordered_exprs: vec![],
+            order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::from([

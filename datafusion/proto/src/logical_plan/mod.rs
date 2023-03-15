@@ -502,8 +502,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )))?
                 }
 
-                let order_expr: Vec<Expr> = create_extern_table
-                    .ordered_exprs
+                let order_exprs = create_extern_table
+                    .order_exprs
                     .iter()
                     .map(|expr| from_proto::parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
@@ -520,7 +520,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     table_partition_cols: create_extern_table
                         .table_partition_cols
                         .clone(),
-                    ordered_exprs: order_expr,
+                    order_exprs,
                     if_not_exists: create_extern_table.if_not_exists,
                     file_compression_type: CompressionTypeVariant::from_str(&create_extern_table.file_compression_type).map_err(|_| DataFusionError::NotImplemented(format!("Unsupported file compression type {}", create_extern_table.file_compression_type)))?,
                     definition,
@@ -1170,7 +1170,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 if_not_exists,
                 definition,
                 file_compression_type,
-                ordered_exprs,
+                order_exprs,
                 options,
             }) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
@@ -1183,7 +1183,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         table_partition_cols: table_partition_cols.clone(),
                         if_not_exists: *if_not_exists,
                         delimiter: String::from(*delimiter),
-                        ordered_exprs: ordered_exprs
+                        order_exprs: order_exprs
                             .iter()
                             .map(|expr| expr.try_into())
                             .collect::<Result<Vec<_>, to_proto::Error>>()?,

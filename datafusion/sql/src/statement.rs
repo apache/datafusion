@@ -427,34 +427,30 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn build_order_by(
         &self,
-        ordered_exprs: Vec<OrderByExpr>,
+        order_exprs: Vec<OrderByExpr>,
         schema: &DFSchemaRef,
     ) -> Result<Vec<datafusion_expr::Expr>> {
-        // Map each OrderByExpr to a SortExpr
-        let ordered_exprs_new = ordered_exprs
+        // Convert each OrderByExpr to a SortExpr:
+        let result = order_exprs
             .into_iter()
             .map(|e| self.order_by_to_sort_expr(e, schema))
             .collect::<Result<Vec<_>>>()?;
 
-        // Ensure that all SortExprs are valid by checking that their columns exist in the schema
-        ordered_exprs_new
-            .iter()
-            .try_for_each::<_, Result<()>>(|expr| {
-                let columns = expr.to_columns()?;
-                columns.iter().try_for_each(|c| {
-                    if !schema.has_column(c) {
-                        // Return an error if the column is not in the schema
-                        return Err(DataFusionError::Plan(format!(
-                            "Column {} is not in schema",
-                            c
-                        )));
-                    }
-                    Ok(())
-                })
-            })?;
+        // Verify that columns of all SortExprs exist in the schema:
+        for expr in result.iter() {
+            for column in expr.to_columns()?.iter() {
+                if !schema.has_column(column) {
+                    // Return an error if any column is not in the schema:
+                    return Err(DataFusionError::Plan(format!(
+                        "Column {} is not in schema",
+                        column
+                    )));
+                }
+            }
+        }
 
         // If all SortExprs are valid, return them as an expression vector
-        Ok(ordered_exprs_new)
+        Ok(result)
     }
 
     /// Generate a logical plan from a CREATE EXTERNAL TABLE statement
@@ -473,7 +469,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             table_partition_cols,
             if_not_exists,
             file_compression_type,
-            ordered_exprs,
+            order_exprs,
             options,
         } = statement;
 
@@ -496,7 +492,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let schema = self.build_schema(columns)?;
         let df_schema = schema.to_dfschema_ref()?;
 
-        let ordered_exprs = self.build_order_by(ordered_exprs, &df_schema)?;
+        let ordered_exprs = self.build_order_by(order_exprs, &df_schema)?;
 
         // External tables do not support schemas at the moment, so the name is just a table name
         let name = OwnedTableReference::Bare { table: name };
@@ -512,7 +508,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             if_not_exists,
             definition,
             file_compression_type,
-            ordered_exprs,
+            order_exprs: ordered_exprs,
             options,
         }))
     }

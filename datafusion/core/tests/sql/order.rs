@@ -44,7 +44,7 @@ async fn sort_with_lots_of_repetition_values() -> Result<()> {
 }
 
 #[tokio::test]
-async fn create_external_table_with_ddl_ordered() -> Result<()> {
+async fn create_external_table_with_order() -> Result<()> {
     let ctx = SessionContext::new();
     let sql = "CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS CSV WITH ORDER (a_id ASC) LOCATION 'file://path/to/table';";
     if let LogicalPlan::CreateExternalTable(cmd) =
@@ -54,7 +54,7 @@ async fn create_external_table_with_ddl_ordered() -> Result<()> {
         let table_dyn = listing_table_factory.create(&ctx.state(), &cmd).await?;
         let table = table_dyn.as_any().downcast_ref::<ListingTable>().unwrap();
         assert_eq!(
-            &cmd.ordered_exprs,
+            &cmd.order_exprs,
             table.options().file_sort_order.as_ref().unwrap()
         )
     } else {

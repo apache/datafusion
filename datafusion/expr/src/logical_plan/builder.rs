@@ -407,7 +407,6 @@ impl LogicalPlanBuilder {
                     .collect::<Result<Vec<_>>>()?;
 
                 let expr = curr_plan.expressions();
-                println!("expr {:?} new_inputs {:?}", &expr, &new_inputs);
                 from_plan(&curr_plan, &expr, &new_inputs)
             }
         }

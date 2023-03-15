@@ -116,10 +116,10 @@ impl TableProviderFactory for ListingTableFactory {
             (Some(schema), table_partition_cols)
         };
 
-        let file_sort_order = if cmd.ordered_exprs.is_empty() {
+        let file_sort_order = if cmd.order_exprs.is_empty() {
             None
         } else {
-            Some(cmd.ordered_exprs.clone())
+            Some(cmd.order_exprs.clone())
         };
 
         let options = ListingOptions::new(file_format)
