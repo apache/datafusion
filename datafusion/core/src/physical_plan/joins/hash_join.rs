@@ -60,7 +60,6 @@ use crate::error::{DataFusionError, Result};
 use crate::logical_expr::JoinType;
 
 use crate::arrow::array::BooleanBufferBuilder;
-use crate::arrow::datatypes::TimeUnit;
 use crate::execution::{
     context::TaskContext,
     memory_pool::{
@@ -77,7 +76,6 @@ use crate::physical_plan::joins::utils::{
     get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
 };
 use datafusion_physical_expr::hash_utils::equal_rows;
-use parking_lot::Mutex;
 use std::fmt;
 use std::task::Poll;
 
