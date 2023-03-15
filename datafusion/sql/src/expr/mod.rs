@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub(crate) mod arrow_cast;
 mod binary_op;
 mod function;
 mod grouping_set;
@@ -92,7 +93,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .find(|field| match field.qualifier() {
                             Some(field_q) => {
                                 field.name() == &col.name
-                                    && field_q.ends_with(&format!(".{q}"))
+                                    && field_q.to_string().ends_with(&format!(".{q}"))
                             }
                             _ => false,
                         }) {

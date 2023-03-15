@@ -197,6 +197,16 @@ pub fn create_physical_expr(
                     rhs,
                     input_schema,
                 )?)),
+                (
+                    DataType::Interval(_),
+                    Operator::Plus | Operator::Minus,
+                    DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
+                ) => Ok(Arc::new(DateTimeIntervalExpr::try_new(
+                    rhs,
+                    *op,
+                    lhs,
+                    input_schema,
+                )?)),
                 _ => {
                     // Note that the logical planner is responsible
                     // for type coercion on the arguments (e.g. if one
@@ -393,7 +403,10 @@ pub fn create_physical_expr(
                     execution_props,
                 )?);
             }
-
+            // udfs with zero params expect null array as input
+            if args.is_empty() {
+                physical_args.push(Arc::new(Literal::new(ScalarValue::Null)));
+            }
             udf::create_physical_expr(fun.clone().as_ref(), &physical_args, input_schema)
         }
         Expr::Between(Between {

@@ -19,14 +19,17 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::normalize_ident;
 use datafusion_common::{DFSchema, DataFusionError, Result};
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
+use datafusion_expr::window_frame::regularize;
 use datafusion_expr::{
     expr, window_function, AggregateFunction, BuiltinScalarFunction, Expr, WindowFrame,
-    WindowFrameUnits, WindowFunction,
+    WindowFunction,
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr,
 };
 use std::str::FromStr;
+
+use super::arrow_cast::ARROW_CAST_NAME;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(super) fn sql_function_to_expr(
@@ -65,15 +68,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .window_frame
                 .as_ref()
                 .map(|window_frame| {
-                    let window_frame: WindowFrame = window_frame.clone().try_into()?;
-                    if WindowFrameUnits::Range == window_frame.units
-                        && order_by.len() != 1
-                    {
-                        Err(DataFusionError::Plan(format!(
-                            "With window frame of type RANGE, the order by expression must be of length 1, got {}", order_by.len())))
-                    } else {
-                        Ok(window_frame)
-                    }
+                    let window_frame = window_frame.clone().try_into()?;
+                    regularize(window_frame, order_by.len())
                 })
                 .transpose()?;
             let window_frame = if let Some(window_frame) = window_frame {
@@ -116,24 +112,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // finally, user-defined functions (UDF) and UDAF
-        match self.schema_provider.get_function_meta(&name) {
-            Some(fm) => {
-                let args = self.function_args_to_expr(function.args, schema)?;
-
-                Ok(Expr::ScalarUDF { fun: fm, args })
-            }
-            None => match self.schema_provider.get_aggregate_meta(&name) {
-                Some(fm) => {
-                    let args = self.function_args_to_expr(function.args, schema)?;
-                    Ok(Expr::AggregateUDF {
-                        fun: fm,
-                        args,
-                        filter: None,
-                    })
-                }
-                _ => Err(DataFusionError::Plan(format!("Invalid function '{name}'"))),
-            },
+        if let Some(fm) = self.schema_provider.get_function_meta(&name) {
+            let args = self.function_args_to_expr(function.args, schema)?;
+            return Ok(Expr::ScalarUDF { fun: fm, args });
         }
+
+        // User defined aggregate functions
+        if let Some(fm) = self.schema_provider.get_aggregate_meta(&name) {
+            let args = self.function_args_to_expr(function.args, schema)?;
+            return Ok(Expr::AggregateUDF {
+                fun: fm,
+                args,
+                filter: None,
+            });
+        }
+
+        // Special case arrow_cast (as its type is dependent on its argument value)
+        if name == ARROW_CAST_NAME {
+            let args = self.function_args_to_expr(function.args, schema)?;
+            return super::arrow_cast::create_arrow_cast(args, schema);
+        }
+
+        // Could not find the relevant function, so return an error
+        Err(DataFusionError::Plan(format!("Invalid function '{name}'")))
     }
 
     pub(super) fn sql_named_function_to_expr(

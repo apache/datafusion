@@ -18,15 +18,13 @@
 //! This module provides a builder for creating LogicalPlans
 
 use crate::expr_rewriter::{
-    coerce_plan_expr_for_schema, normalize_col, normalize_col_with_schemas,
-    normalize_cols, rewrite_sort_cols_by_aggs,
+    coerce_plan_expr_for_schema, normalize_col,
+    normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
+    rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{
-    columnize_expr, compare_sort_expr, ensure_any_column_reference_is_unambiguous,
-    exprlist_to_fields, from_plan,
-};
-use crate::{and, binary_expr, Operator};
+use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields, from_plan};
+use crate::{and, binary_expr, DmlStatement, Operator, WriteOp};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
@@ -42,8 +40,8 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-    ToDFSchema,
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
+    ScalarValue, ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -178,8 +176,7 @@ impl LogicalPlanBuilder {
             .map(|(j, data_type)| {
                 // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
                 let name = &format!("column{}", j + 1);
-                DFField::new(
-                    None,
+                DFField::new_unqualified(
                     name,
                     data_type.clone().unwrap_or(DataType::Utf8),
                     true,
@@ -201,6 +198,21 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         Self::scan_with_filters(table_name, table_source, projection, vec![])
+    }
+
+    /// Create a [DmlStatement] for inserting the contents of this builder into the named table
+    pub fn insert_into(
+        input: LogicalPlan,
+        table_name: impl Into<OwnedTableReference>,
+        table_schema: &Schema,
+    ) -> Result<Self> {
+        let table_schema = table_schema.clone().to_dfschema_ref()?;
+        Ok(Self::from(LogicalPlan::Dml(DmlStatement {
+            table_name: table_name.into(),
+            table_schema,
+            op: WriteOp::Insert,
+            input: Arc::new(input),
+        })))
     }
 
     /// Convert a table provider into a builder with a TableScan
@@ -226,7 +238,10 @@ impl LogicalPlanBuilder {
                 DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
-                            DFField::from_qualified(&table_name, schema.field(*i).clone())
+                            DFField::from_qualified(
+                                table_name.to_string(),
+                                schema.field(*i).clone(),
+                            )
                         })
                         .collect(),
                     schema.metadata().clone(),
@@ -340,19 +355,44 @@ impl LogicalPlanBuilder {
     }
 
     /// Add missing sort columns to all downstream projection
+    ///
+    /// Thus, if you have a LogialPlan that selects A and B and have
+    /// not requested a sort by C, this code will add C recursively to
+    /// all input projections.
+    ///
+    /// Adding a new column is not correct if there is a `Distinct`
+    /// node, which produces only distinct values of its
+    /// inputs. Adding a new column to its input will result in
+    /// potententially different results than with the original column.
+    ///
+    /// For example, if the input is like:
+    ///
+    /// Distinct(A, B)
+    ///
+    /// If the input looks like
+    ///
+    /// a | b | c
+    /// --+---+---
+    /// 1 | 2 | 3
+    /// 1 | 2 | 4
+    ///
+    /// Distinct (A, B) --> (1,2)
+    ///
+    /// But Distinct (A, B, C) --> (1, 2, 3), (1, 2, 4)
+    ///  (which will appear as a (1, 2), (1, 2) if a and b are projected
+    ///
+    /// See <https://github.com/apache/arrow-datafusion/issues/5065> for more details
     fn add_missing_columns(
         curr_plan: LogicalPlan,
         missing_cols: &[Column],
+        is_distinct: bool,
     ) -> Result<LogicalPlan> {
         match curr_plan {
             LogicalPlan::Projection(Projection {
                 input,
                 mut expr,
                 schema: _,
-            }) if missing_cols
-                .iter()
-                .all(|c| input.schema().field_from_column(c).is_ok()) =>
-            {
+            }) if missing_cols.iter().all(|c| input.schema().has_column(c)) => {
                 let mut missing_exprs = missing_cols
                     .iter()
                     .map(|c| normalize_col(Expr::Column(c.clone()), &input))
@@ -362,15 +402,24 @@ impl LogicalPlanBuilder {
                 // missing_cols may be already present but without the new
                 // projected alias.
                 missing_exprs.retain(|e| !expr.contains(e));
+                if is_distinct {
+                    Self::ambiguous_distinct_check(&missing_exprs, missing_cols, &expr)?;
+                }
                 expr.extend(missing_exprs);
                 Ok(project((*input).clone(), expr)?)
             }
             _ => {
+                let is_distinct =
+                    is_distinct || matches!(curr_plan, LogicalPlan::Distinct(_));
                 let new_inputs = curr_plan
                     .inputs()
                     .into_iter()
                     .map(|input_plan| {
-                        Self::add_missing_columns((*input_plan).clone(), missing_cols)
+                        Self::add_missing_columns(
+                            (*input_plan).clone(),
+                            missing_cols,
+                            is_distinct,
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -378,6 +427,45 @@ impl LogicalPlanBuilder {
                 from_plan(&curr_plan, &expr, &new_inputs)
             }
         }
+    }
+
+    fn ambiguous_distinct_check(
+        missing_exprs: &[Expr],
+        missing_cols: &[Column],
+        projection_exprs: &[Expr],
+    ) -> Result<()> {
+        if missing_exprs.is_empty() {
+            return Ok(());
+        }
+
+        // if the missing columns are all only aliases for things in
+        // the existing select list, it is ok
+        //
+        // This handles the special case for
+        // SELECT col as <alias> ORDER BY <alias>
+        //
+        // As described in https://github.com/apache/arrow-datafusion/issues/5293
+        let all_aliases = missing_exprs.iter().all(|e| {
+            projection_exprs.iter().any(|proj_expr| {
+                if let Expr::Alias(expr, _) = proj_expr {
+                    e == expr.as_ref()
+                } else {
+                    false
+                }
+            })
+        });
+        if all_aliases {
+            return Ok(());
+        }
+
+        let missing_col_names = missing_cols
+            .iter()
+            .map(|col| col.flat_name())
+            .collect::<String>();
+
+        Err(DataFusionError::Plan(format!(
+            "For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list",
+        )))
     }
 
     /// Apply a sort
@@ -406,28 +494,6 @@ impl LogicalPlanBuilder {
                 Ok(())
             })?;
 
-        // if current plan is distinct or current plan is repartition and its child plan is distinct,
-        // then this plan is a select distinct plan
-        let is_select_distinct = match self.plan {
-            LogicalPlan::Distinct(_) => true,
-            LogicalPlan::Repartition(Repartition { ref input, .. }) => {
-                matches!(input.as_ref(), &LogicalPlan::Distinct(_))
-            }
-            _ => false,
-        };
-
-        // for select distinct, order by expressions must exist in select list
-        if is_select_distinct && !missing_cols.is_empty() {
-            let missing_col_names = missing_cols
-                .iter()
-                .map(|col| col.flat_name())
-                .collect::<String>();
-            let error_msg = format!(
-                "For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list",
-            );
-            return Err(DataFusionError::Plan(error_msg));
-        }
-
         if missing_cols.is_empty() {
             return Ok(Self::from(LogicalPlan::Sort(Sort {
                 expr: normalize_cols(exprs, &self.plan)?,
@@ -443,7 +509,8 @@ impl LogicalPlanBuilder {
             .map(|f| Expr::Column(f.qualified_column()))
             .collect();
 
-        let plan = Self::add_missing_columns(self.plan, &missing_cols)?;
+        let is_distinct = false;
+        let plan = Self::add_missing_columns(self.plan, &missing_cols, is_distinct)?;
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_cols(exprs, &plan)?,
             input: Arc::new(plan),
@@ -500,15 +567,17 @@ impl LogicalPlanBuilder {
         self.join_detailed(right, join_type, join_keys, filter, false)
     }
 
-    fn normalize(
+    pub(crate) fn normalize(
         plan: &LogicalPlan,
         column: impl Into<Column> + Clone,
     ) -> Result<Column> {
-        let schemas = plan.all_schemas();
+        let schema = plan.schema();
+        let fallback_schemas = plan.fallback_normalize_schemas();
         let using_columns = plan.using_columns()?;
-        column
-            .into()
-            .normalize_with_schemas(&schemas, &using_columns)
+        column.into().normalize_with_schemas_and_ambiguity_check(
+            &[&[schema], &fallback_schemas],
+            &using_columns,
+        )
     }
 
     /// Apply a join with on constraint and specified null equality
@@ -528,18 +597,10 @@ impl LogicalPlanBuilder {
         }
 
         let filter = if let Some(expr) = filter {
-            // ambiguous check
-            ensure_any_column_reference_is_unambiguous(
-                &expr,
-                &[self.schema(), right.schema()],
-            )?;
-
-            // normalize all columns in expression
-            let using_columns = expr.to_columns()?;
-            let filter = normalize_col_with_schemas(
+            let filter = normalize_col_with_schemas_and_ambiguity_check(
                 expr,
-                &[self.schema(), right.schema()],
-                &[using_columns],
+                &[&[self.schema(), right.schema()]],
+                &[],
             )?;
             Some(filter)
         } else {
@@ -668,13 +729,13 @@ impl LogicalPlanBuilder {
         let mut join_on: Vec<(Expr, Expr)> = vec![];
         let mut filters: Option<Expr> = None;
         for (l, r) in &on {
-            if self.plan.schema().field_from_column(l).is_ok()
-                && right.schema().field_from_column(r).is_ok()
+            if self.plan.schema().has_column(l)
+                && right.schema().has_column(r)
                 && can_hash(self.plan.schema().field_from_column(l)?.data_type())
             {
                 join_on.push((Expr::Column(l.clone()), Expr::Column(r.clone())));
-            } else if self.plan.schema().field_from_column(r).is_ok()
-                && right.schema().field_from_column(l).is_ok()
+            } else if self.plan.schema().has_column(l)
+                && right.schema().has_column(r)
                 && can_hash(self.plan.schema().field_from_column(r)?.data_type())
             {
                 join_on.push((Expr::Column(r.clone()), Expr::Column(l.clone())));
@@ -895,16 +956,16 @@ impl LogicalPlanBuilder {
                 let right_key = r.into();
 
                 let left_using_columns = left_key.to_columns()?;
-                let normalized_left_key = normalize_col_with_schemas(
+                let normalized_left_key = normalize_col_with_schemas_and_ambiguity_check(
                     left_key,
-                    &[self.plan.schema(), right.schema()],
+                    &[&[self.plan.schema(), right.schema()]],
                     &[left_using_columns],
                 )?;
 
                 let right_using_columns = right_key.to_columns()?;
-                let normalized_right_key = normalize_col_with_schemas(
+                let normalized_right_key = normalize_col_with_schemas_and_ambiguity_check(
                     right_key,
-                    &[self.plan.schema(), right.schema()],
+                    &[&[self.plan.schema(), right.schema()]],
                     &[right_using_columns],
                 )?;
 
@@ -1046,7 +1107,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
                     })?;
 
             Ok(DFField::new(
-                None,
+                left_field.qualifier().cloned(),
                 left_field.name(),
                 data_type,
                 nullable,
@@ -1232,7 +1293,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
         DataType::List(field)
         | DataType::FixedSizeList(field, _)
         | DataType::LargeList(field) => DFField::new(
-            unnest_field.qualifier().map(String::as_str),
+            unnest_field.qualifier().cloned(),
             unnest_field.name(),
             field.data_type().clone(),
             unnest_field.is_nullable(),
@@ -1273,7 +1334,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
 mod tests {
     use crate::{expr, expr_fn::exists};
     use arrow::datatypes::{DataType, Field};
-    use datafusion_common::SchemaError;
+    use datafusion_common::{OwnedTableReference, SchemaError, TableReference};
 
     use crate::logical_plan::StringifiedPlan;
 
@@ -1548,10 +1609,13 @@ mod tests {
 
         match plan {
             Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
-                qualifier,
-                name,
+                field:
+                    Column {
+                        relation: Some(OwnedTableReference::Bare { table }),
+                        name,
+                    },
             })) => {
-                assert_eq!("employee_csv", qualifier.unwrap().as_str());
+                assert_eq!("employee_csv", table);
                 assert_eq!("id", &name);
                 Ok(())
             }
@@ -1574,10 +1638,13 @@ mod tests {
 
         match plan {
             Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
-                qualifier,
-                name,
+                field:
+                    Column {
+                        relation: Some(OwnedTableReference::Bare { table }),
+                        name,
+                    },
             })) => {
-                assert_eq!("employee_csv", qualifier.unwrap().as_str());
+                assert_eq!("employee_csv", table);
                 assert_eq!("state", &name);
                 Ok(())
             }
@@ -1678,7 +1745,7 @@ mod tests {
         // Check unnested field is a scalar
         let field = plan
             .schema()
-            .field_with_name(Some("test_table"), "strings")
+            .field_with_name(Some(&TableReference::bare("test_table")), "strings")
             .unwrap();
         assert_eq!(&DataType::Utf8, field.data_type());
 
@@ -1697,7 +1764,7 @@ mod tests {
         // Check unnested struct list field should be a struct.
         let field = plan
             .schema()
-            .field_with_name(Some("test_table"), "structs")
+            .field_with_name(Some(&TableReference::bare("test_table")), "structs")
             .unwrap();
         assert!(matches!(field.data_type(), DataType::Struct(_)));
 
@@ -1726,5 +1793,25 @@ mod tests {
         ]);
 
         table_scan(Some(table_name), &schema, None)
+    }
+
+    #[test]
+    fn test_union_after_join() -> Result<()> {
+        let values = vec![vec![lit(1)]];
+
+        let left = LogicalPlanBuilder::values(values.clone())?
+            .alias("left")?
+            .build()?;
+        let right = LogicalPlanBuilder::values(values)?
+            .alias("right")?
+            .build()?;
+
+        let join = LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
+
+        let _ = LogicalPlanBuilder::from(join.clone())
+            .union(join)?
+            .build()?;
+
+        Ok(())
     }
 }

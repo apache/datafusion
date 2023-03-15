@@ -22,7 +22,7 @@
 statement ok
 create table foo (val int, ts timestamp) as values (1, '2000-01-01T00:00:00'::timestamp), (2, '2000-02-01T00:00:00'::timestamp), (3, '2000-03-01T00:00:00'::timestamp);
 
-query C rowsort
+query IP rowsort
 select * from foo;
 ----
 1 2000-01-01T00:00:00
@@ -30,36 +30,36 @@ select * from foo;
 3 2000-03-01T00:00:00
 
 # Test that we can compare a timestamp to a casted string
-query C rowsort
+query IP rowsort
 select * from foo where ts > '2000-01-01T00:00:00'::timestamp;
 ----
 2 2000-02-01T00:00:00
 3 2000-03-01T00:00:00
 
 # Test that we can compare a timestamp to a string and it will be coerced
-query C rowsort
+query IP rowsort
 select * from foo where ts > '2000-01-01T00:00:00';
 ----
 2 2000-02-01T00:00:00
 3 2000-03-01T00:00:00
 
-query C rowsort
+query IP rowsort
 select * from foo where ts < '2000-02-01T00:00:00';
 ----
 1 2000-01-01T00:00:00
 
-query C rowsort
+query IP rowsort
 select * from foo where ts <= '2000-02-01T00:00:00';
 ----
 1 2000-01-01T00:00:00
 2 2000-02-01T00:00:00
 
-query C rowsort
+query IP rowsort
 select * from foo where ts = '2000-02-01T00:00:00';
 ----
 2 2000-02-01T00:00:00
 
-query C rowsort
+query IP rowsort
 select * from foo where ts != '2000-02-01T00:00:00';
 ----
 1 2000-01-01T00:00:00
@@ -71,58 +71,58 @@ drop table foo;
 ###
 ## test date_bin function
 ###
-query T
+query P
 SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:00:00Z')
 ----
 2022-08-03T14:30:00
 
 # Can coerce string interval arguments
-query T
+query P
 SELECT DATE_BIN('15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:00:00Z')
 ----
 2022-08-03T14:30:00
 
 # Can coerce all string arguments
-query T
+query P
 SELECT DATE_BIN('15 minutes', '2022-08-03 14:38:50Z', '1970-01-01T00:00:00Z')
 ----
 2022-08-03T14:30:00
 
 # Shift forward by 5 minutes
-query T
+query P
 SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:05:00Z')
 ----
 2022-08-03T14:35:00
 
 
 # Shift backward by 5 minutes
-query T
+query P
 SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T23:55:00Z')
 ----
 2022-08-03T14:25:00
 
 # origin after source, timestamp in previous bucket
-query T
+query P
 SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '2022-08-03 14:40:00Z')
 ----
 2022-08-03T14:25:00
 
 # stride by 7 days
-query T
+query P
 SELECT DATE_BIN(INTERVAL '7 days', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01 00:00:00Z')
 ----
 2022-07-28T00:00:00
 
 
 # origin shifts bins forward 1 day
-query T
+query P
 SELECT DATE_BIN(INTERVAL '7 days', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-02 00:00:00Z')
 ----
 2022-07-29T00:00:00
 
 
 # demonstrates array values (rather than scalar) for the source argument
-query T rowsort
+query PR rowsort
 SELECT
   DATE_BIN(INTERVAL '15' minute, time, TIMESTAMP '2001-01-01T00:00:00Z') AS time,
   val
@@ -149,37 +149,37 @@ FROM (
 ###
 ## test date_trunc function
 ###
-query T
+query P
 SELECT DATE_TRUNC('year', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-01-01T00:00:00
 
-query T
+query P
 SELECT DATE_TRUNC('quarter', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-07-01T00:00:00
 
-query T
+query P
 SELECT DATE_TRUNC('month', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-08-01T00:00:00
 
-query T
+query P
 SELECT DATE_TRUNC('day', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-08-03T00:00:00
 
-query T
+query P
 SELECT DATE_TRUNC('hour', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-08-03T14:00:00
 
-query T
+query P
 SELECT DATE_TRUNC('minute', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-08-03T14:38:00
 
-query T
+query P
 SELECT DATE_TRUNC('second', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-08-03T14:38:50
@@ -187,7 +187,48 @@ SELECT DATE_TRUNC('second', TIMESTAMP '2022-08-03 14:38:50Z');
 
 # Demonstrate that strings are automatically coerced to timestamps (don't use TIMESTAMP)
 
-query T
+query P
 SELECT DATE_TRUNC('second', '2022-08-03 14:38:50Z');
 ----
 2022-08-03T14:38:50
+
+# Test that interval can add a timestamp
+query P
+SELECT timestamp '2013-07-01 12:00:00' + INTERVAL '8' DAY;
+----
+2013-07-09T12:00:00
+
+query P
+SELECT '2000-01-01T00:00:00'::timestamp + INTERVAL '8' DAY;
+----
+2000-01-09T00:00:00
+
+query P
+SELECT '2000-01-01T00:00:00'::timestamp + INTERVAL '8' YEAR;
+----
+2008-01-01T00:00:00
+
+query P
+SELECT '2000-01-01T00:00:00'::timestamp + INTERVAL '8' MONTH;
+----
+2000-09-01T00:00:00
+
+query P
+SELECT INTERVAL '8' DAY + timestamp '2013-07-01 12:00:00';
+----
+2013-07-09T12:00:00
+
+query P
+SELECT INTERVAL '8' DAY + '2000-01-01T00:00:00'::timestamp;
+----
+2000-01-09T00:00:00
+
+query P
+SELECT INTERVAL '8' YEAR + '2000-01-01T00:00:00'::timestamp;
+----
+2008-01-01T00:00:00
+
+query P
+SELECT INTERVAL '8' MONTH + '2000-01-01T00:00:00'::timestamp;
+----
+2000-09-01T00:00:00

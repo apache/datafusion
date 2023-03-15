@@ -28,15 +28,45 @@ use arrow::datatypes::DataType;
 use datafusion_common::{Column, Result};
 use std::sync::Arc;
 
-/// Create a column expression based on a qualified or unqualified column name
+/// Create a column expression based on a qualified or unqualified column name. Will
+/// normalize unquoted identifiers according to SQL rules (identifiers will become lowercase).
 ///
-/// example:
-/// ```
+/// For example:
+///
+/// ```rust
 /// # use datafusion_expr::col;
-/// let c = col("my_column");
+/// let c1 = col("a");
+/// let c2 = col("A");
+/// assert_eq!(c1, c2);
+///
+/// // note how quoting with double quotes preserves the case
+/// let c3 = col(r#""A""#);
+/// assert_ne!(c1, c3);
 /// ```
 pub fn col(ident: impl Into<Column>) -> Expr {
     Expr::Column(ident.into())
+}
+
+/// Create an unqualified column expression from the provided name, without normalizing
+/// the column.
+///
+/// For example:
+///
+/// ```rust
+/// # use datafusion_expr::{col, ident};
+/// let c1 = ident("A"); // not normalized staying as column 'A'
+/// let c2 = col("A"); // normalized via SQL rules becoming column 'a'
+/// assert_ne!(c1, c2);
+///
+/// let c3 = col(r#""A""#);
+/// assert_eq!(c1, c3);
+///
+/// let c4 = col("t1.a"); // parses as relation 't1' column 'a'
+/// let c5 = ident("t1.a"); // parses as column 't1.a'
+/// assert_ne!(c4, c5);
+/// ```
+pub fn ident(name: impl Into<String>) -> Expr {
+    Expr::Column(Column::from_name(name))
 }
 
 /// Return a new expression `left <op> right`
@@ -112,6 +142,51 @@ pub fn count(expr: Expr) -> Expr {
     ))
 }
 
+/// Return a new expression with bitwise AND
+pub fn bitwise_and(left: Expr, right: Expr) -> Expr {
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::BitwiseAnd,
+        Box::new(right),
+    ))
+}
+
+/// Return a new expression with bitwise OR
+pub fn bitwise_or(left: Expr, right: Expr) -> Expr {
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::BitwiseOr,
+        Box::new(right),
+    ))
+}
+
+/// Return a new expression with bitwise XOR
+pub fn bitwise_xor(left: Expr, right: Expr) -> Expr {
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::BitwiseXor,
+        Box::new(right),
+    ))
+}
+
+/// Return a new expression with bitwise SHIFT RIGHT
+pub fn bitwise_shift_right(left: Expr, right: Expr) -> Expr {
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::BitwiseShiftRight,
+        Box::new(right),
+    ))
+}
+
+/// Return a new expression with bitwise SHIFT LEFT
+pub fn bitwise_shift_left(left: Expr, right: Expr) -> Expr {
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::BitwiseShiftLeft,
+        Box::new(right),
+    ))
+}
+
 /// Create an expression to represent the count(distinct) aggregate function
 pub fn count_distinct(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
@@ -169,6 +244,16 @@ pub fn random() -> Expr {
 pub fn approx_distinct(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
         aggregate_function::AggregateFunction::ApproxDistinct,
+        vec![expr],
+        false,
+        None,
+    ))
+}
+
+/// Calculate the median for `expr`.
+pub fn median(expr: Expr) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::Median,
         vec![expr],
         false,
         None,
@@ -246,6 +331,16 @@ pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
 /// Create a scalar subquery expression
 pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
     Expr::ScalarSubquery(Subquery { subquery })
+}
+
+/// Create an expression to represent the stddev() aggregate function
+pub fn stddev(expr: Expr) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::Stddev,
+        vec![expr],
+        false,
+        None,
+    ))
 }
 
 /// Create a grouping set
@@ -587,7 +682,7 @@ mod test {
     #[test]
     fn filter_is_null_and_is_not_null() {
         let col_null = col("col1");
-        let col_not_null = col("col2");
+        let col_not_null = ident("col2");
         assert_eq!(format!("{:?}", col_null.is_null()), "col1 IS NULL");
         assert_eq!(
             format!("{:?}", col_not_null.is_not_null()),

@@ -17,12 +17,14 @@
 
 use crate::alias::AliasGenerator;
 use crate::optimizer::ApplyOrder;
-use crate::utils::{conjunction, only_or_err, split_conjunction};
+use crate::utils::{
+    collect_subquery_cols, conjunction, extract_join_filters, only_or_err,
+    split_conjunction,
+};
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{context, Column, DataFusionError, Result};
+use datafusion_common::{context, Column, Result};
 use datafusion_expr::expr_rewriter::{replace_col, unnormalize_col};
 use datafusion_expr::logical_plan::{JoinType, Projection, Subquery};
-use datafusion_expr::utils::check_all_column_from_schema;
 use datafusion_expr::{Expr, Filter, LogicalPlan, LogicalPlanBuilder};
 use log::debug;
 use std::collections::{BTreeSet, HashMap};
@@ -160,19 +162,7 @@ fn optimize_where_in(
     // replace qualified name with subquery alias.
     let subquery_alias = alias.next("__correlated_sq");
     let input_schema = subquery_input.schema();
-    let mut subquery_cols: BTreeSet<Column> =
-        join_filters
-            .iter()
-            .try_fold(BTreeSet::new(), |mut cols, expr| {
-                let using_cols: Vec<Column> = expr
-                    .to_columns()?
-                    .into_iter()
-                    .filter(|col| input_schema.field_from_column(col).is_ok())
-                    .collect::<_>();
-
-                cols.extend(using_cols);
-                Result::<_, DataFusionError>::Ok(cols)
-            })?;
+    let mut subquery_cols = collect_subquery_cols(&join_filters, input_schema.clone())?;
     let join_filter = conjunction(join_filters).map_or(Ok(None), |filter| {
         replace_qualified_name(filter, &subquery_cols, &subquery_alias).map(Option::Some)
     })?;
@@ -218,34 +208,6 @@ fn optimize_where_in(
 
     debug!("where in optimized:\n{}", new_plan.display_indent());
     Ok(new_plan)
-}
-
-fn extract_join_filters(maybe_filter: &LogicalPlan) -> Result<(Vec<Expr>, LogicalPlan)> {
-    if let LogicalPlan::Filter(plan_filter) = maybe_filter {
-        let input_schema = plan_filter.input.schema();
-        let subquery_filter_exprs = split_conjunction(&plan_filter.predicate);
-
-        let mut join_filters: Vec<Expr> = vec![];
-        let mut subquery_filters: Vec<Expr> = vec![];
-        for expr in subquery_filter_exprs {
-            let cols = expr.to_columns()?;
-            if check_all_column_from_schema(&cols, input_schema.clone()) {
-                subquery_filters.push(expr.clone());
-            } else {
-                join_filters.push(expr.clone())
-            }
-        }
-
-        // if the subquery still has filter expressions, restore them.
-        let mut plan = LogicalPlanBuilder::from((*plan_filter.input).clone());
-        if let Some(expr) = conjunction(subquery_filters) {
-            plan = plan.filter(expr)?
-        }
-
-        Ok((join_filters, plan.build()?))
-    } else {
-        Ok((vec![], maybe_filter.clone()))
-    }
 }
 
 fn remove_duplicated_filter(filters: Vec<Expr>, in_predicate: Expr) -> Vec<Expr> {
@@ -1170,6 +1132,37 @@ mod tests {
         \n      SubqueryAlias: __correlated_sq_2 [c * UInt32(2):UInt32, a:UInt32]\
         \n        Projection: sq2.c * UInt32(2) AS c * UInt32(2), sq2.a [c * UInt32(2):UInt32, a:UInt32]\
         \n          TableScan: sq2 [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(DecorrelateWhereIn::new()),
+            &plan,
+            expected,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn in_subquery_with_same_table() -> Result<()> {
+        let outer_scan = test_table_scan()?;
+        let subquery_scan = test_table_scan()?;
+        let subquery = LogicalPlanBuilder::from(subquery_scan)
+            .filter(col("test.a").gt(col("test.b")))?
+            .project(vec![col("c")])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(in_subquery(col("test.a"), Arc::new(subquery)))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        // Subquery and outer query refer to the same table.
+        let expected = "Projection: test.b [b:UInt32]\
+                      \n  LeftSemi Join:  Filter: test.a = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]\
+                      \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+                      \n    SubqueryAlias: __correlated_sq_1 [c:UInt32]\
+                      \n      Projection: test.c AS c [c:UInt32]\
+                      \n        Filter: test.a > test.b [a:UInt32, b:UInt32, c:UInt32]\
+                      \n          TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelateWhereIn::new()),

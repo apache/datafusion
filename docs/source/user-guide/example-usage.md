@@ -42,7 +42,7 @@ async fn main() -> datafusion::error::Result<()> {
   ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
 
   // create a plan to run a SQL query
-  let df = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100").await?;
+  let df = ctx.sql("SELECT a, MIN(b) FROM example WHERE a <= b GROUP BY a LIMIT 100").await?;
 
   // execute and print results
   df.show().await?;
@@ -99,7 +99,7 @@ async fn main() -> datafusion::error::Result<()> {
   ctx.register_csv("example", "tests/data/capitalized_example.csv", CsvReadOptions::new()).await?;
 
   // create a plan to run a SQL query
-  let df = ctx.sql("SELECT \"A\", MIN(b) FROM example GROUP BY \"A\" LIMIT 100").await?;
+  let df = ctx.sql("SELECT \"A\", MIN(b) FROM example WHERE \"A\" <= c GROUP BY \"A\" LIMIT 100").await?;
 
   // execute and print results
   df.show().await?;
@@ -118,9 +118,12 @@ async fn main() -> datafusion::error::Result<()> {
   let ctx = SessionContext::new();
   let df = ctx.read_csv("tests/data/capitalized_example.csv", CsvReadOptions::new()).await?;
 
-  let df = df.filter(col("A").lt_eq(col("c")))?
-           .aggregate(vec![col("A")], vec![min(col("b"))])?
-           .limit(0, Some(100))?;
+  let df = df
+      // col will parse the input string, hence requiring double quotes to maintain the capitalization
+      .filter(col("\"A\"").lt_eq(col("c")))?
+      // alternatively use ident to pass in an unqualified column name directly without parsing
+      .aggregate(vec![ident("A")], vec![min(col("b"))])?
+      .limit(0, Some(100))?;
 
   // execute and print results
   df.show().await?;

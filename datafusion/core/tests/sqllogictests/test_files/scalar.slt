@@ -22,22 +22,24 @@
 statement ok
 CREATE TABLE t1(
   a INT,
-  b INT
+  b INT,
+  c INT,
+  d INT
 ) as VALUES
-  (1, 100), 
-  (2, 1000), 
-  (3, 10000)
+  (1, 100, 567, 1024), 
+  (2, 1000, 123, 256), 
+  (3, 10000, 978, 2048)
 ;
 
 # log scalar function
-query IT rowsort
+query RR rowsort
 select log(2, 64) a, log(100) b union all select log(2, 8), log(10);
 ----
 3 1
 6 2
 
 # log scalar function
-query IT rowsort
+query RRR rowsort
 select log(a, 64) a, log(b), log(10, b) from t1;
 ----
 3.7855785 4 4
@@ -45,26 +47,66 @@ select log(a, 64) a, log(b), log(10, b) from t1;
 Infinity 2 2
 
 # log scalar nulls
-query IT rowsort
+query RR rowsort
 select log(null, 64) a, log(null) b
 ----
 NULL NULL
 
 # log scalar nulls 1
-query IT rowsort
+query RR rowsort
 select log(2, null) a, log(null) b
 ----
 NULL NULL
 
 # log scalar nulls 2
-query IT rowsort
+query RR rowsort
 select log(null, null) a, log(null) b
 ----
 NULL NULL
 
 # log scalar ops with zero edgecases
 # please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
-query IT rowsort
+query RR rowsort
 select log(0) a, log(1, 64) b
 ----
 -Infinity Infinity
+
+# bitwise and with column and scalar
+query I rowsort
+select c & 856 from t1;
+----
+528
+848
+88
+
+# bitwise or with column and scalar
+query I rowsort
+select c | 856 from t1;
+----
+891
+895
+986
+
+# bitwise xor with column and scalar
+query I rowsort
+select c ^ 856 from t1;
+----
+138
+367
+803
+
+# right shift with column and scalar
+query I rowsort
+select d >> 2 from t1;
+----
+256
+512
+64
+
+# left shift with column and scalar
+query I rowsort
+select d << 2 from t1;
+----
+1024
+4096
+8192

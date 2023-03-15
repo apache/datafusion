@@ -33,7 +33,7 @@ use std::sync::Arc;
 /// Attempt to replace outer joins with inner joins.
 ///
 /// Outer joins are typically more expensive to compute at runtime
-/// than inner joins and prevent various forms fo predicate pushdown
+/// than inner joins and prevent various forms of predicate pushdown
 /// and other optimizations, so removing them if possible is beneficial.
 ///
 /// Inner joins filter out rows that do match. Outer joins pass rows
@@ -44,7 +44,7 @@ use std::sync::Arc;
 /// For example, in the `select ... from a left join b on ... where b.xx = 100;`
 ///
 /// For rows when `b.xx` is null (as it would be after an outer join),
-/// the `b.xx = 100` predicate filters them out and there there is no
+/// the `b.xx = 100` predicate filters them out and there is no
 /// need to produce null rows for output.
 ///
 /// Generally, an outer join can be rewritten to inner join if the
@@ -84,10 +84,10 @@ impl OptimizerRule for EliminateOuterJoin {
                         let mut left_non_nullable = false;
                         let mut right_non_nullable = false;
                         for col in non_nullable_cols.iter() {
-                            if join.left.schema().field_from_column(col).is_ok() {
+                            if join.left.schema().has_column(col) {
                                 left_non_nullable = true;
                             }
-                            if join.right.schema().field_from_column(col).is_ok() {
+                            if join.right.schema().has_column(col) {
                                 right_non_nullable = true;
                             }
                         }
@@ -251,10 +251,10 @@ fn extract_non_nullable_columns(
                 {
                     for left_col in &left_non_nullable_cols {
                         for right_col in &right_non_nullable_cols {
-                            if (left_schema.field_from_column(left_col).is_ok()
-                                && left_schema.field_from_column(right_col).is_ok())
-                                || (right_schema.field_from_column(left_col).is_ok()
-                                    && right_schema.field_from_column(right_col).is_ok())
+                            if (left_schema.has_column(left_col)
+                                && left_schema.has_column(right_col))
+                                || (right_schema.has_column(left_col)
+                                    && right_schema.has_column(right_col))
                             {
                                 non_nullable_cols.push(left_col.clone());
                                 break;

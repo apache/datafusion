@@ -35,9 +35,10 @@ use crate::{
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    TableReference,
 };
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 ///  The value to which `COUNT(*)` is expanded to in
@@ -96,6 +97,9 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             Expr::ScalarVariable(_, var_names) => {
                 accum.insert(Column::from_name(var_names.join(".")));
             }
+            // Use explicit pattern match instead of a default
+            // implementation, so that in the future if someone adds
+            // new Expr types, they will check here as well
             Expr::Alias(_, _)
             | Expr::Literal(_)
             | Expr::BinaryExpr { .. }
@@ -188,8 +192,9 @@ pub fn expand_qualified_wildcard(
     qualifier: &str,
     schema: &DFSchema,
 ) -> Result<Vec<Expr>> {
+    let qualifier = TableReference::from(qualifier);
     let qualified_fields: Vec<DFField> = schema
-        .fields_with_qualified(qualifier)
+        .fields_with_qualified(&qualifier)
         .into_iter()
         .cloned()
         .collect();
@@ -960,6 +965,7 @@ pub fn can_hash(data_type: &DataType) -> bool {
         DataType::Decimal128(_, _) => true,
         DataType::Date32 => true,
         DataType::Date64 => true,
+        DataType::FixedSizeBinary(_) => true,
         DataType::Dictionary(key_type, value_type)
             if *value_type.as_ref() == DataType::Utf8 =>
         {
@@ -970,13 +976,18 @@ pub fn can_hash(data_type: &DataType) -> bool {
 }
 
 /// Check whether all columns are from the schema.
-pub fn check_all_column_from_schema(
+pub fn check_all_columns_from_schema(
     columns: &HashSet<Column>,
     schema: DFSchemaRef,
-) -> bool {
-    columns
-        .iter()
-        .all(|column| schema.index_of_column(column).is_ok())
+) -> Result<bool> {
+    for col in columns.iter() {
+        let exist = schema.is_column_from_schema(col)?;
+        if !exist {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
 }
 
 /// Give two sides of the equijoin predicate, return a valid join key pair.
@@ -1003,83 +1014,30 @@ pub fn find_valid_equijoin_key_pair(
     }
 
     let l_is_left =
-        check_all_column_from_schema(&left_using_columns, left_schema.clone());
+        check_all_columns_from_schema(&left_using_columns, left_schema.clone())?;
     let r_is_right =
-        check_all_column_from_schema(&right_using_columns, right_schema.clone());
+        check_all_columns_from_schema(&right_using_columns, right_schema.clone())?;
 
     let r_is_left_and_l_is_right = || {
-        check_all_column_from_schema(&right_using_columns, left_schema.clone())
-            && check_all_column_from_schema(&left_using_columns, right_schema.clone())
+        let result =
+            check_all_columns_from_schema(&right_using_columns, left_schema.clone())?
+                && check_all_columns_from_schema(
+                    &left_using_columns,
+                    right_schema.clone(),
+                )?;
+
+        Result::<_, DataFusionError>::Ok(result)
     };
 
     let join_key_pair = match (l_is_left, r_is_right) {
         (true, true) => Some((left_key.clone(), right_key.clone())),
-        (_, _) if r_is_left_and_l_is_right() => {
+        (_, _) if r_is_left_and_l_is_right()? => {
             Some((right_key.clone(), left_key.clone()))
         }
         _ => None,
     };
 
     Ok(join_key_pair)
-}
-
-/// Ensure any column reference of the expression is unambiguous.
-/// Assume we have two schema:
-/// schema1: a, b ,c
-/// schema2: a, d, e
-///
-/// `schema1.a + schema2.a` is unambiguous.
-/// `a + d` is ambiguous, because `a` may come from schema1 or schema2.
-pub fn ensure_any_column_reference_is_unambiguous(
-    expr: &Expr,
-    schemas: &[&DFSchema],
-) -> Result<()> {
-    if schemas.len() == 1 {
-        return Ok(());
-    }
-    // all referenced columns in the expression that don't have relation
-    let referenced_cols = expr.to_columns()?;
-    let mut no_relation_cols = referenced_cols
-        .iter()
-        .filter_map(|col| {
-            if col.relation.is_none() {
-                Some((col.name.as_str(), 0))
-            } else {
-                None
-            }
-        })
-        .collect::<HashMap<&str, u8>>();
-    // find the name of the column existing in multi schemas.
-    let ambiguous_col_name = schemas
-        .iter()
-        .flat_map(|schema| schema.fields())
-        .map(|field| field.name())
-        .find(|col_name| {
-            no_relation_cols.entry(col_name).and_modify(|v| *v += 1);
-            matches!(
-                no_relation_cols.get_key_value(col_name.as_str()),
-                Some((_, 2..))
-            )
-        });
-
-    if let Some(col_name) = ambiguous_col_name {
-        let maybe_field = schemas
-            .iter()
-            .flat_map(|schema| {
-                schema
-                    .field_with_unqualified_name(col_name)
-                    .map(|f| f.qualified_name())
-                    .ok()
-            })
-            .collect::<Vec<_>>();
-        Err(DataFusionError::Plan(format!(
-            "reference \'{}\' is ambiguous, could be {};",
-            col_name,
-            maybe_field.join(","),
-        )))
-    } else {
-        Ok(())
-    }
 }
 
 #[cfg(test)]

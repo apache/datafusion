@@ -226,11 +226,11 @@ Dml: op=[Insert] table=[test_decimal]
 #[rstest]
 #[case::duplicate_columns(
     "INSERT INTO test_decimal (id, price, price) VALUES (1, 2, 3), (4, 5, 6)",
-    "Schema error: Schema contains duplicate unqualified field name 'price'"
+    "Schema error: Schema contains duplicate unqualified field name \"price\""
 )]
 #[case::non_existing_column(
     "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
-    "Schema error: No field named 'nonexistent'. Valid fields are 'id', 'price'."
+    "Schema error: No field named \"nonexistent\". Valid fields are \"id\", \"price\"."
 )]
 #[case::type_mismatch(
     "INSERT INTO test_decimal SELECT '2022-01-01', to_timestamp('2022-01-01T12:00:00')",
@@ -515,7 +515,7 @@ fn select_with_ambiguous_column() {
     let sql = "SELECT id FROM person a, person b";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Plan(\"column reference id is ambiguous\")",
+        "SchemaError(AmbiguousReference { field: Column { relation: None, name: \"id\" } })",
         format!("{err:?}")
     );
 }
@@ -538,7 +538,7 @@ fn where_selection_with_ambiguous_column() {
     let sql = "SELECT * FROM person a, person b WHERE id = id + 1";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Plan(\"column reference id is ambiguous\")",
+        "SchemaError(AmbiguousReference { field: Column { relation: None, name: \"id\" } })",
         format!("{err:?}")
     );
 }
@@ -1121,9 +1121,9 @@ fn select_simple_aggregate_with_groupby_column_unselected() {
 fn select_simple_aggregate_with_groupby_and_column_in_group_by_does_not_exist() {
     let sql = "SELECT SUM(age) FROM person GROUP BY doesnotexist";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!("Schema error: No field named 'doesnotexist'. Valid fields are 'SUM(person.age)', \
-        'person'.'id', 'person'.'first_name', 'person'.'last_name', 'person'.'age', 'person'.'state', \
-        'person'.'salary', 'person'.'birth_date', 'person'.'😀'.", format!("{err}"));
+    assert_eq!("Schema error: No field named \"doesnotexist\". Valid fields are \"SUM(person.age)\", \
+        \"person\".\"id\", \"person\".\"first_name\", \"person\".\"last_name\", \"person\".\"age\", \"person\".\"state\", \
+        \"person\".\"salary\", \"person\".\"birth_date\", \"person\".\"😀\".", format!("{err}"));
 }
 
 #[test]
@@ -1429,6 +1429,17 @@ fn select_where_with_positive_operator() {
     let expected = "Projection: aggregate_test_100.c3\
             \n  Filter: aggregate_test_100.c3 > Float64(0.1) AND aggregate_test_100.c4 > Int64(0)\
             \n    TableScan: aggregate_test_100";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn select_where_compound_identifiers() {
+    let sql = "SELECT aggregate_test_100.c3 \
+    FROM public.aggregate_test_100 \
+    WHERE aggregate_test_100.c3 > 0.1";
+    let expected = "Projection: public.aggregate_test_100.c3\
+            \n  Filter: public.aggregate_test_100.c3 > Float64(0.1)\
+            \n    TableScan: public.aggregate_test_100";
     quick_test(sql, expected);
 }
 
@@ -1916,7 +1927,7 @@ fn union_with_multiply_cols() {
 #[test]
 fn sorted_union_with_different_types_and_group_by() {
     let sql = "SELECT a FROM (select 1 a) x GROUP BY 1 UNION ALL (SELECT a FROM (select 1.1 a) x GROUP BY 1) ORDER BY 1";
-    let expected = "Sort: a ASC NULLS LAST\
+    let expected = "Sort: x.a ASC NULLS LAST\
         \n  Union\
         \n    Projection: CAST(x.a AS Float64) AS a\
         \n      Aggregate: groupBy=[[x.a]], aggr=[[]]\
@@ -2099,27 +2110,6 @@ fn over_order_by_with_window_frame_single_end() {
         \n    WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n      TableScan: orders";
     quick_test(sql, expected);
-}
-
-#[test]
-fn over_order_by_with_window_frame_range_order_by_check() {
-    let sql = "SELECT order_id, MAX(qty) OVER (RANGE UNBOUNDED PRECEDING) from orders";
-    let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-            "Plan(\"With window frame of type RANGE, the order by expression must be of length 1, got 0\")",
-            format!("{err:?}")
-        );
-}
-
-#[test]
-fn over_order_by_with_window_frame_range_order_by_check_2() {
-    let sql =
-            "SELECT order_id, MAX(qty) OVER (ORDER BY order_id, qty RANGE UNBOUNDED PRECEDING) from orders";
-    let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-            "Plan(\"With window frame of type RANGE, the order by expression must be of length 1, got 2\")",
-            format!("{err:?}")
-        );
 }
 
 #[test]
@@ -2329,6 +2319,15 @@ fn approx_median_window() {
         Projection: orders.order_id, APPROXMEDIAN(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
         \n  WindowAggr: windowExpr=[[APPROXMEDIAN(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n    TableScan: orders";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn select_arrow_cast() {
+    let sql = "SELECT arrow_cast(1234, 'Float64'), arrow_cast('foo', 'LargeUtf8')";
+    let expected = "\
+    Projection: CAST(Int64(1234) AS Float64), CAST(Utf8(\"foo\") AS LargeUtf8)\
+    \n  EmptyRelation";
     quick_test(sql, expected);
 }
 
@@ -2555,7 +2554,7 @@ impl ContextProvider for MockContextProvider {
     }
 
     fn get_function_meta(&self, _name: &str) -> Option<Arc<ScalarUDF>> {
-        unimplemented!()
+        None
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
@@ -2974,6 +2973,24 @@ fn order_by_unaliased_name() {
 }
 
 #[test]
+fn order_by_ambiguous_name() {
+    let sql = "select * from person a join person b using (id) order by age";
+    let expected = "Schema error: Ambiguous reference to unqualified field \"age\"";
+
+    let err = logical_plan(sql).unwrap_err();
+    assert_eq!(err.to_string(), expected);
+}
+
+#[test]
+fn group_by_ambiguous_name() {
+    let sql = "select max(id) from person a join person b using (id) group by age";
+    let expected = "Schema error: Ambiguous reference to unqualified field \"age\"";
+
+    let err = logical_plan(sql).unwrap_err();
+    assert_eq!(err.to_string(), expected);
+}
+
+#[test]
 fn test_zero_offset_with_limit() {
     let sql = "select id from person where person.id > 100 LIMIT 5 OFFSET 0;";
     let expected = "Limit: skip=0, fetch=5\
@@ -3272,8 +3289,7 @@ fn test_ambiguous_column_references_in_on_join() {
             INNER JOIN person as p2
             ON id = 1";
 
-    let expected =
-        "Error during planning: reference 'id' is ambiguous, could be p1.id,p2.id;";
+    let expected = "Schema error: Ambiguous reference to unqualified field \"id\"";
 
     // It should return error.
     let result = logical_plan(sql);
@@ -3870,7 +3886,7 @@ fn assert_field_not_found(err: DataFusionError, name: &str) {
     match err {
         DataFusionError::SchemaError { .. } => {
             let msg = format!("{err}");
-            let expected = format!("Schema error: No field named '{name}'.");
+            let expected = format!("Schema error: No field named \"{name}\".");
             if !msg.starts_with(&expected) {
                 panic!("error [{msg}] did not start with [{expected}]");
             }

@@ -29,7 +29,7 @@ use std::sync::Arc;
 /// done so during predicate pruning and expression simplification
 ///
 /// [`LogicalPlan`]: datafusion_expr::LogicalPlan
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ExecutionProps {
     pub query_execution_start_time: DateTime<Utc>,
     /// Providers for scalar variables
@@ -83,5 +83,15 @@ impl ExecutionProps {
         self.var_providers
             .as_ref()
             .and_then(|var_providers| var_providers.get(&var_type).map(Arc::clone))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn debug() {
+        let props = ExecutionProps::new();
+        assert_eq!("ExecutionProps { query_execution_start_time: 1970-01-01T00:00:00Z, var_providers: None }", format!("{props:?}"));
     }
 }

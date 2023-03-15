@@ -28,9 +28,9 @@ use crate::physical_plan::joins::{
 };
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::sorts::sort::SortOptions;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use crate::physical_plan::tree_node::TreeNodeRewritable;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
@@ -181,7 +181,7 @@ fn adjust_input_keys_ordering(
                             filter.clone(),
                             join_type,
                             PartitionMode::Partitioned,
-                            null_equals_null,
+                            *null_equals_null,
                         )?) as Arc<dyn ExecutionPlan>)
                     };
                 Ok(Some(reorder_partitioned_join_keys(
@@ -592,7 +592,7 @@ fn reorder_join_keys_to_inputs(
                             filter.clone(),
                             join_type,
                             PartitionMode::Partitioned,
-                            null_equals_null,
+                            *null_equals_null,
                         )?))
                     } else {
                         Ok(plan)
@@ -1109,7 +1109,7 @@ mod tests {
                 None,
                 join_type,
                 PartitionMode::Partitioned,
-                &false,
+                false,
             )
             .unwrap(),
         )

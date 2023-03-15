@@ -19,7 +19,7 @@
 
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::error::{DataFusionError, Result};
-use crate::execution::context::{SessionState, TaskContext};
+use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -280,7 +280,7 @@ impl FileOpener for CsvOpener {
 }
 
 pub async fn plan_to_csv(
-    state: &SessionState,
+    task_ctx: Arc<TaskContext>,
     plan: Arc<dyn ExecutionPlan>,
     path: impl AsRef<str>,
 ) -> Result<()> {
@@ -300,8 +300,7 @@ pub async fn plan_to_csv(
         let path = fs_path.join(filename);
         let file = fs::File::create(path)?;
         let mut writer = csv::Writer::new(file);
-        let task_ctx = Arc::new(TaskContext::from(state));
-        let stream = plan.execute(i, task_ctx)?;
+        let stream = plan.execute(i, task_ctx.clone())?;
 
         let handle: JoinHandle<Result<()>> = task::spawn(async move {
             stream
@@ -345,7 +344,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn csv_exec_with_projection(
@@ -400,7 +400,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn csv_exec_with_mixed_order_projection(
@@ -455,7 +456,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn csv_exec_with_limit(
@@ -510,7 +512,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn csv_exec_with_missing_column(
@@ -553,7 +556,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn csv_exec_with_partition(
@@ -688,7 +692,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn test_chunked_csv(

@@ -218,9 +218,12 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::Decimal256(_, _) => {
                 return Err(Error::General("Proto serialization error: The Decimal256 data type is not yet supported".to_owned()))
             }
-            DataType::Map(_, _) => {
-                return Err(Error::General(
-                    "Proto serialization error: The Map data type is not yet supported".to_owned()
+            DataType::Map(field, sorted) => {
+                Self::Map(Box::new(
+                    protobuf::Map {
+                        field_type: Some(Box::new(field.as_ref().try_into()?)),
+                        keys_sorted: *sorted,
+                    }
                 ))
             }
             DataType::RunEndEncoded(_, _) => {
@@ -237,9 +240,9 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
 impl From<Column> for protobuf::Column {
     fn from(c: Column) -> Self {
         Self {
-            relation: c
-                .relation
-                .map(|relation| protobuf::ColumnRelation { relation }),
+            relation: c.relation.map(|relation| protobuf::ColumnRelation {
+                relation: relation.to_string(),
+            }),
             name: c.name,
         }
     }
@@ -1318,12 +1321,14 @@ impl From<OwnedTableReference> for protobuf::OwnedTableReference {
         use protobuf::owned_table_reference::TableReferenceEnum;
         let table_reference_enum = match t {
             OwnedTableReference::Bare { table } => {
-                TableReferenceEnum::Bare(protobuf::BareTableReference { table })
+                TableReferenceEnum::Bare(protobuf::BareTableReference {
+                    table: table.to_string(),
+                })
             }
             OwnedTableReference::Partial { schema, table } => {
                 TableReferenceEnum::Partial(protobuf::PartialTableReference {
-                    schema,
-                    table,
+                    schema: schema.to_string(),
+                    table: table.to_string(),
                 })
             }
             OwnedTableReference::Full {
@@ -1331,9 +1336,9 @@ impl From<OwnedTableReference> for protobuf::OwnedTableReference {
                 schema,
                 table,
             } => TableReferenceEnum::Full(protobuf::FullTableReference {
-                catalog,
-                schema,
-                table,
+                catalog: catalog.to_string(),
+                schema: schema.to_string(),
+                table: table.to_string(),
             }),
         };
 

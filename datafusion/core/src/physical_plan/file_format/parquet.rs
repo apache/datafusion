@@ -18,6 +18,7 @@
 //! Execution plan for reading Parquet files
 
 use arrow::datatypes::{DataType, SchemaRef};
+use datafusion_physical_expr::PhysicalExpr;
 use fmt::Debug;
 use std::any::Any;
 use std::cmp::min;
@@ -35,7 +36,7 @@ use crate::physical_plan::file_format::FileMeta;
 use crate::{
     datasource::listing::FileRange,
     error::{DataFusionError, Result},
-    execution::context::{SessionState, TaskContext},
+    execution::context::TaskContext,
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
         expressions::PhysicalSortExpr,
@@ -47,7 +48,6 @@ use crate::{
 };
 use arrow::error::ArrowError;
 use bytes::Bytes;
-use datafusion_expr::Expr;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use itertools::Itertools;
@@ -97,7 +97,7 @@ pub struct ParquetExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Optional predicate for row filtering during parquet scan
-    predicate: Option<Arc<Expr>>,
+    predicate: Option<Arc<dyn PhysicalExpr>>,
     /// Optional predicate for pruning row groups
     pruning_predicate: Option<Arc<PruningPredicate>>,
     /// Optional predicate for pruning pages
@@ -112,7 +112,7 @@ impl ParquetExec {
     /// Create a new Parquet reader execution plan provided file list and schema.
     pub fn new(
         base_config: FileScanConfig,
-        predicate: Option<Expr>,
+        predicate: Option<Arc<dyn PhysicalExpr>>,
         metadata_size_hint: Option<usize>,
     ) -> Self {
         debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
@@ -129,7 +129,7 @@ impl ParquetExec {
                 match PruningPredicate::try_new(predicate_expr, file_schema.clone()) {
                     Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
                     Err(e) => {
-                        debug!("Could not create pruning predicate for: {}", e);
+                        debug!("Could not create pruning predicate for: {e}");
                         predicate_creation_errors.add(1);
                         None
                     }
@@ -150,9 +150,6 @@ impl ParquetExec {
                 }
             }
         });
-
-        // Save original predicate
-        let predicate = predicate.map(Arc::new);
 
         let (projected_schema, projected_statistics) = base_config.project();
 
@@ -175,6 +172,11 @@ impl ParquetExec {
     /// Ref to the base configs
     pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
+    }
+
+    /// Optional predicate.
+    pub fn predicate(&self) -> Option<&Arc<dyn PhysicalExpr>> {
+        self.predicate.as_ref()
     }
 
     /// Optional reference to this parquet scan's pruning predicate
@@ -202,6 +204,8 @@ impl ParquetExec {
     /// `ParquetRecordBatchStream`. These filters are applied by the
     /// parquet decoder to skip unecessairly decoding other columns
     /// which would not pass the predicate. Defaults to false
+    ///
+    /// [`Expr`]: datafusion_expr::Expr
     pub fn with_pushdown_filters(mut self, pushdown_filters: bool) -> Self {
         self.pushdown_filters = Some(pushdown_filters);
         self
@@ -217,6 +221,8 @@ impl ParquetExec {
     /// minimize the cost of filter evaluation by reordering the
     /// predicate [`Expr`]s. If false, the predicates are applied in
     /// the same order as specified in the query. Defaults to false.
+    ///
+    /// [`Expr`]: datafusion_expr::Expr
     pub fn with_reorder_filters(mut self, reorder_filters: bool) -> Self {
         self.reorder_filters = Some(reorder_filters);
         self
@@ -376,6 +382,7 @@ impl ExecutionPlan for ParquetExec {
             partition_index,
             projection: Arc::from(projection),
             batch_size: ctx.session_config().batch_size(),
+            limit: self.base_config.limit,
             predicate: self.predicate.clone(),
             pruning_predicate: self.pruning_predicate.clone(),
             page_pruning_predicate: self.page_pruning_predicate.clone(),
@@ -460,7 +467,8 @@ struct ParquetOpener {
     partition_index: usize,
     projection: Arc<[usize]>,
     batch_size: usize,
-    predicate: Option<Arc<Expr>>,
+    limit: Option<usize>,
+    predicate: Option<Arc<dyn PhysicalExpr>>,
     pruning_predicate: Option<Arc<PruningPredicate>>,
     page_pruning_predicate: Option<Arc<PagePruningPredicate>>,
     table_schema: SchemaRef,
@@ -500,6 +508,7 @@ impl FileOpener for ParquetOpener {
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let enable_page_index = self.enable_page_index;
+        let limit = self.limit;
 
         Ok(Box::pin(async move {
             let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
@@ -508,6 +517,7 @@ impl FileOpener for ParquetOpener {
                     .await?;
             let adapted_projections =
                 schema_adapter.map_projections(builder.schema(), &projection)?;
+            // let predicate = predicate.map(|p| reassign_predicate_columns(p, builder.schema(), true)).transpose()?;
 
             let mask = ProjectionMask::roots(
                 builder.parquet_schema(),
@@ -517,7 +527,7 @@ impl FileOpener for ParquetOpener {
             // Filter pushdown: evaluate predicates during scan
             if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
                 let row_filter = row_filter::build_row_filter(
-                    predicate.as_ref(),
+                    &predicate,
                     builder.schema().as_ref(),
                     table_schema.as_ref(),
                     builder.metadata(),
@@ -560,6 +570,10 @@ impl FileOpener for ParquetOpener {
                         builder = builder.with_row_selection(row_selection);
                     }
                 }
+            }
+
+            if let Some(limit) = limit {
+                builder = builder.with_limit(limit)
             }
 
             let stream = builder
@@ -699,7 +713,7 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
 
 /// Executes a query and writes the results to a partitioned Parquet file.
 pub async fn plan_to_parquet(
-    state: &SessionState,
+    task_ctx: Arc<TaskContext>,
     plan: Arc<dyn ExecutionPlan>,
     path: impl AsRef<str>,
     writer_properties: Option<WriterProperties>,
@@ -721,8 +735,7 @@ pub async fn plan_to_parquet(
         let file = fs::File::create(path)?;
         let mut writer =
             ArrowWriter::try_new(file, plan.schema(), writer_properties.clone())?;
-        let task_ctx = Arc::new(TaskContext::from(state));
-        let stream = plan.execute(i, task_ctx)?;
+        let stream = plan.execute(i, task_ctx.clone())?;
         let handle: tokio::task::JoinHandle<Result<()>> =
             tokio::task::spawn(async move {
                 stream
@@ -798,6 +811,7 @@ mod tests {
     use crate::datasource::file_format::test_util::scan_format;
     use crate::datasource::listing::{FileRange, PartitionedFile};
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::execution::context::SessionState;
     use crate::execution::options::CsvReadOptions;
     use crate::physical_plan::displayable;
     use crate::physical_plan::file_format::partition_type_wrap;
@@ -816,9 +830,11 @@ mod tests {
         datatypes::{DataType, Field},
     };
     use chrono::{TimeZone, Utc};
-    use datafusion_common::assert_contains;
     use datafusion_common::ScalarValue;
-    use datafusion_expr::{col, lit, when};
+    use datafusion_common::{assert_contains, ToDFSchema};
+    use datafusion_expr::{col, lit, when, Expr};
+    use datafusion_physical_expr::create_physical_expr;
+    use datafusion_physical_expr::execution_props::ExecutionProps;
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
@@ -836,8 +852,7 @@ mod tests {
 
     /// round-trip record batches by writing each individual RecordBatch to
     /// a parquet file and then reading that parquet file with the specified
-    /// options. If page_index_predicate is set to `true`, all RecordBatches
-    /// are written into a parquet file instead.
+    /// options.
     #[derive(Debug, Default)]
     struct RoundTrip {
         projection: Option<Vec<usize>>,
@@ -910,6 +925,9 @@ mod tests {
             let multi_page = page_index_predicate;
             let (meta, _files) = store_parquet(batches, multi_page).await.unwrap();
             let file_groups = meta.into_iter().map(Into::into).collect();
+
+            // set up predicate (this is normally done by a layer higher up)
+            let predicate = predicate.map(|p| logical2physical(&p, &file_schema));
 
             // prepare the scan
             let mut parquet_exec = ParquetExec::new(
@@ -1332,6 +1350,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn evolved_schema_disjoint_schema_with_page_index_pushdown() {
+        let c1: ArrayRef = Arc::new(StringArray::from(vec![
+            // Page 1
+            Some("Foo"),
+            Some("Bar"),
+            // Page 2
+            Some("Foo2"),
+            Some("Bar2"),
+            // Page 3
+            Some("Foo3"),
+            Some("Bar3"),
+        ]));
+
+        let c2: ArrayRef = Arc::new(Int64Array::from(vec![
+            // Page 1:
+            Some(1),
+            Some(2),
+            // Page 2: (pruned)
+            Some(3),
+            Some(4),
+            // Page 3: (pruned)
+            Some(5),
+            None,
+        ]));
+
+        // batch1: c1(string)
+        let batch1 = create_batch(vec![("c1", c1.clone())]);
+
+        // batch2: c2(int64)
+        let batch2 = create_batch(vec![("c2", c2.clone())]);
+
+        // batch3 (has c2, c1) -- both columns, should still prune
+        let batch3 = create_batch(vec![("c1", c1.clone()), ("c2", c2.clone())]);
+
+        // batch4 (has c2, c1) -- different column order, should still prune
+        let batch4 = create_batch(vec![("c2", c2), ("c1", c1)]);
+
+        let filter = col("c2").eq(lit(1_i64));
+
+        // read/write them files:
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_page_index_predicate()
+            .round_trip(vec![batch1, batch2, batch3, batch4])
+            .await;
+
+        let expected = vec![
+            "+------+----+",
+            "| c1   | c2 |",
+            "+------+----+",
+            "|      | 1  |",
+            "|      | 2  |",
+            "| Bar  |    |",
+            "| Bar  | 2  |",
+            "| Bar  | 2  |",
+            "| Bar2 |    |",
+            "| Bar3 |    |",
+            "| Foo  |    |",
+            "| Foo  | 1  |",
+            "| Foo  | 1  |",
+            "| Foo2 |    |",
+            "| Foo3 |    |",
+            "+------+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
+        let metrics = rt.parquet_exec.metrics().unwrap();
+
+        // There are 4 rows pruned in each of batch2, batch3, and
+        // batch4 for a total of 12. batch1 had no pruning as c2 was
+        // filled in as null
+        assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 12);
+    }
+
+    #[tokio::test]
     async fn multi_column_predicate_pushdown() {
         let c1: ArrayRef =
             Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
@@ -1355,6 +1447,38 @@ mod tests {
             "+-----+----+",
             "| c1  | c2 |",
             "+-----+----+",
+            "| Foo | 1  |",
+            "| bar |    |",
+            "+-----+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &read);
+    }
+
+    #[tokio::test]
+    async fn multi_column_predicate_pushdown_page_index_pushdown() {
+        let c1: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
+
+        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+
+        let batch1 = create_batch(vec![("c1", c1.clone()), ("c2", c2.clone())]);
+
+        // Columns in different order to schema
+        let filter = col("c2").eq(lit(1_i64)).or(col("c1").eq(lit("bar")));
+
+        // read/write them files:
+        let read = RoundTrip::new()
+            .with_predicate(filter)
+            .with_page_index_predicate()
+            .round_trip_to_batches(vec![batch1])
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+-----+----+",
+            "| c1  | c2 |",
+            "+-----+----+",
+            "|     | 2  |",
             "| Foo | 1  |",
             "| bar |    |",
             "+-----+----+",
@@ -1635,27 +1759,38 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_page_index_exec_metrics() {
-        let c1: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
-        let c2: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), Some(4), Some(5)]));
+        let c1: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(2),
+            Some(3),
+            Some(4),
+            Some(5),
+        ]));
         let batch1 = create_batch(vec![("int", c1.clone())]);
-        let batch2 = create_batch(vec![("int", c2.clone())]);
 
         let filter = col("int").eq(lit(4_i32));
 
         let rt = RoundTrip::new()
             .with_predicate(filter)
             .with_page_index_predicate()
-            .round_trip(vec![batch1, batch2])
+            .round_trip(vec![batch1])
             .await;
 
         let metrics = rt.parquet_exec.metrics().unwrap();
 
         // assert the batches and some metrics
+        #[rustfmt::skip]
         let expected = vec![
-            "+-----+", "| int |", "+-----+", "| 3   |", "| 4   |", "| 5   |", "+-----+",
+            "+-----+",
+            "| int |",
+            "+-----+",
+            "| 4   |",
+            "| 5   |",
+            "+-----+",
         ];
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
-        assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 3);
+        assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 4);
         assert!(
             get_value(&metrics, "page_index_eval_time") > 0,
             "no eval time in metrics: {metrics:#?}"
@@ -1740,7 +1875,7 @@ mod tests {
             "pruning_predicate=c1_min@0 != bar OR bar != c1_max@1"
         );
 
-        assert_contains!(&display, r#"predicate=c1 != Utf8("bar")"#);
+        assert_contains!(&display, r#"predicate=c1@0 != bar"#);
 
         assert_contains!(&display, "projection=[c1]");
     }
@@ -1780,7 +1915,8 @@ mod tests {
 
         // but does still has a pushdown down predicate
         let predicate = rt.parquet_exec.predicate.as_ref();
-        assert_eq!(predicate.unwrap().as_ref(), &filter);
+        let filter_phys = logical2physical(&filter, rt.parquet_exec.schema().as_ref());
+        assert_eq!(predicate.unwrap().to_string(), filter_phys.to_string());
     }
 
     #[tokio::test]
@@ -2132,5 +2268,11 @@ mod tests {
         assert_eq!(allparts_count, 40);
 
         Ok(())
+    }
+
+    fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
+        let df_schema = schema.clone().to_dfschema().unwrap();
+        let execution_props = ExecutionProps::new();
+        create_physical_expr(expr, &df_schema, schema, &execution_props).unwrap()
     }
 }

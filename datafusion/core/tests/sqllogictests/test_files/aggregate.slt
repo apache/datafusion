@@ -106,7 +106,7 @@ select covar_pop(sq.column1, sq.column2) from (values (1.1, 2.2)) as sq
 0
 
 # all_nulls_query_covar
-query R
+query RR
 with data as (
   select null::int as f, null::int as b
   union all
@@ -118,7 +118,7 @@ from data
 NULL NULL
 
 # covar_query_with_nulls
-query R
+query RR
 with data as (
   select 1 as f,       4 as b
   union all
@@ -344,13 +344,13 @@ SELECT median(a) FROM median_f64
 3.3
 
 # median_f64_nan
-query T
+query R
 SELECT median(a) FROM median_f64_nan
 ----
 NaN
 
 # approx_median_f64_nan
-query T
+query R
 SELECT approx_median(a) FROM median_f64_nan
 ----
 NaN
@@ -365,13 +365,13 @@ create table cpu (host string, usage float) as select * from (values
 ('host1', 90.4)
 );
 
-query CI rowsort
+query TR rowsort
 select host, median(usage) from cpu group by host;
 ----
 host0 90.1
 host1 90.3
 
-query CI
+query R
 select median(usage) from cpu;
 ----
 90.2
@@ -395,7 +395,7 @@ create table cpu (host string, usage float) as select * from (values
   ('host1', 89.3)
 );
 
-query CI rowsort
+query TR rowsort
 select host, median(usage) from cpu group by host;
 ----
 host0 90.2
@@ -410,7 +410,7 @@ drop table cpu;
 statement ok
 create table cpu (host string, usage float) as select * from (values ('host0', 90.2), ('host1', 90.1), ('host1', 90.5), ('host0', 90.5), ('host1', 90.0), ('host1', 90.3), ('host1', 90.2), ('host1', 90.3));
 
-query CI rowsort
+query TR rowsort
 select host, median(usage) from cpu group by host;
 ----
 host0 90.35
@@ -499,161 +499,161 @@ SELECT approx_distinct(c9) AS a, approx_distinct(c9) AS b FROM aggregate_test_10
 ## float values.
 
 #csv_query_approx_percentile_cont (c2)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.1) AS DOUBLE) / 1.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.5) AS DOUBLE) / 3.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.9) AS DOUBLE) / 5.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c3)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c3, 0.1) AS DOUBLE) / -95.3) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c3, 0.5) AS DOUBLE) / 15.5) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c3, 0.9) AS DOUBLE) / 102.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c4)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c4, 0.1) AS DOUBLE) / -22925.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c4, 0.5) AS DOUBLE) / 4599.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c4, 0.9) AS DOUBLE) / 25334.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c5)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c5, 0.1) AS DOUBLE) / -1882606710.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c5, 0.5) AS DOUBLE) / 377164262.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c5, 0.9) AS DOUBLE) / 1991374996.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c6)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c6, 0.1) AS DOUBLE) / -7250000000000000000) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c6, 0.5) AS DOUBLE) / 1130000000000000000) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c6, 0.9) AS DOUBLE) / 7370000000000000000) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c7)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c7, 0.1) AS DOUBLE) / 18.9) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c7, 0.5) AS DOUBLE) / 134.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c7, 0.9) AS DOUBLE) / 231.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c8)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c8, 0.1) AS DOUBLE) / 2671.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c8, 0.5) AS DOUBLE) / 30634.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c8, 0.9) AS DOUBLE) / 57518.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c9)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c9, 0.1) AS DOUBLE) / 472608672.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c9, 0.5) AS DOUBLE) / 2365817608.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c9, 0.9) AS DOUBLE) / 3776538487.0) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c10)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c10, 0.1) AS DOUBLE) / 1830000000000000000) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c10, 0.5) AS DOUBLE) / 9300000000000000000) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c10, 0.9) AS DOUBLE) / 16100000000000000000) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
 # csv_query_approx_percentile_cont (c11)
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c11, 0.1) AS DOUBLE) /  0.109) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c11, 0.5) AS DOUBLE) / 0.491) < 0.05) AS q FROM aggregate_test_100
 ----
 true
 
-query T
+query B
 SELECT (ABS(1 - CAST(approx_percentile_cont(c11, 0.9) AS DOUBLE) / 0.834) < 0.05) AS q FROM aggregate_test_100
 ----
 true
@@ -986,19 +986,19 @@ SELECT count(1 + 1)
 1
 
 # csv_query_array_agg
-query T
+query ?
 SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 2) test
 ----
 [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB]
 
 # csv_query_array_agg_empty
-query I
+query ?
 SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test
 ----
 []
 
 # csv_query_array_agg_one
-query I
+query ?
 SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1) test
 ----
 [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm]
@@ -1013,9 +1013,9 @@ select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count
 4 29 1.260869565217 123 -117 23
 5 -194 -13.857142857143 118 -101 14
 
-# TODO: csv_query_array_agg_unsupported
-# statement error
-# SELECT array_agg(c13 ORDER BY c1) FROM aggregate_test_100;
+# csv_query_array_agg_unsupported
+statement error This feature is not implemented: ORDER BY not supported in ARRAY_AGG: c1
+SELECT array_agg(c13 ORDER BY c1) FROM aggregate_test_100;
 
 # csv_query_array_cube_agg_with_overflow
 query TIIRIII
@@ -1058,41 +1058,14 @@ NULL 4 29 1.260869565217 123 -117 23
 NULL 5 -194 -13.857142857143 118 -101 14
 NULL NULL 781 7.81 125 -117 100
 
+# TODO this querys output is non determinisitic (the order of the elements
+# differs run to run
+#
 # csv_query_array_agg_distinct
 # query T
 # SELECT array_agg(distinct c2) FROM aggregate_test_100
 # ----
 # [4, 2, 3, 5, 1]
-
-# TODO: aggregate_timestamps_sum
-
-# aggregate_timestamps_count
-# query IIII
-# SELECT count(nanos), count(micros), count(millis), count(secs) FROM t
-# ----
-# 3 3 3 3
-
-# aggregate_timestamps_min
-# query TTTT
-# SELECT min(nanos), min(micros), min(millis), min(secs) FROM t
-# ----
-# 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10
-
-# # aggregate_timestamps_max
-# query TTTT
-# SELECT max(nanos), max(micros), max(millis), max(secs) FROM t
-# ----
-# 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10
-
-# TODO: aggregate_times_sum
-
-# TODO: aggregate_times_count
-
-# TODO: aggregate_times_min
-
-# TODO: aggregate_times_max
-
-# TODO: aggregate_timestamps_avg
 
 # aggregate_time_min_and_max
 query TT
@@ -1101,30 +1074,28 @@ select min(t), max(t) from  (select '00:00:00' as t union select '00:00:01' unio
 00:00:00 00:00:02
 
 # aggregate_decimal_min
-query R
-select min(c1) from d_table
+query RT
+select min(c1), arrow_typeof(min(c1)) from d_table
 ----
--100.009
+-100.009 Decimal128(10, 3)
 
 # aggregate_decimal_max
-query R
-select max(c1) from d_table
+query RT
+select max(c1), arrow_typeof(max(c1)) from d_table
 ----
-110.009
+110.009 Decimal128(10, 3)
 
-# FIX: doesn't check datatype
 # aggregate_decimal_sum
-query R
-select sum(c1) from d_table
+query RT
+select sum(c1), arrow_typeof(sum(c1)) from d_table
 ----
-100
+100 Decimal128(20, 3)
 
-# FIX: doesn't check datatype
 # aggregate_decimal_avg
-query R
-select avg(c1) from d_table
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from d_table
 ----
-5
+5 Decimal128(14, 7)
 
 # FIX: different test table
 # aggregate
@@ -1191,19 +1162,17 @@ SELECT COUNT(DISTINCT c1) FROM test
 
 # TODO: aggregate_with_alias
 
-# FIX: CSV Writer error
 # array_agg_zero
-# query I
-# SELECT ARRAY_AGG([])
-# ----
-# []
+query ?
+SELECT ARRAY_AGG([])
+----
+[]
 
-# FIX: CSV Writer error
 # array_agg_one
-# query I
-# SELECT ARRAY_AGG([1])
-# ----
-# [[1]]
+query ?
+SELECT ARRAY_AGG([1])
+----
+[[1]]
 
 # test_approx_percentile_cont_decimal_support
 query TI
@@ -1216,15 +1185,14 @@ d 4
 e 4
 
 
-
 # array_agg_zero
-query U
+query ?
 SELECT ARRAY_AGG([]);
 ----
 []
 
 # array_agg_one
-query U
+query ?
 SELECT ARRAY_AGG([1]);
 ----
 [[1]]
@@ -1261,7 +1229,7 @@ NULL 1
 NULL 2
 
 # avg should be null
-query II
+query RI
 SELECT avg(column1), column2 from the_nulls group by column2 order by column2;
 ----
 NULL 1
@@ -1284,3 +1252,153 @@ NULL 2
 
 statement ok
 drop table the_nulls;
+
+# All supported timestamp types
+
+# "nanos" --> TimestampNanosecondArray
+# "micros" --> TimestampMicrosecondArray
+# "millis" --> TimestampMillisecondArray
+# "secs" --> TimestampSecondArray
+# "names" --> StringArray
+
+statement ok
+create table t_source
+as values
+ ('2018-11-13T17:11:10.011375885995', 'Row 0'),
+ ('2011-12-13T11:13:10.12345', 'Row 1'),
+ (null, 'Row 2'),
+ ('2021-1-1T05:11:10.432', 'Row 3');
+
+
+statement ok
+create table t as
+select
+  arrow_cast(column1, 'Timestamp(Nanosecond, None)') as nanos,
+  arrow_cast(column1, 'Timestamp(Microsecond, None)') as micros,
+  arrow_cast(column1, 'Timestamp(Millisecond, None)') as millis,
+  arrow_cast(column1, 'Timestamp(Second, None)') as secs,
+  column2 as names
+from t_source;
+
+# Demonstate the contents
+query PPPPT
+select * from t;
+----
+2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10 Row 0
+2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10 Row 1
+NULL NULL NULL NULL Row 2
+2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10 Row 3
+
+
+# aggregate_timestamps_sum
+statement error Error during planning: The function Sum does not support inputs of type Timestamp\(Nanosecond, None\)
+SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t;
+
+# aggregate_timestamps_count
+query IIII
+SELECT count(nanos), count(micros), count(millis), count(secs) FROM t;
+----
+3 3 3 3
+
+
+# aggregate_timestamps_min
+query PPPP
+SELECT min(nanos), min(micros), min(millis), min(secs) FROM t;
+----
+2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10
+
+# aggregate_timestamps_max
+query PPPP
+SELECT max(nanos), max(micros), max(millis), max(secs) FROM t;
+----
+2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10
+
+
+
+# aggregate_timestamps_avg
+statement error Error during planning: The function Avg does not support inputs of type Timestamp\(Nanosecond, None\).
+SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t
+
+
+statement ok
+drop table t_source;
+
+statement ok
+drop table t;
+
+# All supported time types
+
+# Columns are named:
+# "nanos" --> Time64NanosecondArray
+# "micros" --> Time64MicrosecondArray
+# "millis" --> Time32MillisecondArray
+# "secs" --> Time32SecondArray
+# "names" --> StringArray
+
+statement ok
+create table t_source
+as values
+ ('18:06:30.243620451', 'Row 0'),
+ ('20:08:28.161121654', 'Row 1'),
+ ('19:11:04.156423842', 'Row 2'),
+ ('21:06:28.247821084', 'Row 3');
+
+
+statement ok
+create table t as
+select
+  arrow_cast(column1, 'Time64(Nanosecond)') as nanos,
+  arrow_cast(column1, 'Time64(Microsecond)') as micros,
+  arrow_cast(column1, 'Time32(Millisecond)') as millis,
+  arrow_cast(column1, 'Time32(Second)') as secs,
+  column2 as names
+from t_source;
+
+# Demonstate the contents
+query DDDDT
+select * from t;
+----
+18:06:30.243620451 18:06:30.243620 18:06:30.243 18:06:30 Row 0
+20:08:28.161121654 20:08:28.161121 20:08:28.161 20:08:28 Row 1
+19:11:04.156423842 19:11:04.156423 19:11:04.156 19:11:04 Row 2
+21:06:28.247821084 21:06:28.247821 21:06:28.247 21:06:28 Row 3
+
+# aggregate_times_sum
+statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Time64\(Nanosecond\).
+SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t
+
+# aggregate_times_count
+query IIII
+SELECT count(nanos), count(micros), count(millis), count(secs) FROM t
+----
+4 4 4 4
+
+
+# aggregate_times_min
+query DDDD
+SELECT min(nanos), min(micros), min(millis), min(secs) FROM t
+----
+18:06:30.243620451 18:06:30.243620 18:06:30.243 18:06:30
+
+# aggregate_times_max
+query DDDD
+SELECT max(nanos), max(micros), max(millis), max(secs) FROM t
+----
+21:06:28.247821084 21:06:28.247821 21:06:28.247 21:06:28
+
+
+# aggregate_times_avg
+statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Time64\(Nanosecond\).
+SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t
+
+statement ok
+drop table t_source;
+
+statement ok
+drop table t;
+
+query error DataFusion error: Execution error: median requires at least one non-null value
+select median(a) from (select 1 as a where 1=0);
+
+query error DataFusion error: Execution error: aggregate function needs at least one non-null element
+select approx_median(a) from (select 1 as a where 1=0);

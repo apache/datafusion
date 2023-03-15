@@ -144,6 +144,36 @@ impl WindowFrame {
     }
 }
 
+/// Construct equivalent explicit window frames for implicit corner cases.
+/// With this processing, we may assume in downstream code that RANGE/GROUPS
+/// frames contain an appropriate ORDER BY clause.
+pub fn regularize(mut frame: WindowFrame, order_bys: usize) -> Result<WindowFrame> {
+    if frame.units == WindowFrameUnits::Range && order_bys != 1 {
+        // Normally, RANGE frames require an ORDER BY clause with exactly one
+        // column. However, an ORDER BY clause may be absent in two edge cases.
+        if (frame.start_bound.is_unbounded()
+            || frame.start_bound == WindowFrameBound::CurrentRow)
+            && (frame.end_bound == WindowFrameBound::CurrentRow
+                || frame.end_bound.is_unbounded())
+        {
+            if order_bys == 0 {
+                frame.units = WindowFrameUnits::Rows;
+                frame.start_bound =
+                    WindowFrameBound::Preceding(ScalarValue::UInt64(None));
+                frame.end_bound = WindowFrameBound::Following(ScalarValue::UInt64(None));
+            }
+        } else {
+            return Err(DataFusionError::Plan(format!(
+                "With window frame of type RANGE, the ORDER BY expression must be of length 1, got {order_bys}")));
+        }
+    } else if frame.units == WindowFrameUnits::Groups && order_bys == 0 {
+        return Err(DataFusionError::Plan(
+            "GROUPS mode requires an ORDER BY clause".to_string(),
+        ));
+    };
+    Ok(frame)
+}
+
 /// There are five ways to describe starting and ending frame boundaries:
 ///
 /// 1. UNBOUNDED PRECEDING

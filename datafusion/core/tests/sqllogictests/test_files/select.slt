@@ -21,9 +21,8 @@
 ##########
 
 # all where empty
-query II
+statement ok
 SELECT * FROM aggregate_test_100 WHERE 1=2
-----
 
 # Simple values function
 query I
@@ -38,7 +37,7 @@ VALUES (-1)
 -1
 
 # foo bar
-query IIC
+query IIB
 VALUES (2+1,2-1,2>1)
 ----
 3    1    true
@@ -51,7 +50,7 @@ VALUES (1),(2)
 2
 
 # multiple rows and columns from VALUES
-query IC rowsort
+query IT rowsort
 VALUES (1,'a'),(2,'b')
 ----
 1   a
@@ -65,19 +64,45 @@ CREATE TABLE foo AS VALUES
 (5, 6);
 
 # foo distinct
-query I
+query T
 select distinct '1' from foo;
 ----
 1
 
 # foo order by
-query I
+query T
 select '1' from foo order by column1;
 ----
 1
 1
 1
 
-# foo distinct order by 
+# foo distinct order by
 statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions column1 must appear in select list
 select distinct '1' from foo order by column1;
+
+# distincts for float nan
+query BBBBBBBBBBBBBBBBB
+select 
+    'nan'::double is distinct from 'nan'::double v1,
+    'nan'::double is not distinct from 'nan'::double v2,
+    'nan'::double is not distinct from null v3,
+    'nan'::double is distinct from null v4,
+    null is distinct from 'nan'::double v5,
+    null is not distinct from 'nan'::double v6,
+    'nan'::float is distinct from 'nan'::float v7,
+    'nan'::float is not distinct from 'nan'::float v8,
+    'nan'::float is not distinct from null v9,
+    'nan'::float is distinct from null v10,
+    null is distinct from 'nan'::float v11,
+    null is not distinct from 'nan'::float v12,
+    1::float is distinct from 2::float v13,
+    'nan'::float is distinct from 1::float v14,
+    'nan'::float is not distinct from 1::float v15,
+    1::float is not distinct from null v16,
+    1::float is distinct from null v17
+;
+----
+false true false true true false false true false true true false true true false false true
+
+

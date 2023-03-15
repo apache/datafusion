@@ -27,8 +27,8 @@ use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
-    Aggregate, Distinct, EmptyRelation, Join, Projection, Sort, SubqueryAlias, TableScan,
-    Unnest, Window,
+    Aggregate, EmptyRelation, Join, Projection, Sort, SubqueryAlias, TableScan, Unnest,
+    Window,
 };
 use crate::logical_expr::{
     CrossJoin, Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType,
@@ -65,7 +65,6 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{logical_plan, StringifiedPlan};
 use datafusion_expr::{WindowFrame, WindowFrameBound};
 use datafusion_optimizer::utils::unalias;
@@ -710,17 +709,6 @@ impl DefaultPhysicalPlanner {
                         physical_input_schema.clone(),
                     )?))
                 }
-                LogicalPlan::Distinct(Distinct { input }) => {
-                    // Convert distinct to groupby with no aggregations
-                    let group_expr = expand_wildcard(input.schema(), input)?;
-                    let aggregate = LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
-                        input.clone(),
-                        group_expr,
-                        vec![],
-                        input.schema().clone(), // input schema and aggregate schema are the same in this case
-                    )?);
-                    Ok(self.create_initial_plan(&aggregate, session_state).await?)
-                }
                 LogicalPlan::Projection(Projection { input, expr, .. }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
                     let input_schema = input.as_ref().schema();
@@ -872,6 +860,8 @@ impl DefaultPhysicalPlanner {
                     schema: join_schema,
                     ..
                 }) => {
+                    let null_equals_null = *null_equals_null;
+
                     // If join has expression equijoin keys, add physical projecton.
                     let has_expr_join_key = keys.iter().any(|(l, r)| {
                         !(matches!(l, Expr::Column(_))
@@ -1042,7 +1032,7 @@ impl DefaultPhysicalPlanner {
                                 join_on,
                                 *join_type,
                                 vec![SortOptions::default(); join_on_len],
-                                *null_equals_null,
+                                null_equals_null,
                             )?))
                         }
                     } else if session_state.config().target_partitions() > 1
@@ -1207,6 +1197,11 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::Explain(_) => Err(DataFusionError::Internal(
                     "Unsupported logical plan: Explain must be root of the plan".to_string(),
                 )),
+                LogicalPlan::Distinct(_) => {
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: Distinct should be replaced to Aggregate".to_string(),
+                    ))
+                }
                 LogicalPlan::Analyze(a) => {
                     let input = self.create_initial_plan(&a.input, session_state).await?;
                     let schema = SchemaRef::new((*a.schema).clone().into());
@@ -1594,7 +1589,7 @@ pub fn create_window_expr_with_name(
                 })
                 .collect::<Result<Vec<_>>>()?;
             if !is_window_valid(window_frame) {
-                return Err(DataFusionError::Execution(format!(
+                return Err(DataFusionError::Plan(format!(
                         "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
                         window_frame.start_bound, window_frame.end_bound
                     )));
@@ -1883,7 +1878,10 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::assert_contains;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
-    use datafusion_expr::{col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder};
+    use datafusion_expr::{
+        col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder,
+        UserDefinedLogicalNodeCore,
+    };
     use fmt::Debug;
     use std::collections::HashMap;
     use std::convert::TryFrom;
@@ -2380,6 +2378,7 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
         }
     }
     /// An example extension node that doesn't do anything
+    #[derive(PartialEq, Eq, Hash)]
     struct NoOpExtensionNode {
         schema: DFSchemaRef,
     }
@@ -2389,7 +2388,7 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
             Self {
                 schema: DFSchemaRef::new(
                     DFSchema::new_with_metadata(
-                        vec![DFField::new(None, "a", DataType::Int32, false)],
+                        vec![DFField::new_unqualified("a", DataType::Int32, false)],
                         HashMap::new(),
                     )
                     .unwrap(),
@@ -2404,9 +2403,9 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
         }
     }
 
-    impl UserDefinedLogicalNode for NoOpExtensionNode {
-        fn as_any(&self) -> &dyn Any {
-            self
+    impl UserDefinedLogicalNodeCore for NoOpExtensionNode {
+        fn name(&self) -> &str {
+            "NoOp"
         }
 
         fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -2425,11 +2424,7 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
             write!(f, "NoOp")
         }
 
-        fn from_template(
-            &self,
-            _exprs: &[Expr],
-            _inputs: &[LogicalPlan],
-        ) -> Arc<dyn UserDefinedLogicalNode> {
+        fn from_template(&self, _exprs: &[Expr], _inputs: &[LogicalPlan]) -> Self {
             unimplemented!("NoOp");
         }
     }
@@ -2528,7 +2523,7 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
                         .projected_schema
                         .as_ref()
                         .clone()
-                        .replace_qualifier(name);
+                        .replace_qualifier(name.to_string());
                     scan.projected_schema = Arc::new(new_schema);
                     LogicalPlan::TableScan(scan)
                 }

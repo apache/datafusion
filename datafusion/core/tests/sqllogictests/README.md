@@ -19,25 +19,41 @@
 
 #### Overview
 
-This is the Datafusion implementation of [sqllogictest](https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki). We use [sqllogictest-rs](https://github.com/risinglightdb/sqllogictest-rs) as a parser/runner of `.slt` files in `test_files`.
+This is the Datafusion implementation of [sqllogictest](https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki). We use [sqllogictest-rs](https://github.com/risinglightdb/sqllogictest-rs) as a parser/runner of `.slt` files in [`test_files`](test_files).
+
+#### Running tests: TLDR Examples
+
+```shell
+# Run all tests
+cargo test -p datafusion --test sqllogictests
+```
+
+```shell
+# Run all tests, with debug logging enabled
+RUST_LOG=debug cargo test -p datafusion --test sqllogictests
+```
+
+```shell
+# Run only the tests in `information_schema.slt`
+cargo test -p datafusion --test sqllogictests -- information_schema
+```
+
+```shell
+# Automatically update ddl.slt with expected output
+cargo test -p datafusion --test sqllogictests -- ddl --complete
+```
 
 #### Running tests: Validation Mode
 
 In this model, `sqllogictests` runs the statements and queries in a `.slt` file, comparing the expected output in the file to the output produced by that run.
 
-Run all tests suites in validation mode
+For example, to run all tests suites in validation mode
 
 ```shell
 cargo test -p datafusion --test sqllogictests
 ```
 
-Run tests with debug logging enabled:
-
-```shell
-RUST_LOG=debug cargo test -p datafusion --test sqllogictests
-```
-
-Run only the tests in `information_schema.slt`:
+sqllogictests also supports `cargo test` style substring matches on file names to restrict which tests to run
 
 ```shell
 # information_schema.slt matches due to substring matching `information`
@@ -76,7 +92,7 @@ docker run \
 
 #### Updating tests: Completion Mode
 
-In test script completion mode, `sqllogictests` reads a prototype script and runs the statements and queries against the database engine. The output is is a full script that is a copy of the prototype script with result inserted.
+In test script completion mode, `sqllogictests` reads a prototype script and runs the statements and queries against the database engine. The output is a full script that is a copy of the prototype script with result inserted.
 
 You can update the tests / generate expected output by passing the `--complete` argument.
 
@@ -105,10 +121,13 @@ query <type_string> <sort_mode>
 
 - `test_name`: Uniquely identify the test name (arrow-datafusion only)
 - `type_string`: A short string that specifies the number of result columns and the expected datatype of each result column. There is one character in the <type_string> for each result column. The characters codes are:
-  - "T" for a text result,
-  - "I" for an integer result,
-  - "R" for a floating-point result,
-  - "?" for any other type.
+  - 'B' - **B**oolean,
+  - 'D' - **D**atetime,
+  - 'I' - **I**nteger,
+  - 'P' - timestam**P**,
+  - 'R' - floating-point results,
+  - 'T' - **T**ext,
+  - "?" - any other types
 - `expected_result`: In the results section, some values are converted according to some rules:
   - floating point values are rounded to the scale of "12",
   - NULL values are rendered as `NULL`,

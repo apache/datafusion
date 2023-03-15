@@ -74,7 +74,10 @@ use datafusion::{
         context::{QueryPlanner, SessionState, TaskContext},
         runtime_env::RuntimeEnv,
     },
-    logical_expr::{Expr, Extension, Limit, LogicalPlan, Sort, UserDefinedLogicalNode},
+    logical_expr::{
+        Expr, Extension, Limit, LogicalPlan, Sort, UserDefinedLogicalNode,
+        UserDefinedLogicalNodeCore,
+    },
     optimizer::{optimize_children, OptimizerConfig, OptimizerRule},
     physical_plan::{
         expressions::PhysicalSortExpr,
@@ -218,8 +221,7 @@ async fn topk_plan() -> Result<()> {
 
     let mut expected = vec![
         "| logical_plan after topk                               | TopK: k=3                                                                     |",
-        "|                                                       |   Projection: sales.customer_id, sales.revenue                              |",
-        "|                                                       |     TableScan: sales projection=[customer_id,revenue]                                  |",
+        "|                                                       |   TableScan: sales projection=[customer_id,revenue]                                  |",
     ].join("\n");
 
     let explain_query = format!("EXPLAIN VERBOSE {QUERY}");
@@ -325,6 +327,7 @@ impl OptimizerRule for TopKOptimizerRule {
     }
 }
 
+#[derive(PartialEq, Eq, Hash)]
 struct TopKPlanNode {
     k: usize,
     input: LogicalPlan,
@@ -337,13 +340,13 @@ impl Debug for TopKPlanNode {
     /// For TopK, use explain format for the Debug format. Other types
     /// of nodes may
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.fmt_for_explain(f)
+        UserDefinedLogicalNodeCore::fmt_for_explain(self, f)
     }
 }
 
-impl UserDefinedLogicalNode for TopKPlanNode {
-    fn as_any(&self) -> &dyn Any {
-        self
+impl UserDefinedLogicalNodeCore for TopKPlanNode {
+    fn name(&self) -> &str {
+        "TopK"
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -364,18 +367,14 @@ impl UserDefinedLogicalNode for TopKPlanNode {
         write!(f, "TopK: k={}", self.k)
     }
 
-    fn from_template(
-        &self,
-        exprs: &[Expr],
-        inputs: &[LogicalPlan],
-    ) -> Arc<dyn UserDefinedLogicalNode> {
+    fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
         assert_eq!(inputs.len(), 1, "input size inconsistent");
         assert_eq!(exprs.len(), 1, "expression size inconsistent");
-        Arc::new(TopKPlanNode {
+        Self {
             k: self.k,
             input: inputs[0].clone(),
             expr: exprs[0].clone(),
-        })
+        }
     }
 }
 

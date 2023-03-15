@@ -21,16 +21,20 @@ use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_where_exists::DecorrelateWhereExists;
 use crate::decorrelate_where_in::DecorrelateWhereIn;
 use crate::eliminate_cross_join::EliminateCrossJoin;
+use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
 use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_outer_join::EliminateOuterJoin;
+use crate::eliminate_project::EliminateProjection;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::inline_table_scan::InlineTableScan;
+use crate::merge_projection::MergeProjection;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
 use crate::push_down_projection::PushDownProjection;
+use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
 use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
@@ -42,6 +46,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use log::{debug, trace, warn};
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -63,7 +68,7 @@ pub trait OptimizerRule {
 
     /// How should the rule be applied by the optimizer? See comments on [`ApplyOrder`] for details.
     ///
-    /// If a rule use default None, its should traverse recursively plan inside itself
+    /// If a rule use default None, it should traverse recursively plan inside itself
     fn apply_order(&self) -> Option<ApplyOrder> {
         None
     }
@@ -207,6 +212,7 @@ impl Optimizer {
             Arc::new(TypeCoercion::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
+            Arc::new(ReplaceDistinctWithAggregate::new()),
             Arc::new(DecorrelateWhereExists::new()),
             Arc::new(DecorrelateWhereIn::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
@@ -215,7 +221,9 @@ impl Optimizer {
             // run it again after running the optimizations that potentially converted
             // subqueries to joins
             Arc::new(SimplifyExpressions::new()),
+            Arc::new(MergeProjection::new()),
             Arc::new(RewriteDisjunctivePredicate::new()),
+            Arc::new(EliminateDuplicatedExpr::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(EliminateCrossJoin::new()),
             Arc::new(CommonSubexprEliminate::new()),
@@ -223,7 +231,7 @@ impl Optimizer {
             Arc::new(PropagateEmptyRelation::new()),
             Arc::new(FilterNullJoinKeys::default()),
             Arc::new(EliminateOuterJoin::new()),
-            // Filters can't be pushed down past Limits, we should do PushDownFilter after LimitPushDown
+            // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit
             Arc::new(PushDownLimit::new()),
             Arc::new(PushDownFilter::new()),
             Arc::new(SingleDistinctToGroupBy::new()),
@@ -233,6 +241,9 @@ impl Optimizer {
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(PushDownProjection::new()),
+            Arc::new(EliminateProjection::new()),
+            // PushDownProjection can pushdown Projections through Limits, do PushDownLimit again.
+            Arc::new(PushDownLimit::new()),
         ];
 
         Self::with_rules(rules)
@@ -256,7 +267,7 @@ impl Optimizer {
     {
         let options = config.options();
         let start_time = Instant::now();
-        let mut plan_str = format!("{}", plan.display_indent());
+        let mut old_plan = Cow::Borrowed(plan);
         let mut new_plan = plan.clone();
         let mut i = 0;
         while i < options.optimizer.max_passes {
@@ -320,13 +331,12 @@ impl Optimizer {
             // TODO this is an expensive way to see if the optimizer did anything and
             // it would be better to change the OptimizerRule trait to return an Option
             // instead
-            let new_plan_str = format!("{}", new_plan.display_indent());
-            if plan_str == new_plan_str {
+            if old_plan.as_ref() == &new_plan {
                 // plan did not change, so no need to continue trying to optimize
                 debug!("optimizer pass {} did not make changes", i);
                 break;
             }
-            plan_str = new_plan_str;
+            old_plan = Cow::Owned(new_plan.clone());
             i += 1;
         }
         log_plan("Final optimized plan", &new_plan);
@@ -466,9 +476,9 @@ mod tests {
              Internal error: Optimizer rule 'get table_scan rule' failed, due to generate a different schema, \
              original schema: DFSchema { fields: [], metadata: {} }, \
              new schema: DFSchema { fields: [\
-             DFField { qualifier: Some(\"test\"), field: Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
-             DFField { qualifier: Some(\"test\"), field: Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
-             DFField { qualifier: Some(\"test\"), field: Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }], \
+             DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
+             DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
+             DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }], \
              metadata: {} }. \
              This was likely caused by a bug in DataFusion's code \
              and we would welcome that you file an bug report in our issue tracker",
@@ -511,7 +521,7 @@ mod tests {
 
                 let new_arrow_field = f.field().clone().with_metadata(metadata);
                 if let Some(qualifier) = f.qualifier() {
-                    DFField::from_qualified(qualifier, new_arrow_field)
+                    DFField::from_qualified(qualifier.clone(), new_arrow_field)
                 } else {
                     DFField::from(new_arrow_field)
                 }

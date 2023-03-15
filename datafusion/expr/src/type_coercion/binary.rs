@@ -17,7 +17,7 @@
 
 //! Coercion rules for matching argument types for binary operators
 
-use crate::type_coercion::{is_date, is_numeric, is_timestamp};
+use crate::type_coercion::{is_date, is_interval, is_numeric, is_timestamp};
 use crate::Operator;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
@@ -114,22 +114,12 @@ pub fn coerce_types(
         | Operator::GtEq
         | Operator::LtEq => comparison_coercion(lhs_type, rhs_type),
         Operator::Plus | Operator::Minus
-            if is_date(lhs_type) || is_timestamp(lhs_type) =>
+            if is_date(lhs_type)
+                || is_date(rhs_type)
+                || is_timestamp(lhs_type)
+                || is_timestamp(rhs_type) =>
         {
-            match rhs_type {
-                // timestamp/date +/- interval returns timestamp/date
-                DataType::Interval(_) => Some(lhs_type.clone()),
-                // providing more helpful error message
-                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
-                    return Err(DataFusionError::Plan(
-                        format!(
-                            "'{lhs_type:?} {op} {rhs_type:?}' is an unsupported operation. \
-                                addition/subtraction on dates/timestamps only supported with interval types"
-                        ),
-                    ));
-                }
-                _ => None,
-            }
+            temporal_add_sub_coercion(lhs_type, rhs_type, op)?
         }
         // for math expressions, the final value of the coercion is also the return type
         // because coercion favours higher information types
@@ -173,12 +163,27 @@ fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataT
         return Some(left_type.clone());
     }
 
-    // TODO support other data type
     match (left_type, right_type) {
-        (Int64, _) | (_, Int64) => Some(Int64),
-        (Int32, _) | (_, Int32) => Some(Int32),
-        (Int16, _) | (_, Int16) => Some(Int16),
+        (UInt64, _) | (_, UInt64) => Some(UInt64),
+        (Int64, _)
+        | (_, Int64)
+        | (UInt32, Int8)
+        | (Int8, UInt32)
+        | (UInt32, Int16)
+        | (Int16, UInt32)
+        | (UInt32, Int32)
+        | (Int32, UInt32) => Some(Int64),
+        (Int32, _)
+        | (_, Int32)
+        | (UInt16, Int16)
+        | (Int16, UInt16)
+        | (UInt16, Int8)
+        | (Int8, UInt16) => Some(Int32),
+        (UInt32, _) | (_, UInt32) => Some(UInt32),
+        (Int16, _) | (_, Int16) | (Int8, UInt8) | (UInt8, Int8) => Some(Int16),
+        (UInt16, _) | (_, UInt16) => Some(UInt16),
         (Int8, _) | (_, Int8) => Some(Int8),
+        (UInt8, _) | (_, UInt8) => Some(UInt8),
         _ => None,
     }
 }
@@ -197,6 +202,35 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
         .or_else(|| string_numeric_coercion(lhs_type, rhs_type))
+}
+
+/// Return the output type from performing addition or subtraction operations on temporal data types
+pub fn temporal_add_sub_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    op: &Operator,
+) -> Result<Option<DataType>> {
+    // interval +  date or timestamp
+    if is_interval(lhs_type) && (is_date(rhs_type) || is_timestamp(rhs_type)) {
+        return Ok(Some(rhs_type.clone()));
+    }
+
+    // date or timestamp + interval
+    if is_interval(rhs_type) && (is_date(lhs_type) || is_timestamp(lhs_type)) {
+        return Ok(Some(lhs_type.clone()));
+    }
+
+    // date or timestamp + date or timestamp
+    if (is_date(lhs_type) || is_timestamp(lhs_type))
+        && (is_date(rhs_type) || is_timestamp(rhs_type))
+    {
+        return Err(DataFusionError::Plan(
+                        format!(
+                            "'{lhs_type:?} {op} {rhs_type:?}' is an unsupported operation. \
+                                addition/subtraction on dates/timestamps only supported with interval types"
+                        ),));
+    }
+    Ok(None)
 }
 
 /// Returns the output type of applying numeric operations such as `=`
@@ -238,13 +272,36 @@ fn comparison_binary_numeric_coercion(
         (_, Decimal128(_, _)) => get_comparison_common_decimal_type(rhs_type, lhs_type),
         (Float64, _) | (_, Float64) => Some(Float64),
         (_, Float32) | (Float32, _) => Some(Float32),
-        (Int64, _) | (_, Int64) => Some(Int64),
-        (Int32, _) | (_, Int32) => Some(Int32),
-        (Int16, _) | (_, Int16) => Some(Int16),
-        (Int8, _) | (_, Int8) => Some(Int8),
+        // The following match arms encode the following logic: Given the two
+        // integral types, we choose the narrowest possible integral type that
+        // accommodates all values of both types. Note that some information
+        // loss is inevitable when we have a signed type and a `UInt64`, in
+        // which case we use `Int64`;i.e. the widest signed integral type.
+        (Int64, _)
+        | (_, Int64)
+        | (UInt64, Int8)
+        | (Int8, UInt64)
+        | (UInt64, Int16)
+        | (Int16, UInt64)
+        | (UInt64, Int32)
+        | (Int32, UInt64)
+        | (UInt32, Int8)
+        | (Int8, UInt32)
+        | (UInt32, Int16)
+        | (Int16, UInt32)
+        | (UInt32, Int32)
+        | (Int32, UInt32) => Some(Int64),
         (UInt64, _) | (_, UInt64) => Some(UInt64),
+        (Int32, _)
+        | (_, Int32)
+        | (UInt16, Int16)
+        | (Int16, UInt16)
+        | (UInt16, Int8)
+        | (Int8, UInt16) => Some(Int32),
         (UInt32, _) | (_, UInt32) => Some(UInt32),
+        (Int16, _) | (_, Int16) | (Int8, UInt8) | (UInt8, Int8) => Some(Int16),
         (UInt16, _) | (_, UInt16) => Some(UInt16),
+        (Int8, _) | (_, Int8) => Some(Int8),
         (UInt8, _) | (_, UInt8) => Some(UInt8),
         _ => None,
     }
@@ -1011,6 +1068,42 @@ mod tests {
             DataType::Int64,
             Operator::BitwiseAnd,
             DataType::Int64
+        );
+        test_coercion_binary_rule!(
+            DataType::UInt64,
+            DataType::UInt64,
+            Operator::BitwiseAnd,
+            DataType::UInt64
+        );
+        test_coercion_binary_rule!(
+            DataType::Int8,
+            DataType::UInt32,
+            Operator::BitwiseAnd,
+            DataType::Int64
+        );
+        test_coercion_binary_rule!(
+            DataType::UInt32,
+            DataType::Int32,
+            Operator::BitwiseAnd,
+            DataType::Int64
+        );
+        test_coercion_binary_rule!(
+            DataType::UInt16,
+            DataType::Int16,
+            Operator::BitwiseAnd,
+            DataType::Int32
+        );
+        test_coercion_binary_rule!(
+            DataType::UInt32,
+            DataType::UInt32,
+            Operator::BitwiseAnd,
+            DataType::UInt32
+        );
+        test_coercion_binary_rule!(
+            DataType::UInt16,
+            DataType::UInt32,
+            Operator::BitwiseAnd,
+            DataType::UInt32
         );
         Ok(())
     }

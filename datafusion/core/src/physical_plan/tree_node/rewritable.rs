@@ -15,12 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use sqllogictest::{DBOutput, DefaultColumnType};
+//! Tree node rewritable implementations
 
-pub type DFColumnType = DefaultColumnType;
+use crate::physical_plan::tree_node::TreeNodeRewritable;
+use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion_common::Result;
+use std::sync::Arc;
 
-/// The output type fed to the sqllogictest Runner
-///
-/// See <https://github.com/apache/arrow-datafusion/issues/4499> for
-/// potentially more full featured support.
-pub type DFOutput = DBOutput<DFColumnType>;
+impl TreeNodeRewritable for Arc<dyn ExecutionPlan> {
+    fn map_children<F>(self, transform: F) -> Result<Self>
+    where
+        F: FnMut(Self) -> Result<Self>,
+    {
+        let children = self.children();
+        if !children.is_empty() {
+            let new_children: Result<Vec<_>> =
+                children.into_iter().map(transform).collect();
+            with_new_children_if_necessary(self, new_children?)
+        } else {
+            Ok(self)
+        }
+    }
+}

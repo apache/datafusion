@@ -53,7 +53,6 @@ use prost::Message;
 
 use crate::common::proto_error;
 use crate::common::{csv_delimiter_to_string, str_to_byte};
-use crate::logical_plan;
 use crate::physical_plan::from_proto::{
     parse_physical_expr, parse_protobuf_file_scan_config,
 };
@@ -156,19 +155,22 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 FileCompressionType::UNCOMPRESSED,
             ))),
             PhysicalPlanType::ParquetScan(scan) => {
+                let base_config = parse_protobuf_file_scan_config(
+                    scan.base_conf.as_ref().unwrap(),
+                    registry,
+                )?;
                 let predicate = scan
-                    .pruning_predicate
+                    .predicate
                     .as_ref()
-                    .map(|expr| logical_plan::from_proto::parse_expr(expr, registry))
+                    .map(|expr| {
+                        parse_physical_expr(
+                            expr,
+                            registry,
+                            base_config.file_schema.as_ref(),
+                        )
+                    })
                     .transpose()?;
-                Ok(Arc::new(ParquetExec::new(
-                    parse_protobuf_file_scan_config(
-                        scan.base_conf.as_ref().unwrap(),
-                        registry,
-                    )?,
-                    predicate,
-                    None,
-                )))
+                Ok(Arc::new(ParquetExec::new(base_config, predicate, None)))
             }
             PhysicalPlanType::AvroScan(scan) => {
                 Ok(Arc::new(AvroExec::new(parse_protobuf_file_scan_config(
@@ -534,7 +536,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     filter,
                     &join_type.into(),
                     partition_mode,
-                    &hashjoin.null_equals_null,
+                    hashjoin.null_equals_null,
                 )?))
             }
             PhysicalPlanType::Union(union) => {
@@ -608,7 +610,12 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 } else {
                     Some(sort.fetch as usize)
                 };
-                Ok(Arc::new(SortExec::try_new(exprs, input, fetch)?))
+                Ok(Arc::new(SortExec::new_with_partitioning(
+                    exprs,
+                    input,
+                    sort.preserve_partitioning,
+                    fetch,
+                )))
             }
             PhysicalPlanType::SortPreservingMerge(sort) => {
                 let input: Arc<dyn ExecutionPlan> =
@@ -820,7 +827,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         on,
                         join_type: join_type.into(),
                         partition_mode: partition_mode.into(),
-                        null_equals_null: *exec.null_equals_null(),
+                        null_equals_null: exec.null_equals_null(),
                         filter,
                     },
                 ))),
@@ -949,15 +956,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )),
             })
         } else if let Some(exec) = plan.downcast_ref::<ParquetExec>() {
-            let pruning_expr = exec
-                .pruning_predicate()
-                .map(|pred| pred.logical_expr().try_into())
+            let predicate = exec
+                .predicate()
+                .map(|pred| pred.clone().try_into())
                 .transpose()?;
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ParquetScan(
                     protobuf::ParquetScanExecNode {
                         base_conf: Some(exec.base_config().try_into()?),
-                        pruning_predicate: pruning_expr,
+                        predicate,
                     },
                 )),
             })
@@ -1043,6 +1050,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             Some(n) => n as i64,
                             _ => -1,
                         },
+                        preserve_partitioning: exec.preserve_partitioning(),
                     },
                 ))),
             })
@@ -1212,7 +1220,7 @@ mod roundtrip_tests {
     use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
     use datafusion::physical_expr::ScalarFunctionExpr;
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
-    use datafusion::physical_plan::expressions::like;
+    use datafusion::physical_plan::expressions::{like, BinaryExpr, GetIndexedFieldExpr};
     use datafusion::physical_plan::functions;
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::physical_plan::projection::ProjectionExec;
@@ -1359,7 +1367,7 @@ mod roundtrip_tests {
                     None,
                     join_type,
                     *partition_mode,
-                    &false,
+                    false,
                 )?))?;
             }
         }
@@ -1442,6 +1450,43 @@ mod roundtrip_tests {
     }
 
     #[test]
+    fn roundtrip_sort_preserve_partitioning() -> Result<()> {
+        let field_a = Field::new("a", DataType::Boolean, false);
+        let field_b = Field::new("b", DataType::Int64, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+        let sort_exprs = vec![
+            PhysicalSortExpr {
+                expr: col("a", &schema)?,
+                options: SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            },
+            PhysicalSortExpr {
+                expr: col("b", &schema)?,
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            },
+        ];
+
+        roundtrip_test(Arc::new(SortExec::new_with_partitioning(
+            sort_exprs.clone(),
+            Arc::new(EmptyExec::new(false, schema.clone())),
+            false,
+            None,
+        )))?;
+
+        roundtrip_test(Arc::new(SortExec::new_with_partitioning(
+            sort_exprs,
+            Arc::new(EmptyExec::new(false, schema)),
+            true,
+            None,
+        )))
+    }
+
+    #[test]
     fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         let scan_config = FileScanConfig {
             object_store_url: ObjectStoreUrl::local_filesystem(),
@@ -1467,7 +1512,11 @@ mod roundtrip_tests {
             infinite_source: false,
         };
 
-        let predicate = datafusion::prelude::col("col").eq(datafusion::prelude::lit("1"));
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("col", 1)),
+            Operator::Eq,
+            lit("1"),
+        ));
         roundtrip_test(Arc::new(ParquetExec::new(
             scan_config,
             Some(predicate),
@@ -1547,10 +1596,9 @@ mod roundtrip_tests {
         let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(DistinctCount::new(
-            vec![DataType::Int64],
-            vec![col("b", &schema)?],
-            "COUNT(DISTINCT b)".to_string(),
             DataType::Int64,
+            col("b", &schema)?,
+            "COUNT(DISTINCT b)".to_string(),
         ))];
 
         let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
@@ -1583,6 +1631,32 @@ mod roundtrip_tests {
             vec![(like_expr, "result".to_string())],
             input,
         )?);
+        roundtrip_test(plan)
+    }
+
+    #[test]
+    fn roundtrip_get_indexed_field() -> Result<()> {
+        let fields = vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new(
+                "a",
+                DataType::List(Box::new(Field::new("item", DataType::Float64, true))),
+                true,
+            ),
+        ];
+
+        let schema = Schema::new(fields);
+        let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
+
+        let col_a = col("a", &schema)?;
+        let key = ScalarValue::Int64(Some(1));
+        let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(col_a, key));
+
+        let plan = Arc::new(ProjectionExec::try_new(
+            vec![(get_indexed_field_expr, "result".to_string())],
+            input,
+        )?);
+
         roundtrip_test(plan)
     }
 }

@@ -22,7 +22,7 @@
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::rewrite::TreeNodeRewritable;
+use crate::physical_plan::tree_node::TreeNodeRewritable;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use std::sync::Arc;
 
@@ -305,7 +305,7 @@ mod sql_tests {
                   FROM test
                   LIMIT 5".to_string(),
             cases: vec![Arc::new(test1), Arc::new(test2)],
-            error_operator: "Window Error".to_string()
+            error_operator: "Sort Error".to_string()
         };
 
         case.run().await?;
@@ -328,7 +328,7 @@ mod sql_tests {
                         SUM(c9) OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum1
                   FROM test".to_string(),
             cases: vec![Arc::new(test1), Arc::new(test2)],
-            error_operator: "Window Error".to_string()
+            error_operator: "Sort Error".to_string()
         };
         case.run().await?;
         Ok(())

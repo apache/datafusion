@@ -21,13 +21,14 @@ use std::sync::Arc;
 use std::vec;
 
 use arrow_schema::*;
+use datafusion_common::field_not_found;
 use sqlparser::ast::ExactNumberInfo;
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{field_not_found, DFSchema, DataFusionError, Result};
+use datafusion_common::{unqualified_field_not_found, DFSchema, DataFusionError, Result};
 use datafusion_common::{OwnedTableReference, TableReference};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::utils::find_column_exprs;
@@ -201,16 +202,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         if !schema.fields_with_unqualified_name(&col.name).is_empty() {
                             Ok(())
                         } else {
-                            Err(field_not_found(None, col.name.as_str(), schema))
+                            Err(unqualified_field_not_found(col.name.as_str(), schema))
                         }
                     }
                 }
                 .map_err(|_: DataFusionError| {
-                    field_not_found(
-                        col.relation.as_ref().map(|s| s.to_owned()),
-                        col.name.as_str(),
-                        schema,
-                    )
+                    field_not_found(col.relation.clone(), col.name.as_str(), schema)
                 }),
                 _ => Err(DataFusionError::Internal("Not a column".to_string())),
             })
@@ -295,6 +292,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // adds/changes the `SQLDataType` the compiler will tell us on upgrade
             // and avoid bugs like https://github.com/apache/arrow-datafusion/issues/3059
             SQLDataType::Nvarchar(_)
+            | SQLDataType::JSON
             | SQLDataType::Uuid
             | SQLDataType::Binary(_)
             | SQLDataType::Varbinary(_)
@@ -318,6 +316,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // precision is not supported
             | SQLDataType::Time(Some(_), _)
             | SQLDataType::Dec(_)
+            | SQLDataType::BigNumeric(_)
+            | SQLDataType::BigDecimal(_)
             | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL type {sql_type:?}"
             ))),
@@ -374,22 +374,18 @@ pub(crate) fn idents_to_table_reference(
     match taker.0.len() {
         1 => {
             let table = taker.take(enable_normalization);
-            Ok(OwnedTableReference::Bare { table })
+            Ok(OwnedTableReference::bare(table))
         }
         2 => {
             let table = taker.take(enable_normalization);
             let schema = taker.take(enable_normalization);
-            Ok(OwnedTableReference::Partial { schema, table })
+            Ok(OwnedTableReference::partial(schema, table))
         }
         3 => {
             let table = taker.take(enable_normalization);
             let schema = taker.take(enable_normalization);
             let catalog = taker.take(enable_normalization);
-            Ok(OwnedTableReference::Full {
-                catalog,
-                schema,
-                table,
-            })
+            Ok(OwnedTableReference::full(catalog, schema, table))
         }
         _ => Err(DataFusionError::Plan(format!(
             "Unsupported compound identifier '{:?}'",

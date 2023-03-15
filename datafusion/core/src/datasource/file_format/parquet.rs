@@ -25,7 +25,7 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use datafusion_common::DataFusionError;
-use datafusion_optimizer::utils::conjunction;
+use datafusion_physical_expr::PhysicalExpr;
 use hashbrown::HashMap;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::parquet_to_arrow_schema;
@@ -44,7 +44,6 @@ use crate::config::ConfigOptions;
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::logical_expr::Expr;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::file_format::{ParquetExec, SchemaAdapter};
 use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
@@ -189,16 +188,15 @@ impl FileFormat for ParquetFormat {
         &self,
         state: &SessionState,
         conf: FileScanConfig,
-        filters: &[Expr],
+        filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // If enable pruning then combine the filters to build the predicate.
         // If disable pruning then set the predicate to None, thus readers
         // will not prune data based on the statistics.
-        let predicate = if self.enable_pruning(state.config_options()) {
-            conjunction(filters.to_vec())
-        } else {
-            None
-        };
+        let predicate = self
+            .enable_pruning(state.config_options())
+            .then(|| filters.cloned())
+            .flatten();
 
         Ok(Arc::new(ParquetExec::new(
             conf,
@@ -550,50 +548,63 @@ pub(crate) mod test_util {
     use parquet::file::properties::WriterProperties;
     use tempfile::NamedTempFile;
 
+    /// How many rows per page should be written
+    const ROWS_PER_PAGE: usize = 2;
+
     /// Writes `batches` to a temporary parquet file
     ///
-    /// If multi_page is set to `true`, all batches are written into
-    /// one temporary parquet file and the parquet file is written
+    /// If multi_page is set to `true`, the parquet file(s) are written
     /// with 2 rows per data page (used to test page filtering and
     /// boundaries).
     pub async fn store_parquet(
         batches: Vec<RecordBatch>,
         multi_page: bool,
     ) -> Result<(Vec<ObjectMeta>, Vec<NamedTempFile>)> {
-        if multi_page {
-            // All batches write in to one file, each batch must have same schema.
-            let mut output = NamedTempFile::new().expect("creating temp file");
-            let mut builder = WriterProperties::builder();
-            builder = builder.set_data_page_row_count_limit(2);
-            let proper = builder.build();
-            let mut writer =
-                ArrowWriter::try_new(&mut output, batches[0].schema(), Some(proper))
-                    .expect("creating writer");
-            for b in batches {
-                writer.write(&b).expect("Writing batch");
-            }
-            writer.close().unwrap();
-            Ok((vec![local_unpartitioned_file(&output)], vec![output]))
-        } else {
-            // Each batch writes to their own file
-            let files: Vec<_> = batches
-                .into_iter()
-                .map(|batch| {
-                    let mut output = NamedTempFile::new().expect("creating temp file");
+        // Each batch writes to their own file
+        let files: Vec<_> = batches
+            .into_iter()
+            .map(|batch| {
+                let mut output = NamedTempFile::new().expect("creating temp file");
 
-                    let props = WriterProperties::builder().build();
-                    let mut writer =
-                        ArrowWriter::try_new(&mut output, batch.schema(), Some(props))
-                            .expect("creating writer");
+                let builder = WriterProperties::builder();
+                let props = if multi_page {
+                    builder.set_data_page_row_count_limit(ROWS_PER_PAGE)
+                } else {
+                    builder
+                }
+                .build();
 
+                let mut writer =
+                    ArrowWriter::try_new(&mut output, batch.schema(), Some(props))
+                        .expect("creating writer");
+
+                if multi_page {
+                    // write in smaller batches as the parquet writer
+                    // only checks datapage size limits on the boundaries of each batch
+                    write_in_chunks(&mut writer, &batch, ROWS_PER_PAGE);
+                } else {
                     writer.write(&batch).expect("Writing batch");
-                    writer.close().unwrap();
-                    output
-                })
-                .collect();
+                };
+                writer.close().unwrap();
+                output
+            })
+            .collect();
 
-            let meta: Vec<_> = files.iter().map(local_unpartitioned_file).collect();
-            Ok((meta, files))
+        let meta: Vec<_> = files.iter().map(local_unpartitioned_file).collect();
+        Ok((meta, files))
+    }
+
+    //// write batches chunk_size rows at a time
+    fn write_in_chunks<W: std::io::Write>(
+        writer: &mut ArrowWriter<W>,
+        batch: &RecordBatch,
+        chunk_size: usize,
+    ) {
+        let mut i = 0;
+        while i < batch.num_rows() {
+            let num = chunk_size.min(batch.num_rows() - i);
+            writer.write(&batch.slice(i, num)).unwrap();
+            i += num;
         }
     }
 }
@@ -609,6 +620,7 @@ mod tests {
     use super::*;
 
     use crate::datasource::file_format::parquet::test_util::store_parquet;
+    use crate::physical_plan::file_format::get_scan_files;
     use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{Array, ArrayRef, StringArray};
@@ -1200,6 +1212,25 @@ mod tests {
             .metadata()
             .clone();
         check_page_index_validation(builder.page_indexes(), builder.offset_indexes());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_scan_files() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let projection = Some(vec![9]);
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
+        let scan_files = get_scan_files(exec)?;
+        assert_eq!(scan_files.len(), 1);
+        assert_eq!(scan_files[0].len(), 1);
+        assert_eq!(scan_files[0][0].len(), 1);
+        assert!(scan_files[0][0][0]
+            .object_meta
+            .location
+            .to_string()
+            .contains("alltypes_plain.parquet"));
 
         Ok(())
     }
