@@ -219,13 +219,16 @@ impl<'a> TreeNodeRewriter<Arc<dyn PhysicalExpr>> for FilterCandidateBuilder<'a> 
 
                 if DataType::is_nested(self.file_schema.field(idx).data_type()) {
                     self.non_primitive_columns = true;
+                    return Ok(RewriteRecursion::Stop);
                 }
             } else if self.table_schema.index_of(column.name()).is_err() {
                 // If the column does not exist in the (un-projected) table schema then
                 // it must be a projected column.
                 self.projected_columns = true;
+                return Ok(RewriteRecursion::Stop);
             }
         }
+
         Ok(RewriteRecursion::Continue)
     }
 
