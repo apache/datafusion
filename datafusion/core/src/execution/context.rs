@@ -31,7 +31,7 @@ use crate::{
         optimizer::PhysicalOptimizerRule,
     },
 };
-use datafusion_expr::{DescribeTable, StringifiedPlan};
+use datafusion_expr::{DescribeTable, DmlStatement, StringifiedPlan, WriteOp};
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
@@ -308,7 +308,8 @@ impl SessionContext {
 
     /// Creates a [`DataFrame`] that will execute a SQL query.
     ///
-    /// Note: This API implements DDL such as `CREATE TABLE` and `CREATE VIEW` with in-memory
+    /// Note: This API implements DDL statements such as `CREATE TABLE` and
+    /// `CREATE VIEW` and DML statements such as `INSERT INTO` with in-memory
     /// default implementations.
     ///
     /// If this is not desirable, consider using [`SessionState::create_logical_plan()`] which
@@ -318,6 +319,24 @@ impl SessionContext {
         let plan = self.state().create_logical_plan(sql).await?;
 
         match plan {
+            LogicalPlan::Dml(DmlStatement {
+                table_name,
+                op: WriteOp::Insert,
+                input,
+                ..
+            }) => {
+                if self.table_exist(&table_name)? {
+                    let name = table_name.table();
+                    let provider = self.table_provider(name).await?;
+                    provider.insert_into(&self.state(), &input).await?;
+                } else {
+                    return Err(DataFusionError::Execution(format!(
+                        "Table '{}' does not exist",
+                        table_name
+                    )));
+                }
+                self.return_empty_dataframe()
+            }
             LogicalPlan::CreateExternalTable(cmd) => {
                 self.create_external_table(&cmd).await
             }

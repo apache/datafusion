@@ -42,7 +42,6 @@ use hashbrown::raw::RawTable;
 use crate::physical_plan::{
     coalesce_batches::concat_batches,
     coalesce_partitions::CoalescePartitionsExec,
-    common::{OperatorMemoryReservation, SharedMemoryReservation},
     expressions::Column,
     expressions::PhysicalSortExpr,
     hash_utils::create_hashes,
@@ -61,7 +60,13 @@ use crate::error::{DataFusionError, Result};
 use crate::logical_expr::JoinType;
 
 use crate::arrow::array::BooleanBufferBuilder;
-use crate::execution::{context::TaskContext, memory_pool::MemoryConsumer};
+use crate::arrow::datatypes::TimeUnit;
+use crate::execution::{
+    context::TaskContext,
+    memory_pool::{
+        MemoryConsumer, SharedMemoryReservation, SharedOptionalMemoryReservation, TryGrow,
+    },
+};
 
 use super::{
     utils::{OnceAsync, OnceFut},
@@ -121,7 +126,7 @@ pub struct HashJoinExec {
     /// Build-side data
     left_fut: OnceAsync<JoinLeftData>,
     /// Operator-level memory reservation for left data
-    reservation: OperatorMemoryReservation,
+    reservation: SharedOptionalMemoryReservation,
     /// Shares the `RandomState` for the hashing algorithm
     random_state: RandomState,
     /// Partitioning mode to use
@@ -362,26 +367,14 @@ impl ExecutionPlan for HashJoinExec {
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
         // Initialization of operator-level reservation
-        {
-            let mut operator_reservation_lock = self.reservation.lock();
-            if operator_reservation_lock.is_none() {
-                *operator_reservation_lock = Some(Arc::new(Mutex::new(
-                    MemoryConsumer::new("HashJoinExec").register(context.memory_pool()),
-                )));
-            };
-        }
-
-        let operator_reservation = self.reservation.lock().clone().ok_or_else(|| {
-            DataFusionError::Internal(
-                "Operator-level memory reservation is not initialized".to_string(),
-            )
-        })?;
+        self.reservation
+            .initialize("HashJoinExec", context.memory_pool());
 
         // Inititalization of stream-level reservation
-        let reservation = Arc::new(Mutex::new(
+        let reservation = SharedMemoryReservation::from(
             MemoryConsumer::new(format!("HashJoinStream[{partition}]"))
                 .register(context.memory_pool()),
-        ));
+        );
 
         // Memory reservation for left-side data depends on PartitionMode:
         // - operator-level for `CollectLeft` mode
@@ -399,7 +392,7 @@ impl ExecutionPlan for HashJoinExec {
                     on_left.clone(),
                     context.clone(),
                     join_metrics.clone(),
-                    operator_reservation.clone(),
+                    Arc::new(self.reservation.clone()),
                 )
             }),
             PartitionMode::Partitioned => OnceFut::new(collect_left_input(
@@ -409,7 +402,7 @@ impl ExecutionPlan for HashJoinExec {
                 on_left.clone(),
                 context.clone(),
                 join_metrics.clone(),
-                reservation.clone(),
+                Arc::new(reservation.clone()),
             )),
             PartitionMode::Auto => {
                 return Err(DataFusionError::Plan(format!(
@@ -481,7 +474,7 @@ async fn collect_left_input(
     on_left: Vec<Column>,
     context: Arc<TaskContext>,
     metrics: BuildProbeJoinMetrics,
-    reservation: SharedMemoryReservation,
+    reservation: Arc<dyn TryGrow>,
 ) -> Result<JoinLeftData> {
     let schema = left.schema();
 
@@ -510,7 +503,7 @@ async fn collect_left_input(
         .try_fold(initial, |mut acc, batch| async {
             let batch_size = batch.get_array_memory_size();
             // Reserve memory for incoming batch
-            acc.3.lock().try_grow(batch_size)?;
+            acc.3.try_grow(batch_size)?;
             // Update metrics
             acc.2.build_mem_used.add(batch_size);
             acc.2.build_input_batches.add(1);
@@ -539,7 +532,7 @@ async fn collect_left_input(
     // + 16 bytes fixed
     let estimated_hastable_size = 32 * estimated_buckets + estimated_buckets + 16;
 
-    reservation.lock().try_grow(estimated_hastable_size)?;
+    reservation.try_grow(estimated_hastable_size)?;
     metrics.build_mem_used.add(estimated_hastable_size);
 
     let mut hashmap = JoinHashMap(RawTable::with_capacity(num_rows));
@@ -809,7 +802,7 @@ impl HashJoinStream {
             // TODO: Replace `ceil` wrapper with stable `div_cell` after
             // https://github.com/rust-lang/rust/issues/88581
             let visited_bitmap_size = bit_util::ceil(left_data.1.num_rows(), 8);
-            self.reservation.lock().try_grow(visited_bitmap_size)?;
+            self.reservation.try_grow(visited_bitmap_size)?;
             self.join_metrics.build_mem_used.add(visited_bitmap_size);
         }
 

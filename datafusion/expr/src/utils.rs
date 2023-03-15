@@ -96,7 +96,44 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             Expr::ScalarVariable(_, var_names) => {
                 accum.insert(Column::from_name(var_names.join(".")));
             }
-            _ => {}
+            // Use explicit pattern match instead of a default
+            // implementation, so that in the future if someone adds
+            // new Expr types, they will check here as well
+            Expr::Alias(_, _)
+            | Expr::Literal(_)
+            | Expr::BinaryExpr { .. }
+            | Expr::Like { .. }
+            | Expr::ILike { .. }
+            | Expr::SimilarTo { .. }
+            | Expr::Not(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsNull(_)
+            | Expr::IsTrue(_)
+            | Expr::IsFalse(_)
+            | Expr::IsUnknown(_)
+            | Expr::IsNotTrue(_)
+            | Expr::IsNotFalse(_)
+            | Expr::IsNotUnknown(_)
+            | Expr::Negative(_)
+            | Expr::Between { .. }
+            | Expr::Case { .. }
+            | Expr::Cast { .. }
+            | Expr::TryCast { .. }
+            | Expr::Sort { .. }
+            | Expr::ScalarFunction { .. }
+            | Expr::ScalarUDF { .. }
+            | Expr::WindowFunction { .. }
+            | Expr::AggregateFunction { .. }
+            | Expr::GroupingSet(_)
+            | Expr::AggregateUDF { .. }
+            | Expr::InList { .. }
+            | Expr::Exists { .. }
+            | Expr::InSubquery { .. }
+            | Expr::ScalarSubquery(_)
+            | Expr::Wildcard
+            | Expr::QualifiedWildcard { .. }
+            | Expr::GetIndexedField { .. }
+            | Expr::Placeholder { .. } => {}
         }
         Ok(())
     })
