@@ -795,9 +795,9 @@ impl ExecutionPlan for SortExec {
                 let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
                 match self.fetch {
                     Some(fetch) => {
-                        write!(f, "SortExec: fetch={fetch}, expr=[{}]", expr.join(","),)
+                        write!(f, "SortExec: fetch={fetch}, expr=[{}]", expr.join(","))
                     }
-                    None => write!(f, "SortExec: expr=[{}]", expr.join(","),),
+                    None => write!(f, "SortExec: expr=[{}]", expr.join(",")),
                 }
             }
         }

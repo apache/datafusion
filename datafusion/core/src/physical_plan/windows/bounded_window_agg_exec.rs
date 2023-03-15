@@ -125,9 +125,7 @@ impl BoundedWindowAggExec {
         let mut result = vec![];
         // All window exprs have the same partition by, so we just use the first one:
         let partition_by = self.window_expr()[0].partition_by();
-        let sort_keys = self
-            .output_ordering()
-            .unwrap_or_else(|| self.sort_keys.as_deref().unwrap_or(&[]));
+        let sort_keys = self.sort_keys.as_deref().unwrap_or(&[]);
         for item in partition_by {
             if let Some(a) = sort_keys.iter().find(|&e| e.expr.eq(item)) {
                 result.push(a.clone());

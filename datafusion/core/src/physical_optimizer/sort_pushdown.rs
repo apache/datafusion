@@ -112,11 +112,8 @@ impl TreeNodeRewritable for SortPushDown {
 pub(crate) fn pushdown_sorts(requirements: SortPushDown) -> Result<Option<SortPushDown>> {
     let plan = &requirements.plan;
     let parent_required = requirements.required_ordering.as_deref();
-    let err = || {
-        DataFusionError::Execution(
-            "Expects parent requirement to contain something".to_string(),
-        )
-    };
+    let err_msg = "Expects parent requirement to contain something";
+    let err = || DataFusionError::Execution(err_msg.to_string());
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         let mut new_plan = plan.clone();
         if !ordering_satisfy_requirement(plan.output_ordering(), parent_required, || {
@@ -149,28 +146,25 @@ pub(crate) fn pushdown_sorts(requirements: SortPushDown) -> Result<Option<SortPu
         if ordering_satisfy_requirement(plan.output_ordering(), parent_required, || {
             plan.equivalence_properties()
         }) {
-            Ok(Some(SortPushDown {
+            return Ok(Some(SortPushDown {
                 required_ordering: None,
+                ..requirements
+            }));
+        }
+        // Can not satisfy the parent requirements, check whether the requirements can be pushed down. If not, add new SortExec.
+        if let Some(adjusted) = pushdown_requirement_to_children(plan, parent_required)? {
+            Ok(Some(SortPushDown {
+                plan: plan.clone(),
+                adjusted_request_ordering: adjusted,
                 ..requirements
             }))
         } else {
-            // Can not satisfy the parent requirements, check whether the requirements can be pushed down. If not, add new SortExec.
-            if let Some(adjusted) =
-                pushdown_requirement_to_children(plan, parent_required)?
-            {
-                Ok(Some(SortPushDown {
-                    plan: plan.clone(),
-                    adjusted_request_ordering: adjusted,
-                    ..requirements
-                }))
-            } else {
-                // Can not push down requirements, add new SortExec
-                let parent_required_expr =
-                    create_sort_expr_from_requirement(parent_required.ok_or_else(err)?);
-                let mut new_plan = plan.clone();
-                add_sort_above(&mut new_plan, parent_required_expr)?;
-                Ok(Some(SortPushDown::init(new_plan)))
-            }
+            // Can not push down requirements, add new SortExec
+            let parent_required_expr =
+                create_sort_expr_from_requirement(parent_required.ok_or_else(err)?);
+            let mut new_plan = plan.clone();
+            add_sort_above(&mut new_plan, parent_required_expr)?;
+            Ok(Some(SortPushDown::init(new_plan)))
         }
     }
 }
@@ -179,11 +173,8 @@ fn pushdown_requirement_to_children(
     plan: &Arc<dyn ExecutionPlan>,
     parent_required: Option<&[PhysicalSortRequirements]>,
 ) -> Result<Option<Vec<Option<Vec<PhysicalSortRequirements>>>>> {
-    let err = || {
-        DataFusionError::Execution(
-            "Expects parent requirement to contain something".to_string(),
-        )
-    };
+    let err_msg = "Expects parent requirement to contain something";
+    let err = || DataFusionError::Execution(err_msg.to_string());
     let maintains_input_order = plan.maintains_input_order();
     if is_window(plan) {
         let required_input_ordering = plan.required_input_ordering();
