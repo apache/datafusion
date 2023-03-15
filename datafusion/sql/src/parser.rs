@@ -272,7 +272,6 @@ impl<'a> DFParser<'a> {
     /// Parse an expression, optionally followed by ASC or DESC (used in ORDER BY)
     pub fn parse_order_by_expr(&mut self) -> Result<OrderByExpr, ParserError> {
         let expr = self.parser.parse_expr()?;
-        println!("expr {}", expr);
 
         let asc = if self.parser.parse_keyword(Keyword::ASC) {
             Some(true)
@@ -514,7 +513,7 @@ impl<'a> DFParser<'a> {
     }
 
     fn parse_has_ordered(&mut self) -> bool {
-        self.parser.parse_keywords(&[Keyword::ORDER, Keyword::BY])
+        self.parser.parse_keywords(&[Keyword::WITH, Keyword::ORDER])
     }
 }
 
@@ -569,7 +568,7 @@ mod tests {
     #[test]
     fn create_external_table_ordered() -> Result<(), ParserError> {
         // positive case
-        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV ORDER BY (c1 ASC, c2 DESC NULLS FIRST) LOCATION 'foo.csv'";
+        let sql = "CREATE EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV WITH ORDER (c1 ASC, c2 DESC NULLS FIRST) LOCATION 'foo.csv'";
         let display = None;
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: "t".into(),
@@ -604,7 +603,7 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // positive case
-        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV ORDER BY (c1 - c2 ASC) LOCATION 'foo.csv'";
+        let sql = "CREATE EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV WITH ORDER (c1 - c2 ASC) LOCATION 'foo.csv'";
         let display = None;
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: "t".into(),

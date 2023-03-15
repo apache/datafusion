@@ -46,7 +46,7 @@ async fn sort_with_lots_of_repetition_values() -> Result<()> {
 #[tokio::test]
 async fn create_external_table_with_ddl_ordered() -> Result<()> {
     let ctx = SessionContext::new();
-    let sql = "CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS CSV ORDER BY (a_id ASC) LOCATION 'file://path/to/table';";
+    let sql = "CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS CSV WITH ORDER (a_id ASC) LOCATION 'file://path/to/table';";
     if let LogicalPlan::CreateExternalTable(cmd) =
         ctx.state().create_logical_plan(sql).await?
     {
@@ -60,5 +60,13 @@ async fn create_external_table_with_ddl_ordered() -> Result<()> {
     } else {
         panic!("Wrong command")
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_external_table_with_ddl_ordered_non_cols() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = "CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS CSV WITH ORDER (a ASC) LOCATION 'file://path/to/table';";
+    assert!(ctx.state().create_logical_plan(sql).await.is_err());
     Ok(())
 }

@@ -40,8 +40,8 @@ use datafusion_expr::{
 };
 use sqlparser::ast;
 use sqlparser::ast::{
-    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query, SchemaName,
-    SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableFactor,
+    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, OrderByExpr, Query,
+    SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableFactor,
     TableWithJoins, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
@@ -425,6 +425,38 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }))
     }
 
+    fn build_order_by(
+        &self,
+        ordered_exprs: Vec<OrderByExpr>,
+        schema: &DFSchemaRef,
+    ) -> Result<Vec<datafusion_expr::Expr>> {
+        // Map each OrderByExpr to a SortExpr
+        let ordered_exprs_new = ordered_exprs
+            .into_iter()
+            .map(|e| self.order_by_to_sort_expr(e, schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Ensure that all SortExprs are valid by checking that their columns exist in the schema
+        ordered_exprs_new
+            .iter()
+            .try_for_each::<_, Result<()>>(|expr| {
+                let columns = expr.to_columns()?;
+                columns.iter().try_for_each(|c| {
+                    if !schema.has_column(c) {
+                        // Return an error if the column is not in the schema
+                        return Err(DataFusionError::Plan(format!(
+                            "Column {} is not in schema",
+                            c
+                        )));
+                    }
+                    Ok(())
+                })
+            })?;
+
+        // If all SortExprs are valid, return them as an expression vector
+        Ok(ordered_exprs_new)
+    }
+
     /// Generate a logical plan from a CREATE EXTERNAL TABLE statement
     fn external_table_to_plan(
         &self,
@@ -445,8 +477,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             options,
         } = statement;
 
-        let mut planner_context = PlannerContext::new();
-
         // semantic checks
         if file_type == "PARQUET" && !columns.is_empty() {
             Err(DataFusionError::Plan(
@@ -465,8 +495,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let schema = self.build_schema(columns)?;
         let df_schema = schema.to_dfschema_ref()?;
-        let ordered_exprs =
-            self.build_order_by(ordered_exprs, &df_schema, &mut planner_context)?;
+
+        let ordered_exprs = self.build_order_by(ordered_exprs, &df_schema)?;
 
         // External tables do not support schemas at the moment, so the name is just a table name
         let name = OwnedTableReference::Bare { table: name };
