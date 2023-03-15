@@ -79,7 +79,12 @@ impl std::fmt::Display for ObjectStoreUrl {
     }
 }
 
-/// Provides a mechanism for lazy, on-demand creation of [`ObjectStore`]
+/// Provides a mechanism for lazy, on-demand creation of an [`ObjectStore`]
+///
+/// For example, to support reading arbitrary buckets from AWS S3
+/// without instantiating an [`ObjectStore`] for each possible bucket
+/// up front, an [`ObjectStoreProvider`] can be used to create the
+/// appropriate [`ObjectStore`] instance on demand.
 ///
 /// See [`ObjectStoreRegistry::new_with_provider`]
 pub trait ObjectStoreProvider: Send + Sync + 'static {
@@ -89,21 +94,29 @@ pub trait ObjectStoreProvider: Send + Sync + 'static {
     fn get_by_url(&self, url: &Url) -> Result<Arc<dyn ObjectStore>>;
 }
 
-/// [`ObjectStoreRegistry`] stores [`ObjectStore`] keyed by url scheme and authority, that is
-/// the part of a URL preceding the path
+/// [`ObjectStoreRegistry`] maps a URL to an [`ObjectStore`] instance,
+/// and allows DataFusion to read from different [`ObjectStore`]
+/// instances. For example DataFusion might be configured so that
 ///
-/// This is used by DataFusion to find an appropriate [`ObjectStore`] for a [`ListingTableUrl`]
-/// provided in a query such as
+/// 1. `s3://my_bucket/lineitem/` mapped to the `/lineitem` path on an
+/// AWS S3 object store bound to `my_bucket`
+///
+/// 2. `s3://my_other_bucket/lineitem/` mapped to the (same)
+/// `/lineitem` path on a *different* AWS S3 object store bound to
+/// `my_other_bucket`
+///
+/// When given a [`ListingTableUrl`], DataFusion tries to find an
+/// appropriate [`ObjectStore`]. For example
 ///
 /// ```sql
 /// create external table unicorns stored as parquet location 's3://my_bucket/lineitem/';
 /// ```
 ///
-/// In this particular case the url `s3://my_bucket/lineitem/` will be provided to
+/// In this particular case, the url `s3://my_bucket/lineitem/` will be provided to
 /// [`ObjectStoreRegistry::get_by_url`] and one of three things will happen:
 ///
 /// - If an [`ObjectStore`] has been registered with [`ObjectStoreRegistry::register_store`] with
-/// scheme `s3` and host `my_bucket`, this [`ObjectStore`] will be returned
+/// scheme `s3` and host `my_bucket`, that [`ObjectStore`] will be returned
 ///
 /// - If an [`ObjectStoreProvider`] has been associated with this [`ObjectStoreRegistry`] using
 /// [`ObjectStoreRegistry::new_with_provider`], [`ObjectStoreProvider::get_by_url`] will be invoked,
@@ -115,9 +128,10 @@ pub trait ObjectStoreProvider: Send + Sync + 'static {
 ///
 /// This allows for two different use-cases:
 ///
-/// * DBMS systems where object store buckets are explicitly created using DDL, can register these
+/// 1. Systems where object store buckets are explicitly created using DDL, can register these
 /// buckets using [`ObjectStoreRegistry::register_store`]
-/// * DMBS systems relying on ad-hoc discovery, without corresponding DDL, can create [`ObjectStore`]
+///
+/// 2. Systems relying on ad-hoc discovery, without corresponding DDL, can create [`ObjectStore`]
 /// lazily, on-demand using [`ObjectStoreProvider`]
 ///
 /// [`ListingTableUrl`]: crate::datasource::listing::ListingTableUrl

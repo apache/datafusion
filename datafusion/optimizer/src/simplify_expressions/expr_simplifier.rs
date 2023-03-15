@@ -390,6 +390,22 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 lit(negated)
             }
 
+            // expr IN ((subquery)) -> expr IN (subquery), see ##5529
+            Expr::InList {
+                expr,
+                mut list,
+                negated,
+            } if list.len() == 1
+                && matches!(list.first(), Some(Expr::ScalarSubquery { .. })) =>
+            {
+                let Expr::ScalarSubquery(subquery) = list.remove(0) else { unreachable!() };
+                Expr::InSubquery {
+                    expr,
+                    subquery,
+                    negated,
+                }
+            }
+
             // if expr is a single column reference:
             // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
             Expr::InList {
@@ -1110,6 +1126,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::test::test_table_scan_with_name;
     use arrow::{
         array::{ArrayRef, Int32Array},
         datatypes::{DataType, Field, Schema},
@@ -2410,14 +2427,14 @@ mod tests {
         Arc::new(
             DFSchema::new_with_metadata(
                 vec![
-                    DFField::new(None, "c1", DataType::Utf8, true),
-                    DFField::new(None, "c2", DataType::Boolean, true),
-                    DFField::new(None, "c3", DataType::Int64, true),
-                    DFField::new(None, "c4", DataType::UInt32, true),
-                    DFField::new(None, "c1_non_null", DataType::Utf8, false),
-                    DFField::new(None, "c2_non_null", DataType::Boolean, false),
-                    DFField::new(None, "c3_non_null", DataType::Int64, false),
-                    DFField::new(None, "c4_non_null", DataType::UInt32, false),
+                    DFField::new_unqualified("c1", DataType::Utf8, true),
+                    DFField::new_unqualified("c2", DataType::Boolean, true),
+                    DFField::new_unqualified("c3", DataType::Int64, true),
+                    DFField::new_unqualified("c4", DataType::UInt32, true),
+                    DFField::new_unqualified("c1_non_null", DataType::Utf8, false),
+                    DFField::new_unqualified("c2_non_null", DataType::Boolean, false),
+                    DFField::new_unqualified("c3_non_null", DataType::Int64, false),
+                    DFField::new_unqualified("c4_non_null", DataType::UInt32, false),
                 ],
                 HashMap::new(),
             )
@@ -2687,6 +2704,51 @@ mod tests {
         assert_eq!(
             simplify(in_list(col("c1"), vec![lit(1), lit(2)], true)),
             col("c1").not_eq(lit(2)).and(col("c1").not_eq(lit(1)))
+        );
+
+        let subquery = Arc::new(test_table_scan_with_name("test").unwrap());
+        assert_eq!(
+            simplify(in_list(
+                col("c1"),
+                vec![scalar_subquery(subquery.clone())],
+                false
+            )),
+            in_subquery(col("c1"), subquery.clone())
+        );
+        assert_eq!(
+            simplify(in_list(
+                col("c1"),
+                vec![scalar_subquery(subquery.clone())],
+                true
+            )),
+            not_in_subquery(col("c1"), subquery)
+        );
+
+        let subquery1 =
+            scalar_subquery(Arc::new(test_table_scan_with_name("test1").unwrap()));
+        let subquery2 =
+            scalar_subquery(Arc::new(test_table_scan_with_name("test2").unwrap()));
+
+        // c1 NOT IN (<subquery1>, <subquery2>) -> c1 != <subquery2> AND c1 != <subquery1>
+        assert_eq!(
+            simplify(in_list(
+                col("c1"),
+                vec![subquery1.clone(), subquery2.clone()],
+                true
+            )),
+            col("c1")
+                .not_eq(subquery2.clone())
+                .and(col("c1").not_eq(subquery1.clone()))
+        );
+
+        // c1 IN (<subquery1>, <subquery2>) -> c1 == <subquery2> OR c1 == <subquery1>
+        assert_eq!(
+            simplify(in_list(
+                col("c1"),
+                vec![subquery1.clone(), subquery2.clone()],
+                false
+            )),
+            col("c1").eq(subquery2).or(col("c1").eq(subquery1))
         );
     }
 
