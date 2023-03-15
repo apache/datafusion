@@ -24,7 +24,9 @@ use arrow_schema::*;
 use sqlparser::ast::ExactNumberInfo;
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
-use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
+use sqlparser::ast::{
+    DataType as SQLDataType, Ident, ObjectName, OrderByExpr as SqlOrderByExpr, TableAlias,
+};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{field_not_found, DFSchema, DataFusionError, Result};
@@ -141,6 +143,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         Ok(Schema::new(fields))
+    }
+
+    pub fn build_order_by(
+        &self,
+        order_exprs: Vec<SqlOrderByExpr>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Vec<Expr>> {
+        let mut exprs = Vec::with_capacity(order_exprs.len());
+        for order_expr in order_exprs {
+            let expr =
+                self.sql_expr_to_logical_expr(order_expr.expr, schema, planner_context)?;
+            let sort_expr = expr.sort(order_expr.asc.unwrap_or(true), false);
+            exprs.push(sort_expr);
+        }
+        Ok(exprs)
     }
 
     /// Apply the given TableAlias to the top-level projection.

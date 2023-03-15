@@ -441,8 +441,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             table_partition_cols,
             if_not_exists,
             file_compression_type,
+            ordered_exprs,
             options,
         } = statement;
+
+        let mut planner_context = PlannerContext::new();
 
         // semantic checks
         if file_type == "PARQUET" && !columns.is_empty() {
@@ -461,12 +464,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         let schema = self.build_schema(columns)?;
+        let df_schema = schema.to_dfschema_ref()?;
+        let ordered_exprs =
+            self.build_order_by(ordered_exprs, &df_schema, &mut planner_context)?;
 
         // External tables do not support schemas at the moment, so the name is just a table name
         let name = OwnedTableReference::Bare { table: name };
 
         Ok(LogicalPlan::CreateExternalTable(PlanCreateExternalTable {
-            schema: schema.to_dfschema_ref()?,
+            schema: df_schema,
             name,
             location,
             file_type,
@@ -476,6 +482,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             if_not_exists,
             definition,
             file_compression_type,
+            ordered_exprs,
             options,
         }))
     }

@@ -291,6 +291,8 @@ pub struct CreateExternalTableNode {
     pub definition: ::prost::alloc::string::String,
     #[prost(string, tag = "10")]
     pub file_compression_type: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "13")]
+    pub ordered_exprs: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(map = "string, string", tag = "11")]
     pub options: ::std::collections::HashMap<
         ::prost::alloc::string::String,

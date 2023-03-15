@@ -16,6 +16,9 @@
 // under the License.
 
 use super::*;
+use datafusion::datasource::datasource::TableProviderFactory;
+use datafusion::datasource::listing::ListingTable;
+use datafusion::datasource::listing_table_factory::ListingTableFactory;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};
 
 #[tokio::test]
@@ -36,6 +39,26 @@ async fn sort_with_lots_of_repetition_values() -> Result<()> {
     assert_eq!(actual.len(), expected.len());
     for i in 0..actual.len() {
         assert_eq!(actual[i], expected[i]);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_external_table_with_ddl_ordered() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = "CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS CSV ORDER BY (a_id ASC) LOCATION 'file://path/to/table';";
+    if let LogicalPlan::CreateExternalTable(cmd) =
+        ctx.state().create_logical_plan(sql).await?
+    {
+        let listing_table_factory = Arc::new(ListingTableFactory::new());
+        let table_dyn = listing_table_factory.create(&ctx.state(), &cmd).await?;
+        let table = table_dyn.as_any().downcast_ref::<ListingTable>().unwrap();
+        assert_eq!(
+            &cmd.ordered_exprs,
+            table.options().file_sort_order.as_ref().unwrap()
+        )
+    } else {
+        panic!("Wrong command")
     }
     Ok(())
 }
