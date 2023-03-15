@@ -57,6 +57,15 @@ impl OptimizerRule for InlineTableScan {
                         generate_projection_expr(projection, sub_plan)?;
                     let plan = LogicalPlanBuilder::from(sub_plan.clone())
                         .project(projection_exprs)?
+                        // Since this This is creating a subquery like:
+                        //```sql
+                        // ...
+                        // FROM <view definition> as "table_name"
+                        // ```
+                        //
+                        // it doesn't make sense to have a qualified
+                        // reference (e.g. "foo"."bar") -- this convert to
+                        // string
                         .alias(table_name.to_string())?;
                     Ok(Some(plan.build()?))
                 } else {
