@@ -18,6 +18,7 @@
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
+use datafusion_expr::expr::Sort as ExprSort;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{Expr, Sort};
 use hashbrown::HashSet;
@@ -90,7 +91,6 @@ impl OptimizerRule for EliminateDuplicatedExpr {
 mod tests {
     use super::*;
     use crate::test::*;
-    use datafusion_expr::expr::Sort as ExprSort;
     use datafusion_expr::{col, logical_plan::builder::LogicalPlanBuilder};
     use std::sync::Arc;
 
