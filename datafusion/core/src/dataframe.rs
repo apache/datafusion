@@ -20,18 +20,18 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, StringArray};
+use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
-use futures::StreamExt;
+use datafusion_common::DataFusionError;
 use parquet::file::properties::WriterProperties;
 
 use datafusion_common::from_slice::FromSlice;
 use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::{
-    avg, count, is_null, max, median, min, stddev, TableProviderFilterPushDown,
-    UNNAMED_TABLE,
+    avg, count, is_null, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
+    TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 
 use crate::arrow::datatypes::Schema;
@@ -627,12 +627,22 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn count(self) -> Result<usize> {
-        let mut stream = self.execute_stream().await?;
-        let mut rows = 0;
-        while let Some(b) = stream.next().await {
-            rows += b?.num_rows();
-        }
-        Ok(rows)
+        let rows = self
+            .aggregate(
+                vec![],
+                vec![datafusion_expr::count(Expr::Literal(COUNT_STAR_EXPANSION))],
+            )?
+            .collect()
+            .await?;
+        let len = *rows
+            .first()
+            .and_then(|r| r.columns().first())
+            .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
+            .and_then(|a| a.values().first())
+            .ok_or(DataFusionError::Internal(
+                "Unexpected output when collecting for count()".to_string(),
+            ))? as usize;
+        Ok(len)
     }
 
     /// Convert the logical plan represented by this DataFrame into a physical plan and
