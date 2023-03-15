@@ -387,7 +387,7 @@ mod tests {
     use crate::expressions::col;
     use crate::expressions::lit;
     use crate::expressions::{binary, cast};
-    use crate::rewrite::TreeNodeRewritable;
+    use crate::tree_node::TreeNode;
     use arrow::array::StringArray;
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;

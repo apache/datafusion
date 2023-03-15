@@ -27,7 +27,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::Interval;
-use datafusion_physical_expr::rewrite::TreeNodeRewritable;
+use datafusion_physical_expr::tree_node::TreeNode as PhysicalExprTreeNode;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 

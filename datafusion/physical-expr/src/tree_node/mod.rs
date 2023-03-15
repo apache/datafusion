@@ -15,60 +15,43 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::physical_expr::with_new_children_if_necessary;
-use crate::PhysicalExpr;
-use datafusion_common::Result;
+//! This module provides common traits for visiting or rewriting tree nodes easily.
+//!
+//! It's a duplication of the one in the crate `datafusion`.
+//! In the future, if the Orphan rule is relaxed for Arc<dyn T>, these duplicated codes can be removed.
 
-use std::sync::Arc;
+pub mod physical_expr;
 
-/// a Trait for marking tree node types that are rewritable
-pub trait TreeNodeRewritable: Clone {
-    /// Transform the tree node using the given [TreeNodeRewriter]
-    /// It performs a depth first walk of an node and its children.
+use datafusion_common::{DataFusionError, Result};
+
+/// Trait for tree node. It can be [`ExecutionPlan`], [`PhysicalExpr`], [`LogicalExpr`], etc.
+pub trait TreeNode: Clone {
+    /// Return the children of this tree node
+    fn get_children(&self) -> Vec<Self>;
+
+    /// Use pre-order to iterate the node on the tree so that we can stop fast for some cases.
     ///
-    /// For an node tree such as
-    /// ```text
-    /// ParentNode
-    ///    left: ChildNode1
-    ///    right: ChildNode2
-    /// ```
-    ///
-    /// The nodes are visited using the following order
-    /// ```text
-    /// pre_visit(ParentNode)
-    /// pre_visit(ChildNode1)
-    /// mutate(ChildNode1)
-    /// pre_visit(ChildNode2)
-    /// mutate(ChildNode2)
-    /// mutate(ParentNode)
-    /// ```
-    ///
-    /// If an Err result is returned, recursion is stopped immediately
-    ///
-    /// If [`false`] is returned on a call to pre_visit, no
-    /// children of that node are visited, nor is mutate
-    /// called on that node
-    ///
-    fn transform_using<R: TreeNodeRewriter<Self>>(
-        self,
-        rewriter: &mut R,
-    ) -> Result<Self> {
-        let need_mutate = match rewriter.pre_visit(&self)? {
-            RewriteRecursion::Mutate => return rewriter.mutate(self),
-            RewriteRecursion::Stop => return Ok(self),
-            RewriteRecursion::Continue => true,
-            RewriteRecursion::Skip => false,
+    /// `op` can be used to collect some info from the tree node.
+    fn collect<F>(&self, op: &mut F) -> Result<()>
+    where
+        F: FnMut(&Self) -> Result<Recursion>,
+    {
+        match op(self)? {
+            Recursion::Continue => {}
+            // If the recursion should stop, do not visit children
+            Recursion::Stop => return Ok(()),
+            r => {
+                return Err(DataFusionError::Execution(format!(
+                    "Recursion {r:?} is not supported for collect"
+                )))
+            }
         };
 
-        let after_op_children =
-            self.map_children(|node| node.transform_using(rewriter))?;
-
-        // now rewrite this node itself
-        if need_mutate {
-            rewriter.mutate(after_op_children)
-        } else {
-            Ok(after_op_children)
+        for child in self.get_children() {
+            child.collect(op)?;
         }
+
+        Ok(())
     }
 
     /// Convenience utils for writing optimizers rule: recursively apply the given `op` to the node tree.
@@ -113,30 +96,81 @@ pub trait TreeNodeRewritable: Clone {
         Ok(new_node)
     }
 
+    /// Transform the tree node using the given [TreeNodeRewriter]
+    /// It performs a depth first walk of an node and its children.
+    ///
+    /// For an node tree such as
+    /// ```text
+    /// ParentNode
+    ///    left: ChildNode1
+    ///    right: ChildNode2
+    /// ```
+    ///
+    /// The nodes are visited using the following order
+    /// ```text
+    /// pre_visit(ParentNode)
+    /// pre_visit(ChildNode1)
+    /// mutate(ChildNode1)
+    /// pre_visit(ChildNode2)
+    /// mutate(ChildNode2)
+    /// mutate(ParentNode)
+    /// ```
+    ///
+    /// If an Err result is returned, recursion is stopped immediately
+    ///
+    /// If [`false`] is returned on a call to pre_visit, no
+    /// children of that node are visited, nor is mutate
+    /// called on that node
+    ///
+    fn transform_using<R: TreeNodeRewriter<N = Self>>(
+        self,
+        rewriter: &mut R,
+    ) -> Result<Self> {
+        let need_mutate = match rewriter.pre_visit(&self)? {
+            Recursion::Mutate => return rewriter.mutate(self),
+            Recursion::Stop => return Ok(self),
+            Recursion::Continue => true,
+            Recursion::Skip => false,
+        };
+
+        let after_op_children =
+            self.map_children(|node| node.transform_using(rewriter))?;
+
+        // now rewrite this node itself
+        if need_mutate {
+            rewriter.mutate(after_op_children)
+        } else {
+            Ok(after_op_children)
+        }
+    }
+
     /// Apply transform `F` to the node's children, the transform `F` might have a direction(Preorder or Postorder)
     fn map_children<F>(self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>;
 }
 
-/// Trait for potentially recursively transform an [`TreeNodeRewritable`] node
-/// tree. When passed to `TreeNodeRewritable::transform_using`, `TreeNodeRewriter::mutate` is
+/// Trait for potentially recursively transform an [`TreeNode`] node
+/// tree. When passed to `TreeNode::transform_using`, `TreeNodeRewriter::mutate` is
 /// invoked recursively on all nodes of a tree.
-pub trait TreeNodeRewriter<N: TreeNodeRewritable>: Sized {
+pub trait TreeNodeRewriter: Sized {
+    /// The node type which is rewritable.
+    type N: TreeNode;
+
     /// Invoked before (Preorder) any children of `node` are rewritten /
     /// visited. Default implementation returns `Ok(RewriteRecursion::Continue)`
-    fn pre_visit(&mut self, _node: &N) -> Result<RewriteRecursion> {
-        Ok(RewriteRecursion::Continue)
+    fn pre_visit(&mut self, _node: &Self::N) -> Result<Recursion> {
+        Ok(Recursion::Continue)
     }
 
     /// Invoked after (Postorder) all children of `node` have been mutated and
     /// returns a potentially modified node.
-    fn mutate(&mut self, node: N) -> Result<N>;
+    fn mutate(&mut self, node: Self::N) -> Result<Self::N>;
 }
 
-/// Controls how the [TreeNodeRewriter] recursion should proceed.
-#[allow(dead_code)]
-pub enum RewriteRecursion {
+/// Controls how the [TreeNode] recursion should proceed.
+#[derive(Debug)]
+pub enum Recursion {
     /// Continue rewrite / visit this node tree.
     Continue,
     /// Call 'op' immediately and return.
@@ -145,20 +179,4 @@ pub enum RewriteRecursion {
     Stop,
     /// Keep recursive but skip apply op on this node
     Skip,
-}
-
-impl TreeNodeRewritable for Arc<dyn PhysicalExpr> {
-    fn map_children<F>(self, transform: F) -> Result<Self>
-    where
-        F: FnMut(Self) -> Result<Self>,
-    {
-        let children = self.children();
-        if !children.is_empty() {
-            let new_children: Result<Vec<_>> =
-                children.into_iter().map(transform).collect();
-            with_new_children_if_necessary(self, new_children?)
-        } else {
-            Ok(self)
-        }
-    }
 }

@@ -17,12 +17,12 @@
 
 use crate::equivalence::EquivalentClass;
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
-use crate::rewrite::{TreeNodeRewritable, TreeNodeRewriter};
 use crate::{EquivalenceProperties, PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Operator;
 
+use crate::tree_node::{Recursion, TreeNode, TreeNodeRewriter};
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 use std::collections::HashMap;
@@ -264,7 +264,11 @@ impl<T> ExprTreeNode<T> {
     }
 }
 
-impl<T: Clone> TreeNodeRewritable for ExprTreeNode<T> {
+impl<T: Clone> TreeNode for ExprTreeNode<T> {
+    fn get_children(&self) -> Vec<Self> {
+        self.children()
+    }
+
     fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
@@ -292,9 +296,10 @@ struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> T> {
     constructor: &'a F,
 }
 
-impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> T>
-    TreeNodeRewriter<ExprTreeNode<NodeIndex>> for PhysicalExprDAEGBuilder<'a, T, F>
+impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> T> TreeNodeRewriter
+    for PhysicalExprDAEGBuilder<'a, T, F>
 {
+    type N = ExprTreeNode<NodeIndex>;
     // This method mutates an expression node by transforming it to a physical expression
     // and adding it to the graph. The method returns the mutated expression node.
     fn mutate(
@@ -349,24 +354,19 @@ where
     Ok((root.data.unwrap(), builder.graph))
 }
 
-fn collect_columns_recursive(
-    expr: &Arc<dyn PhysicalExpr>,
-    columns: &mut HashSet<Column>,
-) {
-    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-        if !columns.iter().any(|c| c.eq(column)) {
-            columns.insert(column.clone());
-        }
-    }
-    expr.children()
-        .iter()
-        .for_each(|e| collect_columns_recursive(e, columns))
-}
-
 /// Recursively extract referenced [`Column`]s within a [`PhysicalExpr`].
 pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     let mut columns = HashSet::<Column>::new();
-    collect_columns_recursive(expr, &mut columns);
+    expr.collect(&mut |expr| {
+        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            if !columns.iter().any(|c| c.eq(column)) {
+                columns.insert(column.clone());
+            }
+        }
+        Ok(Recursion::Continue)
+    })
+    // pre_visit always returns OK, so this will always too
+    .expect("no way to return error during recursion");
     columns
 }
 

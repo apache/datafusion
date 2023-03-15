@@ -52,7 +52,7 @@ use crate::physical_plan::{
     Partitioning, PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
-use datafusion_physical_expr::rewrite::TreeNodeRewritable;
+use datafusion_physical_expr::tree_node::TreeNode as PhysicalExprTreeNode;
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
