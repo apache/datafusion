@@ -49,7 +49,7 @@ use crate::physical_plan::{with_new_children_if_necessary, Distribution, Executi
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{reverse_sort_options, DataFusionError};
 use datafusion_physical_expr::utils::{
-    create_sort_expr_from_requirement, ordering_satisfy,
+    make_sort_exprs_from_requirements, ordering_satisfy,
     ordering_satisfy_requirement_concrete,
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
@@ -438,7 +438,7 @@ fn ensure_sorting(
                         &plan,
                         idx,
                     )?;
-                    let sort_expr = create_sort_expr_from_requirement(&required_ordering);
+                    let sort_expr = make_sort_exprs_from_requirements(&required_ordering);
                     add_sort_above(child, sort_expr)?;
                     if is_sort(child) {
                         *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
@@ -449,7 +449,7 @@ fn ensure_sorting(
             }
             (Some(required), None) => {
                 // Ordering requirement is not met, we should add a `SortExec` to the plan.
-                let sort_expr = create_sort_expr_from_requirement(&required);
+                let sort_expr = make_sort_exprs_from_requirements(&required);
                 add_sort_above(child, sort_expr)?;
                 *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
             }

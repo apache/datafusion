@@ -19,7 +19,7 @@ use crate::equivalence::EquivalentClass;
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
 use crate::rewrite::{TreeNodeRewritable, TreeNodeRewriter};
 use crate::{
-    EquivalenceProperties, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirements,
+    EquivalenceProperties, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{DataFusionError, Result};
@@ -118,33 +118,21 @@ pub fn normalize_out_expr_with_alias_schema(
     alias_map: &HashMap<Column, Vec<Column>>,
     schema: &SchemaRef,
 ) -> Arc<dyn PhysicalExpr> {
-    let expr_clone = expr.clone();
-    expr_clone
+    expr.clone()
         .transform(&|expr| {
-            let normalized_form: Option<Arc<dyn PhysicalExpr>> =
-                match expr.as_any().downcast_ref::<Column>() {
-                    Some(column) => {
-                        let out = alias_map
-                            .get(column)
-                            .map(|c| {
-                                let out_col: Arc<dyn PhysicalExpr> =
-                                    Arc::new(c[0].clone());
-                                out_col
-                            })
-                            .or_else(|| match schema.index_of(column.name()) {
-                                // Exactly matching, return None, no need to do the transform
-                                Ok(idx) if column.index() == idx => None,
-                                _ => {
-                                    let out_col: Arc<dyn PhysicalExpr> =
-                                        Arc::new(UnKnownColumn::new(column.name()));
-                                    Some(out_col)
-                                }
-                            });
-                        out
-                    }
-                    None => None,
-                };
-            Ok(normalized_form)
+            Ok(match expr.as_any().downcast_ref::<Column>() {
+                Some(column) => {
+                    alias_map
+                        .get(column)
+                        .map(|c| Arc::new(c[0].clone()) as _)
+                        .or_else(|| match schema.index_of(column.name()) {
+                            // Exactly matching, return None, no need to do the transform
+                            Ok(idx) if column.index() == idx => None,
+                            _ => Some(Arc::new(UnKnownColumn::new(column.name())) as _),
+                        })
+                }
+                None => None,
+            })
         })
         .unwrap_or(expr)
 }
@@ -153,36 +141,19 @@ pub fn normalize_expr_with_equivalence_properties(
     expr: Arc<dyn PhysicalExpr>,
     eq_properties: &[EquivalentClass],
 ) -> Arc<dyn PhysicalExpr> {
-    let expr_clone = expr.clone();
-    expr_clone
+    expr.clone()
         .transform(&|expr| match expr.as_any().downcast_ref::<Column>() {
             Some(column) => {
-                let mut normalized: Option<Arc<dyn PhysicalExpr>> = None;
                 for class in eq_properties {
                     if class.contains(column) {
-                        normalized = Some(Arc::new(class.head().clone()));
-                        break;
+                        return Ok(Some(Arc::new(class.head().clone())));
                     }
                 }
-                Ok(normalized)
+                Ok(None)
             }
             None => Ok(None),
         })
         .unwrap_or(expr)
-}
-
-pub fn new_sort_requirements(
-    sort_keys: Option<&[PhysicalSortExpr]>,
-) -> Option<Vec<PhysicalSortRequirements>> {
-    sort_keys.map(|ordering| {
-        ordering
-            .iter()
-            .map(|o| PhysicalSortRequirements {
-                expr: o.expr.clone(),
-                sort_options: Some(o.options),
-            })
-            .collect::<Vec<_>>()
-    })
 }
 
 pub fn normalize_sort_expr_with_equivalence_properties(
@@ -203,24 +174,25 @@ pub fn normalize_sort_expr_with_equivalence_properties(
 }
 
 pub fn normalize_sort_requirement_with_equivalence_properties(
-    sort_requirement: PhysicalSortRequirements,
+    sort_requirement: PhysicalSortRequirement,
     eq_properties: &[EquivalentClass],
-) -> PhysicalSortRequirements {
+) -> PhysicalSortRequirement {
     let normalized_expr = normalize_expr_with_equivalence_properties(
         sort_requirement.expr.clone(),
         eq_properties,
     );
     if sort_requirement.expr.ne(&normalized_expr) {
-        PhysicalSortRequirements {
+        PhysicalSortRequirement {
             expr: normalized_expr,
-            sort_options: sort_requirement.sort_options,
+            options: sort_requirement.options,
         }
     } else {
         sort_requirement
     }
 }
 
-/// Checks whether the required [PhysicalSortExpr]s are satisfied by the provided [PhysicalSortExpr]s.
+/// Checks whether the required [`PhysicalSortExpr`]s are satisfied by the
+/// provided [`PhysicalSortExpr`]s.
 pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
     provided: Option<&[PhysicalSortExpr]>,
     required: Option<&[PhysicalSortExpr]>,
@@ -235,6 +207,8 @@ pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
     }
 }
 
+/// Checks whether the required [`PhysicalSortExpr`]s are satisfied by the
+/// provided [`PhysicalSortExpr`]s.
 fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(
     provided: &[PhysicalSortExpr],
     required: &[PhysicalSortExpr],
@@ -245,35 +219,29 @@ fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(
     } else if required
         .iter()
         .zip(provided.iter())
-        .all(|(order1, order2)| order1.eq(order2))
+        .all(|(req, given)| req.eq(given))
     {
         true
     } else if let eq_classes @ [_, ..] = equal_properties().classes() {
-        let normalized_required_exprs = required
+        required
             .iter()
             .map(|e| {
                 normalize_sort_expr_with_equivalence_properties(e.clone(), eq_classes)
             })
-            .collect::<Vec<_>>();
-        let normalized_provided_exprs = provided
-            .iter()
-            .map(|e| {
+            .zip(provided.iter().map(|e| {
                 normalize_sort_expr_with_equivalence_properties(e.clone(), eq_classes)
-            })
-            .collect::<Vec<_>>();
-        normalized_required_exprs
-            .iter()
-            .zip(normalized_provided_exprs.iter())
-            .all(|(order1, order2)| order1.eq(order2))
+            }))
+            .all(|(req, given)| req.eq(&given))
     } else {
         false
     }
 }
 
-/// Checks whether the required ordering requirements are satisfied by the provided [PhysicalSortExpr]s.
+/// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
+/// provided [`PhysicalSortExpr`]s.
 pub fn ordering_satisfy_requirement<F: FnOnce() -> EquivalenceProperties>(
     provided: Option<&[PhysicalSortExpr]>,
-    required: Option<&[PhysicalSortRequirements]>,
+    required: Option<&[PhysicalSortRequirement]>,
     equal_properties: F,
 ) -> bool {
     match (provided, required) {
@@ -285,9 +253,11 @@ pub fn ordering_satisfy_requirement<F: FnOnce() -> EquivalenceProperties>(
     }
 }
 
+/// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
+/// provided [`PhysicalSortExpr`]s.
 pub fn ordering_satisfy_requirement_concrete<F: FnOnce() -> EquivalenceProperties>(
     provided: &[PhysicalSortExpr],
-    required: &[PhysicalSortRequirements],
+    required: &[PhysicalSortRequirement],
     equal_properties: F,
 ) -> bool {
     if required.len() > provided.len() {
@@ -295,11 +265,11 @@ pub fn ordering_satisfy_requirement_concrete<F: FnOnce() -> EquivalencePropertie
     } else if required
         .iter()
         .zip(provided.iter())
-        .all(|(order1, order2)| order2.satisfy(order1))
+        .all(|(req, given)| given.satisfy(req))
     {
         true
     } else if let eq_classes @ [_, ..] = equal_properties().classes() {
-        let normalized_requirements = required
+        required
             .iter()
             .map(|e| {
                 normalize_sort_requirement_with_equivalence_properties(
@@ -307,67 +277,64 @@ pub fn ordering_satisfy_requirement_concrete<F: FnOnce() -> EquivalencePropertie
                     eq_classes,
                 )
             })
-            .collect::<Vec<_>>();
-        let normalized_provided_exprs = provided
-            .iter()
-            .map(|e| {
+            .zip(provided.iter().map(|e| {
                 normalize_sort_expr_with_equivalence_properties(e.clone(), eq_classes)
-            })
-            .collect::<Vec<_>>();
-        normalized_requirements
-            .iter()
-            .zip(normalized_provided_exprs.iter())
-            .all(|(order1, order2)| order2.satisfy(order1))
+            }))
+            .all(|(req, given)| given.satisfy(&req))
     } else {
         false
     }
 }
 
-/// Provided requirements are compatible with the required, which means the provided requirements are equal or more specific than the required
+/// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
+/// specific than the provided [`PhysicalSortRequirement`]s.
 pub fn requirements_compatible<F: FnOnce() -> EquivalenceProperties>(
-    provided: Option<&[PhysicalSortRequirements]>,
-    required: Option<&[PhysicalSortRequirements]>,
+    provided: Option<&[PhysicalSortRequirement]>,
+    required: Option<&[PhysicalSortRequirement]>,
     equal_properties: F,
 ) -> bool {
     match (provided, required) {
         (_, None) => true,
         (None, Some(_)) => false,
         (Some(provided), Some(required)) => {
-            if required.len() > provided.len() {
-                false
-            } else if required
-                .iter()
-                .zip(provided.iter())
-                .all(|(req, pro)| pro.compatible(req))
-            {
-                true
-            } else if let eq_classes @ [_, ..] = equal_properties().classes() {
-                let normalized_required = required
-                    .iter()
-                    .map(|e| {
-                        normalize_sort_requirement_with_equivalence_properties(
-                            e.clone(),
-                            eq_classes,
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let normalized_provided = provided
-                    .iter()
-                    .map(|e| {
-                        normalize_sort_requirement_with_equivalence_properties(
-                            e.clone(),
-                            eq_classes,
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                normalized_required
-                    .iter()
-                    .zip(normalized_provided.iter())
-                    .all(|(req, pro)| pro.compatible(req))
-            } else {
-                false
-            }
+            requirements_compatible_concrete(provided, required, equal_properties)
         }
+    }
+}
+
+/// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
+/// specific than the provided [`PhysicalSortRequirement`]s.
+fn requirements_compatible_concrete<F: FnOnce() -> EquivalenceProperties>(
+    provided: &[PhysicalSortRequirement],
+    required: &[PhysicalSortRequirement],
+    equal_properties: F,
+) -> bool {
+    if required.len() > provided.len() {
+        false
+    } else if required
+        .iter()
+        .zip(provided.iter())
+        .all(|(req, given)| given.compatible(req))
+    {
+        true
+    } else if let eq_classes @ [_, ..] = equal_properties().classes() {
+        required
+            .iter()
+            .map(|e| {
+                normalize_sort_requirement_with_equivalence_properties(
+                    e.clone(),
+                    eq_classes,
+                )
+            })
+            .zip(provided.iter().map(|e| {
+                normalize_sort_requirement_with_equivalence_properties(
+                    e.clone(),
+                    eq_classes,
+                )
+            }))
+            .all(|(req, given)| given.compatible(&req))
+    } else {
+        false
     }
 }
 
@@ -375,13 +342,15 @@ pub fn map_columns_before_projection(
     parent_required: &[Arc<dyn PhysicalExpr>],
     proj_exprs: &[(Arc<dyn PhysicalExpr>, String)],
 ) -> Vec<Arc<dyn PhysicalExpr>> {
-    let mut column_mapping = HashMap::new();
-    for (expression, name) in proj_exprs.iter() {
-        if let Some(column) = expression.as_any().downcast_ref::<Column>() {
-            column_mapping.insert(name.clone(), column.clone());
-        };
-    }
-    let new_required: Vec<Arc<dyn PhysicalExpr>> = parent_required
+    let column_mapping = proj_exprs
+        .iter()
+        .filter_map(|(expr, name)| {
+            expr.as_any()
+                .downcast_ref::<Column>()
+                .map(|column| (name.clone(), column.clone()))
+        })
+        .collect::<HashMap<_, _>>();
+    parent_required
         .iter()
         .filter_map(|r| {
             if let Some(column) = r.as_any().downcast_ref::<Column>() {
@@ -390,57 +359,24 @@ pub fn map_columns_before_projection(
                 None
             }
         })
-        .map(|e| Arc::new(e.clone()) as Arc<dyn PhysicalExpr>)
-        .collect::<Vec<_>>();
-    new_required
+        .map(|e| Arc::new(e.clone()) as _)
+        .collect()
 }
 
-pub fn map_requirement_before_projection(
-    parent_required: Option<&[PhysicalSortRequirements]>,
-    proj_exprs: &[(Arc<dyn PhysicalExpr>, String)],
-) -> Option<Vec<PhysicalSortRequirements>> {
-    println!("parent_required: {:?}", parent_required);
-    println!("proj_exprs: {:?}", proj_exprs);
-    if let Some(requirement) = parent_required {
-        let required_expr = create_sort_expr_from_requirement(requirement)
-            .iter()
-            .map(|sort_expr| sort_expr.expr.clone())
-            .collect::<Vec<_>>();
-        println!("required_expr:{:?}", required_expr);
-        let new_exprs = map_columns_before_projection(&required_expr, proj_exprs);
-        println!("new_exprs:{:?}", new_exprs);
-        if new_exprs.len() == requirement.len() {
-            let new_request = new_exprs
-                .iter()
-                .zip(requirement.iter())
-                .map(|(new, old)| PhysicalSortRequirements {
-                    expr: new.clone(),
-                    sort_options: old.sort_options,
-                })
-                .collect::<Vec<_>>();
-            Some(new_request)
-        } else {
-            None
-        }
-    } else {
-        None
-    }
-}
-
-pub fn create_sort_expr_from_requirement(
-    required: &[PhysicalSortRequirements],
+pub fn make_sort_exprs_from_requirements(
+    required: &[PhysicalSortRequirement],
 ) -> Vec<PhysicalSortExpr> {
-    let parent_required_expr = required
+    required
         .iter()
-        .map(|prop| {
-            if prop.sort_options.is_some() {
+        .map(|requirement| {
+            if let Some(options) = requirement.options {
                 PhysicalSortExpr {
-                    expr: prop.expr.clone(),
-                    options: prop.sort_options.unwrap(),
+                    expr: requirement.expr.clone(),
+                    options,
                 }
             } else {
                 PhysicalSortExpr {
-                    expr: prop.expr.clone(),
+                    expr: requirement.expr.clone(),
                     options: SortOptions {
                         // By default, create sort key with ASC is true and NULLS LAST to be consistent with
                         // PostgreSQL's rule: https://www.postgresql.org/docs/current/queries-order.html
@@ -450,8 +386,7 @@ pub fn create_sort_expr_from_requirement(
                 }
             }
         })
-        .collect::<Vec<_>>();
-    parent_required_expr
+        .collect()
 }
 
 #[derive(Clone, Debug)]

@@ -39,10 +39,9 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::DataFusionError;
-use datafusion_physical_expr::PhysicalSortRequirements;
+use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
-use log::debug;
 use std::any::Any;
 use std::ops::Range;
 use std::pin::Pin;
@@ -173,36 +172,28 @@ impl ExecutionPlan for WindowAggExec {
         vec![true]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirements>>> {
-        let expr_partition_keys = self.window_expr()[0].partition_by();
-        let expr_order_keys = self.window_expr()[0].order_by();
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+        let partition_keys = self.window_expr()[0].partition_by();
+        let order_keys = self.window_expr()[0].order_by();
         let requirements = self.sort_keys.as_deref().map(|ordering| {
             ordering
                 .iter()
                 .map(|o| {
-                    let is_partition_only =
-                        expr_partition_keys.iter().any(|e| e.eq(&o.expr))
-                            && !expr_order_keys.iter().any(|e| e.expr.eq(&o.expr));
-                    if is_partition_only {
-                        PhysicalSortRequirements {
-                            expr: o.expr.clone(),
-                            sort_options: None,
-                        }
-                    } else {
-                        PhysicalSortRequirements {
-                            expr: o.expr.clone(),
-                            sort_options: Some(o.options),
-                        }
+                    let in_partition_keys = partition_keys.iter().any(|e| o.expr.eq(e));
+                    let in_order_keys = order_keys.iter().any(|e| o.expr.eq(&e.expr));
+                    let not_partition_only = !in_partition_keys || in_order_keys;
+                    PhysicalSortRequirement {
+                        expr: o.expr.clone(),
+                        options: not_partition_only.then_some(o.options),
                     }
                 })
-                .collect::<Vec<_>>()
+                .collect()
         });
         vec![requirements]
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         if self.partition_keys.is_empty() {
-            debug!("No partition defined for WindowAggExec!!!");
             vec![Distribution::SinglePartition]
         } else {
             vec![Distribution::HashPartitioned(self.partition_keys.clone())]

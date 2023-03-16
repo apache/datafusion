@@ -41,14 +41,7 @@ impl PartialEq for PhysicalSortExpr {
 
 impl std::fmt::Display for PhysicalSortExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let opts_string = match (self.options.descending, self.options.nulls_first) {
-            (true, true) => "DESC",
-            (true, false) => "DESC NULLS LAST",
-            (false, true) => "ASC",
-            (false, false) => "ASC NULLS LAST",
-        };
-
-        write!(f, "{} {}", self.expr, opts_string)
+        write!(f, "{} {}", self.expr, to_string(&self.options))
     }
 }
 
@@ -70,55 +63,69 @@ impl PhysicalSortExpr {
         })
     }
 
-    pub fn satisfy(&self, requirement: &PhysicalSortRequirements) -> bool {
-        if requirement.sort_options.is_some() {
-            self.options == requirement.sort_options.unwrap()
-                && self.expr.eq(&requirement.expr)
-        } else {
-            self.expr.eq(&requirement.expr)
-        }
+    pub fn satisfy(&self, requirement: &PhysicalSortRequirement) -> bool {
+        self.expr.eq(&requirement.expr)
+            && requirement
+                .options
+                .map_or(true, |opts| self.options == opts)
     }
 }
 
 /// Represents sort requirement associated with a plan
 #[derive(Clone, Debug)]
-pub struct PhysicalSortRequirements {
+pub struct PhysicalSortRequirement {
     /// Physical expression representing the column to sort
     pub expr: Arc<dyn PhysicalExpr>,
     /// Option to specify how the given column should be sorted.
-    /// If not specified, the PhysicalSortRequirements does not have specific requirements on the sort options.
-    pub sort_options: Option<SortOptions>,
+    /// If unspecified, there is no constraint on sort options.
+    pub options: Option<SortOptions>,
 }
 
-impl PartialEq for PhysicalSortRequirements {
-    fn eq(&self, other: &PhysicalSortRequirements) -> bool {
-        self.sort_options == other.sort_options && self.expr.eq(&other.expr)
+impl From<PhysicalSortExpr> for PhysicalSortRequirement {
+    fn from(value: PhysicalSortExpr) -> Self {
+        Self {
+            expr: value.expr,
+            options: Some(value.options),
+        }
     }
 }
 
-impl std::fmt::Display for PhysicalSortRequirements {
+impl PartialEq for PhysicalSortRequirement {
+    fn eq(&self, other: &PhysicalSortRequirement) -> bool {
+        self.options == other.options && self.expr.eq(&other.expr)
+    }
+}
+
+impl std::fmt::Display for PhysicalSortRequirement {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let opts_string = if let Some(sort_options) = self.sort_options {
-            match (sort_options.descending, sort_options.nulls_first) {
-                (true, true) => "DESC",
-                (true, false) => "DESC NULLS LAST",
-                (false, true) => "ASC",
-                (false, false) => "ASC NULLS LAST",
-            }
-        } else {
-            "NA"
-        };
+        let opts_string = self.options.as_ref().map_or("NA", to_string);
         write!(f, "{} {}", self.expr, opts_string)
     }
 }
 
-impl PhysicalSortRequirements {
-    /// Requirement is compatible with the other means the current requirement is equal or more specific than the other
-    pub fn compatible(&self, other: &PhysicalSortRequirements) -> bool {
-        if other.sort_options.is_some() {
-            self.eq(other)
-        } else {
-            self.expr.eq(&other.expr)
-        }
+impl PhysicalSortRequirement {
+    /// Returns whether this requirement is equal or more specific than `other`.
+    pub fn compatible(&self, other: &PhysicalSortRequirement) -> bool {
+        self.expr.eq(&other.expr)
+            && other.options.map_or(true, |other_opts| {
+                self.options.map_or(false, |opts| opts == other_opts)
+            })
+    }
+}
+
+pub fn make_sort_requirements_from_exprs(
+    ordering: &[PhysicalSortExpr],
+) -> Vec<PhysicalSortRequirement> {
+    ordering.iter().map(|e| e.clone().into()).collect()
+}
+
+/// Returns the SQL string representation of the given [SortOptions] object.
+#[inline]
+fn to_string(options: &SortOptions) -> &str {
+    match (options.descending, options.nulls_first) {
+        (true, true) => "DESC",
+        (true, false) => "DESC NULLS LAST",
+        (false, true) => "ASC",
+        (false, false) => "ASC NULLS LAST",
     }
 }

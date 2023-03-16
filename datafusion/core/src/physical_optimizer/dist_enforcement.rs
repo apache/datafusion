@@ -38,11 +38,11 @@ use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::expressions::NoOp;
+use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, AggregateExpr,
     PhysicalExpr,
 };
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// The EnforceDistribution rule ensures that distribution requirements are met
@@ -490,30 +490,6 @@ fn reorder_aggregate_keys(
             }
         }
     }
-}
-
-fn map_columns_before_projection(
-    parent_required: &[Arc<dyn PhysicalExpr>],
-    proj_exprs: &[(Arc<dyn PhysicalExpr>, String)],
-) -> Vec<Arc<dyn PhysicalExpr>> {
-    let mut column_mapping = HashMap::new();
-    for (expression, name) in proj_exprs.iter() {
-        if let Some(column) = expression.as_any().downcast_ref::<Column>() {
-            column_mapping.insert(name.clone(), column.clone());
-        };
-    }
-    let new_required: Vec<Arc<dyn PhysicalExpr>> = parent_required
-        .iter()
-        .filter_map(|r| {
-            if let Some(column) = r.as_any().downcast_ref::<Column>() {
-                column_mapping.get(column.name())
-            } else {
-                None
-            }
-        })
-        .map(|e| Arc::new(e.clone()) as Arc<dyn PhysicalExpr>)
-        .collect::<Vec<_>>();
-    new_required
 }
 
 fn shift_right_required(

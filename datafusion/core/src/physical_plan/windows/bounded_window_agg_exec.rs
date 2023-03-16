@@ -55,7 +55,7 @@ use datafusion_physical_expr::window::{
     WindowAggState, WindowState,
 };
 use datafusion_physical_expr::{
-    EquivalenceProperties, PhysicalExpr, PhysicalSortRequirements,
+    EquivalenceProperties, PhysicalExpr, PhysicalSortRequirement,
 };
 use indexmap::IndexMap;
 use log::debug;
@@ -169,29 +169,22 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self.input().output_ordering()
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirements>>> {
-        let expr_partition_keys = self.window_expr()[0].partition_by();
-        let expr_order_keys = self.window_expr()[0].order_by();
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+        let partition_keys = self.window_expr()[0].partition_by();
+        let order_keys = self.window_expr()[0].order_by();
         let requirements = self.sort_keys.as_deref().map(|ordering| {
             ordering
                 .iter()
                 .map(|o| {
-                    let is_partition_only =
-                        expr_partition_keys.iter().any(|e| e.eq(&o.expr))
-                            && !expr_order_keys.iter().any(|e| e.expr.eq(&o.expr));
-                    if is_partition_only {
-                        PhysicalSortRequirements {
-                            expr: o.expr.clone(),
-                            sort_options: None,
-                        }
-                    } else {
-                        PhysicalSortRequirements {
-                            expr: o.expr.clone(),
-                            sort_options: Some(o.options),
-                        }
+                    let in_partition_keys = partition_keys.iter().any(|e| o.expr.eq(e));
+                    let in_order_keys = order_keys.iter().any(|e| o.expr.eq(&e.expr));
+                    let not_partition_only = !in_partition_keys || in_order_keys;
+                    PhysicalSortRequirement {
+                        expr: o.expr.clone(),
+                        options: not_partition_only.then_some(o.options),
                     }
                 })
-                .collect::<Vec<_>>()
+                .collect()
         });
         vec![requirements]
     }

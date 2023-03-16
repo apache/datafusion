@@ -53,10 +53,11 @@ pub use equivalence::EquivalentClass;
 pub use physical_expr::{AnalysisContext, ExprBoundaries, PhysicalExpr, PhysicalExprRef};
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
-pub use sort_expr::PhysicalSortExpr;
-pub use sort_expr::PhysicalSortRequirements;
+pub use sort_expr::{
+    make_sort_requirements_from_exprs, PhysicalSortExpr, PhysicalSortRequirement,
+};
 pub use utils::{
-    expr_list_eq_any_order, expr_list_eq_strict_order, new_sort_requirements,
+    expr_list_eq_any_order, expr_list_eq_strict_order,
     normalize_expr_with_equivalence_properties, normalize_out_expr_with_alias_schema,
     normalize_sort_expr_with_equivalence_properties, sort_expr_list_eq_strict_order,
     split_conjunction,

@@ -46,7 +46,9 @@ use hashbrown::{raw::RawTable, HashSet};
 
 use datafusion_common::{utils::bisect, ScalarValue};
 use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval};
-use datafusion_physical_expr::{new_sort_requirements, PhysicalSortRequirements};
+use datafusion_physical_expr::{
+    make_sort_requirements_from_exprs, PhysicalSortRequirement,
+};
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
@@ -391,12 +393,15 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         self.schema.clone()
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirements>>> {
-        let left_ordering_requirements =
-            new_sort_requirements(self.left.output_ordering());
-        let right_ordering_requirements =
-            new_sort_requirements(self.right.output_ordering());
-        vec![left_ordering_requirements, right_ordering_requirements]
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+        vec![
+            self.left
+                .output_ordering()
+                .map(make_sort_requirements_from_exprs),
+            self.right
+                .output_ordering()
+                .map(make_sort_requirements_from_exprs),
+        ]
     }
 
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
