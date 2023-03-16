@@ -501,8 +501,8 @@ datafusion public table_with_normalization NULL
 query TTT
 describe table_with_normalization
 ----
-field1 Int64 NO
-field2 Int64 NO
+field1 Int64 YES
+field2 Int64 YES
 
 # Disable ident normalization
 statement ok
