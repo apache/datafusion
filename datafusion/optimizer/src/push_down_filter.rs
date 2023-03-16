@@ -2082,7 +2082,7 @@ mod tests {
         let test_provider = PushDownProvider { filter_support };
 
         let table_scan = LogicalPlan::TableScan(TableScan {
-            table_name: "test".to_string(),
+            table_name: "test".into(),
             filters: vec![],
             projected_schema: Arc::new(DFSchema::try_from(
                 (*test_provider.schema()).clone(),
@@ -2154,7 +2154,7 @@ mod tests {
         };
 
         let table_scan = LogicalPlan::TableScan(TableScan {
-            table_name: "test".to_string(),
+            table_name: "test".into(),
             filters: vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
             projected_schema: Arc::new(DFSchema::try_from(
                 (*test_provider.schema()).clone(),
@@ -2183,7 +2183,7 @@ mod tests {
         };
 
         let table_scan = LogicalPlan::TableScan(TableScan {
-            table_name: "test".to_string(),
+            table_name: "test".into(),
             filters: vec![],
             projected_schema: Arc::new(DFSchema::try_from(
                 (*test_provider.schema()).clone(),
