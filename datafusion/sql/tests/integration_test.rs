@@ -3253,6 +3253,17 @@ fn test_select_distinct_order_by() {
 }
 
 #[test]
+fn select_order_by_with_cast() {
+    let sql =
+        "SELECT first_name AS first_name FROM (SELECT first_name AS first_name FROM person) ORDER BY CAST(first_name as INT)";
+    let expected = "Sort: CAST(first_name AS first_name AS Int32) ASC NULLS LAST\
+                        \n  Projection: first_name AS first_name\
+                        \n    Projection: person.first_name AS first_name\
+                        \n      TableScan: person";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn test_duplicated_left_join_key_inner_join() {
     //  person.id * 2 happen twice in left side.
     let sql = "SELECT person.id, person.age
