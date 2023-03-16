@@ -59,7 +59,7 @@ pub struct CreateExternalTable {
     pub location: String,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
-    /// Ordered Columns
+    /// Ordered expressions
     pub order_exprs: Vec<OrderByExpr>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
