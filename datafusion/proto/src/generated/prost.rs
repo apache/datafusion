@@ -130,8 +130,8 @@ pub struct AvroFormat {}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListingTableScanNode {
-    #[prost(string, tag = "1")]
-    pub table_name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "14")]
+    pub table_name: ::core::option::Option<OwnedTableReference>,
     #[prost(string, repeated, tag = "2")]
     pub paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "3")]
@@ -171,8 +171,8 @@ pub mod listing_table_scan_node {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ViewTableScanNode {
-    #[prost(string, tag = "1")]
-    pub table_name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "6")]
+    pub table_name: ::core::option::Option<OwnedTableReference>,
     #[prost(message, optional, boxed, tag = "2")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(message, optional, tag = "3")]
@@ -186,8 +186,8 @@ pub struct ViewTableScanNode {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CustomTableScanNode {
-    #[prost(string, tag = "1")]
-    pub table_name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "6")]
+    pub table_name: ::core::option::Option<OwnedTableReference>,
     #[prost(message, optional, tag = "2")]
     pub projection: ::core::option::Option<ProjectionColumns>,
     #[prost(message, optional, tag = "3")]
