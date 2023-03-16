@@ -39,7 +39,7 @@ use crate::prelude::{CsvReadOptions, SessionContext};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion_common::{DataFusionError, Statistics};
+use datafusion_common::{DataFusionError, Statistics, TableReference};
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
 use datafusion_physical_expr::PhysicalSortExpr;
 use futures::Stream;
@@ -219,11 +219,8 @@ pub fn scan_empty(
 ) -> Result<LogicalPlanBuilder, DataFusionError> {
     let table_schema = Arc::new(table_schema.clone());
     let provider = Arc::new(EmptyTable::new(table_schema));
-    LogicalPlanBuilder::scan(
-        name.unwrap_or(UNNAMED_TABLE),
-        provider_as_source(provider),
-        projection,
-    )
+    let name = TableReference::bare(name.unwrap_or(UNNAMED_TABLE).to_string());
+    LogicalPlanBuilder::scan(name, provider_as_source(provider), projection)
 }
 
 /// Scan an empty data source with configured partition, mainly used in tests.
@@ -235,11 +232,8 @@ pub fn scan_empty_with_partitions(
 ) -> Result<LogicalPlanBuilder, DataFusionError> {
     let table_schema = Arc::new(table_schema.clone());
     let provider = Arc::new(EmptyTable::new(table_schema).with_partitions(partitions));
-    LogicalPlanBuilder::scan(
-        name.unwrap_or(UNNAMED_TABLE),
-        provider_as_source(provider),
-        projection,
-    )
+    let name = TableReference::bare(name.unwrap_or(UNNAMED_TABLE).to_string());
+    LogicalPlanBuilder::scan(name, provider_as_source(provider), projection)
 }
 
 /// Get the schema for the aggregate_test_* csv files

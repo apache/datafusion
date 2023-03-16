@@ -80,6 +80,11 @@ impl std::fmt::Display for TableReference<'_> {
 }
 
 impl<'a> TableReference<'a> {
+    /// Convenience method for creating a typed none `None`
+    pub fn none() -> Option<TableReference<'a>> {
+        None
+    }
+
     /// Convenience method for creating a `Bare` variant of `TableReference`
     pub fn bare(table: impl Into<Cow<'a, str>>) -> TableReference<'a> {
         TableReference::Bare {
