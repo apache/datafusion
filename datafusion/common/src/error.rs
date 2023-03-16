@@ -222,6 +222,12 @@ impl Display for SchemaError {
 
 impl Error for SchemaError {}
 
+impl From<std::fmt::Error> for DataFusionError {
+    fn from(_e: std::fmt::Error) -> Self {
+        DataFusionError::Execution("Fail to format".to_string())
+    }
+}
+
 impl From<io::Error> for DataFusionError {
     fn from(e: io::Error) -> Self {
         DataFusionError::IoError(e)

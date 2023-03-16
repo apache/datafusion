@@ -18,11 +18,92 @@
 //! Tree node implementation for logical plan
 
 use crate::LogicalPlan;
-use datafusion_common::{tree_node::TreeNode, Result};
+use datafusion_common::tree_node::{Recursion, TreeNodeVisitor};
+use datafusion_common::{tree_node::TreeNode, DataFusionError, Result};
 
 impl TreeNode for LogicalPlan {
     fn get_children(&self) -> Vec<Self> {
         self.inputs().into_iter().cloned().collect::<Vec<_>>()
+    }
+
+    /// Compared to the default implementation, we need to invoke [`collect_subqueries`]
+    /// before visiting its children
+    fn collect<F>(&self, op: &mut F) -> Result<()>
+    where
+        F: FnMut(&Self) -> Result<Recursion>,
+    {
+        match op(self)? {
+            Recursion::Continue => {}
+            // If the recursion should stop, do not visit children
+            Recursion::Stop => return Ok(()),
+            r => {
+                return Err(DataFusionError::Execution(format!(
+                    "Recursion {r:?} is not supported for collect"
+                )))
+            }
+        };
+
+        self.collect_subqueries(op)?;
+
+        for child in self.get_children() {
+            child.collect(op)?;
+        }
+
+        Ok(())
+    }
+
+    /// To use, define a struct that implements the trait [`TreeNodeVisitor`] and then invoke
+    /// [`LogicalPlan::visit`].
+    ///
+    /// For example, for a logical plan like:
+    ///
+    /// ```text
+    /// Projection: id
+    ///    Filter: state Eq Utf8(\"CO\")\
+    ///       CsvScan: employee.csv projection=Some([0, 3])";
+    /// ```
+    ///
+    /// The sequence of visit operations would be:
+    /// ```text
+    /// visitor.pre_visit(Projection)
+    /// visitor.pre_visit(Filter)
+    /// visitor.pre_visit(CsvScan)
+    /// visitor.post_visit(CsvScan)
+    /// visitor.post_visit(Filter)
+    /// visitor.post_visit(Projection)
+    /// ```
+    ///
+    /// Compared to the default implementation, we need to invoke [`visit_subqueries`]
+    /// before visiting its children
+    fn visit<V: TreeNodeVisitor<N = Self>>(&self, visitor: &mut V) -> Result<Recursion> {
+        match visitor.pre_visit(self)? {
+            Recursion::Continue => {}
+            // If the recursion should stop, do not visit children
+            Recursion::Stop => return Ok(Recursion::Stop),
+            r => {
+                return Err(DataFusionError::Execution(format!(
+                    "Recursion {r:?} is not supported for collect_using"
+                )))
+            }
+        };
+
+        // Now visit any subqueries in expressions
+        self.visit_subqueries(visitor)?;
+
+        for child in self.get_children() {
+            match child.visit(visitor)? {
+                Recursion::Continue => {}
+                // If the recursion should stop, do not visit children
+                Recursion::Stop => return Ok(Recursion::Stop),
+                r => {
+                    return Err(DataFusionError::Execution(format!(
+                        "Recursion {r:?} is not supported for collect_using"
+                    )))
+                }
+            }
+        }
+
+        visitor.post_visit(self)
     }
 
     fn map_children<F>(self, transform: F) -> Result<Self>

@@ -434,7 +434,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
         Ok(Recursion::Continue)
     }
 
-    fn post_visit(&mut self, expr: &Expr) -> Result<()> {
+    fn post_visit(&mut self, expr: &Expr) -> Result<Recursion> {
         self.series_number += 1;
 
         let (idx, sub_expr_desc) = self.pop_enter_mark();
@@ -451,7 +451,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
             self.id_array[idx].0 = self.series_number;
             let desc = Self::desc_expr(expr);
             self.visit_stack.push(VisitRecord::ExprItem(desc));
-            return Ok(());
+            return Ok(Recursion::Continue);
         }
         let mut desc = Self::desc_expr(expr);
         desc.push_str(&sub_expr_desc);
@@ -465,7 +465,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
             .entry(desc)
             .or_insert_with(|| (expr.clone(), 0, data_type))
             .1 += 1;
-        Ok(())
+        Ok(Recursion::Continue)
     }
 }
 

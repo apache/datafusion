@@ -81,11 +81,11 @@ pub trait TreeNode: Clone {
     /// called on that node
     ///
     /// If using the default [`post_visit`] with nothing to do, the [`collect`] should be preferred
-    fn visit<V: TreeNodeVisitor<N = Self>>(&self, visitor: &mut V) -> Result<()> {
+    fn visit<V: TreeNodeVisitor<N = Self>>(&self, visitor: &mut V) -> Result<Recursion> {
         match visitor.pre_visit(self)? {
             Recursion::Continue => {}
             // If the recursion should stop, do not visit children
-            Recursion::Stop => return Ok(()),
+            Recursion::Stop => return Ok(Recursion::Stop),
             r => {
                 return Err(DataFusionError::Execution(format!(
                     "Recursion {r:?} is not supported for collect_using"
@@ -94,7 +94,16 @@ pub trait TreeNode: Clone {
         };
 
         for child in self.get_children() {
-            child.visit(visitor)?;
+            match child.visit(visitor)? {
+                Recursion::Continue => {}
+                // If the recursion should stop, do not visit children
+                Recursion::Stop => return Ok(Recursion::Stop),
+                r => {
+                    return Err(DataFusionError::Execution(format!(
+                        "Recursion {r:?} is not supported for collect_using"
+                    )))
+                }
+            }
         }
 
         visitor.post_visit(self)
@@ -220,8 +229,8 @@ pub trait TreeNodeVisitor: Sized {
 
     /// Invoked after all children of `node` are visited. Default
     /// implementation does nothing.
-    fn post_visit(&mut self, _node: &Self::N) -> Result<()> {
-        Ok(())
+    fn post_visit(&mut self, _node: &Self::N) -> Result<Recursion> {
+        Ok(Recursion::Continue)
     }
 }
 
