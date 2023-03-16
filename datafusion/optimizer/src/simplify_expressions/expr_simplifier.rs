@@ -27,11 +27,10 @@ use arrow::{
     error::ArrowError,
     record_batch::RecordBatch,
 };
+use datafusion_common::tree_node::{Recursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    and,
-    expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
-    lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Volatility,
+    and, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
@@ -119,11 +118,11 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         // (evaluating constants can enable new simplifications and
         // simplifications can enable new constant evaluation)
         // https://github.com/apache/arrow-datafusion/issues/1160
-        expr.rewrite(&mut const_evaluator)?
-            .rewrite(&mut simplifier)?
+        expr.transform_using(&mut const_evaluator)?
+            .transform_using(&mut simplifier)?
             // run both passes twice to try an minimize simplifications that we missed
-            .rewrite(&mut const_evaluator)?
-            .rewrite(&mut simplifier)
+            .transform_using(&mut const_evaluator)?
+            .transform_using(&mut simplifier)
     }
 
     /// Apply type coercion to an [`Expr`] so that it can be
@@ -139,7 +138,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     pub fn coerce(&self, expr: Expr, schema: DFSchemaRef) -> Result<Expr> {
         let mut expr_rewrite = TypeCoercionRewriter { schema };
 
-        expr.rewrite(&mut expr_rewrite)
+        expr.transform_using(&mut expr_rewrite)
     }
 }
 
@@ -168,8 +167,10 @@ struct ConstEvaluator<'a> {
     input_batch: RecordBatch,
 }
 
-impl<'a> ExprRewriter for ConstEvaluator<'a> {
-    fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
+impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
+    type N = Expr;
+
+    fn pre_visit(&mut self, expr: &Expr) -> Result<Recursion> {
         // Default to being able to evaluate this node
         self.can_evaluate.push(true);
 
@@ -193,7 +194,7 @@ impl<'a> ExprRewriter for ConstEvaluator<'a> {
         // NB: do not short circuit recursion even if we find a non
         // evaluatable node (so we can fold other children, args to
         // functions, etc)
-        Ok(RewriteRecursion::Continue)
+        Ok(Recursion::Continue)
     }
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
@@ -337,7 +338,9 @@ impl<'a, S> Simplifier<'a, S> {
     }
 }
 
-impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
+impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
+    type N = Expr;
+
     /// rewrite the expression simplifying any constant expressions
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         use datafusion_expr::Operator::{
@@ -1060,7 +1063,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 }
 
                 // Do a first pass at simplification
-                out_expr.rewrite(self)?
+                out_expr.transform_using(self)?
             }
 
             // concat
@@ -1233,7 +1236,7 @@ mod tests {
         let mut const_evaluator = ConstEvaluator::try_new(&execution_props).unwrap();
         let evaluated_expr = input_expr
             .clone()
-            .rewrite(&mut const_evaluator)
+            .transform_using(&mut const_evaluator)
             .expect("successfully evaluated");
 
         assert_eq!(

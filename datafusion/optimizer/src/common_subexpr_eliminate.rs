@@ -22,11 +22,12 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 
-use datafusion_common::tree_node::{Recursion, TreeNode, TreeNodeVisitor};
+use datafusion_common::tree_node::{
+    Recursion, TreeNode, TreeNodeRewriter, TreeNodeVisitor,
+};
 use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::{
     col,
-    expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
     logical_plan::{Aggregate, Filter, LogicalPlan, Projection, Sort, Window},
     Expr, ExprSchemable,
 };
@@ -504,28 +505,30 @@ struct CommonSubexprRewriter<'a> {
     curr_index: usize,
 }
 
-impl ExprRewriter for CommonSubexprRewriter<'_> {
-    fn pre_visit(&mut self, _: &Expr) -> Result<RewriteRecursion> {
+impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
+    type N = Expr;
+
+    fn pre_visit(&mut self, _: &Expr) -> Result<Recursion> {
         if self.curr_index >= self.id_array.len()
             || self.max_series_number > self.id_array[self.curr_index].0
         {
-            return Ok(RewriteRecursion::Stop);
+            return Ok(Recursion::Stop);
         }
 
         let curr_id = &self.id_array[self.curr_index].1;
         // skip `Expr`s without identifier (empty identifier).
         if curr_id.is_empty() {
             self.curr_index += 1;
-            return Ok(RewriteRecursion::Skip);
+            return Ok(Recursion::Skip);
         }
         match self.expr_set.get(curr_id) {
             Some((_, counter, _)) => {
                 if *counter > 1 {
                     self.affected_id.insert(curr_id.clone());
-                    Ok(RewriteRecursion::Mutate)
+                    Ok(Recursion::Mutate)
                 } else {
                     self.curr_index += 1;
-                    Ok(RewriteRecursion::Skip)
+                    Ok(Recursion::Skip)
                 }
             }
             _ => Err(DataFusionError::Internal(
@@ -575,7 +578,7 @@ fn replace_common_expr(
     expr_set: &mut ExprSet,
     affected_id: &mut BTreeSet<Identifier>,
 ) -> Result<Expr> {
-    expr.rewrite(&mut CommonSubexprRewriter {
+    expr.transform_using(&mut CommonSubexprRewriter {
         expr_set,
         id_array,
         affected_id,

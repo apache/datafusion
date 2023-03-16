@@ -21,11 +21,11 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, IntervalUnit};
 
+use datafusion_common::tree_node::{Recursion, TreeNodeRewriter};
 use datafusion_common::{
     parse_interval, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{self, Between, BinaryExpr, Case, Like, WindowFunction};
-use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     coerce_types, comparison_coercion, like_coercion,
@@ -118,9 +118,11 @@ pub(crate) struct TypeCoercionRewriter {
     pub(crate) schema: DFSchemaRef,
 }
 
-impl ExprRewriter for TypeCoercionRewriter {
-    fn pre_visit(&mut self, _expr: &Expr) -> Result<RewriteRecursion> {
-        Ok(RewriteRecursion::Continue)
+impl TreeNodeRewriter for TypeCoercionRewriter {
+    type N = Expr;
+
+    fn pre_visit(&mut self, _expr: &Expr) -> Result<Recursion> {
+        Ok(Recursion::Continue)
     }
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
@@ -630,9 +632,9 @@ mod test {
 
     use arrow::datatypes::DataType;
 
+    use datafusion_common::tree_node::TreeNode;
     use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
     use datafusion_expr::expr::{self, Like};
-    use datafusion_expr::expr_rewriter::ExprRewritable;
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true,
         AccumulatorFunctionImplementation, AggregateFunction, AggregateUDF,
@@ -1107,7 +1109,7 @@ mod test {
         let mut rewriter = TypeCoercionRewriter { schema };
         let expr = is_true(lit(12i32).gt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).gt(lit(13i64)));
-        let result = expr.rewrite(&mut rewriter)?;
+        let result = expr.transform_using(&mut rewriter)?;
         assert_eq!(expected, result);
 
         // eq
@@ -1121,7 +1123,7 @@ mod test {
         let mut rewriter = TypeCoercionRewriter { schema };
         let expr = is_true(lit(12i32).eq(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).eq(lit(13i64)));
-        let result = expr.rewrite(&mut rewriter)?;
+        let result = expr.transform_using(&mut rewriter)?;
         assert_eq!(expected, result);
 
         // lt
@@ -1135,7 +1137,7 @@ mod test {
         let mut rewriter = TypeCoercionRewriter { schema };
         let expr = is_true(lit(12i32).lt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).lt(lit(13i64)));
-        let result = expr.rewrite(&mut rewriter)?;
+        let result = expr.transform_using(&mut rewriter)?;
         assert_eq!(expected, result);
 
         Ok(())

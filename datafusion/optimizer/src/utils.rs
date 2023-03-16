@@ -18,10 +18,10 @@
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
 use datafusion_common::{plan_err, Column, DFSchemaRef, DataFusionError};
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr::{BinaryExpr, Sort};
-use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::logical_plan::LogicalPlanBuilder;
 use datafusion_expr::utils::{
     check_all_columns_from_schema, from_plan, inspect_expr_pre,
@@ -421,10 +421,10 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 /// schema of plan nodes don't change after optimization
 pub fn rewrite_preserving_name<R>(expr: Expr, rewriter: &mut R) -> Result<Expr>
 where
-    R: ExprRewriter<Expr>,
+    R: TreeNodeRewriter<N = Expr>,
 {
     let original_name = name_for_alias(&expr)?;
-    let expr = expr.rewrite(rewriter)?;
+    let expr = expr.transform_using(rewriter)?;
     add_alias_if_changed(original_name, expr)
 }
 
@@ -702,7 +702,9 @@ mod tests {
             rewrite_to: Expr,
         }
 
-        impl ExprRewriter for TestRewriter {
+        impl TreeNodeRewriter for TestRewriter {
+            type N = Expr;
+
             fn mutate(&mut self, _: Expr) -> Result<Expr> {
                 Ok(self.rewrite_to.clone())
             }

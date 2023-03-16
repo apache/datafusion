@@ -18,7 +18,6 @@
 //! Expression utilities
 
 use crate::expr::{Sort, WindowFunction};
-use crate::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, Distinct, Extension, Filter, Join,
@@ -30,7 +29,7 @@ use crate::{
     Operator, TableScan, TryCast,
 };
 use arrow::datatypes::{DataType, TimeUnit};
-use datafusion_common::tree_node::{Recursion, TreeNode};
+use datafusion_common::tree_node::{Recursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
     TableReference,
@@ -513,17 +512,19 @@ pub fn from_plan(
 
             struct RemoveAliases {}
 
-            impl ExprRewriter for RemoveAliases {
-                fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
+            impl TreeNodeRewriter for RemoveAliases {
+                type N = Expr;
+
+                fn pre_visit(&mut self, expr: &Expr) -> Result<Recursion> {
                     match expr {
                         Expr::Exists { .. }
                         | Expr::ScalarSubquery(_)
                         | Expr::InSubquery { .. } => {
                             // subqueries could contain aliases so we don't recurse into those
-                            Ok(RewriteRecursion::Stop)
+                            Ok(Recursion::Stop)
                         }
-                        Expr::Alias(_, _) => Ok(RewriteRecursion::Mutate),
-                        _ => Ok(RewriteRecursion::Continue),
+                        Expr::Alias(_, _) => Ok(Recursion::Mutate),
+                        _ => Ok(Recursion::Continue),
                     }
                 }
 
@@ -533,7 +534,7 @@ pub fn from_plan(
             }
 
             let mut remove_aliases = RemoveAliases {};
-            let predicate = predicate.rewrite(&mut remove_aliases)?;
+            let predicate = predicate.transform_using(&mut remove_aliases)?;
 
             Ok(LogicalPlan::Filter(Filter::try_new(
                 predicate,
