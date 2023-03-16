@@ -193,7 +193,7 @@ impl<'a> FilterCandidateBuilder<'a> {
         metadata: &ParquetMetaData,
     ) -> Result<Option<FilterCandidate>> {
         let expr = self.expr.clone();
-        let expr = expr.transform_using(&mut self)?;
+        let expr = expr.rewrite(&mut self)?;
 
         if self.non_primitive_columns || self.projected_columns {
             Ok(None)

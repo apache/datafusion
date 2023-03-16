@@ -118,11 +118,11 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         // (evaluating constants can enable new simplifications and
         // simplifications can enable new constant evaluation)
         // https://github.com/apache/arrow-datafusion/issues/1160
-        expr.transform_using(&mut const_evaluator)?
-            .transform_using(&mut simplifier)?
+        expr.rewrite(&mut const_evaluator)?
+            .rewrite(&mut simplifier)?
             // run both passes twice to try an minimize simplifications that we missed
-            .transform_using(&mut const_evaluator)?
-            .transform_using(&mut simplifier)
+            .rewrite(&mut const_evaluator)?
+            .rewrite(&mut simplifier)
     }
 
     /// Apply type coercion to an [`Expr`] so that it can be
@@ -138,7 +138,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     pub fn coerce(&self, expr: Expr, schema: DFSchemaRef) -> Result<Expr> {
         let mut expr_rewrite = TypeCoercionRewriter { schema };
 
-        expr.transform_using(&mut expr_rewrite)
+        expr.rewrite(&mut expr_rewrite)
     }
 }
 
@@ -1063,7 +1063,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 }
 
                 // Do a first pass at simplification
-                out_expr.transform_using(self)?
+                out_expr.rewrite(self)?
             }
 
             // concat
@@ -1236,7 +1236,7 @@ mod tests {
         let mut const_evaluator = ConstEvaluator::try_new(&execution_props).unwrap();
         let evaluated_expr = input_expr
             .clone()
-            .transform_using(&mut const_evaluator)
+            .rewrite(&mut const_evaluator)
             .expect("successfully evaluated");
 
         assert_eq!(

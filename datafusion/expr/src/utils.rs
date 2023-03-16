@@ -534,7 +534,7 @@ pub fn from_plan(
             }
 
             let mut remove_aliases = RemoveAliases {};
-            let predicate = predicate.transform_using(&mut remove_aliases)?;
+            let predicate = predicate.rewrite(&mut remove_aliases)?;
 
             Ok(LogicalPlan::Filter(Filter::try_new(
                 predicate,

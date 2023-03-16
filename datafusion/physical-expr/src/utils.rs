@@ -349,7 +349,7 @@ where
         constructor,
     };
     // Use the builder to transform the expression tree node into a DAG.
-    let root = init.transform_using(&mut builder)?;
+    let root = init.rewrite(&mut builder)?;
     // Return a tuple containing the root node index and the DAG.
     Ok((root.data.unwrap(), builder.graph))
 }

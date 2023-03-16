@@ -424,7 +424,7 @@ where
     R: TreeNodeRewriter<N = Expr>,
 {
     let original_name = name_for_alias(&expr)?;
-    let expr = expr.transform_using(rewriter)?;
+    let expr = expr.rewrite(rewriter)?;
     add_alias_if_changed(original_name, expr)
 }
 

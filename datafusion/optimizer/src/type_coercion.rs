@@ -1109,7 +1109,7 @@ mod test {
         let mut rewriter = TypeCoercionRewriter { schema };
         let expr = is_true(lit(12i32).gt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).gt(lit(13i64)));
-        let result = expr.transform_using(&mut rewriter)?;
+        let result = expr.rewrite(&mut rewriter)?;
         assert_eq!(expected, result);
 
         // eq
@@ -1123,7 +1123,7 @@ mod test {
         let mut rewriter = TypeCoercionRewriter { schema };
         let expr = is_true(lit(12i32).eq(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).eq(lit(13i64)));
-        let result = expr.transform_using(&mut rewriter)?;
+        let result = expr.rewrite(&mut rewriter)?;
         assert_eq!(expected, result);
 
         // lt
@@ -1137,7 +1137,7 @@ mod test {
         let mut rewriter = TypeCoercionRewriter { schema };
         let expr = is_true(lit(12i32).lt(lit(13i64)));
         let expected = is_true(cast(lit(12i32), DataType::Int64).lt(lit(13i64)));
-        let result = expr.transform_using(&mut rewriter)?;
+        let result = expr.rewrite(&mut rewriter)?;
         assert_eq!(expected, result);
 
         Ok(())

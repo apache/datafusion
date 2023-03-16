@@ -476,7 +476,7 @@ fn expr_to_identifier(
     id_array: &mut Vec<(usize, Identifier)>,
     input_schema: DFSchemaRef,
 ) -> Result<()> {
-    expr.collect_using(&mut ExprIdentifierVisitor {
+    expr.visit(&mut ExprIdentifierVisitor {
         expr_set,
         id_array,
         input_schema,
@@ -578,7 +578,7 @@ fn replace_common_expr(
     expr_set: &mut ExprSet,
     affected_id: &mut BTreeSet<Identifier>,
 ) -> Result<Expr> {
-    expr.transform_using(&mut CommonSubexprRewriter {
+    expr.rewrite(&mut CommonSubexprRewriter {
         expr_set,
         id_array,
         affected_id,

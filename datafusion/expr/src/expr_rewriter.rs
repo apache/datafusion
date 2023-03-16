@@ -367,10 +367,7 @@ mod test {
     #[test]
     fn rewriter_visit() {
         let mut rewriter = RecordingRewriter::default();
-        col("state")
-            .eq(lit("CO"))
-            .transform_using(&mut rewriter)
-            .unwrap();
+        col("state").eq(lit("CO")).rewrite(&mut rewriter).unwrap();
 
         assert_eq!(
             rewriter.v,

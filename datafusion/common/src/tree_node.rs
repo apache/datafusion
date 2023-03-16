@@ -76,7 +76,7 @@ pub trait TreeNode: Clone {
     /// called on that node
     ///
     /// If using the default [`post_visit`] with nothing to do, the [`collect`] should be preferred
-    fn collect_using<V: TreeNodeVisitor<N = Self>>(&self, visitor: &mut V) -> Result<()> {
+    fn visit<V: TreeNodeVisitor<N = Self>>(&self, visitor: &mut V) -> Result<()> {
         match visitor.pre_visit(self)? {
             Recursion::Continue => {}
             // If the recursion should stop, do not visit children
@@ -89,7 +89,7 @@ pub trait TreeNode: Clone {
         };
 
         for child in self.get_children() {
-            child.collect_using(visitor)?;
+            child.visit(visitor)?;
         }
 
         visitor.post_visit(self)
@@ -164,10 +164,7 @@ pub trait TreeNode: Clone {
     /// called on that node
     ///
     /// If using the default [`pre_visit`] with [`true`] returned, the [`transform`] should be preferred
-    fn transform_using<R: TreeNodeRewriter<N = Self>>(
-        self,
-        rewriter: &mut R,
-    ) -> Result<Self> {
+    fn rewrite<R: TreeNodeRewriter<N = Self>>(self, rewriter: &mut R) -> Result<Self> {
         let need_mutate = match rewriter.pre_visit(&self)? {
             Recursion::Mutate => return rewriter.mutate(self),
             Recursion::Stop => return Ok(self),
@@ -175,8 +172,7 @@ pub trait TreeNode: Clone {
             Recursion::Skip => false,
         };
 
-        let after_op_children =
-            self.map_children(|node| node.transform_using(rewriter))?;
+        let after_op_children = self.map_children(|node| node.rewrite(rewriter))?;
 
         // now rewrite this node itself
         if need_mutate {

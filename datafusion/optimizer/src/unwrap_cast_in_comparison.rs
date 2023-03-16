@@ -738,7 +738,7 @@ mod tests {
         let mut expr_rewriter = UnwrapCastExprRewriter {
             schema: schema.clone(),
         };
-        expr.transform_using(&mut expr_rewriter).unwrap()
+        expr.rewrite(&mut expr_rewriter).unwrap()
     }
 
     fn expr_test_schema() -> DFSchemaRef {
