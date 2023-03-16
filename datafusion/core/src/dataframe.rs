@@ -30,8 +30,8 @@ use parquet::file::properties::WriterProperties;
 use datafusion_common::from_slice::FromSlice;
 use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::{
-    avg, count, is_null, max, median, min, stddev, TableProviderFilterPushDown,
-    UNNAMED_TABLE,
+    avg, count, is_null, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
+    TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 
 use crate::arrow::datatypes::Schema;
@@ -630,7 +630,7 @@ impl DataFrame {
         let rows = self
             .aggregate(
                 vec![],
-                vec![datafusion_expr::count(Expr::Literal(ScalarValue::Null))],
+                vec![datafusion_expr::count(Expr::Literal(COUNT_STAR_EXPANSION))],
             )?
             .collect()
             .await?;
