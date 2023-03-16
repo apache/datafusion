@@ -552,28 +552,21 @@ fn analyze_window_sort_removal(
     sort_tree: &mut ExecTree,
     window_exec: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
-    let (window_expr, partition_keys, sort_keys) = if let Some(exec) =
+    let (window_expr, partition_keys) = if let Some(exec) =
         window_exec.as_any().downcast_ref::<BoundedWindowAggExec>()
     {
-        (exec.window_expr(), &exec.partition_keys, &exec.sort_keys)
+        (exec.window_expr(), &exec.partition_keys)
     } else if let Some(exec) = window_exec.as_any().downcast_ref::<WindowAggExec>() {
-        (exec.window_expr(), &exec.partition_keys, &exec.sort_keys)
+        (exec.window_expr(), &exec.partition_keys)
     } else {
         return Err(DataFusionError::Plan(
             "Expects to receive either WindowAggExec of BoundedWindowAggExec".to_string(),
         ));
     };
-    let sort_keys = sort_keys.as_deref().unwrap_or(&[]);
+    let orderby_sort_keys = window_expr[0].order_by();
 
-    // Find order by columns among sort_keys.
-    let mut orderby_sort_keys = vec![];
-    for item in window_expr[0].order_by() {
-        if let Some(elem) = sort_keys.iter().find(|e| e.expr.eq(&item.expr)) {
-            orderby_sort_keys.push(elem.clone());
-        }
-    }
     let (should_reverse, partition_search_mode) = if let Some(res) =
-        can_skip_ordering(sort_tree, window_expr[0].partition_by(), &orderby_sort_keys)?
+        can_skip_ordering(sort_tree, window_expr[0].partition_by(), orderby_sort_keys)?
     {
         res
     } else {
@@ -626,6 +619,8 @@ fn analyze_window_sort_removal(
                     // For `WindowAggExec` to work correctly PARTITION BY columns should be sorted.
                     // Hence if `PartitionSearchMode` is not `Sorted` we should satisfy required ordering.
                     // Effectively `WindowAggExec` works only in PartitionSearchMode::Sorted mode.
+                    let sort_keys =
+                        window_exec.required_input_ordering()[0].unwrap_or(&[]);
                     add_sort_above(&mut new_child, sort_keys.to_vec())?;
                     Arc::new(WindowAggExec::try_new(
                         window_expr,
