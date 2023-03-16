@@ -15,7 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Tree node implementation for logical expr and logical plan
+//! Tree node implementation for logical plan
 
-pub mod expr;
-pub mod plan;
+use crate::LogicalPlan;
+use datafusion_common::{tree_node::TreeNode, Result};
+
+impl TreeNode for LogicalPlan {
+    fn get_children(&self) -> Vec<Self> {
+        self.inputs().into_iter().cloned().collect::<Vec<_>>()
+    }
+
+    fn map_children<F>(self, transform: F) -> Result<Self>
+    where
+        F: FnMut(Self) -> Result<Self>,
+    {
+        let children = self.get_children();
+        if !children.is_empty() {
+            let new_children: Result<Vec<_>> =
+                children.into_iter().map(transform).collect();
+            self.with_new_inputs(new_children?.as_slice())
+        } else {
+            Ok(self)
+        }
+    }
+}
