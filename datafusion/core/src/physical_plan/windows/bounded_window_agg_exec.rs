@@ -433,6 +433,39 @@ pub struct LinearSearch {
 
 impl PartitionSearcher for LinearSearch {
     /// This method constructs output columns using the result of each window expression
+    // Assume input buffer is         |      Partition Buffers would be (Where each partition and its data is seperated)
+    // a, 2                           |      a, 2
+    // b, 2                           |      a, 2
+    // a, 2                           |      a, 2
+    // b, 2                           |
+    // a, 2                           |      b, 2
+    // b, 2                           |      b, 2
+    // b, 2                           |      b, 2
+    //                                |      b, 2
+    // Also assume we happen to calculate 2 new values for a, and 3 for b (To be calculate missing values we may need to consider future values).
+    // Partition buffers effectively will be
+    // a, 2, 1
+    // a, 2, 2
+    // a, 2, (missing)
+    //
+    // b, 2, 1
+    // b, 2, 2
+    // b, 2, 3
+    // b, 2, (missing)
+    // When partition buffers are mapped back to the original record batch. Result becomes
+    // a, 2, 1
+    // b, 2, 1
+    // a, 2, 2
+    // b, 2, 2
+    // a, 2, (missing)
+    // b, 2, 3
+    // b, 2, (missing)
+    // This function calculates the column result of window expression(s) (First 4 entry of 3rd column in the above section.)
+    // 1
+    // 1
+    // 2
+    // 2
+    // Above section corresponds to calculated result which can be emitted without breaking input buffer ordering.
     fn calculate_out_columns(
         &mut self,
         input_buffer: &mut RecordBatch,
@@ -482,6 +515,7 @@ impl PartitionSearcher for LinearSearch {
                     .map_err(DataFusionError::ArrowError)
             })
             .collect::<Result<Vec<_>>>()?;
+        // Convert PrimitiveArray to ArrayRef (sort_to_indices works on ArrayRef).
         let all_indices = Arc::new(all_indices) as ArrayRef;
 
         // We should emit columns, according to row index ordering.
