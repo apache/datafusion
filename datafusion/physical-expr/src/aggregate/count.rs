@@ -137,13 +137,13 @@ impl Accumulator for CountAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = &values[0];
-        self.count += (array.len() - array.data().null_count()) as i64;
+        self.count += (array.len() - array.null_count()) as i64;
         Ok(())
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = &values[0];
-        self.count -= (array.len() - array.data().null_count()) as i64;
+        self.count -= (array.len() - array.null_count()) as i64;
         Ok(())
     }
 
@@ -183,7 +183,7 @@ impl RowAccumulator for CountRowAccumulator {
         accessor: &mut RowAccessor,
     ) -> Result<()> {
         let array = &values[0];
-        let delta = (array.len() - array.data().null_count()) as u64;
+        let delta = (array.len() - array.null_count()) as u64;
         accessor.add_u64(self.state_index, delta);
         Ok(())
     }
