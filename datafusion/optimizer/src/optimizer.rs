@@ -17,6 +17,7 @@
 
 //! Query optimizer traits
 
+use crate::analyzer::Analyzer;
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_where_exists::DecorrelateWhereExists;
 use crate::decorrelate_where_in::DecorrelateWhereIn;
@@ -266,9 +267,10 @@ impl Optimizer {
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
         let options = config.options();
+        let analyzed_plan = Analyzer::default().execute_and_check(plan, options)?;
         let start_time = Instant::now();
-        let mut old_plan = Cow::Borrowed(plan);
-        let mut new_plan = plan.clone();
+        let mut old_plan = Cow::Borrowed(&analyzed_plan);
+        let mut new_plan = analyzed_plan.clone();
         let mut i = 0;
         while i < options.optimizer.max_passes {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
