@@ -566,95 +566,7 @@ mod tests {
     }
 
     #[test]
-    fn create_external_table_ordered() -> Result<(), ParserError> {
-        // positive case
-        let sql = "CREATE EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV WITH ORDER (c1 ASC, c2 DESC NULLS FIRST) LOCATION 'foo.csv'";
-        let display = None;
-        let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
-            columns: vec![make_column_def("c1", DataType::Int(display))],
-            file_type: "CSV".to_string(),
-            has_header: false,
-            delimiter: ',',
-            location: "foo.csv".into(),
-            table_partition_cols: vec![],
-            order_exprs: vec![
-                OrderByExpr {
-                    expr: Identifier(Ident {
-                        value: "c1".to_owned(),
-                        quote_style: None,
-                    }),
-                    asc: Some(true),
-                    nulls_first: None,
-                },
-                OrderByExpr {
-                    expr: Identifier(Ident {
-                        value: "c2".to_owned(),
-                        quote_style: None,
-                    }),
-                    asc: Some(false),
-                    nulls_first: Some(true),
-                },
-            ],
-            if_not_exists: false,
-            file_compression_type: UNCOMPRESSED,
-            options: HashMap::new(),
-        });
-        expect_parse_ok(sql, expected)?;
-
-        // positive case
-        let sql = "CREATE EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV WITH ORDER (c1 - c2 ASC) LOCATION 'foo.csv'";
-        let display = None;
-        let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
-            columns: vec![make_column_def("c1", DataType::Int(display))],
-            file_type: "CSV".to_string(),
-            has_header: false,
-            delimiter: ',',
-            location: "foo.csv".into(),
-            table_partition_cols: vec![],
-            order_exprs: vec![OrderByExpr {
-                expr: Expr::BinaryOp {
-                    left: Box::new(Identifier(Ident {
-                        value: "c1".to_owned(),
-                        quote_style: None,
-                    })),
-                    op: BinaryOperator::Minus,
-                    right: Box::new(Identifier(Ident {
-                        value: "c2".to_owned(),
-                        quote_style: None,
-                    })),
-                },
-                asc: Some(true),
-                nulls_first: None,
-            }],
-            if_not_exists: false,
-            file_compression_type: UNCOMPRESSED,
-            options: HashMap::new(),
-        });
-        expect_parse_ok(sql, expected)?;
-        Ok(())
-    }
-
-    #[test]
     fn create_external_table() -> Result<(), ParserError> {
-        // positive case
-        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV ORDER BY (c1 ASC, c2 DESC NULLS FIRST) LOCATION 'foo.csv'";
-        let display = None;
-        let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
-            columns: vec![make_column_def("c1", DataType::Int(display))],
-            file_type: "CSV".to_string(),
-            has_header: false,
-            delimiter: ',',
-            location: "foo.csv".into(),
-            table_partition_cols: vec![],
-            order_exprs: vec![],
-            if_not_exists: false,
-            file_compression_type: UNCOMPRESSED,
-            options: HashMap::new(),
-        });
-        expect_parse_ok(sql, expected)?;
         // positive case
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'";
         let display = None;
@@ -867,6 +779,79 @@ mod tests {
                 ("k1".into(), "v1".into()),
                 ("k2".into(), "v2".into()),
             ]),
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // Ordered Col
+        let sql = "CREATE EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV WITH ORDER (c1 ASC, c2 DESC NULLS FIRST) LOCATION 'foo.csv'";
+        let display = None;
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![
+                make_column_def("c1", DataType::Int(display)),
+                make_column_def("c2", DataType::Int(display)),
+            ],
+            file_type: "CSV".to_string(),
+            has_header: false,
+            delimiter: ',',
+            location: "foo.csv".into(),
+            table_partition_cols: vec![],
+            order_exprs: vec![
+                OrderByExpr {
+                    expr: Identifier(Ident {
+                        value: "c1".to_owned(),
+                        quote_style: None,
+                    }),
+                    asc: Some(true),
+                    nulls_first: None,
+                },
+                OrderByExpr {
+                    expr: Identifier(Ident {
+                        value: "c2".to_owned(),
+                        quote_style: None,
+                    }),
+                    asc: Some(false),
+                    nulls_first: Some(true),
+                },
+            ],
+            if_not_exists: false,
+            file_compression_type: UNCOMPRESSED,
+            options: HashMap::new(),
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // Ordered Binary op
+        let sql = "CREATE EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV WITH ORDER (c1 - c2 ASC) LOCATION 'foo.csv'";
+        let display = None;
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![
+                make_column_def("c1", DataType::Int(display)),
+                make_column_def("c2", DataType::Int(display)),
+            ],
+            file_type: "CSV".to_string(),
+            has_header: false,
+            delimiter: ',',
+            location: "foo.csv".into(),
+            table_partition_cols: vec![],
+            order_exprs: vec![OrderByExpr {
+                expr: Expr::BinaryOp {
+                    left: Box::new(Identifier(Ident {
+                        value: "c1".to_owned(),
+                        quote_style: None,
+                    })),
+                    op: BinaryOperator::Minus,
+                    right: Box::new(Identifier(Ident {
+                        value: "c2".to_owned(),
+                        quote_style: None,
+                    })),
+                },
+                asc: Some(true),
+                nulls_first: None,
+            }],
+            if_not_exists: false,
+            file_compression_type: UNCOMPRESSED,
+            options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
 
