@@ -331,9 +331,10 @@ async fn run_window_test(
     }
 
     let concat_input_record = concat_batches(&schema, &input1).unwrap();
-    let exec1 = Arc::new(
-        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None).unwrap(),
-    );
+    let memory_exec =
+        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None).unwrap();
+    let memory_exec = memory_exec.with_sort_information(sort_keys.clone());
+    let exec1 = Arc::new(memory_exec);
     let usual_window_exec = Arc::new(
         WindowAggExec::try_new(
             vec![create_window_expr(
@@ -349,12 +350,13 @@ async fn run_window_test(
             exec1,
             schema.clone(),
             vec![],
-            Some(sort_keys.clone()),
         )
         .unwrap(),
     );
-    let exec2 =
-        Arc::new(MemoryExec::try_new(&[input1.clone()], schema.clone(), None).unwrap());
+    let memory_exec2 =
+        MemoryExec::try_new(&[input1.clone()], schema.clone(), None).unwrap();
+    let memory_exec2 = memory_exec2.with_sort_information(sort_keys);
+    let exec2 = Arc::new(memory_exec2);
     let running_window_exec = Arc::new(
         BoundedWindowAggExec::try_new(
             vec![create_window_expr(
@@ -370,7 +372,6 @@ async fn run_window_test(
             exec2,
             schema.clone(),
             vec![],
-            Some(sort_keys),
         )
         .unwrap(),
     );

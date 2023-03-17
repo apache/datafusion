@@ -549,7 +549,6 @@ fn analyze_window_sort_removal(
     };
 
     let mut first_should_reverse = None;
-    let mut physical_ordering_common = vec![];
     for sort_any in sort_tree.get_leaves() {
         let sort_output_ordering = sort_any.output_ordering();
         // Variable `sort_any` will either be a `SortExec` or a
@@ -566,11 +565,6 @@ fn analyze_window_sort_removal(
             DataFusionError::Plan("A SortExec should have output ordering".to_string())
         })?;
         if let Some(physical_ordering) = physical_ordering {
-            if physical_ordering_common.is_empty()
-                || physical_ordering.len() < physical_ordering_common.len()
-            {
-                physical_ordering_common = physical_ordering.to_vec();
-            }
             let (can_skip_sorting, should_reverse) = can_skip_sort(
                 window_expr[0].partition_by(),
                 required_ordering,
@@ -620,7 +614,6 @@ fn analyze_window_sort_removal(
                 new_child,
                 new_schema,
                 partition_keys.to_vec(),
-                Some(physical_ordering_common),
             )?) as _
         } else {
             Arc::new(WindowAggExec::try_new(
@@ -628,7 +621,6 @@ fn analyze_window_sort_removal(
                 new_child,
                 new_schema,
                 partition_keys.to_vec(),
-                Some(physical_ordering_common),
             )?) as _
         };
         return Ok(Some(PlanWithCorrespondingSort::new(new_plan)));
@@ -2380,7 +2372,6 @@ mod tests {
                 input.clone(),
                 input.schema(),
                 vec![],
-                Some(sort_exprs),
             )
             .unwrap(),
         )

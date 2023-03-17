@@ -25,7 +25,6 @@ use super::{
 };
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
-use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
     Aggregate, EmptyRelation, Join, Projection, Sort, SubqueryAlias, TableScan, Unnest,
     Window,
@@ -544,63 +543,35 @@ impl DefaultPhysicalPlanner {
                         vec![]
                     };
 
-                    let get_sort_keys = |expr: &Expr| match expr {
+                    let get_sort_keys = |expr: & Expr| match expr {
                         Expr::WindowFunction(WindowFunction{
                             ref partition_by,
                             ref order_by,
                             ..
-                        }) => generate_sort_key(partition_by, order_by),
+                        }) => (partition_by.to_vec(), order_by.to_vec()),
                         Expr::Alias(expr, _) => {
                             // Convert &Box<T> to &T
                             match &**expr {
                                 Expr::WindowFunction(WindowFunction{
                                     ref partition_by,
                                     ref order_by,
-                                    ..}) => generate_sort_key(partition_by, order_by),
+                                    ..}) => (partition_by.to_vec(), order_by.to_vec()),
                                 _ => unreachable!(),
                             }
                         }
                         _ => unreachable!(),
                     };
-                    let sort_keys = get_sort_keys(&window_expr[0])?;
+                    let sort_keys = get_sort_keys(&window_expr[0]);
                     if window_expr.len() > 1 {
                         debug_assert!(
                             window_expr[1..]
                                 .iter()
-                                .all(|expr| get_sort_keys(expr).unwrap() == sort_keys),
+                                .all(|expr| get_sort_keys(expr) == sort_keys),
                             "all window expressions shall have the same sort keys, as guaranteed by logical planning"
                         );
                     }
 
                     let logical_input_schema = input.schema();
-
-                    let physical_sort_keys = if sort_keys.is_empty() {
-                        None
-                    } else {
-                        let physical_input_schema = input_exec.schema();
-                        let sort_keys = sort_keys
-                            .iter()
-                            .map(|(e, _)| match e {
-                                Expr::Sort(expr::Sort {
-                                    expr,
-                                    asc,
-                                    nulls_first,
-                                }) => create_physical_sort_expr(
-                                    expr,
-                                    logical_input_schema,
-                                    &physical_input_schema,
-                                    SortOptions {
-                                        descending: !*asc,
-                                        nulls_first: *nulls_first,
-                                    },
-                                    session_state.execution_props(),
-                                ),
-                                _ => unreachable!(),
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-                        Some(sort_keys)
-                    };
-
                     let physical_input_schema = input_exec.schema();
                     let window_expr = window_expr
                         .iter()
@@ -625,7 +596,6 @@ impl DefaultPhysicalPlanner {
                             input_exec,
                             physical_input_schema,
                             physical_partition_keys,
-                            physical_sort_keys,
                         )?)
                     } else {
                         Arc::new(WindowAggExec::try_new(
@@ -633,7 +603,6 @@ impl DefaultPhysicalPlanner {
                             input_exec,
                             physical_input_schema,
                             physical_partition_keys,
-                            physical_sort_keys,
                         )?)
                     })
                 }
