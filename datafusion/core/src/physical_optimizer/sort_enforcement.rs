@@ -1774,25 +1774,22 @@ mod tests {
         ];
         let sort_exprs2 = vec![sort_expr("nullable_col", &schema)];
         // reverse sorting of sort_exprs2
-        let sort_exprs3 = vec![
-            sort_expr("nullable_col", &schema),
-            sort_expr_options(
-                "non_nullable_col",
-                &schema,
-                SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            ),
-        ];
+        let sort_exprs3 = vec![sort_expr_options(
+            "nullable_col",
+            &schema,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        )];
         let source1 = parquet_exec_sorted(&schema, sort_exprs1);
-        let source2 = parquet_exec_sorted(&schema, sort_exprs2.clone());
+        let source2 = parquet_exec_sorted(&schema, sort_exprs2);
         let sort1 = sort_exec(sort_exprs3.clone(), source1);
-        let sort2 = sort_exec(sort_exprs3, source2);
+        let sort2 = sort_exec(sort_exprs3.clone(), source2);
 
         let union = union_exec(vec![sort1, sort2]);
-        let spm = sort_preserving_merge_exec(sort_exprs2.clone(), union);
-        let physical_plan = bounded_window_exec("nullable_col", sort_exprs2, spm);
+        let spm = sort_preserving_merge_exec(sort_exprs3.clone(), union);
+        let physical_plan = bounded_window_exec("nullable_col", sort_exprs3, spm);
 
         // The `WindowAggExec` gets its sorting from multiple children jointly.
         // During the removal of `SortExec`s, it should be able to remove the
@@ -1800,19 +1797,20 @@ mod tests {
         // are not necessarily the same to be able to remove them.
         let expected_input = vec![
             "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
-            "  SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "  SortPreservingMergeExec: [nullable_col@0 DESC NULLS LAST]",
             "    UnionExec",
-            "      SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC NULLS LAST]",
+            "      SortExec: expr=[nullable_col@0 DESC NULLS LAST]",
             "        ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC], projection=[nullable_col, non_nullable_col]",
-            "      SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC NULLS LAST]",
+            "      SortExec: expr=[nullable_col@0 DESC NULLS LAST]",
             "        ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
         ];
         let expected_optimized = vec![
-            "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
-            "  SortPreservingMergeExec: [nullable_col@0 ASC]",
-            "    UnionExec",
-            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC], projection=[nullable_col, non_nullable_col]",
-            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
+            "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(NULL) }]",
+            "  SortExec: expr=[nullable_col@0 ASC]",
+            "    CoalescePartitionsExec",
+            "      UnionExec",
+            "        ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC], projection=[nullable_col, non_nullable_col]",
+            "        ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())
