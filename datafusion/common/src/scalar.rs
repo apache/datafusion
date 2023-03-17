@@ -43,7 +43,8 @@ use arrow::{
         DECIMAL128_MAX_PRECISION,
     },
 };
-use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime};
+use arrow_array::timezone::Tz;
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, TimeZone};
 
 // Constants we use throughout this file:
 const MILLISECS_IN_ONE_DAY: i64 = 86_400_000;
@@ -902,17 +903,28 @@ fn with_timezone_to_naive_datetime(
     ts: i64,
     tz: &Option<String>,
     mode: IntervalMode,
-) -> Result<NaiveDateTime> {
-    let mut result = if let IntervalMode::Milli = mode {
+) -> Result<NaiveDateTime, DataFusionError> {
+    let datetime = if let IntervalMode::Milli = mode {
         ticks_to_naive_datetime::<1_000_000>(ts)
     } else {
         ticks_to_naive_datetime::<1>(ts)
     }?;
+
     if let Some(tz) = tz {
-        let offset = parse_tz_to_offset(tz)?;
-        result = DateTime::<FixedOffset>::from_utc(result, offset).naive_local();
-    };
-    Ok(result)
+        let parsed_tz: Tz = FromStr::from_str(tz).map_err(|_| {
+            DataFusionError::Execution("cannot parse given timezone".to_string())
+        })?;
+        let offset = parsed_tz
+            .offset_from_local_datetime(&datetime)
+            .single()
+            .ok_or_else(|| {
+                DataFusionError::Execution(
+                    "error conversion result of timezone offset".to_string(),
+                )
+            })?;
+        return Ok(DateTime::<Tz>::from_local(datetime, offset).naive_utc());
+    }
+    Ok(datetime)
 }
 
 /// This function creates the [`NaiveDateTime`] object corresponding to the
@@ -928,29 +940,6 @@ fn ticks_to_naive_datetime<const UNIT_NANOS: i64>(ticks: i64) -> Result<NaiveDat
             "Can not convert given timestamp to a NaiveDateTime".to_string(),
         )
     })
-}
-
-/// This function parses `tz` according to the format "+HH:MM" (e.g. "+05:30")
-/// and retuns a [`FixedOffset`] object.
-#[inline]
-fn parse_tz_to_offset(tz: &str) -> Result<FixedOffset> {
-    const ERR_MSG: &str = "Can not parse timezone";
-    let sign = tz
-        .chars()
-        .next()
-        .ok_or_else(|| DataFusionError::Execution(ERR_MSG.to_string()))?;
-    let hours = tz[1..3]
-        .parse::<i32>()
-        .map_err(|_| DataFusionError::Execution(ERR_MSG.to_string()))?;
-    let minutes = tz[4..6]
-        .parse::<i32>()
-        .map_err(|_| DataFusionError::Execution(ERR_MSG.to_string()))?;
-    match sign {
-        '-' => FixedOffset::east_opt(hours * 3600 + minutes * 60),
-        '+' => FixedOffset::west_opt(hours * 3600 + minutes * 60),
-        _ => None,
-    }
-    .ok_or_else(|| DataFusionError::Execution(ERR_MSG.to_string()))
 }
 
 #[inline]
@@ -5435,6 +5424,30 @@ mod tests {
                             .timestamp(),
                     ),
                     Some("-23:59".to_string()),
+                ),
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 0))),
+            ),
+            // 10th test case, parsing different types of timezone input
+            (
+                ScalarValue::TimestampSecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 3, 17)
+                            .unwrap()
+                            .and_hms_opt(14, 10, 0)
+                            .unwrap()
+                            .timestamp(),
+                    ),
+                    Some("Europe/Istanbul".to_string()),
+                ),
+                ScalarValue::TimestampSecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 3, 17)
+                            .unwrap()
+                            .and_hms_opt(4, 10, 0)
+                            .unwrap()
+                            .timestamp(),
+                    ),
+                    Some("America/Los_Angeles".to_string()),
                 ),
                 ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 0))),
             ),
