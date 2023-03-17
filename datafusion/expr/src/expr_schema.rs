@@ -136,9 +136,10 @@ impl ExprSchemable for Expr {
             Expr::Placeholder { data_type, .. } => data_type.clone().ok_or_else(|| {
                 DataFusionError::Plan("Placeholder type could not be resolved".to_owned())
             }),
-            Expr::Wildcard => Err(DataFusionError::Internal(
-                "Wildcard expressions are not valid in a logical query plan".to_owned(),
-            )),
+            Expr::Wildcard => {
+                // Wildcard do not really have a type and do not appear in projections
+                Ok(DataType::Null)
+            }
             Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
                 "QualifiedWildcard expressions are not valid in a logical query plan"
                     .to_owned(),
