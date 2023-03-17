@@ -139,7 +139,7 @@ impl<'a> TableReference<'a> {
 
     /// Convenience method for creating a [`TableReference::Partial`].
     ///
-    /// As described on [`TableReference`] this does parsing at all.
+    /// As described on [`TableReference`] this does *NO* parsing at all.
     pub fn partial(
         schema: impl Into<Cow<'a, str>>,
         table: impl Into<Cow<'a, str>>,
@@ -152,7 +152,7 @@ impl<'a> TableReference<'a> {
 
     /// Convenience method for creating a [`TableReference::Full`]
     ///
-    /// As described on [`TableReference`] this does parsing at all.
+    /// As described on [`TableReference`] this does *NO* parsing at all.
     pub fn full(
         catalog: impl Into<Cow<'a, str>>,
         schema: impl Into<Cow<'a, str>>,
