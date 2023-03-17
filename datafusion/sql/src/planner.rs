@@ -137,14 +137,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         for column in columns {
             let data_type = self.convert_simple_data_type(&column.data_type)?;
-            let prevent_null = column
+            let not_nullable = column
                 .options
                 .iter()
                 .any(|x| x.option == ColumnOption::NotNull);
             fields.push(Field::new(
                 normalize_ident(column.name, self.options.enable_ident_normalization),
                 data_type,
-                !prevent_null,
+                !not_nullable,
             ));
         }
 
