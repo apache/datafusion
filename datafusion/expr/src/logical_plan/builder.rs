@@ -17,14 +17,18 @@
 
 //! This module provides a builder for creating LogicalPlans
 
+use crate::expr::AggregateFunction;
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
     rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields, from_plan};
-use crate::{and, binary_expr, DmlStatement, Operator, WriteOp};
+use crate::utils::{
+    columnize_expr, compare_sort_expr, exprlist_to_fields, from_plan,
+    COUNT_STAR_EXPANSION,
+};
+use crate::{aggregate_function, and, binary_expr, lit, DmlStatement, Operator, WriteOp};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
@@ -826,6 +830,9 @@ impl LogicalPlanBuilder {
         window_expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
         let window_expr = normalize_cols(window_expr, &self.plan)?;
+        //handle Count(Expr:Wildcard) with DataFrame API
+        let window_expr = handle_wildcard(window_expr)?;
+
         let all_expr = window_expr.iter();
         validate_unique_names("Windows", all_expr.clone())?;
         let mut window_fields: Vec<DFField> = self.plan.schema().fields().clone();
@@ -849,6 +856,10 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         let group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
+
+        //handle Count(Expr:Wildcard) with DataFrame API
+        let aggr_expr = handle_wildcard(aggr_expr)?;
+
         Ok(Self::from(LogicalPlan::Aggregate(Aggregate::try_new(
             Arc::new(self.plan),
             group_expr,
@@ -1032,6 +1043,31 @@ impl LogicalPlanBuilder {
     pub fn unnest_column(self, column: impl Into<Column>) -> Result<Self> {
         Ok(Self::from(unnest(self.plan, column.into())?))
     }
+}
+
+//handle Count(Expr:Wildcard) with DataFrame API
+pub fn handle_wildcard(exprs: Vec<Expr>) -> Result<Vec<Expr>> {
+    let exprs: Vec<Expr> = exprs
+        .iter()
+        .map(|expr| match expr {
+            Expr::AggregateFunction(AggregateFunction {
+                fun: aggregate_function::AggregateFunction::Count,
+                args,
+                distinct,
+                filter,
+            }) if args.len() == 1 => match args[0] {
+                Expr::Wildcard => Expr::AggregateFunction(AggregateFunction {
+                    fun: aggregate_function::AggregateFunction::Count,
+                    args: vec![lit(COUNT_STAR_EXPANSION)],
+                    distinct: *distinct,
+                    filter: filter.clone(),
+                }),
+                _ => expr.clone(),
+            },
+            _ => expr.clone(),
+        })
+        .collect();
+    Ok(exprs)
 }
 
 /// Creates a schema for a join operation.
@@ -1371,7 +1407,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{expr, expr_fn::exists};
+    use crate::{count, expr, expr_fn::exists};
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::{OwnedTableReference, SchemaError, TableReference};
 
@@ -1380,6 +1416,34 @@ mod tests {
     use super::*;
     use crate::{col, in_subquery, lit, scalar_subquery, sum};
 
+    #[test]
+    fn window_wildcard() -> Result<()> {
+        let plan = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![]))?
+            .window(vec![count(Expr::Wildcard)])?
+            .build()?;
+
+        let expected = "WindowAggr: windowExpr=[[COUNT(UInt8(1))]]\
+                \n  TableScan: employee_csv projection=[]";
+
+        assert_eq!(expected, format!("{plan:?}"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn count_wildcard() -> Result<()> {
+        let group_expr: Vec<Expr> = Vec::new();
+        let plan = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![]))?
+            .aggregate(group_expr, vec![count(Expr::Wildcard)])?
+            .build()?;
+
+        let expected = "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+                \n  TableScan: employee_csv projection=[]";
+
+        assert_eq!(expected, format!("{plan:?}"));
+
+        Ok(())
+    }
     #[test]
     fn plan_builder_simple() -> Result<()> {
         let plan =
