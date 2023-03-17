@@ -61,7 +61,20 @@ async fn window_frame_creation_type_checking() -> Result<()> {
     ).await
 }
 
-fn write_test_data_to_parquet(tmpdir: &TempDir, n_file: usize) -> Result<()> {
+fn split_record_batch(batch: RecordBatch, n_split: usize) -> Vec<RecordBatch> {
+    let n_chunk = batch.num_rows() / n_split;
+    let mut res = vec![];
+    for i in 0..n_split - 1 {
+        let chunk = batch.slice(i * n_chunk, n_chunk);
+        res.push(chunk);
+    }
+    let start = (n_split - 1) * n_chunk;
+    let len = batch.num_rows() - start;
+    res.push(batch.slice(start, len));
+    res
+}
+
+fn get_test_data(n_split: usize) -> Result<Vec<RecordBatch>> {
     let ts_field = Field::new("ts", DataType::Int32, false);
     let inc_field = Field::new("inc_col", DataType::Int32, false);
     let desc_field = Field::new("desc_col", DataType::Int32, false);
@@ -100,19 +113,19 @@ fn write_test_data_to_parquet(tmpdir: &TempDir, n_file: usize) -> Result<()> {
             ])),
         ],
     )?;
-    let n_chunk = batch.num_rows() / n_file;
-    for i in 0..n_file {
+    Ok(split_record_batch(batch, n_split))
+}
+
+fn write_test_data_to_parquet(tmpdir: &TempDir, n_split: usize) -> Result<()> {
+    let batches = get_test_data(n_split)?;
+    for (i, batch) in batches.into_iter().enumerate() {
         let target_file = tmpdir.path().join(format!("{i}.parquet"));
         let file = File::create(target_file).unwrap();
         // Default writer properties
         let props = WriterProperties::builder().build();
-        let chunks_start = i * n_chunk;
-        let cur_batch = batch.slice(chunks_start, n_chunk);
-        // let chunks_end = chunks_start + n_chunk;
-        let mut writer =
-            ArrowWriter::try_new(file, cur_batch.schema(), Some(props)).unwrap();
+        let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
 
-        writer.write(&cur_batch).expect("Writing batch");
+        writer.write(&batch).expect("Writing batch");
 
         // writer must be closed to write footer
         writer.close().unwrap();
@@ -120,12 +133,11 @@ fn write_test_data_to_parquet(tmpdir: &TempDir, n_file: usize) -> Result<()> {
     Ok(())
 }
 
-async fn get_test_context(tmpdir: &TempDir) -> Result<SessionContext> {
+async fn get_test_context(tmpdir: &TempDir, n_batch: usize) -> Result<SessionContext> {
     let session_config = SessionConfig::new().with_target_partitions(1);
     let ctx = SessionContext::with_config(session_config);
 
     let parquet_read_options = ParquetReadOptions::default();
-    // The sort order is specified (not actually correct in this case)
     let file_sort_order = [col("ts")]
         .into_iter()
         .map(|e| {
@@ -139,7 +151,7 @@ async fn get_test_context(tmpdir: &TempDir) -> Result<SessionContext> {
         .to_listing_options(&ctx.copied_config())
         .with_file_sort_order(Some(file_sort_order));
 
-    write_test_data_to_parquet(tmpdir, 1)?;
+    write_test_data_to_parquet(tmpdir, n_batch)?;
     let provided_schema = None;
     let sql_definition = None;
     ctx.register_listing_table(
@@ -160,7 +172,7 @@ mod tests {
     #[tokio::test]
     async fn test_source_sorted_aggregate() -> Result<()> {
         let tmpdir = TempDir::new().unwrap();
-        let ctx = get_test_context(&tmpdir).await?;
+        let ctx = get_test_context(&tmpdir, 1).await?;
 
         let sql = "SELECT
             SUM(inc_col) OVER(ORDER BY ts RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING) as sum1,
@@ -235,7 +247,7 @@ mod tests {
     #[tokio::test]
     async fn test_source_sorted_builtin() -> Result<()> {
         let tmpdir = TempDir::new().unwrap();
-        let ctx = get_test_context(&tmpdir).await?;
+        let ctx = get_test_context(&tmpdir, 1).await?;
 
         let sql = "SELECT
             FIRST_VALUE(inc_col) OVER(ORDER BY ts RANGE BETWEEN 10 PRECEDING and 1 FOLLOWING) as fv1,
@@ -309,7 +321,7 @@ mod tests {
     #[tokio::test]
     async fn test_source_sorted_unbounded_preceding() -> Result<()> {
         let tmpdir = TempDir::new().unwrap();
-        let ctx = get_test_context(&tmpdir).await?;
+        let ctx = get_test_context(&tmpdir, 1).await?;
 
         let sql = "SELECT
             SUM(inc_col) OVER(ORDER BY ts ASC RANGE BETWEEN UNBOUNDED PRECEDING AND 5 FOLLOWING) as sum1,
@@ -368,7 +380,7 @@ mod tests {
     #[tokio::test]
     async fn test_source_sorted_unbounded_preceding_builtin() -> Result<()> {
         let tmpdir = TempDir::new().unwrap();
-        let ctx = get_test_context(&tmpdir).await?;
+        let ctx = get_test_context(&tmpdir, 1).await?;
 
         let sql = "SELECT
            FIRST_VALUE(inc_col) OVER(ORDER BY ts ASC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as first_value1,
