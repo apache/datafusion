@@ -37,7 +37,8 @@ use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::sort_pushdown::{pushdown_sorts, SortPushDown};
 use crate::physical_optimizer::utils::{
-    add_sort_above, is_limit, is_sort, is_sort_preserving_merge, is_window,
+    add_sort_above, is_coalesce_partitions, is_limit, is_sort, is_sort_preserving_merge,
+    is_window,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -105,8 +106,8 @@ impl ExecTree {
     }
 }
 
-/// This object is used within the [EnforceSorting] rule to track the closest
-/// `SortExec` descendant(s) for every child of a plan.
+/// This object is used within the [`EnforceSorting`] rule to track the closest
+/// [`SortExec`] descendant(s) for every child of a plan.
 #[derive(Debug, Clone)]
 struct PlanWithCorrespondingSort {
     plan: Arc<dyn ExecutionPlan>,
@@ -204,7 +205,7 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
 }
 
 /// This object is used within the [EnforceSorting] rule to track the closest
-/// `CoalescePartitionsExec` descendant(s) for every child of a plan.
+/// [`CoalescePartitionsExec`] descendant(s) for every child of a plan.
 #[derive(Debug, Clone)]
 struct PlanWithCorrespondingCoalescePartitions {
     plan: Arc<dyn ExecutionPlan>,
@@ -245,7 +246,7 @@ impl PlanWithCorrespondingCoalescePartitions {
                 if plan.children().is_empty() {
                     // Plan has no children, there is nothing to propagate.
                     None
-                } else if plan.as_any().is::<CoalescePartitionsExec>() {
+                } else if is_coalesce_partitions(&plan) {
                     Some(ExecTree::new(plan, idx, vec![]))
                 } else {
                     let children = item
@@ -317,6 +318,8 @@ impl PhysicalOptimizerRule for EnforceSorting {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let plan_requirements = PlanWithCorrespondingSort::new(plan);
+        // Execute a bottom-up traversal to enforce sorting requirements,
+        // remove unnecessary sorts, and optimize sort-sensitive operators:
         let adjusted = plan_requirements.transform_up(&ensure_sorting)?;
         let new_plan = if config.optimizer.repartition_sorts {
             let plan_with_coalesce_partitions =
@@ -327,7 +330,8 @@ impl PhysicalOptimizerRule for EnforceSorting {
         } else {
             adjusted.plan
         };
-        // Execute a Top-Down process (Preorder Traversal) to push down sorts if they are helpful:
+        // Execute a top-down traversal to exploit sort push-down opportunities
+        // missed by the bottom-up traversal:
         let sort_pushdown = SortPushDown::init(new_plan);
         let adjusted = sort_pushdown.transform_down(&pushdown_sorts)?;
         Ok(adjusted.plan)
@@ -343,38 +347,34 @@ impl PhysicalOptimizerRule for EnforceSorting {
 }
 
 /// This function turns plans of the form
-///      "SortExec: expr=[a@0 ASC]",
+///      "SortExec: expr=\[a@0 ASC\]",
 ///      "  CoalescePartitionsExec",
 ///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
 /// to
-///      "SortPreservingMergeExec: [a@0 ASC]",
-///      "  SortExec: expr=[a@0 ASC]",
+///      "SortPreservingMergeExec: \[a@0 ASC\]",
+///      "  SortExec: expr=\[a@0 ASC\]",
 ///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-/// by following connections from `CoalescePartitionsExec`s to `SortExec`s.
+/// by following connections from [`CoalescePartitionsExec`]s to [`SortExec`]s.
 /// By performing sorting in parallel, we can increase performance in some scenarios.
 fn parallelize_sorts(
     requirements: PlanWithCorrespondingCoalescePartitions,
 ) -> Result<Option<PlanWithCorrespondingCoalescePartitions>> {
     let plan = requirements.plan;
     let mut coalesce_onwards = requirements.coalesce_onwards;
-    if plan.children().is_empty()
-        // We only do action when plan is either SortExec, SortPreservingMergeExec or CoalescePartitionsExec
-        // all of them have single child. If 0th child is `None` we can immediately return.
-        || coalesce_onwards[0].is_none()
-    {
+    if plan.children().is_empty() || coalesce_onwards[0].is_none() {
+        // We only take an action when the plan is either a SortExec, a
+        // SortPreservingMergeExec or a CoalescePartitionsExec, and they
+        // all have a single child. Therefore, if the first child is `None`,
+        // we can return immediately.
         return Ok(None);
-    }
-    // We know that `plan` has children, so `coalesce_onwards` is non-empty.
-    if (is_sort(&plan) || is_sort_preserving_merge(&plan))
-        // Make sure that Sort is actually global sort
+    } else if (is_sort(&plan) || is_sort_preserving_merge(&plan))
         && plan.output_partitioning().partition_count() <= 1
     {
-        // If there is a connection between a `CoalescePartitionsExec` and a
-        // Global Sort that satisfy the requirements (i.e. intermediate
-        // executors  don't require single partition), then we can
-        // replace the `CoalescePartitionsExec`+ GlobalSort cascade with
-        // the `SortExec` + `SortPreservingMergeExec`
-        // cascade to parallelize sorting.
+        // If there is a connection between a CoalescePartitionsExec and a
+        // global sort that satisfy the requirements (i.e. intermediate
+        // executors don't require single partition), then we can replace
+        // the CoalescePartitionsExec + Sort cascade with a SortExec +
+        // SortPreservingMergeExec cascade to parallelize sorting.
         let mut prev_layer = plan.clone();
         update_child_to_remove_coalesce(&mut prev_layer, &mut coalesce_onwards[0])?;
         let sort_exprs = get_sort_exprs(&plan)?;
@@ -384,7 +384,7 @@ fn parallelize_sorts(
             plan: Arc::new(spm),
             coalesce_onwards: vec![None],
         }));
-    } else if plan.as_any().is::<CoalescePartitionsExec>() {
+    } else if is_coalesce_partitions(&plan) {
         // There is an unnecessary `CoalescePartitionExec` in the plan.
         let mut prev_layer = plan.clone();
         update_child_to_remove_coalesce(&mut prev_layer, &mut coalesce_onwards[0])?;
@@ -479,7 +479,8 @@ fn ensure_sorting(
     } else if is_sort_preserving_merge(&plan)
         && children[0].output_partitioning().partition_count() <= 1
     {
-        // sort preserving merge can removed. Input already has single partition
+        // This SortPreservingMergeExec is unnecessary, input already has a
+        // single partition.
         return Ok(Some(PlanWithCorrespondingSort {
             plan: children[0].clone(),
             sort_onwards: vec![sort_onwards[0].clone()],
@@ -491,8 +492,8 @@ fn ensure_sorting(
     }))
 }
 
-/// Analyzes a given `SortExec` (`plan`) to determine whether its input already
-/// has a finer ordering than this `SortExec` enforces.
+/// Analyzes a given [`SortExec`] (`plan`) to determine whether its input
+/// already has a finer ordering than it enforces.
 fn analyze_immediate_sort_removal(
     plan: &Arc<dyn ExecutionPlan>,
     sort_onwards: &[Option<ExecTree>],
@@ -539,8 +540,8 @@ fn analyze_immediate_sort_removal(
     None
 }
 
-/// Analyzes a [WindowAggExec] or a [BoundedWindowAggExec] to determine whether
-/// it may allow removing a sort.
+/// Analyzes a [`WindowAggExec`] or a [`BoundedWindowAggExec`] to determine
+/// whether it may allow removing a sort.
 fn analyze_window_sort_removal(
     sort_tree: &mut ExecTree,
     window_exec: &Arc<dyn ExecutionPlan>,
@@ -588,8 +589,7 @@ fn analyze_window_sort_removal(
             )?;
             if !can_skip_sorting {
                 return Ok(None);
-            }
-            if let Some(first_should_reverse) = first_should_reverse {
+            } else if let Some(first_should_reverse) = first_should_reverse {
                 if first_should_reverse != should_reverse {
                     return Ok(None);
                 }
@@ -661,26 +661,20 @@ fn update_child_to_remove_coalesce(
 fn remove_corresponding_coalesce_in_sub_plan(
     coalesce_onwards: &mut ExecTree,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    Ok(
-        if coalesce_onwards
-            .plan
-            .as_any()
-            .is::<CoalescePartitionsExec>()
-        {
-            // We can safely use the 0th index since we have a `CoalescePartitionsExec`.
-            coalesce_onwards.plan.children()[0].clone()
-        } else {
-            let plan = coalesce_onwards.plan.clone();
-            let mut children = plan.children();
-            for item in &mut coalesce_onwards.children {
-                children[item.idx] = remove_corresponding_coalesce_in_sub_plan(item)?;
-            }
-            plan.with_new_children(children)?
-        },
-    )
+    Ok(if is_coalesce_partitions(&coalesce_onwards.plan) {
+        // We can safely use the 0th index since we have a `CoalescePartitionsExec`.
+        coalesce_onwards.plan.children()[0].clone()
+    } else {
+        let plan = coalesce_onwards.plan.clone();
+        let mut children = plan.children();
+        for item in &mut coalesce_onwards.children {
+            children[item.idx] = remove_corresponding_coalesce_in_sub_plan(item)?;
+        }
+        plan.with_new_children(children)?
+    })
 }
 
-/// Updates child to remove the unnecessary sorting below it.
+/// Updates child to remove the unnecessary sort below it.
 fn update_child_to_remove_unnecessary_sort(
     child: &mut Arc<dyn ExecutionPlan>,
     sort_onwards: &mut Option<ExecTree>,
@@ -698,8 +692,10 @@ fn update_child_to_remove_unnecessary_sort(
         )?;
     }
     *sort_onwards = None;
-    // Deleting sort(SortExec+SortPreservingMergeExec) may invalidate distribution requirement
-    update_child_to_satisfy_distribution(child, parent, child_idx)
+    // Deleting a merging sort may invalidate distribution requirements.
+    // Ensure that we stay compliant with such requirements:
+    update_child_to_satisfy_distribution(child, parent, child_idx);
+    Ok(())
 }
 
 /// Removes the sort from the plan in `sort_onwards`.
@@ -741,8 +737,8 @@ fn update_child_to_satisfy_distribution(
     child: &mut Arc<dyn ExecutionPlan>,
     parent: &Arc<dyn ExecutionPlan>,
     child_idx: usize,
-) -> Result<()> {
-    // If distribution requirement is not satisfied, satisfies it by adding
+) {
+    // If distribution requirement is not met, satisfy it by adding a
     // CoalescePartitionsExec.
     let requires_single_partition = matches!(
         parent.required_input_distribution()[child_idx],
@@ -751,7 +747,6 @@ fn update_child_to_satisfy_distribution(
     if requires_single_partition && child.output_partitioning().partition_count() > 1 {
         *child = Arc::new(CoalescePartitionsExec::new(child.clone())) as _;
     }
-    Ok(())
 }
 
 /// Converts an [ExecutionPlan] trait object to a [PhysicalSortExpr] slice when possible.
@@ -1088,7 +1083,6 @@ mod tests {
             sort,
         );
 
-        // let filter_exec = sort_exec;
         let physical_plan = bounded_window_exec("non_nullable_col", sort_exprs, filter);
 
         let expected_input = vec![
@@ -1504,8 +1498,8 @@ mod tests {
         let physical_plan = sort_preserving_merge_exec(sort_exprs, union);
 
         // Input is an invalid plan. In this case rule should add required sorting in appropriate places.
-        // First ParquetExec has output ordering(nullable_col@0 ASC). However, it doesn't satisfy required ordering
-        // of SortPreservingMergeExec.
+        // First ParquetExec has output ordering(nullable_col@0 ASC). However, it doesn't satisfy the
+        // required ordering of SortPreservingMergeExec.
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "  UnionExec",
