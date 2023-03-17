@@ -25,7 +25,8 @@ use std::{any::Any, sync::Arc};
 use arrow::array::*;
 use arrow::compute::kernels::arithmetic::{
     add_dyn, add_scalar_dyn as add_dyn_scalar, divide_dyn_opt,
-    divide_scalar_dyn as divide_dyn_scalar, modulus, modulus_scalar, multiply_dyn,
+    divide_scalar_dyn as divide_dyn_scalar, modulus_dyn,
+    modulus_scalar_dyn as modulus_dyn_scalar, multiply_dyn,
     multiply_scalar_dyn as multiply_dyn_scalar, subtract_dyn,
     subtract_scalar_dyn as subtract_dyn_scalar,
 };
@@ -1128,8 +1129,7 @@ impl BinaryExpr {
                 binary_primitive_array_op_dyn_scalar!(array, scalar, divide)
             }
             Operator::Modulo => {
-                // todo: change to binary_primitive_array_op_dyn_scalar! once modulo is implemented
-                binary_primitive_array_op_scalar!(array, scalar, modulus)
+                binary_primitive_array_op_dyn_scalar!(array, scalar, modulus)
             }
             Operator::RegexMatch => binary_string_array_flag_op_scalar!(
                 array,
@@ -1239,7 +1239,9 @@ impl BinaryExpr {
             Operator::Divide => {
                 binary_primitive_array_op_dyn!(left, right, divide_dyn_opt)
             }
-            Operator::Modulo => binary_primitive_array_op!(left, right, modulus),
+            Operator::Modulo => {
+                binary_primitive_array_op_dyn!(left, right, modulus_dyn)
+            }
             Operator::And => {
                 if left_data_type == &DataType::Boolean {
                     boolean_op!(&left, &right, and_kleene)
