@@ -4916,103 +4916,49 @@ mod tests {
     fn test_scalar_interval_add() {
         let cases = [
             (
-                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
-                    1, 12,
-                ))),
-                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
-                    1, 12,
-                ))),
-                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
-                    2, 24,
-                ))),
+                ScalarValue::new_interval_ym(1, 12),
+                ScalarValue::new_interval_ym(1, 12),
+                ScalarValue::new_interval_ym(2, 24),
             ),
             (
-                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                    1, 999,
-                ))),
-                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                    1, 999,
-                ))),
-                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                    2, 1998,
-                ))),
+                ScalarValue::new_interval_dt(1, 999),
+                ScalarValue::new_interval_dt(1, 999),
+                ScalarValue::new_interval_dt(2, 1998),
             ),
             (
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(12, 15, 123_456),
-                )),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(12, 15, 123_456),
-                )),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(24, 30, 246_912),
-                )),
+                ScalarValue::new_interval_mdn(12, 15, 123_456),
+                ScalarValue::new_interval_mdn(12, 15, 123_456),
+                ScalarValue::new_interval_mdn(24, 30, 246_912),
             ),
             (
-                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
-                    0, 1,
-                ))),
-                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                    29, 86_390,
-                ))),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(1, 29, 86_390_000_000),
-                )),
+                ScalarValue::new_interval_ym(0, 1),
+                ScalarValue::new_interval_dt(29, 86_390),
+                ScalarValue::new_interval_mdn(1, 29, 86_390_000_000),
             ),
             (
-                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
-                    0, 1,
-                ))),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(2, 10, 999_999_999),
-                )),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(3, 10, 999_999_999),
-                )),
+                ScalarValue::new_interval_ym(0, 1),
+                ScalarValue::new_interval_mdn(2, 10, 999_999_999),
+                ScalarValue::new_interval_mdn(3, 10, 999_999_999),
             ),
             (
-                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                    400, 123_456,
-                ))),
-                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
-                    1, 1,
-                ))),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(13, 400, 123_456_000_000),
-                )),
+                ScalarValue::new_interval_dt(400, 123_456),
+                ScalarValue::new_interval_ym(1, 1),
+                ScalarValue::new_interval_mdn(13, 400, 123_456_000_000),
             ),
             (
-                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                    65, 321,
-                ))),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(2, 5, 1_000_000),
-                )),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(2, 70, 322_000_000),
-                )),
+                ScalarValue::new_interval_dt(65, 321),
+                ScalarValue::new_interval_mdn(2, 5, 1_000_000),
+                ScalarValue::new_interval_mdn(2, 70, 322_000_000),
             ),
             (
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(12, 15, 123_456),
-                )),
-                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
-                    2, 0,
-                ))),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(36, 15, 123_456),
-                )),
+                ScalarValue::new_interval_mdn(12, 15, 123_456),
+                ScalarValue::new_interval_ym(2, 0),
+                ScalarValue::new_interval_mdn(36, 15, 123_456),
             ),
             (
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(12, 15, 100_000),
-                )),
-                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                    370, 1,
-                ))),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(12, 385, 1_100_000),
-                )),
+                ScalarValue::new_interval_mdn(12, 15, 100_000),
+                ScalarValue::new_interval_dt(370, 1),
+                ScalarValue::new_interval_mdn(12, 385, 1_100_000),
             ),
         ];
         for (lhs, rhs, expected) in cases.iter() {
@@ -5027,101 +4973,49 @@ mod tests {
     fn test_scalar_interval_sub() {
         let cases = [
             (
-                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
-                    1, 12,
-                ))),
-                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
-                    1, 12,
-                ))),
-                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
-                    0, 0,
-                ))),
+                ScalarValue::new_interval_ym(1, 12),
+                ScalarValue::new_interval_ym(1, 12),
+                ScalarValue::new_interval_ym(0, 0),
             ),
             (
-                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                    1, 999,
-                ))),
-                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                    1, 999,
-                ))),
-                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 0))),
+                ScalarValue::new_interval_dt(1, 999),
+                ScalarValue::new_interval_dt(1, 999),
+                ScalarValue::new_interval_dt(0, 0),
             ),
             (
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(12, 15, 123_456),
-                )),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(12, 15, 123_456),
-                )),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(0, 0, 0),
-                )),
+                ScalarValue::new_interval_mdn(12, 15, 123_456),
+                ScalarValue::new_interval_mdn(12, 15, 123_456),
+                ScalarValue::new_interval_mdn(0, 0, 0),
             ),
             (
-                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
-                    0, 1,
-                ))),
-                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                    29, 999_999,
-                ))),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(1, -29, -999_999_000_000),
-                )),
+                ScalarValue::new_interval_ym(0, 1),
+                ScalarValue::new_interval_dt(29, 999_999),
+                ScalarValue::new_interval_mdn(1, -29, -999_999_000_000),
             ),
             (
-                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
-                    0, 1,
-                ))),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(2, 10, 999_999_999),
-                )),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(-1, -10, -999_999_999),
-                )),
+                ScalarValue::new_interval_ym(0, 1),
+                ScalarValue::new_interval_mdn(2, 10, 999_999_999),
+                ScalarValue::new_interval_mdn(-1, -10, -999_999_999),
             ),
             (
-                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                    400, 123_456,
-                ))),
-                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
-                    1, 1,
-                ))),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(-13, 400, 123_456_000_000),
-                )),
+                ScalarValue::new_interval_dt(400, 123_456),
+                ScalarValue::new_interval_ym(1, 1),
+                ScalarValue::new_interval_mdn(-13, 400, 123_456_000_000),
             ),
             (
-                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                    65, 321,
-                ))),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(2, 5, 1_000_000),
-                )),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(-2, 60, 320_000_000),
-                )),
+                ScalarValue::new_interval_dt(65, 321),
+                ScalarValue::new_interval_mdn(2, 5, 1_000_000),
+                ScalarValue::new_interval_mdn(-2, 60, 320_000_000),
             ),
             (
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(12, 15, 123_456),
-                )),
-                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(
-                    2, 0,
-                ))),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(-12, 15, 123_456),
-                )),
+                ScalarValue::new_interval_mdn(12, 15, 123_456),
+                ScalarValue::new_interval_ym(2, 0),
+                ScalarValue::new_interval_mdn(-12, 15, 123_456),
             ),
             (
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(12, 15, 100_000),
-                )),
-                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-                    370, 1,
-                ))),
-                ScalarValue::IntervalMonthDayNano(Some(
-                    IntervalMonthDayNanoType::make_value(12, -355, -900_000),
-                )),
+                ScalarValue::new_interval_mdn(12, 15, 100_000),
+                ScalarValue::new_interval_dt(370, 1),
+                ScalarValue::new_interval_mdn(12, -355, -900_000),
             ),
         ];
         for (lhs, rhs, expected) in cases.iter() {
