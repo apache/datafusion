@@ -15,8 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod disk_manager;
-pub mod memory_pool;
-pub mod object_store;
-pub mod registry;
-pub mod runtime_env;
+//! Tree node visitable implementations
+
+use crate::physical_plan::tree_node::TreeNodeVisitable;
+use crate::physical_plan::ExecutionPlan;
+use std::sync::Arc;
+
+impl TreeNodeVisitable for Arc<dyn ExecutionPlan> {
+    fn get_children(&self) -> Vec<Self> {
+        self.children()
+    }
+}

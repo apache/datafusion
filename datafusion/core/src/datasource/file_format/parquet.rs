@@ -620,6 +620,7 @@ mod tests {
     use super::*;
 
     use crate::datasource::file_format::parquet::test_util::store_parquet;
+    use crate::physical_plan::file_format::get_scan_files;
     use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{Array, ArrayRef, StringArray};
@@ -1211,6 +1212,25 @@ mod tests {
             .metadata()
             .clone();
         check_page_index_validation(builder.page_indexes(), builder.offset_indexes());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_scan_files() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let projection = Some(vec![9]);
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
+        let scan_files = get_scan_files(exec)?;
+        assert_eq!(scan_files.len(), 1);
+        assert_eq!(scan_files[0].len(), 1);
+        assert_eq!(scan_files[0][0].len(), 1);
+        assert!(scan_files[0][0][0]
+            .object_meta
+            .location
+            .to_string()
+            .contains("alltypes_plain.parquet"));
 
         Ok(())
     }

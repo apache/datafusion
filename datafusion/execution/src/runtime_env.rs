@@ -19,15 +19,12 @@
 //! and various system level components that are used during physical plan execution.
 
 use crate::{
-    error::Result,
-    execution::disk_manager::{DiskManager, DiskManagerConfig},
-};
-
-use datafusion_common::DataFusionError;
-use datafusion_execution::{
+    disk_manager::{DiskManager, DiskManagerConfig},
     memory_pool::{GreedyMemoryPool, MemoryPool, UnboundedMemoryPool},
     object_store::ObjectStoreRegistry,
 };
+
+use datafusion_common::{DataFusionError, Result};
 use object_store::ObjectStore;
 use std::fmt::{Debug, Formatter};
 use std::path::PathBuf;
