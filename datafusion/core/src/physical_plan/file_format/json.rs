@@ -73,6 +73,11 @@ impl NdJsonExec {
             file_compression_type,
         }
     }
+
+    /// Ref to the base configs
+    pub fn base_config(&self) -> &FileScanConfig {
+        &self.base_config
+    }
 }
 
 impl ExecutionPlan for NdJsonExec {
