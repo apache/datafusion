@@ -783,6 +783,56 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // Ordered Col
+        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1) LOCATION 'foo.csv'";
+        let display = None;
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![make_column_def("c1", DataType::Int(display))],
+            file_type: "CSV".to_string(),
+            has_header: false,
+            delimiter: ',',
+            location: "foo.csv".into(),
+            table_partition_cols: vec![],
+            order_exprs: vec![OrderByExpr {
+                expr: Identifier(Ident {
+                    value: "c1".to_owned(),
+                    quote_style: None,
+                }),
+                asc: None,
+                nulls_first: None,
+            }],
+            if_not_exists: false,
+            file_compression_type: UNCOMPRESSED,
+            options: HashMap::new(),
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // Ordered Col
+        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 NULLS FIRST) LOCATION 'foo.csv'";
+        let display = None;
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![make_column_def("c1", DataType::Int(display))],
+            file_type: "CSV".to_string(),
+            has_header: false,
+            delimiter: ',',
+            location: "foo.csv".into(),
+            table_partition_cols: vec![],
+            order_exprs: vec![OrderByExpr {
+                expr: Identifier(Ident {
+                    value: "c1".to_owned(),
+                    quote_style: None,
+                }),
+                asc: None,
+                nulls_first: Some(true),
+            }],
+            if_not_exists: false,
+            file_compression_type: UNCOMPRESSED,
+            options: HashMap::new(),
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // Ordered Col
         let sql = "CREATE EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV WITH ORDER (c1 ASC, c2 DESC NULLS FIRST) LOCATION 'foo.csv'";
         let display = None;
         let expected = Statement::CreateExternalTable(CreateExternalTable {
@@ -859,6 +909,16 @@ mod tests {
         let sql =
             "CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2, k3) LOCATION 'blahblah'";
         expect_parse_error(sql, "sql parser error: Expected literal string, found: )");
+
+        // Error cases: partition column does not support type
+        let sql =
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER c1 LOCATION 'foo.csv'";
+        expect_parse_error(sql, "sql parser error: Expected (, found: c1");
+
+        // Error cases: partition column does not support type
+        let sql =
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 LOCATION 'foo.csv'";
+        expect_parse_error(sql, "sql parser error: Expected ), found: LOCATION");
 
         // Error case: `with header` is an invalid syntax
         let sql = "CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER LOCATION 'abc'";
