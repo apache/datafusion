@@ -173,18 +173,15 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
-        let partition_keys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
         let requirements = self.sort_keys.as_deref().map(|ordering| {
             ordering
                 .iter()
                 .map(|o| {
-                    let in_partition_keys = partition_keys.iter().any(|e| o.expr.eq(e));
                     let in_order_keys = order_keys.iter().any(|e| o.expr.eq(&e.expr));
-                    let not_partition_only = !in_partition_keys || in_order_keys;
                     PhysicalSortRequirement {
                         expr: o.expr.clone(),
-                        options: not_partition_only.then_some(o.options),
+                        options: in_order_keys.then_some(o.options),
                     }
                 })
                 .collect()
