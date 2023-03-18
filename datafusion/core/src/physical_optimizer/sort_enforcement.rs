@@ -706,7 +706,16 @@ fn remove_corresponding_sort_from_sub_plan(
     if requires_single_partition
         && updated_plan.output_partitioning().partition_count() > 1
     {
-        updated_plan = Arc::new(CoalescePartitionsExec::new(updated_plan.clone()));
+        // If there is existing ordering, to preserve ordering use SortPreservingMergeExec
+        // instead of CoalescePartitionsExec.
+        if let Some(ordering) = updated_plan.output_ordering() {
+            updated_plan = Arc::new(SortPreservingMergeExec::new(
+                ordering.to_vec(),
+                updated_plan,
+            ));
+        } else {
+            updated_plan = Arc::new(CoalescePartitionsExec::new(updated_plan.clone()));
+        }
     }
     Ok(updated_plan)
 }
@@ -1806,11 +1815,10 @@ mod tests {
         ];
         let expected_optimized = vec![
             "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(NULL) }]",
-            "  SortExec: expr=[nullable_col@0 ASC]",
-            "    CoalescePartitionsExec",
-            "      UnionExec",
-            "        ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC], projection=[nullable_col, non_nullable_col]",
-            "        ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
+            "  SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "    UnionExec",
+            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC], projection=[nullable_col, non_nullable_col]",
+            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())
