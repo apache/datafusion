@@ -17,6 +17,8 @@
 
 //! Column
 
+use regex::Regex;
+
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
 use crate::{DFSchema, DataFusionError, OwnedTableReference, Result, SchemaError};
 use std::collections::HashSet;
@@ -114,18 +116,14 @@ impl Column {
     pub fn quoted_flat_name(&self) -> String {
         match &self.relation {
             Some(r) => {
-                let column_name = if self.name.chars().all(|c| c.is_ascii()) {
+                let regexp = Regex::new(r"^[a-zA-Z][_a-zA-Z0-9]*$").unwrap();
+                let column_name = if regexp.is_match(&self.name) {
                     self.name.clone()
                 } else {
                     quote_identifier(&self.name)
                 };
 
-                let relation_name = if r.to_string().chars().all(|c| c.is_ascii()) {
-                    r.to_string()
-                } else {
-                    r.to_quoted_string()
-                };
-                format!("{}.{}", relation_name, column_name)
+                format!("{}.{}", r.to_quoted_string(), column_name)
             }
 
             None => quote_identifier(&self.name),
@@ -415,7 +413,7 @@ mod tests {
                 &[],
             )
             .expect_err("should've failed to find field");
-        let expected = r#"Schema error: No field named "z". Valid fields are t1.a, t1.b, t2.c, t2.d, t3.a, t3.b, t3.c, t3.d, t3.e."#;
+        let expected = r#"Schema error: No field named "z". Valid fields are "t1".a, "t1".b, "t2".c, "t2".d, "t3".a, "t3".b, "t3".c, "t3".d, "t3".e."#;
         assert_eq!(err.to_string(), expected);
 
         // ambiguous column reference

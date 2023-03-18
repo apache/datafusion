@@ -745,7 +745,7 @@ mod tests {
         // lookup with unqualified name "t1.c0"
         let err = schema.index_of_column(&col).unwrap_err();
         assert_eq!(
-            r#"Schema error: No field named "t1.c0". Valid fields are t1.c0, t1.c1."#,
+            r#"Schema error: No field named "t1.c0". Valid fields are "t1".c0, "t1".c1."#,
             &format!("{err}")
         );
         Ok(())
@@ -875,7 +875,7 @@ mod tests {
         assert!(join.is_err());
         assert_eq!(
             "Schema error: Schema contains qualified \
-        field name t1.c0 and unqualified field name \"c0\" which would be ambiguous",
+        field name \"t1\".c0 and unqualified field name \"c0\" which would be ambiguous",
             &format!("{}", join.err().unwrap())
         );
         Ok(())
@@ -885,7 +885,7 @@ mod tests {
     #[test]
     fn helpful_error_messages() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-        let expected_help = "Valid fields are t1.c0, t1.c1.";
+        let expected_help = "Valid fields are \"t1\".c0, \"t1\".c1.";
         // Pertinent message parts
         let expected_err_msg = "Fully qualified field name 't1.c0'";
         assert!(schema
@@ -917,7 +917,10 @@ mod tests {
 
         let col = Column::from_qualified_name("t1.c0");
         let err = schema.index_of_column(&col).err().unwrap();
-        assert_eq!(r#"Schema error: No field named t1.c0."#, &format!("{err}"));
+        assert_eq!(
+            r#"Schema error: No field named "t1".c0."#,
+            &format!("{err}")
+        );
 
         // the same check without qualifier
         let col = Column::from_name("c0");

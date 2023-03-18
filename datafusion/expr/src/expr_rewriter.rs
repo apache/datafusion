@@ -675,7 +675,7 @@ mod test {
                 .to_string();
         assert_eq!(
             error,
-            r#"Schema error: No field named "b". Valid fields are tableA.a."#
+            r#"Schema error: No field named "b". Valid fields are "tableA".a."#
         );
     }
 
