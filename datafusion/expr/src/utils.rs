@@ -422,11 +422,10 @@ where
 }
 
 /// Recursively inspect an [`Expr`] and all its children.
-pub fn inspect_expr_pre<F, E>(expr: &Expr, f: F) -> Result<(), E>
+pub fn inspect_expr_pre<F, E>(expr: &Expr, mut f: F) -> Result<(), E>
 where
     F: FnMut(&Expr) -> Result<(), E>,
 {
-    let mut f = f;
     let mut err = Ok(());
     expr.collect(&mut |expr| {
         if let Err(e) = f(expr) {
