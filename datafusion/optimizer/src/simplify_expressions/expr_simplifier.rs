@@ -1022,6 +1022,11 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             Expr::Not(inner) => negate_clause(*inner),
 
             //
+            // Rules for Negative
+            //
+            Expr::Negative(inner) => distribute_negation(*inner),
+
+            //
             // Rules for Case
             //
 
@@ -2143,6 +2148,37 @@ mod tests {
     }
 
     #[test]
+    fn test_simplify_by_de_morgan_laws() {
+        // Laws with logical operations
+        // !(c3 AND c4) --> !c3 OR !c4
+        let expr = and(col("c3"), col("c4")).not();
+        let expected = or(col("c3").not(), col("c4").not());
+        assert_eq!(simplify(expr), expected);
+        // !(c3 OR c4) --> !c3 AND !c4
+        let expr = or(col("c3"), col("c4")).not();
+        let expected = and(col("c3").not(), col("c4").not());
+        assert_eq!(simplify(expr), expected);
+        // !(!c3) --> c3
+        let expr = col("c3").not().not();
+        let expected = col("c3");
+        assert_eq!(simplify(expr), expected);
+
+        // Laws with bitwise operations
+        // !(c3 & c4) --> !c3 | !c4
+        let expr = -bitwise_and(col("c3"), col("c4"));
+        let expected = bitwise_or(-col("c3"), -col("c4"));
+        assert_eq!(simplify(expr), expected);
+        // !(c3 | c4) --> !c3 & !c4
+        let expr = -bitwise_or(col("c3"), col("c4"));
+        let expected = bitwise_and(-col("c3"), -col("c4"));
+        assert_eq!(simplify(expr), expected);
+        // !(!c3) --> c3
+        let expr = -(-col("c3"));
+        let expected = col("c3");
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
     fn test_simplify_null_and_false() {
         let expr = and(lit_bool_null(), lit(false));
         let expr_eq = lit(false);
@@ -2443,11 +2479,6 @@ mod tests {
             )
             .unwrap(),
         )
-    }
-
-    #[test]
-    fn simplify_expr_not_not() {
-        assert_eq!(simplify(col("c2").not().not().not()), col("c2").not(),);
     }
 
     #[test]

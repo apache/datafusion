@@ -59,7 +59,13 @@ async fn parquet_distinct_partition_col() -> Result<()> {
         ],
         &[
             ("year", DataType::Int32),
-            ("month", DataType::Utf8),
+            (
+                "month",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt16),
+                    Box::new(DataType::Utf8),
+                ),
+            ),
             ("day", DataType::Utf8),
         ],
         "mirror:///",
