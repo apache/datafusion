@@ -274,7 +274,7 @@ impl Optimizer {
         let start_time = Instant::now();
 
         let mut previous_plans = HashSet::with_capacity(16);
-        previous_plans.insert(LogicalPlanSignature::compute(&new_plan));
+        previous_plans.insert(LogicalPlanSignature::new(&new_plan));
 
         let mut i = 0;
         while i < options.optimizer.max_passes {
@@ -326,7 +326,7 @@ impl Optimizer {
 
             // HashSet::insert returns, whether the value was newly inserted.
             let plan_is_fresh =
-                previous_plans.insert(LogicalPlanSignature::compute(&new_plan));
+                previous_plans.insert(LogicalPlanSignature::new(&new_plan));
             if !plan_is_fresh {
                 // plan did not change, so no need to continue trying to optimize
                 debug!("optimizer pass {} did not make changes", i);
@@ -543,10 +543,10 @@ mod tests {
         let opt = Optimizer::with_rules(vec![Arc::new(RotateProjectionRule::new(false))]);
         let config = OptimizerContext::new().with_max_passes(16);
 
-        let mut b = LogicalPlanBuilder::empty(false);
-        b = b.project([lit(1), lit(2), lit(3)])?;
-        b = b.project([lit(100)])?; // to not trigger changed schema error
-        let initial_plan = b.build()?;
+        let initial_plan = LogicalPlanBuilder::empty(false)
+            .project([lit(1), lit(2), lit(3)])?
+            .project([lit(100)])? // to not trigger changed schema error
+            .build()?;
 
         let mut plans: Vec<LogicalPlan> = Vec::new();
         let final_plan =
@@ -569,10 +569,10 @@ mod tests {
         let opt = Optimizer::with_rules(vec![Arc::new(RotateProjectionRule::new(true))]);
         let config = OptimizerContext::new().with_max_passes(16);
 
-        let mut b = LogicalPlanBuilder::empty(false);
-        b = b.project([lit(1), lit(2), lit(3)])?;
-        b = b.project([lit(100)])?; // to not trigger changed schema error
-        let initial_plan = b.build()?;
+        let initial_plan = LogicalPlanBuilder::empty(false)
+            .project([lit(1), lit(2), lit(3)])?
+            .project([lit(100)])? // to not trigger changed schema error
+            .build()?;
 
         let mut plans: Vec<LogicalPlan> = Vec::new();
         let final_plan =
@@ -649,7 +649,7 @@ mod tests {
     ///
     /// Useful to test cycle detection.
     struct RotateProjectionRule {
-        // reverse exprs instead on rotating on the first pass
+        // reverse exprs instead of rotating on the first pass
         reverse_on_first_pass: Mutex<bool>,
     }
 

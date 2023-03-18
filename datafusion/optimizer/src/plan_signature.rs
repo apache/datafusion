@@ -26,7 +26,7 @@ use datafusion_expr::{LogicalPlan, PlanVisitor};
 
 /// Non-unique identifier of a [`LogicalPlan`].
 ///
-/// See [`LogicalPlanSignature::compute`] for details.
+/// See [`LogicalPlanSignature::new`] for details.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LogicalPlanSignature {
     node_number: NonZeroUsize,
@@ -59,7 +59,7 @@ impl LogicalPlanSignature {
     /// When two [`LogicalPlan`]s differ only in metadata, then they will have
     /// the same [`LogicalPlanSignature`]s (due to hash implementation in
     /// [`LogicalPlan`]).
-    pub fn compute(plan: &LogicalPlan) -> Self {
+    pub fn new(plan: &LogicalPlan) -> Self {
         let mut hasher = DefaultHasher::new();
         plan.hash(&mut hasher);
 
