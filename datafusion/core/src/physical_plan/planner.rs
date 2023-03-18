@@ -25,6 +25,7 @@ use super::{
 };
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
+use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
     Aggregate, EmptyRelation, Join, Projection, Sort, SubqueryAlias, TableScan, Unnest,
     Window,
@@ -543,30 +544,30 @@ impl DefaultPhysicalPlanner {
                         vec![]
                     };
 
-                    let get_sort_keys = |expr: & Expr| match expr {
+                    let get_sort_keys = |expr: &Expr| match expr {
                         Expr::WindowFunction(WindowFunction{
                             ref partition_by,
                             ref order_by,
                             ..
-                        }) => (partition_by.to_vec(), order_by.to_vec()),
+                        }) => generate_sort_key(partition_by, order_by),
                         Expr::Alias(expr, _) => {
                             // Convert &Box<T> to &T
                             match &**expr {
                                 Expr::WindowFunction(WindowFunction{
                                     ref partition_by,
                                     ref order_by,
-                                    ..}) => (partition_by.to_vec(), order_by.to_vec()),
+                                    ..}) => generate_sort_key(partition_by, order_by),
                                 _ => unreachable!(),
                             }
                         }
                         _ => unreachable!(),
                     };
-                    let sort_keys = get_sort_keys(&window_expr[0]);
+                    let sort_keys = get_sort_keys(&window_expr[0])?;
                     if window_expr.len() > 1 {
                         debug_assert!(
                             window_expr[1..]
                                 .iter()
-                                .all(|expr| get_sort_keys(expr) == sort_keys),
+                                .all(|expr| get_sort_keys(expr).unwrap() == sort_keys),
                             "all window expressions shall have the same sort keys, as guaranteed by logical planning"
                         );
                     }
