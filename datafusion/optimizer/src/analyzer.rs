@@ -18,7 +18,7 @@
 use crate::rewrite::TreeNodeRewritable;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::expr_visitor::inspect_expr_pre;
+use datafusion_expr::utils::inspect_expr_pre;
 use datafusion_expr::{Expr, LogicalPlan};
 use log::{debug, trace};
 use std::sync::Arc;
