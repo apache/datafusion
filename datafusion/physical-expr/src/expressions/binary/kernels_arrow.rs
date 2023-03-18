@@ -19,8 +19,9 @@
 //! destined for arrow-rs but are in datafusion until they are ported.
 
 use arrow::compute::{
-    add_dyn, add_scalar_dyn, divide_dyn_opt, divide_scalar_dyn, modulus, modulus_scalar,
-    multiply_dyn, multiply_scalar_dyn, subtract_dyn, subtract_scalar_dyn,
+    add_dyn, add_scalar_dyn, divide_dyn_opt, divide_scalar_dyn, modulus, modulus_dyn,
+    modulus_scalar, modulus_scalar_dyn, multiply_dyn, multiply_scalar_dyn, subtract_dyn,
+    subtract_scalar_dyn,
 };
 use arrow::datatypes::Decimal128Type;
 use arrow::{array::*, datatypes::ArrowNumericType, downcast_dictionary_array};
@@ -387,6 +388,25 @@ pub(crate) fn divide_dyn_opt_decimal(
     let array = multiply_scalar_dyn::<Decimal128Type>(left, mul)?;
     let array = decimal_array_with_precision_scale(array, precision, scale)?;
     let array = divide_dyn_opt(&array, right)?;
+    decimal_array_with_precision_scale(array, precision, scale)
+}
+
+pub(crate) fn modulus_dyn_decimal(
+    left: &dyn Array,
+    right: &dyn Array,
+) -> Result<ArrayRef> {
+    let (precision, scale) = get_precision_scale(left)?;
+    let array = modulus_dyn(left, right)?;
+    decimal_array_with_precision_scale(array, precision, scale)
+}
+
+pub(crate) fn modulus_decimal_dyn_scalar(
+    left: &dyn Array,
+    right: i128,
+) -> Result<ArrayRef> {
+    let (precision, scale) = get_precision_scale(left)?;
+
+    let array = modulus_scalar_dyn::<Decimal128Type>(left, right)?;
     decimal_array_with_precision_scale(array, precision, scale)
 }
 

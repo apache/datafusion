@@ -65,7 +65,7 @@ use kernels_arrow::{
     is_distinct_from_null, is_distinct_from_utf8, is_not_distinct_from,
     is_not_distinct_from_bool, is_not_distinct_from_decimal, is_not_distinct_from_f32,
     is_not_distinct_from_f64, is_not_distinct_from_null, is_not_distinct_from_utf8,
-    modulus_decimal, modulus_decimal_scalar, multiply_decimal_dyn_scalar,
+    modulus_decimal_dyn_scalar, modulus_dyn_decimal, multiply_decimal_dyn_scalar,
     multiply_dyn_decimal, subtract_decimal_dyn_scalar, subtract_dyn_decimal,
 };
 
