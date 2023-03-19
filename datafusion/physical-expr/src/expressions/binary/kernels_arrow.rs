@@ -19,8 +19,8 @@
 //! destined for arrow-rs but are in datafusion until they are ported.
 
 use arrow::compute::{
-    add_dyn, add_scalar_dyn, divide_dyn_opt, divide_scalar_dyn, modulus, modulus_dyn,
-    modulus_scalar, modulus_scalar_dyn, multiply_dyn, multiply_scalar_dyn, subtract_dyn,
+    add_dyn, add_scalar_dyn, divide_dyn_opt, divide_scalar_dyn, modulus_dyn,
+    modulus_scalar_dyn, multiply_dyn, multiply_scalar_dyn, subtract_dyn,
     subtract_scalar_dyn,
 };
 use arrow::datatypes::Decimal128Type;
@@ -410,25 +410,6 @@ pub(crate) fn modulus_decimal_dyn_scalar(
     decimal_array_with_precision_scale(array, precision, scale)
 }
 
-pub(crate) fn modulus_decimal(
-    left: &Decimal128Array,
-    right: &Decimal128Array,
-) -> Result<Decimal128Array> {
-    let array =
-        modulus(left, right)?.with_precision_and_scale(left.precision(), left.scale())?;
-    Ok(array)
-}
-
-pub(crate) fn modulus_decimal_scalar(
-    left: &Decimal128Array,
-    right: i128,
-) -> Result<Decimal128Array> {
-    // `0` for right will be checked in `modulus_scalar`
-    let array = modulus_scalar(left, right)?
-        .with_precision_and_scale(left.precision(), left.scale())?;
-    Ok(array)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,14 +571,16 @@ mod tests {
             3,
         );
         assert_eq!(&expect, result);
-        let result = modulus_decimal(&left_decimal_array, &right_decimal_array)?;
+        let result = modulus_dyn_decimal(&left_decimal_array, &right_decimal_array)?;
+        let result = as_decimal128_array(&result)?;
         let expect =
             create_decimal_array(&[Some(7), None, Some(37), Some(16), None], 25, 3);
-        assert_eq!(expect, result);
-        let result = modulus_decimal_scalar(&left_decimal_array, 10)?;
+        assert_eq!(&expect, result);
+        let result = modulus_decimal_dyn_scalar(&left_decimal_array, 10)?;
+        let result = as_decimal128_array(&result)?;
         let expect =
             create_decimal_array(&[Some(7), None, Some(7), Some(7), Some(7)], 25, 3);
-        assert_eq!(expect, result);
+        assert_eq!(&expect, result);
 
         Ok(())
     }
@@ -609,9 +592,10 @@ mod tests {
 
         let err = divide_decimal_dyn_scalar(&left_decimal_array, 0).unwrap_err();
         assert_eq!("Arrow error: Divide by zero error", err.to_string());
-        let err = modulus_decimal(&left_decimal_array, &right_decimal_array).unwrap_err();
+        let err =
+            modulus_dyn_decimal(&left_decimal_array, &right_decimal_array).unwrap_err();
         assert_eq!("Arrow error: Divide by zero error", err.to_string());
-        let err = modulus_decimal_scalar(&left_decimal_array, 0).unwrap_err();
+        let err = modulus_decimal_dyn_scalar(&left_decimal_array, 0).unwrap_err();
         assert_eq!("Arrow error: Divide by zero error", err.to_string());
     }
 

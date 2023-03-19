@@ -19,7 +19,6 @@ mod adapter;
 mod kernels;
 mod kernels_arrow;
 
-use std::convert::TryInto;
 use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
@@ -77,7 +76,7 @@ use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::intervals::{apply_operator, Interval};
 use crate::physical_expr::down_cast_any_ref;
 use crate::{analysis_expect, AnalysisContext, ExprBoundaries, PhysicalExpr};
-use datafusion_common::cast::{as_boolean_array, as_decimal128_array};
+use datafusion_common::cast::as_boolean_array;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::type_coercion::binary::binary_operator_data_type;
@@ -157,21 +156,6 @@ macro_rules! compute_decimal_op_dyn_scalar {
         } else {
             // when the $RIGHT is a NULL, generate a NULL array of $OP_TYPE type
             Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
-        }
-    }};
-}
-
-macro_rules! compute_decimal_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = as_decimal128_array($LEFT).unwrap();
-        if let ScalarValue::Decimal128(Some(_), _, _) = $RIGHT {
-            Ok(Arc::new(paste::expr! {[<$OP _decimal_scalar>]}(
-                ll,
-                $RIGHT.try_into()?,
-            )?))
-        } else {
-            // when the $RIGHT is a NULL, generate a NULL array of LEFT's datatype
-            Ok(Arc::new(new_null_array($LEFT.data_type(), $LEFT.len())))
         }
     }};
 }
@@ -336,25 +320,6 @@ macro_rules! compute_bool_op {
     }};
 }
 
-/// Invoke a compute kernel on a data array and a scalar value
-/// LEFT is array, RIGHT is scalar value
-macro_rules! compute_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        if $RIGHT.is_null() {
-            Ok(Arc::new(new_null_array($LEFT.data_type(), $LEFT.len())))
-        } else {
-            let ll = $LEFT
-                .as_any()
-                .downcast_ref::<$DT>()
-                .expect("compute_op failed to downcast left side array");
-            Ok(Arc::new(paste::expr! {[<$OP _scalar>]}(
-                &ll,
-                $RIGHT.try_into()?,
-            )?))
-        }
-    }};
-}
-
 /// Invoke a dyn compute kernel on a data array and a scalar value
 /// LEFT is Primitive or Dictionary array of numeric values, RIGHT is scalar value
 /// OP_TYPE is the return type of scalar function
@@ -452,31 +417,6 @@ macro_rules! binary_string_array_op {
 /// Invoke a compute kernel on a pair of arrays
 /// The binary_primitive_array_op macro only evaluates for primitive types
 /// like integers and floats.
-macro_rules! binary_primitive_array_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
-        match $LEFT.data_type() {
-            DataType::Decimal128(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, Decimal128Array),
-            DataType::Int8 => compute_op!($LEFT, $RIGHT, $OP, Int8Array),
-            DataType::Int16 => compute_op!($LEFT, $RIGHT, $OP, Int16Array),
-            DataType::Int32 => compute_op!($LEFT, $RIGHT, $OP, Int32Array),
-            DataType::Int64 => compute_op!($LEFT, $RIGHT, $OP, Int64Array),
-            DataType::UInt8 => compute_op!($LEFT, $RIGHT, $OP, UInt8Array),
-            DataType::UInt16 => compute_op!($LEFT, $RIGHT, $OP, UInt16Array),
-            DataType::UInt32 => compute_op!($LEFT, $RIGHT, $OP, UInt32Array),
-            DataType::UInt64 => compute_op!($LEFT, $RIGHT, $OP, UInt64Array),
-            DataType::Float32 => compute_op!($LEFT, $RIGHT, $OP, Float32Array),
-            DataType::Float64 => compute_op!($LEFT, $RIGHT, $OP, Float64Array),
-            other => Err(DataFusionError::Internal(format!(
-                "Data type {:?} not supported for binary operation '{}' on primitive arrays",
-                other, stringify!($OP)
-            ))),
-        }
-    }};
-}
-
-/// Invoke a compute kernel on a pair of arrays
-/// The binary_primitive_array_op macro only evaluates for primitive types
-/// like integers and floats.
 macro_rules! binary_primitive_array_op_dyn {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         match $LEFT.data_type() {
@@ -524,32 +464,6 @@ macro_rules! binary_primitive_array_op_dyn_scalar {
 
         Some(result)
     }}
-}
-
-/// Invoke a compute kernel on an array and a scalar
-/// The binary_primitive_array_op_scalar macro only evaluates for primitive
-/// types like integers and floats.
-macro_rules! binary_primitive_array_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
-        let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
-            DataType::Decimal128(_,_) => compute_decimal_op_scalar!($LEFT, $RIGHT, $OP, Decimal128Array),
-            DataType::Int8 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int8Array),
-            DataType::Int16 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int16Array),
-            DataType::Int32 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int32Array),
-            DataType::Int64 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int64Array),
-            DataType::UInt8 => compute_op_scalar!($LEFT, $RIGHT, $OP, UInt8Array),
-            DataType::UInt16 => compute_op_scalar!($LEFT, $RIGHT, $OP, UInt16Array),
-            DataType::UInt32 => compute_op_scalar!($LEFT, $RIGHT, $OP, UInt32Array),
-            DataType::UInt64 => compute_op_scalar!($LEFT, $RIGHT, $OP, UInt64Array),
-            DataType::Float32 => compute_op_scalar!($LEFT, $RIGHT, $OP, Float32Array),
-            DataType::Float64 => compute_op_scalar!($LEFT, $RIGHT, $OP, Float64Array),
-            other => Err(DataFusionError::Internal(format!(
-                "Data type {:?} not supported for scalar operation '{}' on primitive array",
-                other, stringify!($OP)
-            ))),
-        };
-        Some(result)
-    }};
 }
 
 /// The binary_array_op macro includes types that extend beyond the primitive,
