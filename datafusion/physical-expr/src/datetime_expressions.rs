@@ -326,11 +326,13 @@ pub fn date_bin(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
 
     let (stride, array) = (&args[0], &args[1]);
-    let epoch = &ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+
+    // If the origin is not provided, use the Unix epoch
+    let origin = ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
         Some(0),
         Some("+00:00".to_owned()),
     ));
-    let origin = if args.len() == 2 { epoch } else { &args[2] };
+    let origin = if args.len() == 3 { &args[2] } else { &origin };
 
     let stride = match stride {
         ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(v))) => {
@@ -793,6 +795,18 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
         assert!(res.is_ok());
+
+        //
+        // Fallible test cases
+        //
+
+        // invalid number of arguments
+        let res =
+            date_bin(&[ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1)))]);
+        assert_eq!(
+            res.err().unwrap().to_string(),
+            "Execution error: DATE_BIN expected two or three arguments"
+        );
 
         // stride: invalid type
         let res = date_bin(&[
