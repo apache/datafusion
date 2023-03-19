@@ -24,8 +24,7 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::plan;
 use crate::utils::{
-    self, exprlist_to_fields, from_plan, grouping_set_expr_count,
-    grouping_set_to_exprlist,
+    exprlist_to_fields, from_plan, grouping_set_expr_count, grouping_set_to_exprlist,
 };
 use crate::{
     build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
@@ -634,20 +633,19 @@ impl LogicalPlan {
         &self,
         param_values: &[ScalarValue],
     ) -> Result<LogicalPlan, DataFusionError> {
-        let exprs = self.expressions();
-        let mut new_exprs = Vec::with_capacity(exprs.len());
-        for expr in exprs {
-            new_exprs.push(Self::replace_placeholders_with_values(expr, param_values)?);
-        }
+        let new_exprs = self
+            .expressions()
+            .into_iter()
+            .map(|e| Self::replace_placeholders_with_values(e, param_values))
+            .collect::<Result<Vec<_>, DataFusionError>>()?;
 
-        let new_inputs = self.inputs();
-        let mut new_inputs_with_values = Vec::with_capacity(new_inputs.len());
-        for input in new_inputs {
-            new_inputs_with_values.push(input.replace_params_with_values(param_values)?);
-        }
+        let new_inputs_with_values = self
+            .inputs()
+            .into_iter()
+            .map(|inp| inp.replace_params_with_values(param_values))
+            .collect::<Result<Vec<_>, DataFusionError>>()?;
 
-        let new_plan = utils::from_plan(self, &new_exprs, &new_inputs_with_values)?;
-        Ok(new_plan)
+        from_plan(self, &new_exprs, &new_inputs_with_values)
     }
 
     /// Walk the logical plan, find any `PlaceHolder` tokens, and return a map of their IDs and DataTypes
