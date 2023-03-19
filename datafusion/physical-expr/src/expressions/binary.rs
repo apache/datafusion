@@ -2554,6 +2554,201 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    #[cfg(feature = "dictionary_expressions")]
+    fn modulus_op_dict() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
+                true,
+            ),
+            Field::new(
+                "b",
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
+                true,
+            ),
+        ]);
+
+        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
+
+        dict_builder.append(1)?;
+        dict_builder.append_null();
+        dict_builder.append(2)?;
+        dict_builder.append(5)?;
+        dict_builder.append(0)?;
+
+        let a = dict_builder.finish();
+
+        let b = Int32Array::from(vec![1, 2, 4, 8, 16]);
+        let keys = Int8Array::from(vec![0, 1, 1, 2, 1]);
+        let b = DictionaryArray::try_new(&keys, &b)?;
+
+        apply_arithmetic::<Int32Type>(
+            Arc::new(schema),
+            vec![Arc::new(a), Arc::new(b)],
+            Operator::Modulo,
+            Int32Array::from(vec![Some(0), None, Some(0), Some(1), Some(0)]),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "dictionary_expressions")]
+    fn modulus_op_dict_decimal() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::Dictionary(
+                    Box::new(DataType::Int8),
+                    Box::new(DataType::Decimal128(10, 0)),
+                ),
+                true,
+            ),
+            Field::new(
+                "b",
+                DataType::Dictionary(
+                    Box::new(DataType::Int8),
+                    Box::new(DataType::Decimal128(10, 0)),
+                ),
+                true,
+            ),
+        ]);
+
+        let value = 123;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[
+                Some(value),
+                Some(value + 2),
+                Some(value - 1),
+                Some(value + 1),
+            ],
+            10,
+            0,
+        )) as ArrayRef;
+
+        let keys = Int8Array::from(vec![Some(0), Some(2), None, Some(3), Some(0)]);
+        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+
+        let keys = Int8Array::from(vec![Some(0), None, Some(3), Some(2), Some(2)]);
+        let decimal_array = create_decimal_array(
+            &[
+                Some(value + 1),
+                Some(value + 3),
+                Some(value),
+                Some(value + 2),
+            ],
+            10,
+            0,
+        );
+        let b = DictionaryArray::try_new(&keys, &decimal_array)?;
+
+        apply_arithmetic(
+            Arc::new(schema),
+            vec![Arc::new(a), Arc::new(b)],
+            Operator::Modulo,
+            create_decimal_array(&[Some(123), None, None, Some(1), Some(0)], 10, 0),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn modulus_op_scalar() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+
+        apply_arithmetic_scalar(
+            Arc::new(schema),
+            vec![Arc::new(a)],
+            Operator::Modulo,
+            ScalarValue::Int32(Some(2)),
+            Arc::new(Int32Array::from(vec![1, 0, 1, 0, 1])),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn modules_op_dict_scalar() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
+            true,
+        )]);
+
+        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
+
+        dict_builder.append(1)?;
+        dict_builder.append_null();
+        dict_builder.append(2)?;
+        dict_builder.append(5)?;
+
+        let a = dict_builder.finish();
+
+        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
+
+        dict_builder.append(1)?;
+        dict_builder.append_null();
+        dict_builder.append(0)?;
+        dict_builder.append(1)?;
+        let expected = dict_builder.finish();
+
+        apply_arithmetic_scalar(
+            Arc::new(schema),
+            vec![Arc::new(a)],
+            Operator::Modulo,
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(ScalarValue::Int32(Some(2))),
+            ),
+            Arc::new(expected),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn modulus_op_dict_scalar_decimal() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Decimal128(10, 0)),
+            ),
+            true,
+        )]);
+
+        let value = 123;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[Some(value), None, Some(value - 1), Some(value + 1)],
+            10,
+            0,
+        )) as ArrayRef;
+
+        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
+        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+
+        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
+        let decimal_array =
+            create_decimal_array(&[Some(1), None, Some(0), Some(0)], 10, 0);
+        let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
+
+        apply_arithmetic_scalar(
+            Arc::new(schema),
+            vec![Arc::new(a)],
+            Operator::Modulo,
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(ScalarValue::Decimal128(Some(2), 10, 0)),
+            ),
+            Arc::new(expected),
+        )?;
+
+        Ok(())
+    }
+
     fn apply_arithmetic<T: ArrowNumericType>(
         schema: SchemaRef,
         data: Vec<ArrayRef>,
