@@ -632,16 +632,16 @@ impl LogicalPlan {
     /// params_values
     pub fn replace_params_with_values(
         &self,
-        param_values: &Vec<ScalarValue>,
+        param_values: &[ScalarValue],
     ) -> Result<LogicalPlan, DataFusionError> {
         let exprs = self.expressions();
-        let mut new_exprs = vec![];
+        let mut new_exprs = Vec::with_capacity(exprs.len());
         for expr in exprs {
             new_exprs.push(Self::replace_placeholders_with_values(expr, param_values)?);
         }
 
         let new_inputs = self.inputs();
-        let mut new_inputs_with_values = vec![];
+        let mut new_inputs_with_values = Vec::with_capacity(new_inputs.len());
         for input in new_inputs {
             new_inputs_with_values.push(input.replace_params_with_values(param_values)?);
         }
@@ -748,10 +748,8 @@ impl LogicalPlan {
                     Ok(Expr::Literal(value.clone()))
                 }
                 Expr::ScalarSubquery(qry) => {
-                    let subquery = Arc::new(
-                        qry.subquery
-                            .replace_params_with_values(&param_values.to_vec())?,
-                    );
+                    let subquery =
+                        Arc::new(qry.subquery.replace_params_with_values(param_values)?);
                     Ok(Expr::ScalarSubquery(plan::Subquery { subquery }))
                 }
                 _ => Ok(expr),
