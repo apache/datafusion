@@ -319,13 +319,18 @@ fn date_bin_single(stride: i64, source: i64, origin: i64) -> i64 {
 
 /// DATE_BIN sql function
 pub fn date_bin(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 3 {
+    if args.len() != 2 && args.len() != 3 {
         return Err(DataFusionError::Execution(
-            "DATE_BIN expected three arguments".to_string(),
+            "DATE_BIN expected two or three arguments".to_string(),
         ));
     }
 
-    let (stride, array, origin) = (&args[0], &args[1], &args[2]);
+    let (stride, array) = (&args[0], &args[1]);
+    let epoch = &ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+        Some(0),
+        Some("+00:00".to_owned()),
+    ));
+    let origin = if args.len() == 2 { epoch } else { &args[2] };
 
     let stride = match stride {
         ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(v))) => {
@@ -783,19 +788,11 @@ mod tests {
         ]);
         assert!(res.is_ok());
 
-        //
-        // Fallible test cases
-        //
-
-        // invalid number of arguments
         let res = date_bin(&[
             ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
-        assert_eq!(
-            res.err().unwrap().to_string(),
-            "Execution error: DATE_BIN expected three arguments"
-        );
+        assert!(res.is_ok());
 
         // stride: invalid type
         let res = date_bin(&[
