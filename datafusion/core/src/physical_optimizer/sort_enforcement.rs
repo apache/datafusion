@@ -560,11 +560,12 @@ fn analyze_window_sort_removal(
         // Therefore, we can use the 0th index without loss of generality.
         let sort_input = sort_any.children()[0].clone();
         let physical_ordering = sort_input.output_ordering();
-        let required_ordering = sort_output_ordering.ok_or_else(|| {
+        let sort_output_ordering = sort_output_ordering.ok_or_else(|| {
             DataFusionError::Plan("A SortExec should have output ordering".to_string())
         })?;
-        // First n_req element of the sort output corresponds to required section of the window_exec.
-        let required_ordering = &required_ordering[0..n_req];
+        // It is enough to check whether first n_req element of the sort output satisfies window_exec requirement.
+        // Because length of window_exec requirement is n_req.
+        let required_ordering = &sort_output_ordering[0..n_req];
         if let Some(physical_ordering) = physical_ordering {
             let (can_skip_sorting, should_reverse) = can_skip_sort(
                 window_expr[0].partition_by(),
