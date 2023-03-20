@@ -90,3 +90,85 @@ async fn create_external_table_with_ddl_ordered_without_schema() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn sort_with_duplicate_sort_exprs() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let t1_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, true),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+
+    let t1_data = RecordBatch::try_new(
+        t1_schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![2, 4, 9, 3, 4])),
+            Arc::new(StringArray::from_slice(["a", "b", "c", "d", "e"])),
+        ],
+    )?;
+    ctx.register_batch("t1", t1_data)?;
+
+    let sql = "select * from t1 order by id desc, id, name, id asc";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+    let expected = vec![
+        "Sort: t1.id DESC NULLS FIRST, t1.name ASC NULLS LAST [id:Int32;N, name:Utf8;N]",
+        "  TableScan: t1 projection=[id, name] [id:Int32;N, name:Utf8;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+----+------+",
+        "| id | name |",
+        "+----+------+",
+        "| 9  | c    |",
+        "| 4  | b    |",
+        "| 4  | e    |",
+        "| 3  | d    |",
+        "| 2  | a    |",
+        "+----+------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_eq!(expected, &results);
+
+    let sql = "select * from t1 order by id asc, id, name, id desc;";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+    let expected = vec![
+        "Sort: t1.id ASC NULLS LAST, t1.name ASC NULLS LAST [id:Int32;N, name:Utf8;N]",
+        "  TableScan: t1 projection=[id, name] [id:Int32;N, name:Utf8;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+----+------+",
+        "| id | name |",
+        "+----+------+",
+        "| 2  | a    |",
+        "| 3  | d    |",
+        "| 4  | b    |",
+        "| 4  | e    |",
+        "| 9  | c    |",
+        "+----+------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}

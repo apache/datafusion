@@ -97,7 +97,8 @@ message ParquetFormat {
 message AvroFormat {}
 
 message ListingTableScanNode {
-  string table_name = 1;
+  reserved 1; // was string table_name
+  OwnedTableReference table_name = 14;
   repeated string paths = 2;
   string file_extension = 3;
   ProjectionColumns projection = 4;
@@ -115,7 +116,8 @@ message ListingTableScanNode {
 }
 
 message ViewTableScanNode {
-  string table_name = 1;
+  reserved 1; // was string table_name
+  OwnedTableReference table_name = 6;
   LogicalPlanNode input = 2;
   Schema schema = 3;
   ProjectionColumns projection = 4;
@@ -124,7 +126,8 @@ message ViewTableScanNode {
 
 // Logical Plan to Scan a CustomTableProvider registered at runtime
 message CustomTableScanNode {
-  string table_name = 1;
+  reserved 1; // was string table_name
+  OwnedTableReference table_name = 6;
   ProjectionColumns projection = 2;
   Schema schema = 3;
   repeated LogicalExprNode filters = 4;

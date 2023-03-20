@@ -86,7 +86,7 @@ where
 {
     fn new(array: &T, hash_set: ArrayHashSet) -> Self {
         Self {
-            array: T::from(array.data().clone()),
+            array: downcast_array(array),
             hash_set,
         }
     }
@@ -103,15 +103,14 @@ where
             v => {
                 let values_contains = self.contains(v.values().as_ref(), negated)?;
                 let result = take(&values_contains, v.keys(), None)?;
-                return Ok(BooleanArray::from(result.data().clone()))
+                return Ok(downcast_array(result.as_ref()))
             }
             _ => {}
         }
 
         let v = v.as_any().downcast_ref::<T>().unwrap();
-        let in_data = self.array.data();
         let in_array = &self.array;
-        let has_nulls = in_data.null_count() != 0;
+        let has_nulls = in_array.null_count() != 0;
 
         Ok(ArrayIter::new(v)
             .map(|v| {

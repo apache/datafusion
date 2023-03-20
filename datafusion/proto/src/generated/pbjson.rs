@@ -4304,7 +4304,7 @@ impl serde::Serialize for CustomTableScanNode {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if !self.table_name.is_empty() {
+        if self.table_name.is_some() {
             len += 1;
         }
         if self.projection.is_some() {
@@ -4320,8 +4320,8 @@ impl serde::Serialize for CustomTableScanNode {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.CustomTableScanNode", len)?;
-        if !self.table_name.is_empty() {
-            struct_ser.serialize_field("tableName", &self.table_name)?;
+        if let Some(v) = self.table_name.as_ref() {
+            struct_ser.serialize_field("tableName", v)?;
         }
         if let Some(v) = self.projection.as_ref() {
             struct_ser.serialize_field("projection", v)?;
@@ -4417,7 +4417,7 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                             if table_name__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("tableName"));
                             }
-                            table_name__ = Some(map.next_value()?);
+                            table_name__ = map.next_value()?;
                         }
                         GeneratedField::Projection => {
                             if projection__.is_some() {
@@ -4448,7 +4448,7 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                     }
                 }
                 Ok(CustomTableScanNode {
-                    table_name: table_name__.unwrap_or_default(),
+                    table_name: table_name__,
                     projection: projection__,
                     schema: schema__,
                     filters: filters__.unwrap_or_default(),
@@ -9604,7 +9604,7 @@ impl serde::Serialize for ListingTableScanNode {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if !self.table_name.is_empty() {
+        if self.table_name.is_some() {
             len += 1;
         }
         if !self.paths.is_empty() {
@@ -9638,8 +9638,8 @@ impl serde::Serialize for ListingTableScanNode {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.ListingTableScanNode", len)?;
-        if !self.table_name.is_empty() {
-            struct_ser.serialize_field("tableName", &self.table_name)?;
+        if let Some(v) = self.table_name.as_ref() {
+            struct_ser.serialize_field("tableName", v)?;
         }
         if !self.paths.is_empty() {
             struct_ser.serialize_field("paths", &self.paths)?;
@@ -9797,7 +9797,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                             if table_name__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("tableName"));
                             }
-                            table_name__ = Some(map.next_value()?);
+                            table_name__ = map.next_value()?;
                         }
                         GeneratedField::Paths => {
                             if paths__.is_some() {
@@ -9879,7 +9879,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                     }
                 }
                 Ok(ListingTableScanNode {
-                    table_name: table_name__.unwrap_or_default(),
+                    table_name: table_name__,
                     paths: paths__.unwrap_or_default(),
                     file_extension: file_extension__.unwrap_or_default(),
                     projection: projection__,
@@ -20881,7 +20881,7 @@ impl serde::Serialize for ViewTableScanNode {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if !self.table_name.is_empty() {
+        if self.table_name.is_some() {
             len += 1;
         }
         if self.input.is_some() {
@@ -20897,8 +20897,8 @@ impl serde::Serialize for ViewTableScanNode {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.ViewTableScanNode", len)?;
-        if !self.table_name.is_empty() {
-            struct_ser.serialize_field("tableName", &self.table_name)?;
+        if let Some(v) = self.table_name.as_ref() {
+            struct_ser.serialize_field("tableName", v)?;
         }
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
@@ -20993,7 +20993,7 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                             if table_name__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("tableName"));
                             }
-                            table_name__ = Some(map.next_value()?);
+                            table_name__ = map.next_value()?;
                         }
                         GeneratedField::Input => {
                             if input__.is_some() {
@@ -21022,7 +21022,7 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                     }
                 }
                 Ok(ViewTableScanNode {
-                    table_name: table_name__.unwrap_or_default(),
+                    table_name: table_name__,
                     input: input__,
                     schema: schema__,
                     projection: projection__,

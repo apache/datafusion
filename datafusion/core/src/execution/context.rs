@@ -31,7 +31,7 @@ use crate::{
         optimizer::PhysicalOptimizerRule,
     },
 };
-use datafusion_expr::{DescribeTable, StringifiedPlan};
+use datafusion_expr::{DescribeTable, DmlStatement, StringifiedPlan, WriteOp};
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
@@ -282,7 +282,7 @@ impl SessionContext {
         self.session_id.clone()
     }
 
-    /// Return the [`TableFactoryProvider`] that is registered for the
+    /// Return the [`TableProviderFactory`] that is registered for the
     /// specified file type, if any.
     pub fn table_factory(
         &self,
@@ -308,7 +308,8 @@ impl SessionContext {
 
     /// Creates a [`DataFrame`] that will execute a SQL query.
     ///
-    /// Note: This API implements DDL such as `CREATE TABLE` and `CREATE VIEW` with in-memory
+    /// Note: This API implements DDL statements such as `CREATE TABLE` and
+    /// `CREATE VIEW` and DML statements such as `INSERT INTO` with in-memory
     /// default implementations.
     ///
     /// If this is not desirable, consider using [`SessionState::create_logical_plan()`] which
@@ -318,6 +319,24 @@ impl SessionContext {
         let plan = self.state().create_logical_plan(sql).await?;
 
         match plan {
+            LogicalPlan::Dml(DmlStatement {
+                table_name,
+                op: WriteOp::Insert,
+                input,
+                ..
+            }) => {
+                if self.table_exist(&table_name)? {
+                    let name = table_name.table();
+                    let provider = self.table_provider(name).await?;
+                    provider.insert_into(&self.state(), &input).await?;
+                } else {
+                    return Err(DataFusionError::Execution(format!(
+                        "Table '{}' does not exist",
+                        table_name
+                    )));
+                }
+                self.return_empty_dataframe()
+            }
             LogicalPlan::CreateExternalTable(cmd) => {
                 self.create_external_table(&cmd).await
             }
@@ -1001,10 +1020,9 @@ impl SessionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<DataFrame> {
         let table_ref = table_ref.into();
-        let table = table_ref.table().to_owned();
-        let provider = self.table_provider(table_ref).await?;
+        let provider = self.table_provider(table_ref.to_owned_reference()).await?;
         let plan = LogicalPlanBuilder::scan(
-            &table,
+            table_ref.to_owned_reference(),
             provider_as_source(Arc::clone(&provider)),
             None,
         )?
@@ -1018,7 +1036,7 @@ impl SessionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn TableProvider>> {
         let table_ref = table_ref.into();
-        let table = table_ref.table().to_owned();
+        let table = table_ref.table().to_string();
         let schema = self.state.read().schema_for_ref(table_ref)?;
         match schema.table(&table).await {
             Some(ref provider) => Ok(Arc::clone(provider)),
@@ -1914,7 +1932,7 @@ impl SessionState {
             self.config.options.sql_parser.parse_float_as_decimal;
         for reference in references {
             let table = reference.table();
-            let resolved = self.resolve_table_ref(reference.as_table_reference());
+            let resolved = self.resolve_table_ref(&reference);
             if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
                 if let Ok(schema) = self.schema_for_ref(resolved) {
                     if let Some(table) = schema.table(table).await {

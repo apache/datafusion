@@ -35,6 +35,7 @@ use crate::{
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    TableReference,
 };
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -96,7 +97,44 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             Expr::ScalarVariable(_, var_names) => {
                 accum.insert(Column::from_name(var_names.join(".")));
             }
-            _ => {}
+            // Use explicit pattern match instead of a default
+            // implementation, so that in the future if someone adds
+            // new Expr types, they will check here as well
+            Expr::Alias(_, _)
+            | Expr::Literal(_)
+            | Expr::BinaryExpr { .. }
+            | Expr::Like { .. }
+            | Expr::ILike { .. }
+            | Expr::SimilarTo { .. }
+            | Expr::Not(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsNull(_)
+            | Expr::IsTrue(_)
+            | Expr::IsFalse(_)
+            | Expr::IsUnknown(_)
+            | Expr::IsNotTrue(_)
+            | Expr::IsNotFalse(_)
+            | Expr::IsNotUnknown(_)
+            | Expr::Negative(_)
+            | Expr::Between { .. }
+            | Expr::Case { .. }
+            | Expr::Cast { .. }
+            | Expr::TryCast { .. }
+            | Expr::Sort { .. }
+            | Expr::ScalarFunction { .. }
+            | Expr::ScalarUDF { .. }
+            | Expr::WindowFunction { .. }
+            | Expr::AggregateFunction { .. }
+            | Expr::GroupingSet(_)
+            | Expr::AggregateUDF { .. }
+            | Expr::InList { .. }
+            | Expr::Exists { .. }
+            | Expr::InSubquery { .. }
+            | Expr::ScalarSubquery(_)
+            | Expr::Wildcard
+            | Expr::QualifiedWildcard { .. }
+            | Expr::GetIndexedField { .. }
+            | Expr::Placeholder { .. } => {}
         }
         Ok(())
     })
@@ -154,8 +192,9 @@ pub fn expand_qualified_wildcard(
     qualifier: &str,
     schema: &DFSchema,
 ) -> Result<Vec<Expr>> {
+    let qualifier = TableReference::from(qualifier);
     let qualified_fields: Vec<DFField> = schema
-        .fields_with_qualified(qualifier)
+        .fields_with_qualified(&qualifier)
         .into_iter()
         .cloned()
         .collect();
@@ -605,14 +644,10 @@ pub fn from_plan(
             }))
         }
         LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
-            let schema = inputs[0].schema().as_ref().clone().into();
-            let schema =
-                DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
-            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
-                alias: alias.clone(),
-                input: Arc::new(inputs[0].clone()),
-                schema,
-            }))
+            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+                inputs[0].clone(),
+                alias.clone(),
+            )?))
         }
         LogicalPlan::Limit(Limit { skip, fetch, .. }) => Ok(LogicalPlan::Limit(Limit {
             skip: *skip,

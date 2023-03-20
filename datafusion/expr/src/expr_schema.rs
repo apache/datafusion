@@ -247,13 +247,12 @@ impl ExprSchemable for Expr {
     fn to_field(&self, input_schema: &DFSchema) -> Result<DFField> {
         match self {
             Expr::Column(c) => Ok(DFField::new(
-                c.relation.as_deref(),
+                c.relation.clone(),
                 &c.name,
                 self.get_type(input_schema)?,
                 self.nullable(input_schema)?,
             )),
-            _ => Ok(DFField::new(
-                None,
+            _ => Ok(DFField::new_unqualified(
                 &self.display_name()?,
                 self.get_type(input_schema)?,
                 self.nullable(input_schema)?,

@@ -398,8 +398,13 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let provider = ListingTable::try_new(config)?;
 
+                let table_name = from_owned_table_reference(
+                    scan.table_name.as_ref(),
+                    "ListingTableScan",
+                )?;
+
                 LogicalPlanBuilder::scan_with_filters(
-                    &scan.table_name,
+                    table_name,
                     provider_as_source(Arc::new(provider)),
                     projection,
                     filters,
@@ -430,8 +435,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ctx,
                 )?;
 
+                let table_name =
+                    from_owned_table_reference(scan.table_name.as_ref(), "CustomScan")?;
+
                 LogicalPlanBuilder::scan_with_filters(
-                    &scan.table_name,
+                    table_name,
                     provider_as_source(provider),
                     projection,
                     filters,
@@ -737,8 +745,11 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let provider = ViewTable::try_new(input, definition)?;
 
+                let table_name =
+                    from_owned_table_reference(scan.table_name.as_ref(), "ViewScan")?;
+
                 LogicalPlanBuilder::scan(
-                    &scan.table_name,
+                    table_name,
                     provider_as_source(Arc::new(provider)),
                     projection,
                 )?
@@ -850,7 +861,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ListingScan(
                             protobuf::ListingTableScanNode {
                                 file_format_type: Some(file_format_type),
-                                table_name: table_name.to_owned(),
+                                table_name: Some(table_name.clone().into()),
                                 collect_stat: options.collect_stat,
                                 file_extension: options.file_extension.clone(),
                                 table_partition_cols: options
@@ -875,7 +886,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Ok(protobuf::LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ViewScan(Box::new(
                             protobuf::ViewTableScanNode {
-                                table_name: table_name.to_owned(),
+                                table_name: Some(table_name.clone().into()),
                                 input: Some(Box::new(
                                     protobuf::LogicalPlanNode::try_from_logical_plan(
                                         view_table.logical_plan(),
@@ -897,7 +908,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .try_encode_table_provider(provider, &mut bytes)
                         .map_err(|e| context!("Error serializing custom table", e))?;
                     let scan = CustomScan(CustomTableScanNode {
-                        table_name: table_name.clone(),
+                        table_name: Some(table_name.clone().into()),
                         projection,
                         schema: Some(schema),
                         filters,
