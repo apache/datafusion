@@ -38,9 +38,15 @@ pub trait PartitionEvaluator: Debug + Send {
         Ok(BuiltinWindowState::Default)
     }
 
+    /// Updates the internal state for Built-in window function
+    // state is useful to update internal state for Built-in window function.
+    // idx is the index of last row for which result is calculated.
+    // range_columns is the result of order by column values. It is used to calculate rank boundaries
+    // sort_partition_points is the boundaries of each rank in the range_column. It is used to update rank.
     fn update_state(
         &mut self,
         _state: &WindowAggState,
+        _idx: usize,
         _range_columns: &[ArrayRef],
         _sort_partition_points: &[Range<usize>],
     ) -> Result<()> {
@@ -54,20 +60,23 @@ pub trait PartitionEvaluator: Debug + Send {
         ))
     }
 
-    fn get_range(&self, _state: &WindowAggState, _n_rows: usize) -> Result<Range<usize>> {
+    /// Gets the range where Built-in window function result is calculated.
+    // idx is the index of last row for which result is calculated.
+    // n_rows is the number of rows of the input record batch (Used during bound check)
+    fn get_range(&self, _idx: usize, _n_rows: usize) -> Result<Range<usize>> {
         Err(DataFusionError::NotImplemented(
             "get_range is not implemented for this window function".to_string(),
         ))
     }
 
-    /// evaluate the partition evaluator against the partition
+    /// Evaluate the partition evaluator against the partition
     fn evaluate(&self, _values: &[ArrayRef], _num_rows: usize) -> Result<ArrayRef> {
         Err(DataFusionError::NotImplemented(
             "evaluate is not implemented by default".into(),
         ))
     }
 
-    /// evaluate window function result inside given range
+    /// Evaluate window function result inside given range
     fn evaluate_stateful(&mut self, _values: &[ArrayRef]) -> Result<ScalarValue> {
         Err(DataFusionError::NotImplemented(
             "evaluate_stateful is not implemented by default".into(),

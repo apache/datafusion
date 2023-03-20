@@ -27,7 +27,7 @@ use arrow::{array::ArrayRef, datatypes::Field};
 
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{Accumulator, WindowFrame, WindowFrameUnits};
+use datafusion_expr::{Accumulator, WindowFrame};
 
 use crate::window::window_expr::{reverse_order_bys, AggregateWindowExpr};
 use crate::window::{
@@ -115,11 +115,8 @@ impl WindowExpr for PlainAggregateWindowExpr {
                 })?;
             let mut state = &mut window_state.state;
             if self.window_frame.start_bound.is_unbounded() {
-                state.window_frame_range.start = if state.window_frame_range.end >= 1 {
-                    state.window_frame_range.end - 1
-                } else {
-                    0
-                };
+                state.window_frame_range.start =
+                    state.window_frame_range.end.saturating_sub(1);
             }
         }
         Ok(())
@@ -159,10 +156,8 @@ impl WindowExpr for PlainAggregateWindowExpr {
     }
 
     fn uses_bounded_memory(&self) -> bool {
-        // NOTE: Currently, groups queries do not support the bounded memory variant.
         self.aggregate.supports_bounded_execution()
             && !self.window_frame.end_bound.is_unbounded()
-            && !matches!(self.window_frame.units, WindowFrameUnits::Groups)
     }
 }
 

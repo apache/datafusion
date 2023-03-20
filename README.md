@@ -48,7 +48,7 @@ DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchm
 - Written in [Rust](https://www.rust-lang.org/), a modern system language with development
   productivity similar to Java or Golang, the performance of C++, and
   [loved by programmers everywhere](https://insights.stackoverflow.com/survey/2021#technology-most-loved-dreaded-and-wanted).
-- Support for [Substrait](https://substrait.io/) for query plan serialization, making it easier to integrate DataFusion  
+- Support for [Substrait](https://substrait.io/) for query plan serialization, making it easier to integrate DataFusion
   with other projects, and to pass plans across language boundaries.
 
 ## Use Cases
@@ -78,6 +78,13 @@ execution plans, file format support, etc.
 - _High Quality_: Extensively tested, both by itself and with the rest of the Arrow ecosystem, DataFusion can be used as the foundation for production systems.
 
 ## Comparisons with other projects
+
+When compared to similar systems, DataFusion typically is:
+
+1. Targeted at developers, rather than end users / data scientists.
+2. Designed to be embedded, rather than a complete file based SQL system.
+3. Governed by the [Apache Software Foundation](https://www.apache.org/) process, rather than a single company or individual.
+4. Implemented in `Rust`, rather than `C/C++`
 
 Here is a comparison with similar projects that may help understand
 when DataFusion might be be suitable and unsuitable for your needs:

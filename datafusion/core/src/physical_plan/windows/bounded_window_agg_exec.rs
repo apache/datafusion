@@ -352,12 +352,12 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
     // For instance, if `n_out` number of rows are calculated, we can remove
     // first `n_out` rows from `self.input_buffer_record_batch`.
     fn prune_state(&mut self, n_out: usize) -> Result<()> {
+        // Prune `self.window_agg_states`:
+        self.prune_out_columns(n_out)?;
         // Prune `self.partition_batches`:
         self.prune_partition_batches()?;
         // Prune `self.input_buffer_record_batch`:
         self.prune_input_batch(n_out)?;
-        // Prune `self.window_agg_states`:
-        self.prune_out_columns(n_out)?;
         Ok(())
     }
 
@@ -547,9 +547,9 @@ impl SortedPartitionByBoundedWindowStream {
             for (partition_row, WindowState { state: value, .. }) in window_agg_state {
                 let n_prune =
                     min(value.window_frame_range.start, value.last_calculated_index);
-                if let Some(state) = n_prune_each_partition.get_mut(partition_row) {
-                    if n_prune < *state {
-                        *state = n_prune;
+                if let Some(current) = n_prune_each_partition.get_mut(partition_row) {
+                    if n_prune < *current {
+                        *current = n_prune;
                     }
                 } else {
                     n_prune_each_partition.insert(partition_row.clone(), n_prune);
@@ -570,15 +570,7 @@ impl SortedPartitionByBoundedWindowStream {
 
             // Update state indices since we have pruned some rows from the beginning:
             for window_agg_state in self.window_agg_states.iter_mut() {
-                let window_state =
-                    window_agg_state.get_mut(partition_row).ok_or_else(err)?;
-                let mut state = &mut window_state.state;
-                state.window_frame_range = Range {
-                    start: state.window_frame_range.start - n_prune,
-                    end: state.window_frame_range.end - n_prune,
-                };
-                state.last_calculated_index -= n_prune;
-                state.offset_pruned_rows += n_prune;
+                window_agg_state[partition_row].state.prune_state(*n_prune);
             }
         }
         Ok(())
