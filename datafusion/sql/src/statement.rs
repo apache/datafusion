@@ -429,8 +429,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchemaRef,
     ) -> Result<Vec<datafusion_expr::Expr>> {
         // Ask user to provide a schema if schema is empty.
-        if schema.fields().is_empty(){
-            return Err(DataFusionError::Plan("Provide a schema before specifying the order while creating a table.".to_owned()));
+        if schema.fields().is_empty() {
+            return Err(DataFusionError::Plan(
+                "Provide a schema before specifying the order while creating a table."
+                    .to_owned(),
+            ));
         }
         // Convert each OrderByExpr to a SortExpr:
         let result = order_exprs

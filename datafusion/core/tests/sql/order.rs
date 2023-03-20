@@ -71,7 +71,10 @@ async fn create_external_table_with_ddl_ordered_non_cols() -> Result<()> {
     match ctx.state().create_logical_plan(sql).await {
         Ok(_) => panic!("Expecting error."),
         Err(e) => {
-            assert_eq!(e.to_string(), "Error during planning: Column a is not in schema")
+            assert_eq!(
+                e.to_string(),
+                "Error during planning: Column a is not in schema"
+            )
         }
     }
     Ok(())
