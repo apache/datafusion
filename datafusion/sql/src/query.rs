@@ -72,7 +72,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }
         let plan = self.set_expr_to_plan(*set_expr, planner_context)?;
-        let plan = self.order_by(plan, query.order_by)?;
+        let plan = self.order_by(plan, query.order_by, planner_context)?;
         self.limit(plan, query.offset, query.limit)
     }
 
@@ -133,6 +133,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         plan: LogicalPlan,
         order_by: Vec<OrderByExpr>,
+        planner_context: &mut PlannerContext
     ) -> Result<LogicalPlan> {
         if order_by.is_empty() {
             return Ok(plan);
@@ -140,7 +141,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let order_by_rex = order_by
             .into_iter()
-            .map(|e| self.order_by_to_sort_expr(e, plan.schema()))
+            .map(|e| self.order_by_to_sort_expr(e, plan.schema(), planner_context))
             .collect::<Result<Vec<_>>>()?;
 
         LogicalPlanBuilder::from(plan).sort(order_by_rex)?.build()

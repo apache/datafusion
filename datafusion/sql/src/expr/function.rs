@@ -63,7 +63,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let order_by = window
                 .order_by
                 .into_iter()
-                .map(|e| self.order_by_to_sort_expr(e, schema))
+                .map(|e| self.order_by_to_sort_expr(e, schema, planner_context))
                 .collect::<Result<Vec<_>>>()?;
             let window_frame = window
                 .window_frame
