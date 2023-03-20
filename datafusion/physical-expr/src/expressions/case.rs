@@ -716,10 +716,10 @@ mod tests {
 
         //let valid_array = vec![true, false, false, true, false, tru
         let null_buffer = Buffer::from([0b00101001u8]);
-        let load4 = ArrayDataBuilder::new(load4.data_type().clone())
-            .len(load4.len())
+        let load4 = load4
+            .into_data()
+            .into_builder()
             .null_bit_buffer(Some(null_buffer))
-            .buffers(load4.data().buffers().to_vec())
             .build()
             .unwrap();
         let load4: Float64Array = load4.into();
