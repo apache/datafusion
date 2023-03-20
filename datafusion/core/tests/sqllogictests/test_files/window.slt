@@ -2217,3 +2217,39 @@ SELECT c9,
 
 statement ok
 set datafusion.execution.target_partitions = 2;
+
+# test_window_agg_with_bounded_group
+query TT
+EXPLAIN SELECT SUM(c12) OVER(ORDER BY c1, c2 GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as sum1,
+  SUM(c12) OVER(ORDER BY c1 GROUPS BETWEEN 5 PRECEDING AND 3 PRECEDING) as sum2
+  FROM aggregate_test_100 ORDER BY c9 LIMIT 5
+----
+logical_plan
+Projection: sum1, sum2
+  Limit: skip=0, fetch=5
+    Sort: aggregate_test_100.c9 ASC NULLS LAST, fetch=5
+      Projection: SUM(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST] GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS sum1, SUM(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST] GROUPS BETWEEN 5 PRECEDING AND 3 PRECEDING AS sum2, aggregate_test_100.c9
+        WindowAggr: windowExpr=[[SUM(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST] GROUPS BETWEEN 5 PRECEDING AND 3 PRECEDING]]
+          WindowAggr: windowExpr=[[SUM(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST] GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
+            TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
+physical_plan
+ProjectionExec: expr=[sum1@0 as sum1, sum2@1 as sum2]
+  GlobalLimitExec: skip=0, fetch=5
+    SortExec: fetch=5, expr=[c9@2 ASC NULLS LAST]
+      ProjectionExec: expr=[SUM(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST] GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING@13 as sum1, SUM(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST] GROUPS BETWEEN 5 PRECEDING AND 3 PRECEDING@14 as sum2, c9@8 as c9]
+        BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c12): Ok(Field { name: "SUM(aggregate_test_100.c12)", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Groups, start_bound: Preceding(UInt64(5)), end_bound: Preceding(UInt64(3)) }], mode=[Sorted]
+          BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c12): Ok(Field { name: "SUM(aggregate_test_100.c12)", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Groups, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }], mode=[Sorted]
+            SortExec: expr=[c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST]
+              CsvExec: files={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
+
+query RR
+SELECT SUM(c12) OVER(ORDER BY c1, c2 GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as sum1,
+  SUM(c12) OVER(ORDER BY c1 GROUPS BETWEEN 5 PRECEDING AND 3 PRECEDING) as sum2
+  FROM aggregate_test_100 ORDER BY c9 LIMIT 5
+----
+4.561269874379 18.036183428008
+6.808931568966 10.238448667883
+2.994840293343 NULL
+9.674390599321 NULL
+7.728066219895 NULL
+

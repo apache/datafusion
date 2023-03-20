@@ -282,7 +282,7 @@ impl SessionContext {
         self.session_id.clone()
     }
 
-    /// Return the [`TableFactoryProvider`] that is registered for the
+    /// Return the [`TableProviderFactory`] that is registered for the
     /// specified file type, if any.
     pub fn table_factory(
         &self,
@@ -1020,10 +1020,9 @@ impl SessionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<DataFrame> {
         let table_ref = table_ref.into();
-        let table = table_ref.table().to_owned();
-        let provider = self.table_provider(table_ref).await?;
+        let provider = self.table_provider(table_ref.to_owned_reference()).await?;
         let plan = LogicalPlanBuilder::scan(
-            &table,
+            table_ref.to_owned_reference(),
             provider_as_source(Arc::clone(&provider)),
             None,
         )?
@@ -1037,7 +1036,7 @@ impl SessionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn TableProvider>> {
         let table_ref = table_ref.into();
-        let table = table_ref.table().to_owned();
+        let table = table_ref.table().to_string();
         let schema = self.state.read().schema_for_ref(table_ref)?;
         match schema.table(&table).await {
             Some(ref provider) => Ok(Arc::clone(provider)),
@@ -1933,7 +1932,7 @@ impl SessionState {
             self.config.options.sql_parser.parse_float_as_decimal;
         for reference in references {
             let table = reference.table();
-            let resolved = self.resolve_table_ref(reference.as_table_reference());
+            let resolved = self.resolve_table_ref(&reference);
             if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
                 if let Ok(schema) = self.schema_for_ref(resolved) {
                     if let Some(table) = schema.table(table).await {

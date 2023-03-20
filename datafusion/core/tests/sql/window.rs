@@ -189,7 +189,7 @@ fn write_test_data_to_csv(
     Ok(())
 }
 
-async fn get_test_context(tmpdir: &TempDir) -> Result<SessionContext> {
+async fn get_test_context(tmpdir: &TempDir, n_batch: usize) -> Result<SessionContext> {
     let session_config = SessionConfig::new().with_target_partitions(1);
     let ctx = SessionContext::with_config(session_config);
 
@@ -201,7 +201,7 @@ async fn get_test_context(tmpdir: &TempDir) -> Result<SessionContext> {
         .to_listing_options(&ctx.copied_config())
         .with_file_sort_order(Some(file_sort_order));
 
-    write_test_data_to_csv(tmpdir, 1, &batch)?;
+    write_test_data_to_csv(tmpdir, n_batch, &batch)?;
     let sql_definition = None;
     ctx.register_listing_table(
         "annotated_data",
@@ -215,7 +215,7 @@ async fn get_test_context(tmpdir: &TempDir) -> Result<SessionContext> {
     Ok(ctx)
 }
 
-async fn get_test_context2(tmpdir: &TempDir) -> Result<SessionContext> {
+async fn get_test_context2(tmpdir: &TempDir, n_batch: usize) -> Result<SessionContext> {
     let session_config = SessionConfig::new().with_target_partitions(1);
     let ctx = SessionContext::with_config(session_config);
 
@@ -227,7 +227,7 @@ async fn get_test_context2(tmpdir: &TempDir) -> Result<SessionContext> {
         .with_file_sort_order(Some(file_sort_order))
         .with_infinite_source(true);
 
-    write_test_data_to_csv(tmpdir, 1, &batch)?;
+    write_test_data_to_csv(tmpdir, n_batch, &batch)?;
     let sql_definition = None;
     ctx.register_listing_table(
         "annotated_data2",
@@ -247,7 +247,7 @@ mod tests {
     #[tokio::test]
     async fn test_source_sorted_aggregate() -> Result<()> {
         let tmpdir = TempDir::new()?;
-        let ctx = get_test_context(&tmpdir).await?;
+        let ctx = get_test_context(&tmpdir, 1).await?;
 
         let sql = "SELECT
             SUM(inc_col) OVER(ORDER BY ts RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING) as sum1,
@@ -322,7 +322,7 @@ mod tests {
     #[tokio::test]
     async fn test_source_sorted_builtin() -> Result<()> {
         let tmpdir = TempDir::new()?;
-        let ctx = get_test_context(&tmpdir).await?;
+        let ctx = get_test_context(&tmpdir, 1).await?;
 
         let sql = "SELECT
             FIRST_VALUE(inc_col) OVER(ORDER BY ts RANGE BETWEEN 10 PRECEDING and 1 FOLLOWING) as fv1,
@@ -396,7 +396,7 @@ mod tests {
     #[tokio::test]
     async fn test_source_sorted_unbounded_preceding() -> Result<()> {
         let tmpdir = TempDir::new()?;
-        let ctx = get_test_context(&tmpdir).await?;
+        let ctx = get_test_context(&tmpdir, 1).await?;
 
         let sql = "SELECT
             SUM(inc_col) OVER(ORDER BY ts ASC RANGE BETWEEN UNBOUNDED PRECEDING AND 5 FOLLOWING) as sum1,
@@ -455,7 +455,7 @@ mod tests {
     #[tokio::test]
     async fn test_source_sorted_unbounded_preceding_builtin() -> Result<()> {
         let tmpdir = TempDir::new()?;
-        let ctx = get_test_context(&tmpdir).await?;
+        let ctx = get_test_context(&tmpdir, 1).await?;
 
         let sql = "SELECT
            FIRST_VALUE(inc_col) OVER(ORDER BY ts ASC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as first_value1,
@@ -510,7 +510,7 @@ mod tests {
     async fn test_source_partially_sorted_partition_by() -> Result<()> {
         let tmpdir = TempDir::new()?;
         // Source is ordered by low_card_col1, low_card_col2, inc_col
-        let ctx = get_test_context2(&tmpdir).await?;
+        let ctx = get_test_context2(&tmpdir, 1).await?;
 
         let sql = "SELECT low_card_col1, low_card_col2, inc_col,
         SUM(inc_col) OVER(PARTITION BY low_card_col1, unsorted_col ORDER BY low_card_col2, inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum1,

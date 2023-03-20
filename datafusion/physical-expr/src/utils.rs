@@ -420,35 +420,18 @@ pub fn reassign_predicate_columns(
     schema: &SchemaRef,
     ignore_not_found: bool,
 ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
-    let mut rewriter = ColumnAssigner {
-        schema,
-        ignore_not_found,
-    };
-    pred.transform_using(&mut rewriter)
-}
-
-#[derive(Debug)]
-struct ColumnAssigner<'a> {
-    schema: &'a SchemaRef,
-    ignore_not_found: bool,
-}
-
-impl<'a> TreeNodeRewriter<Arc<dyn PhysicalExpr>> for ColumnAssigner<'a> {
-    fn mutate(
-        &mut self,
-        expr: Arc<dyn PhysicalExpr>,
-    ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
+    pred.transform(&|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-            let index = match self.schema.index_of(column.name()) {
+            let index = match schema.index_of(column.name()) {
                 Ok(idx) => idx,
-                Err(_) if self.ignore_not_found => usize::MAX,
+                Err(_) if ignore_not_found => usize::MAX,
                 Err(e) => return Err(e.into()),
             };
-            return Ok(Arc::new(Column::new(column.name(), index)));
+            return Ok(Some(Arc::new(Column::new(column.name(), index))));
         }
 
-        Ok(expr)
-    }
+        Ok(None)
+    })
 }
 
 #[cfg(test)]
