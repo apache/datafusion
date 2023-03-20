@@ -547,6 +547,10 @@ fn analyze_window_sort_removal(
             "Expects to receive either WindowAggExec of BoundedWindowAggExec".to_string(),
         ));
     };
+    let n_req = window_exec.required_input_ordering()[0]
+        .as_ref()
+        .map(|elem| elem.len())
+        .unwrap_or(0);
 
     let mut first_should_reverse = None;
     for sort_any in sort_tree.get_leaves() {
@@ -556,14 +560,11 @@ fn analyze_window_sort_removal(
         // Therefore, we can use the 0th index without loss of generality.
         let sort_input = sort_any.children()[0].clone();
         let physical_ordering = sort_input.output_ordering();
-        // TODO: Once we can ensure that required ordering information propagates with
-        //       the necessary lineage information, compare `physical_ordering` and the
-        //       ordering required by the window executor instead of `sort_output_ordering`.
-        //       This will enable us to handle cases such as (a,b) -> Sort -> (a,b,c) -> Required(a,b).
-        //       Currently, we can not remove such sorts.
         let required_ordering = sort_output_ordering.ok_or_else(|| {
             DataFusionError::Plan("A SortExec should have output ordering".to_string())
         })?;
+        // First n_req element of the sort output corresponds to required section of the window_exec.
+        let required_ordering = &required_ordering[0..n_req];
         if let Some(physical_ordering) = physical_ordering {
             let (can_skip_sorting, should_reverse) = can_skip_sort(
                 window_expr[0].partition_by(),
@@ -1833,40 +1834,31 @@ mod tests {
             sort_expr("non_nullable_col", &schema),
         ];
         let sort_exprs2 = vec![sort_expr("nullable_col", &schema)];
-        // reverse sorting of sort_exprs2
-        let reversed_sort_exprs2 = vec![sort_expr_options(
-            "nullable_col",
-            &schema,
-            SortOptions {
-                descending: true,
-                nulls_first: false,
-            },
-        )];
-        let source1 = parquet_exec_sorted(&schema, sort_exprs1);
+        let source1 = parquet_exec_sorted(&schema, sort_exprs2.clone());
         let source2 = parquet_exec_sorted(&schema, sort_exprs2.clone());
-        let sort1 = sort_exec(reversed_sort_exprs2.clone(), source1);
-        let sort2 = sort_exec(reversed_sort_exprs2, source2);
+        let sort1 = sort_exec(sort_exprs1.clone(), source1);
+        let sort2 = sort_exec(sort_exprs1.clone(), source2);
 
         let union = union_exec(vec![sort1, sort2]);
-        let coalesce = Arc::new(CoalescePartitionsExec::new(union)) as _;
-        let physical_plan = bounded_window_exec("nullable_col", sort_exprs2, coalesce);
+        let spm = Arc::new(SortPreservingMergeExec::new(sort_exprs1, union)) as _;
+        let physical_plan = bounded_window_exec("nullable_col", sort_exprs2, spm);
 
         // The `WindowAggExec` can get its required sorting from the leaf nodes directly.
         // The unnecessary SortExecs should be removed
         let expected_input = vec![
             "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
-            "  CoalescePartitionsExec",
+            "  SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "    UnionExec",
-            "      SortExec: expr=[nullable_col@0 DESC NULLS LAST]",
-            "        ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC], projection=[nullable_col, non_nullable_col]",
-            "      SortExec: expr=[nullable_col@0 DESC NULLS LAST]",
+            "      SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC]",
+            "        ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
+            "      SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "        ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
         ];
         let expected_optimized = vec![
             "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
             "  SortPreservingMergeExec: [nullable_col@0 ASC]",
             "    UnionExec",
-            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC], projection=[nullable_col, non_nullable_col]",
+            "      ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
             "      ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[nullable_col@0 ASC], projection=[nullable_col, non_nullable_col]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
