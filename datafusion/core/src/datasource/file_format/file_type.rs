@@ -30,10 +30,10 @@ use async_compression::tokio::bufread::{
 };
 use bytes::Bytes;
 #[cfg(feature = "compression")]
-use bzip2::read::BzDecoder;
+use bzip2::read::MultiBzDecoder;
 use datafusion_common::parsers::CompressionTypeVariant;
 #[cfg(feature = "compression")]
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 use futures::Stream;
 #[cfg(feature = "compression")]
 use futures::TryStreamExt;
@@ -168,11 +168,11 @@ impl FileCompressionType {
     ) -> Result<Box<dyn std::io::Read + Send>> {
         Ok(match self.variant {
             #[cfg(feature = "compression")]
-            GZIP => Box::new(GzDecoder::new(r)),
+            GZIP => Box::new(MultiGzDecoder::new(r)),
             #[cfg(feature = "compression")]
-            BZIP2 => Box::new(BzDecoder::new(r)),
+            BZIP2 => Box::new(MultiBzDecoder::new(r)),
             #[cfg(feature = "compression")]
-            XZ => Box::new(XzDecoder::new(r)),
+            XZ => Box::new(XzDecoder::new_multi_decoder(r)),
             #[cfg(feature = "compression")]
             ZSTD => match ZstdDecoder::new(r) {
                 Ok(decoder) => Box::new(decoder),

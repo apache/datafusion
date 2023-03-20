@@ -227,9 +227,7 @@ fn get_random_window_frame(rng: &mut StdRng) -> WindowFrame {
     } else if rand_num < 2 {
         WindowFrameUnits::Rows
     } else {
-        // For now we do not support GROUPS in BoundedWindowAggExec implementation
-        // TODO: once GROUPS handling is available, use WindowFrameUnits::GROUPS in randomized tests also.
-        WindowFrameUnits::Range
+        WindowFrameUnits::Groups
     };
     match units {
         // In range queries window frame boundaries should match column type
@@ -256,8 +254,8 @@ fn get_random_window_frame(rng: &mut StdRng) -> WindowFrame {
             }
             window_frame
         }
-        // In window queries, window frame boundary should be Uint64
-        WindowFrameUnits::Rows => {
+        // Window frame boundary should be UInt64 for both ROWS and GROUPS frames:
+        WindowFrameUnits::Rows | WindowFrameUnits::Groups => {
             let start_bound = if start_bound.is_preceding {
                 WindowFrameBound::Preceding(ScalarValue::UInt64(Some(
                     start_bound.val as u64,
@@ -286,10 +284,10 @@ fn get_random_window_frame(rng: &mut StdRng) -> WindowFrame {
                 window_frame.start_bound =
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None));
             }
+            // We never use UNBOUNDED FOLLOWING in test. Because that case is not prunable and
+            // should work only with WindowAggExec
             window_frame
         }
-        // Once GROUPS support is added construct window frame for this case also
-        _ => todo!(),
     }
 }
 
@@ -401,7 +399,7 @@ async fn run_window_test(
         assert_eq!(
             (i, usual_line),
             (i, running_line),
-            "Inconsistent result for window_fn: {window_fn:?}, args:{args:?}"
+            "Inconsistent result for window_frame: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}"
         );
     }
 }
