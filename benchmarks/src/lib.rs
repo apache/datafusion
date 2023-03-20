@@ -72,6 +72,12 @@ pub struct BenchmarkRun {
     current_case: Option<usize>,
 }
 
+impl Default for BenchmarkRun {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BenchmarkRun {
     // create new
     pub fn new() -> Self {
