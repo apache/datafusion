@@ -63,8 +63,8 @@ WITH HEADER ROW
 LOCATION '/path/to/aggregate_test_100.csv';
 ```
 
-When creating an output from a data source that is already ordered by an expression, you can pre-specify the order of 
-the data using the `WITH ORDER` clause. This applies even if the expression used for sorting is complex, 
+When creating an output from a data source that is already ordered by an expression, you can pre-specify the order of
+the data using the `WITH ORDER` clause. This applies even if the expression used for sorting is complex,
 allowing for greater flexibility.
 
 Here's an example of how to use `WITH ORDER` query
@@ -90,7 +90,9 @@ WITH HEADER ROW
 WITH ORDER (c2 ASC, c5 + c8 DESC NULL FIRST)
 LOCATION '/path/to/aggregate_test_100.csv';
 ```
+
 where `WITH ORDER` clause specifies the sort order:
+
 ```sql
 WITH ORDER (sort_expression1 [ASC | DESC] [NULLS { FIRST | LAST }]
          [, sort_expression2 [ASC | DESC] [NULLS { FIRST | LAST }] ...])
