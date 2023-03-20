@@ -40,8 +40,8 @@ use datafusion_expr::{
 };
 use sqlparser::ast;
 use sqlparser::ast::{
-    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query, SchemaName,
-    SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableFactor,
+    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, OrderByExpr, Query,
+    SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableFactor,
     TableWithJoins, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
@@ -423,6 +423,40 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }))
     }
 
+    fn build_order_by(
+        &self,
+        order_exprs: Vec<OrderByExpr>,
+        schema: &DFSchemaRef,
+    ) -> Result<Vec<datafusion_expr::Expr>> {
+        // Ask user to provide a schema if schema is empty.
+        if !order_exprs.is_empty() && schema.fields().is_empty() {
+            return Err(DataFusionError::Plan(
+                "Provide a schema before specifying the order while creating a table."
+                    .to_owned(),
+            ));
+        }
+        // Convert each OrderByExpr to a SortExpr:
+        let result = order_exprs
+            .into_iter()
+            .map(|e| self.order_by_to_sort_expr(e, schema))
+            .collect::<Result<Vec<_>>>()?;
+        // Verify that columns of all SortExprs exist in the schema:
+        for expr in result.iter() {
+            for column in expr.to_columns()?.iter() {
+                if !schema.has_column(column) {
+                    // Return an error if any column is not in the schema:
+                    return Err(DataFusionError::Plan(format!(
+                        "Column {} is not in schema",
+                        column
+                    )));
+                }
+            }
+        }
+
+        // If all SortExprs are valid, return them as an expression vector
+        Ok(result)
+    }
+
     /// Generate a logical plan from a CREATE EXTERNAL TABLE statement
     fn external_table_to_plan(
         &self,
@@ -439,6 +473,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             table_partition_cols,
             if_not_exists,
             file_compression_type,
+            order_exprs,
             options,
         } = statement;
 
@@ -459,12 +494,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         let schema = self.build_schema(columns)?;
+        let df_schema = schema.to_dfschema_ref()?;
+
+        let ordered_exprs = self.build_order_by(order_exprs, &df_schema)?;
 
         // External tables do not support schemas at the moment, so the name is just a table name
         let name = OwnedTableReference::bare(name);
 
         Ok(LogicalPlan::CreateExternalTable(PlanCreateExternalTable {
-            schema: schema.to_dfschema_ref()?,
+            schema: df_schema,
             name,
             location,
             file_type,
@@ -474,6 +512,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             if_not_exists,
             definition,
             file_compression_type,
+            order_exprs: ordered_exprs,
             options,
         }))
     }

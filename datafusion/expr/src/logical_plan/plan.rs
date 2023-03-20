@@ -1631,6 +1631,8 @@ pub struct CreateExternalTable {
     pub if_not_exists: bool,
     /// SQL used to create the table, if available
     pub definition: Option<String>,
+    /// Order expressions supplied by user
+    pub order_exprs: Vec<Expr>,
     /// File compression type (GZIP, BZIP2, XZ, ZSTD)
     pub file_compression_type: CompressionTypeVariant,
     /// Table(provider) specific options
@@ -1651,6 +1653,7 @@ impl Hash for CreateExternalTable {
         self.if_not_exists.hash(state);
         self.definition.hash(state);
         self.file_compression_type.hash(state);
+        self.order_exprs.hash(state);
         self.options.len().hash(state); // HashMap is not hashable
     }
 }
