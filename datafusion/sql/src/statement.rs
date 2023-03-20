@@ -429,7 +429,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchemaRef,
     ) -> Result<Vec<datafusion_expr::Expr>> {
         // Ask user to provide a schema if schema is empty.
-        if schema.fields().is_empty() {
+        if !order_exprs.is_empty() && schema.fields().is_empty() {
             return Err(DataFusionError::Plan(
                 "Provide a schema before specifying the order while creating a table."
                     .to_owned(),
