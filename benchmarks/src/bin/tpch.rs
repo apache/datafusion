@@ -198,7 +198,7 @@ async fn benchmark_datafusion(
     }
 
     if let Some(path) = &opt.output_path {
-        std::fs::write(path, &benchmark_run.to_json())?;
+        std::fs::write(path, benchmark_run.to_json())?;
     }
     Ok(results)
 }

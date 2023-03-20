@@ -36,6 +36,12 @@ pub struct RunContext {
     pub arguments: Vec<String>,
 }
 
+impl Default for RunContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RunContext {
     pub fn new() -> Self {
         Self {
