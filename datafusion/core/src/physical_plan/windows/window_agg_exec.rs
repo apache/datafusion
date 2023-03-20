@@ -83,18 +83,19 @@ impl WindowAggExec {
         let schema = create_schema(&input_schema, &window_expr)?;
         let schema = Arc::new(schema);
         let partition_by_exprs = window_expr[0].partition_by();
-        let ordered_partition_by_indices =
-            if let Some(input_ordering) = input.output_ordering() {
-                let input_ordering_exprs = convert_to_expr(input_ordering);
-                let equal_properties = || input.equivalence_properties();
-                get_indices_of_matching_exprs(
-                    partition_by_exprs,
-                    &input_ordering_exprs,
-                    equal_properties,
-                )
-            } else {
-                (0..partition_by_exprs.len()).collect()
-            };
+        let input_ordering = sort_keys.as_deref().unwrap_or(&[]);
+        let input_ordering_exprs = convert_to_expr(input_ordering);
+        let equal_properties = || input.equivalence_properties();
+        let ordered_partition_by_indices = get_indices_of_matching_exprs(
+            partition_by_exprs,
+            &input_ordering_exprs,
+            equal_properties,
+        );
+        assert_eq!(
+            ordered_partition_by_indices.len(),
+            partition_by_exprs.len(),
+            "missing partition keys in the ordering"
+        );
         Ok(Self {
             input,
             window_expr,
@@ -128,17 +129,9 @@ impl WindowAggExec {
     // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
     // to calculate partition separation points
     pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
-        // All window exprs have the same partition by, so we just use the first one:
-        let partition_by = self.window_expr()[0].partition_by();
+        // Partition by sort keys indices are stored in self.ordered_partition_by_indices.
         let sort_keys = self.sort_keys.as_deref().unwrap_or(&[]);
-        let sort_keys_exprs = convert_to_expr(sort_keys);
-        let equal_properties = || self.equivalence_properties();
-        let indices = get_indices_of_matching_exprs(
-            partition_by,
-            &sort_keys_exprs,
-            equal_properties,
-        );
-        get_at_indices(sort_keys, &indices)
+        get_at_indices(sort_keys, &self.ordered_partition_by_indices)
     }
 }
 

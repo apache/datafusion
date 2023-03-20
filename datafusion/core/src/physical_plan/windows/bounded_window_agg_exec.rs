@@ -74,7 +74,7 @@ pub enum PartitionSearchMode {
     /// None of the columns among the partition columns is ordered.
     Linear,
     /// Some columns of the partition columns are ordered but not all
-    PartiallySorted,
+    PartiallySorted(Vec<usize>),
     /// All Partition columns are ordered (Also empty case)
     Sorted,
 }
@@ -120,18 +120,26 @@ impl BoundedWindowAggExec {
         let schema = create_schema(&input_schema, &window_expr)?;
         let schema = Arc::new(schema);
         let partition_by_exprs = window_expr[0].partition_by();
-        let ordered_partition_by_indices =
-            if let Some(input_ordering) = input.output_ordering() {
+        let ordered_partition_by_indices = match &partition_search_mode {
+            PartitionSearchMode::Sorted => {
+                let input_ordering = sort_keys.as_deref().unwrap_or(&[]);
                 let input_ordering_exprs = convert_to_expr(input_ordering);
                 let equal_properties = || input.equivalence_properties();
-                get_indices_of_matching_exprs(
+                let ordered_indices = get_indices_of_matching_exprs(
                     partition_by_exprs,
                     &input_ordering_exprs,
                     equal_properties,
-                )
-            } else {
-                (0..partition_by_exprs.len()).collect()
-            };
+                );
+                assert_eq!(ordered_indices.len(), partition_by_exprs.len());
+                ordered_indices
+            }
+            PartitionSearchMode::PartiallySorted(ordered_indices) => {
+                ordered_indices.clone()
+            }
+            PartitionSearchMode::Linear => {
+                vec![]
+            }
+        };
         Ok(Self {
             input,
             window_expr,
@@ -166,17 +174,9 @@ impl BoundedWindowAggExec {
     // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
     // to calculate partition separation points
     pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
-        // All window exprs have the same partition by, so we just use the first one:
-        let partition_by = self.window_expr()[0].partition_by();
+        // Partition by sort keys indices are stored in self.ordered_partition_by_indices.
         let sort_keys = self.sort_keys.as_deref().unwrap_or(&[]);
-        let sort_keys_exprs = convert_to_expr(sort_keys);
-        let equal_properties = || self.equivalence_properties();
-        let indices = get_indices_of_matching_exprs(
-            partition_by,
-            &sort_keys_exprs,
-            equal_properties,
-        );
-        get_at_indices(sort_keys, &indices)
+        get_at_indices(sort_keys, &self.ordered_partition_by_indices)
     }
 
     // Initialize appropriate PartitionSearcher implementation from the state.
@@ -189,13 +189,8 @@ impl BoundedWindowAggExec {
                 partition_by_sort_keys,
                 ordered_partition_by_indices,
             }),
-            PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted => {
-                let is_partially_sorted =
-                    matches!(search_mode, PartitionSearchMode::PartiallySorted);
-                Box::new(LinearSearch::new(
-                    ordered_partition_by_indices,
-                    is_partially_sorted,
-                ))
+            PartitionSearchMode::Linear | PartitionSearchMode::PartiallySorted(_) => {
+                Box::new(LinearSearch::new(ordered_partition_by_indices))
             }
         })
     }
@@ -416,10 +411,6 @@ pub struct LinearSearch {
     // For instance, if input is ordered by a,b and window expression is
     // PARTITION BY b,a this stores (1, 0).
     ordered_partition_by_indices: Vec<usize>,
-    // Linear search has two version: PartiallySorted and Linear (e.g Unsorted)
-    // the only difference is that in PartiallySorted we can prune some partitions
-    // This flag enables check for additional pruning.
-    is_partially_sorted: bool,
     // RawTable that is used to calculate unique partitions for each new RecordBatch.
     // First entry in the tuple is hash value.
     // Second entry is the unique id for each partition (increments from 0 to n)
@@ -555,7 +546,7 @@ impl PartitionSearcher for LinearSearch {
 
     fn mark_partition_end(&mut self, partition_buffers: &mut PartitionBatches) {
         // PartiallySorted case, otherwise we cannot mark end of a partition
-        if self.is_partially_sorted {
+        if !self.ordered_partition_by_indices.is_empty() {
             if let Some((last_row, _)) = partition_buffers.last() {
                 let last_sorted_cols = self
                     .ordered_partition_by_indices
@@ -583,12 +574,11 @@ impl PartitionSearcher for LinearSearch {
 
 impl LinearSearch {
     // Initialize new LinearSearch partition searcher.
-    fn new(ordered_partition_by_indices: Vec<usize>, is_partially_sorted: bool) -> Self {
+    fn new(ordered_partition_by_indices: Vec<usize>) -> Self {
         LinearSearch {
             input_buffer_hashes: VecDeque::new(),
             random_state: Default::default(),
             ordered_partition_by_indices,
-            is_partially_sorted,
             row_map_batch: RawTable::with_capacity(0),
             row_map_out: RawTable::with_capacity(0),
         }

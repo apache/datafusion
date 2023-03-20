@@ -735,7 +735,9 @@ fn can_skip_ordering_util(
     } else if is_first_pb {
         let first_n = calc_ordering_range(&ordered_pb_indices);
         assert!(first_n < partitionby_exprs.len());
-        PartitionSearchMode::PartiallySorted
+        let ordered_range = &ordered_pb_indices[0..first_n];
+        let partially_ordered_indices = find_match_indices(&pb_indices, ordered_range);
+        PartitionSearchMode::PartiallySorted(partially_ordered_indices)
     } else {
         PartitionSearchMode::Linear
     };
@@ -1223,7 +1225,7 @@ mod tests {
                 vec!["a", "e"],
                 vec![("b", false, true)],
                 // For unbounded, Expects to work in PartiallySorted mode. Shouldn't reverse window function.
-                Some((false, PartitionSearchMode::PartiallySorted)),
+                Some((false, PartitionSearchMode::PartiallySorted(vec![0]))),
                 None,
             ),
             // PARTITION BY a, c ORDER BY b ASC NULLS FIRST
@@ -1231,7 +1233,7 @@ mod tests {
                 vec!["a", "c"],
                 vec![("b", false, true)],
                 // For unbounded, Expects to work in PartiallySorted mode. Shouldn't reverse window function.
-                Some((false, PartitionSearchMode::PartiallySorted)),
+                Some((false, PartitionSearchMode::PartiallySorted(vec![0]))),
                 None,
             ),
         ];
