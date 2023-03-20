@@ -124,7 +124,6 @@ This will produce output like
 └──────────────┴──────────────┴──────────────┴───────────────┘
 ```
 
-
 ## Expected output
 
 The result of query 1 should produce the following output when executed against the SF=1 dataset.
