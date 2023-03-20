@@ -124,12 +124,18 @@ impl TableProviderFactory for ListingTableFactory {
             (Some(schema), table_partition_cols)
         };
 
+        let file_sort_order = if cmd.order_exprs.is_empty() {
+            None
+        } else {
+            Some(cmd.order_exprs.clone())
+        };
+
         let options = ListingOptions::new(file_format)
             .with_collect_stat(state.config().collect_statistics())
             .with_file_extension(file_extension)
             .with_target_partitions(state.config().target_partitions())
             .with_table_partition_cols(table_partition_cols)
-            .with_file_sort_order(None);
+            .with_file_sort_order(file_sort_order);
 
         let table_path = ListingTableUrl::parse(&cmd.location)?;
         let resolved_schema = match provided_schema {
