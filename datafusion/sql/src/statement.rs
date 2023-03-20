@@ -427,6 +427,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         order_exprs: Vec<OrderByExpr>,
         schema: &DFSchemaRef,
+        planner_context: &mut PlannerContext,
     ) -> Result<Vec<datafusion_expr::Expr>> {
         // Ask user to provide a schema if schema is empty.
         if !order_exprs.is_empty() && schema.fields().is_empty() {
@@ -438,7 +439,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Convert each OrderByExpr to a SortExpr:
         let result = order_exprs
             .into_iter()
-            .map(|e| self.order_by_to_sort_expr(e, schema))
+            .map(|e| self.order_by_to_sort_expr(e, schema, planner_context))
             .collect::<Result<Vec<_>>>()?;
         // Verify that columns of all SortExprs exist in the schema:
         for expr in result.iter() {
@@ -496,7 +497,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let schema = self.build_schema(columns)?;
         let df_schema = schema.to_dfschema_ref()?;
 
-        let ordered_exprs = self.build_order_by(order_exprs, &df_schema)?;
+        let ordered_exprs =
+            self.build_order_by(order_exprs, &df_schema, &mut PlannerContext::new())?;
 
         // External tables do not support schemas at the moment, so the name is just a table name
         let name = OwnedTableReference::bare(name);
