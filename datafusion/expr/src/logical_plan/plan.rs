@@ -34,7 +34,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
-    ScalarValue, TableReference,
+    Result, ScalarValue, TableReference,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -259,7 +259,7 @@ impl LogicalPlan {
         let mut exprs = vec![];
         self.inspect_expressions(|e| {
             exprs.push(e.clone());
-            Ok(()) as Result<(), DataFusionError>
+            Ok(()) as Result<()>
         })
         // closure always returns OK
         .unwrap();
@@ -417,7 +417,7 @@ impl LogicalPlan {
     }
 
     /// returns all `Using` join columns in a logical plan
-    pub fn using_columns(&self) -> Result<Vec<HashSet<Column>>, DataFusionError> {
+    pub fn using_columns(&self) -> Result<Vec<HashSet<Column>>> {
         struct UsingJoinColumnVisitor {
             using_columns: Vec<HashSet<Column>>,
         }
@@ -437,7 +437,7 @@ impl LogicalPlan {
                         on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
                             accumu.insert(l.try_into_col()?);
                             accumu.insert(r.try_into_col()?);
-                            Result::<_, DataFusionError>::Ok(accumu)
+                            Result::<_>::Ok(accumu)
                         })?;
                     self.using_columns.push(columns);
                 }
@@ -452,10 +452,7 @@ impl LogicalPlan {
         Ok(visitor.using_columns)
     }
 
-    pub fn with_new_inputs(
-        &self,
-        inputs: &[LogicalPlan],
-    ) -> Result<LogicalPlan, DataFusionError> {
+    pub fn with_new_inputs(&self, inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
         from_plan(self, &self.expressions(), inputs)
     }
 
@@ -464,7 +461,7 @@ impl LogicalPlan {
     pub fn with_param_values(
         self,
         param_values: Vec<ScalarValue>,
-    ) -> Result<LogicalPlan, DataFusionError> {
+    ) -> Result<LogicalPlan> {
         match self {
             LogicalPlan::Prepare(prepare_lp) => {
                 // Verify if the number of params matches the number of values
@@ -658,12 +655,12 @@ impl LogicalPlan {
     pub fn replace_params_with_values(
         &self,
         param_values: &[ScalarValue],
-    ) -> Result<LogicalPlan, DataFusionError> {
+    ) -> Result<LogicalPlan> {
         let new_exprs = self
             .expressions()
             .into_iter()
             .map(|e| Self::replace_placeholders_with_values(e, param_values))
-            .collect::<Result<Vec<_>, DataFusionError>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         let new_inputs_with_values = self
             .inputs()
@@ -675,9 +672,7 @@ impl LogicalPlan {
     }
 
     /// Walk the logical plan, find any `PlaceHolder` tokens, and return a map of their IDs and DataTypes
-    pub fn get_parameter_types(
-        &self,
-    ) -> Result<HashMap<String, Option<DataType>>, DataFusionError> {
+    pub fn get_parameter_types(&self) -> Result<HashMap<String, Option<DataType>>> {
         struct ParamTypeVisitor {
             param_types: HashMap<String, Option<DataType>>,
         }
@@ -725,7 +720,7 @@ impl LogicalPlan {
                     };
                     visitor = expr.accept(visitor)?;
                     param_types.extend(visitor.param_types);
-                    Ok(()) as Result<(), DataFusionError>
+                    Ok(()) as Result<()>
                 })?;
                 self.param_types.extend(param_types);
                 Ok(true)
@@ -744,7 +739,7 @@ impl LogicalPlan {
     fn replace_placeholders_with_values(
         expr: Expr,
         param_values: &[ScalarValue],
-    ) -> Result<Expr, DataFusionError> {
+    ) -> Result<Expr> {
         rewrite_expr(expr, |expr| {
             match &expr {
                 Expr::Placeholder { id, data_type } => {
@@ -1393,10 +1388,7 @@ pub struct Projection {
 
 impl Projection {
     /// Create a new Projection
-    pub fn try_new(
-        expr: Vec<Expr>,
-        input: Arc<LogicalPlan>,
-    ) -> Result<Self, DataFusionError> {
+    pub fn try_new(expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
         let schema = Arc::new(DFSchema::new_with_metadata(
             exprlist_to_fields(&expr, &input)?,
             input.schema().metadata().clone(),
@@ -1409,7 +1401,7 @@ impl Projection {
         expr: Vec<Expr>,
         input: Arc<LogicalPlan>,
         schema: DFSchemaRef,
-    ) -> Result<Self, DataFusionError> {
+    ) -> Result<Self> {
         if expr.len() != schema.fields().len() {
             return Err(DataFusionError::Plan(format!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len())));
         }
@@ -1917,7 +1909,7 @@ impl Join {
         left: Arc<LogicalPlan>,
         right: Arc<LogicalPlan>,
         column_on: (Vec<Column>, Vec<Column>),
-    ) -> Result<Self, DataFusionError> {
+    ) -> Result<Self> {
         let original_join = match original {
             LogicalPlan::Join(join) => join,
             _ => return plan_err!("Could not create join with project input"),
