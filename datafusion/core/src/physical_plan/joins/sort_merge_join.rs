@@ -24,6 +24,7 @@ use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::fmt::Formatter;
+use std::mem;
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -526,16 +527,17 @@ impl BufferedBatch {
         // Estimation is calculated as
         //   inner batch size
         // + join keys size
-        // + worst case null_joined (as vector capacity)
-        // + Range size (16)
-        // + size of this estimation (8)
+        // + worst case null_joined (as vector capacity * element size)
+        // + Range size
+        // + size of this estimation
         let size_estimation = batch.get_array_memory_size()
             + join_arrays
                 .iter()
                 .map(|arr| arr.get_array_memory_size())
                 .sum::<usize>()
-            + batch.num_rows().next_power_of_two() * 8
-            + 24;
+            + batch.num_rows().next_power_of_two() * mem::size_of::<usize>()
+            + mem::size_of::<Range<usize>>()
+            + mem::size_of::<usize>();
 
         BufferedBatch {
             batch,
