@@ -21,7 +21,7 @@ use crate::type_coercion::{is_date, is_interval, is_numeric, is_timestamp};
 use crate::Operator;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
-    DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
 };
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
@@ -220,7 +220,58 @@ pub fn temporal_add_sub_coercion(
         return Ok(Some(lhs_type.clone()));
     }
 
-    // date or timestamp + date or timestamp
+    // timestamp + timestamp with - operator
+    if is_timestamp(lhs_type) && is_timestamp(rhs_type) && (*op == Operator::Minus) {
+        // At this stage, a timestamp can be subtracted from a timestamp only if they
+        // have the same type. To not lose data, second and millisecond precision
+        // timestamps give output in the type of `IntervalDayTime`, and microsecond
+        // and nanosecond precision timestamps give in the type of `IntervalMonthDayNano`.
+        // A nanosecond precision subtraction may result in `IntervalYearMonth` or
+        // `IntervalDayTime` without loss of data, however; we need to be deterministic
+        // while determining the type of the output.
+        match (lhs_type, rhs_type) {
+            (
+                DataType::Timestamp(TimeUnit::Second, _),
+                DataType::Timestamp(TimeUnit::Second, _),
+            ) => return Ok(Some(DataType::Interval(IntervalUnit::DayTime))),
+            (
+                DataType::Timestamp(TimeUnit::Millisecond, _),
+                DataType::Timestamp(TimeUnit::Millisecond, _),
+            ) => return Ok(Some(DataType::Interval(IntervalUnit::DayTime))),
+            (
+                DataType::Timestamp(TimeUnit::Microsecond, _),
+                DataType::Timestamp(TimeUnit::Microsecond, _),
+            ) => return Ok(Some(DataType::Interval(IntervalUnit::MonthDayNano))),
+            (
+                DataType::Timestamp(TimeUnit::Nanosecond, _),
+                DataType::Timestamp(TimeUnit::Nanosecond, _),
+            ) => return Ok(Some(DataType::Interval(IntervalUnit::MonthDayNano))),
+            (_, _) => {
+                return Err(DataFusionError::Plan(format!(
+                    "The timestamps have different types"
+                )));
+            }
+        }
+    }
+
+    // interval + interval
+    if is_interval(lhs_type) && is_interval(rhs_type) {
+        match (lhs_type, rhs_type) {
+            // operation with the same types
+            (
+                DataType::Interval(IntervalUnit::YearMonth),
+                DataType::Interval(IntervalUnit::YearMonth),
+            ) => return Ok(Some(DataType::Interval(IntervalUnit::YearMonth))),
+            (
+                DataType::Interval(IntervalUnit::DayTime),
+                DataType::Interval(IntervalUnit::DayTime),
+            ) => return Ok(Some(DataType::Interval(IntervalUnit::DayTime))),
+            // operation with MonthDayNano's or different types
+            (_, _) => return Ok(Some(DataType::Interval(IntervalUnit::MonthDayNano))),
+        }
+    }
+
+    // date + date or timestamp + timestamp with + operator
     if (is_date(lhs_type) || is_timestamp(lhs_type))
         && (is_date(rhs_type) || is_timestamp(rhs_type))
     {

@@ -18,12 +18,14 @@
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::array::{Array, ArrayRef};
-use arrow::compute::unary;
+use arrow::compute::{binary, unary};
 use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Schema, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    DataType, Date32Type, Date64Type, IntervalDayTimeType, Schema, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType,
 };
 use arrow::record_batch::RecordBatch;
+use arrow_schema::IntervalUnit;
 use datafusion_common::cast::{
     as_date32_array, as_date64_array, as_timestamp_microsecond_array,
     as_timestamp_millisecond_array, as_timestamp_nanosecond_array,
@@ -31,10 +33,11 @@ use datafusion_common::cast::{
 };
 use datafusion_common::scalar::{
     date32_add, date64_add, microseconds_add, milliseconds_add, nanoseconds_add,
-    seconds_add,
+    seconds_add, trial, ts_sub_to_interval, IntervalMode,
 };
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_expr::type_coercion::is_interval;
 use datafusion_expr::{ColumnarValue, Operator};
 use std::any::Any;
 use std::fmt::{Display, Formatter};
@@ -59,27 +62,29 @@ impl DateTimeIntervalExpr {
         rhs: Arc<dyn PhysicalExpr>,
         input_schema: &Schema,
     ) -> Result<Self> {
-        match lhs.data_type(input_schema)? {
-            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
-                match rhs.data_type(input_schema)? {
-                    DataType::Interval(_) => match &op {
-                        Operator::Plus | Operator::Minus => Ok(Self {
-                            lhs,
-                            op,
-                            rhs,
-                            input_schema: input_schema.clone(),
-                        }),
-                        _ => Err(DataFusionError::Execution(format!(
-                            "Invalid operator '{op}' for DateIntervalExpr"
-                        ))),
-                    },
-                    other => Err(DataFusionError::Execution(format!(
-                        "Operation '{op}' not support for type {other}"
-                    ))),
-                }
-            }
+        match (
+            lhs.data_type(input_schema)?,
+            op,
+            rhs.data_type(input_schema)?,
+        ) {
+            (
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
+                Operator::Plus | Operator::Minus,
+                DataType::Interval(_),
+            )
+            | (DataType::Timestamp(_, _), Operator::Minus, DataType::Timestamp(_, _))
+            | (
+                DataType::Interval(_),
+                Operator::Plus | Operator::Minus,
+                DataType::Interval(_),
+            ) => Ok(Self {
+                lhs,
+                op,
+                rhs,
+                input_schema: input_schema.clone(),
+            }),
             other => Err(DataFusionError::Execution(format!(
-                "Invalid lhs type '{other}' for DateIntervalExpr"
+                "Invalid operation '{other:?}' for DateIntervalExpr"
             ))),
         }
     }
@@ -112,7 +117,35 @@ impl PhysicalExpr for DateTimeIntervalExpr {
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        self.lhs.data_type(input_schema)
+        let lhs_data_type = self.lhs.data_type(input_schema)?;
+        let rhs_data_type = self.rhs.data_type(input_schema)?;
+
+        if is_interval(&lhs_data_type) && is_interval(&rhs_data_type) {
+            if lhs_data_type == rhs_data_type {
+                return Ok(lhs_data_type);
+            } else {
+                return Ok(DataType::Interval(IntervalUnit::MonthDayNano));
+            }
+        }
+        match (lhs_data_type, rhs_data_type) {
+            (
+                DataType::Timestamp(TimeUnit::Second, _),
+                DataType::Timestamp(TimeUnit::Second, _),
+            )
+            | (
+                DataType::Timestamp(TimeUnit::Millisecond, _),
+                DataType::Timestamp(TimeUnit::Millisecond, _),
+            ) => Ok(DataType::Interval(IntervalUnit::DayTime)),
+            (
+                DataType::Timestamp(TimeUnit::Microsecond, _),
+                DataType::Timestamp(TimeUnit::Microsecond, _),
+            )
+            | (
+                DataType::Timestamp(TimeUnit::Nanosecond, _),
+                DataType::Timestamp(TimeUnit::Nanosecond, _),
+            ) => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
+            (_, _) => self.lhs.data_type(input_schema),
+        }
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
@@ -120,18 +153,8 @@ impl PhysicalExpr for DateTimeIntervalExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let dates = self.lhs.evaluate(batch)?;
-        let intervals = self.rhs.evaluate(batch)?;
-
-        // Unwrap interval to add
-        let intervals = match &intervals {
-            ColumnarValue::Scalar(interval) => interval,
-            _ => {
-                let msg = "Columnar execution is not yet supported for DateIntervalExpr";
-                return Err(DataFusionError::Execution(msg.to_string()));
-            }
-        };
-
+        let lhs_columnar = self.lhs.evaluate(batch)?;
+        let rhs_columnar = self.rhs.evaluate(batch)?;
         // Invert sign for subtraction
         let sign = match self.op {
             Operator::Plus => 1,
@@ -142,14 +165,34 @@ impl PhysicalExpr for DateTimeIntervalExpr {
                 return Err(DataFusionError::Internal(msg.to_string()));
             }
         };
-
-        match dates {
-            ColumnarValue::Scalar(operand) => Ok(ColumnarValue::Scalar(if sign > 0 {
-                operand.add(intervals)?
-            } else {
-                operand.sub(intervals)?
-            })),
-            ColumnarValue::Array(array) => evaluate_array(array, sign, intervals),
+        // RHS is first checked. If it is a Scalar, there are 2 options:
+        // Either LHS is also a Scalar and matching operation is applied,
+        // or LHS is an Array and unary operations for related types are
+        // applied in evaluate_array function. If RHS is an Array, then
+        // LHS must also be, moreover; they must be the same Timestamp type.
+        match &rhs_columnar {
+            ColumnarValue::Scalar(operand_rhs) => match lhs_columnar {
+                ColumnarValue::Scalar(operand_lhs) => {
+                    Ok(ColumnarValue::Scalar(if sign > 0 {
+                        operand_lhs.add(operand_rhs)?
+                    } else {
+                        operand_lhs.sub(operand_rhs)?
+                    }))
+                }
+                ColumnarValue::Array(array_lhs) => {
+                    evaluate_array(array_lhs, sign, operand_rhs)
+                }
+            },
+            ColumnarValue::Array(array_rhs) => match lhs_columnar {
+                ColumnarValue::Array(array_lhs) => {
+                    evaluate_arrays(array_lhs, sign, array_rhs)
+                }
+                _ => {
+                    let msg =
+                        "If RHS of the operation is an array, then LHS also must be";
+                    Err(DataFusionError::Internal(msg.to_string()))
+                }
+            },
         }
     }
 
@@ -236,6 +279,41 @@ pub fn evaluate_array(
             array.data_type()
         )))?,
     };
+    Ok(ColumnarValue::Array(ret))
+}
+
+pub fn evaluate_arrays(
+    array_lhs: ArrayRef,
+    sign: i32,
+    array_rhs: &ArrayRef,
+) -> Result<ColumnarValue> {
+    let err =
+        || DataFusionError::Execution("Overflow while evaluating arrays".to_string());
+    let ret = match (array_lhs.data_type(), array_rhs.data_type()) {
+        (
+            DataType::Timestamp(TimeUnit::Second, opt_tz_lhs),
+            DataType::Timestamp(TimeUnit::Second, opt_tz_rhs),
+        ) => {
+            let prim_array_lhs = as_timestamp_second_array(&array_lhs)?;
+            let prim_array_rhs = as_timestamp_second_array(&array_rhs)?;
+            Arc::new(
+                binary::<TimestampSecondType, TimestampSecondType, _, IntervalDayTimeType>(
+                    prim_array_lhs,
+                    prim_array_rhs,
+                    |ts1: TimestampSecondType, ts2: TimestampSecondType| {
+                        trial(ts1, ts2)
+                    },
+                )
+                .unwrap(),
+            )
+        }
+        (_, _) => Err(DataFusionError::Execution(format!(
+            "Invalid array types for DateIntervalExpr: {:?} {} {:?}",
+            array_lhs.data_type(),
+            sign,
+            array_rhs.data_type()
+        )))?,
+    } as ArrayRef;
     Ok(ColumnarValue::Array(ret))
 }
 

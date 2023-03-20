@@ -207,6 +207,27 @@ pub fn create_physical_expr(
                     lhs,
                     input_schema,
                 )?)),
+                // Timestamp + Timestamp operations cannot reach till that point already.
+                (
+                    DataType::Timestamp(_, _),
+                    Operator::Minus,
+                    DataType::Timestamp(_, _),
+                ) => Ok(Arc::new(DateTimeIntervalExpr::try_new(
+                    lhs,
+                    *op,
+                    rhs,
+                    input_schema,
+                )?)),
+                (
+                    DataType::Interval(_),
+                    Operator::Plus | Operator::Minus,
+                    DataType::Interval(_),
+                ) => Ok(Arc::new(DateTimeIntervalExpr::try_new(
+                    lhs,
+                    *op,
+                    rhs,
+                    input_schema,
+                )?)),
                 _ => {
                     // Note that the logical planner is responsible
                     // for type coercion on the arguments (e.g. if one
