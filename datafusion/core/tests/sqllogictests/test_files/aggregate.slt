@@ -1397,8 +1397,10 @@ drop table t_source;
 statement ok
 drop table t;
 
-query error DataFusion error: Execution error: median requires at least one non-null value
+query I
 select median(a) from (select 1 as a where 1=0);
+----
+NULL
 
 query error DataFusion error: Execution error: aggregate function needs at least one non-null element
 select approx_median(a) from (select 1 as a where 1=0);
