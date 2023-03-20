@@ -42,6 +42,7 @@ use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr, Column, Litera
 use datafusion_physical_expr::intervals::{is_datatype_supported, is_operator_supported};
 use datafusion_physical_expr::PhysicalExpr;
 
+use crate::physical_plan::windows::{BoundedWindowAggExec, PartitionSearchMode};
 use std::sync::Arc;
 
 /// The [PipelineFixer] rule tries to modify a given plan so that it can
@@ -73,6 +74,7 @@ impl PhysicalOptimizerRule for PipelineFixer {
         let physical_optimizer_subrules: Vec<Box<PipelineFixerSubrule>> = vec![
             Box::new(hash_join_convert_symmetric_subrule),
             Box::new(hash_join_swap_subrule),
+            Box::new(replace_window_with_linear),
         ];
         let state = pipeline.transform_up(&|p| {
             apply_subrules_and_check_finiteness_requirements(
@@ -263,6 +265,41 @@ fn hash_join_swap_subrule(
     }
 }
 
+/// This subrule converts a BoundedWindowExec
+/// where all partition by columns are expected to be sorted
+/// to none of the columns are expected to be sorted.
+/// With this change we can remove SortExecs in the plan.
+fn replace_window_with_linear(
+    input: PipelineStatePropagator,
+) -> Option<Result<PipelineStatePropagator>> {
+    let plan = input.plan;
+    if let Some(exec) = plan.as_any().downcast_ref::<BoundedWindowAggExec>() {
+        // BoundedWindowAggExec has single child
+        let child_unbounded = input.children_unbounded[0];
+        let new_plan = if child_unbounded {
+            let input = exec.input();
+            let new_exec = BoundedWindowAggExec::try_new(
+                exec.window_expr().to_vec(),
+                input.clone(),
+                input.schema(),
+                exec.partition_keys.clone(),
+                exec.sort_keys.clone(),
+                PartitionSearchMode::Linear,
+            );
+            new_exec.map(|elem| Arc::new(elem) as _)
+        } else {
+            Ok(plan.clone())
+        };
+
+        Some(new_plan.map(|plan| PipelineStatePropagator {
+            plan,
+            unbounded: child_unbounded,
+            children_unbounded: vec![child_unbounded],
+        }))
+    } else {
+        None
+    }
+}
 /// This function swaps sides of a hash join to make it runnable even if one of its
 /// inputs are infinite. Note that this is not always possible; i.e. [JoinType::Full],
 /// [JoinType::Right], [JoinType::RightAnti] and [JoinType::RightSemi] can not run with

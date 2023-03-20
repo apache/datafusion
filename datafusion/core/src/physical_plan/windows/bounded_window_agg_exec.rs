@@ -79,6 +79,31 @@ pub enum PartitionSearchMode {
     Sorted,
 }
 
+impl PartialOrd for PartitionSearchMode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (PartitionSearchMode::Sorted, PartitionSearchMode::Sorted) => {
+                Some(Ordering::Equal)
+            }
+            (PartitionSearchMode::Sorted, _) => Some(Ordering::Greater),
+            (PartitionSearchMode::PartiallySorted(_), PartitionSearchMode::Sorted) => {
+                Some(Ordering::Less)
+            }
+            (
+                PartitionSearchMode::PartiallySorted(lhs),
+                PartitionSearchMode::PartiallySorted(rhs),
+            ) => Some(lhs.len().cmp(&rhs.len())),
+            (PartitionSearchMode::PartiallySorted(_), PartitionSearchMode::Linear) => {
+                Some(Ordering::Greater)
+            }
+            (PartitionSearchMode::Linear, PartitionSearchMode::Linear) => {
+                Some(Ordering::Equal)
+            }
+            (PartitionSearchMode::Linear, _) => Some(Ordering::Less),
+        }
+    }
+}
+
 /// Window execution plan
 #[derive(Debug)]
 pub struct BoundedWindowAggExec {
@@ -97,7 +122,7 @@ pub struct BoundedWindowAggExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Partition by mode
-    partition_search_mode: PartitionSearchMode,
+    pub partition_search_mode: PartitionSearchMode,
     /// Partition by indices that define ordering
     // For example, if input ordering is ORDER BY a,b
     // and window expression contains PARTITION BY b,a

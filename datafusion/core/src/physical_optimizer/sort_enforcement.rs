@@ -404,6 +404,12 @@ fn parallelize_sorts(
 }
 
 /// Checks whether the given executor is a limit;
+/// i.e. either a `WindowAggExec` or a `BoundedWindowAggExec`.
+fn is_window(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<WindowAggExec>() || plan.as_any().is::<BoundedWindowAggExec>()
+}
+
+/// Checks whether the given executor is a limit;
 /// i.e. either a `LocalLimitExec` or a `GlobalLimitExec`.
 fn is_limit(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<GlobalLimitExec>() || plan.as_any().is::<LocalLimitExec>()
@@ -454,17 +460,10 @@ fn ensure_sorting(
                     update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
                     let sort_expr = required_ordering.to_vec();
                     add_sort_above(child, sort_expr)?;
-                    *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
-                }
-                if let Some(tree) = sort_onwards {
-                    // For window expressions, we can remove some sorts when we can
-                    // calculate the result in reverse:
-                    if plan.as_any().is::<WindowAggExec>()
-                        || plan.as_any().is::<BoundedWindowAggExec>()
-                    {
-                        if let Some(result) = analyze_window_sort_removal(tree, &plan)? {
-                            return Ok(Some(result));
-                        }
+                    if is_sort(child) {
+                        *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
+                    } else {
+                        *sort_onwards = None;
                     }
                 }
             }
@@ -491,6 +490,38 @@ fn ensure_sorting(
             }
             (None, None) => {}
         }
+    }
+    // For window expressions, we can remove some sorts when we can
+    // calculate the result in reverse:
+    if is_window(&plan) {
+        if let Some(tree) = &mut sort_onwards[0] {
+            if let Some(result) = analyze_window_sort_removal(tree, &plan)? {
+                return Ok(Some(result));
+            }
+        }
+        if let Some(exec) = plan.as_any().downcast_ref::<BoundedWindowAggExec>() {
+            let window_expr = exec.window_expr();
+            let search_mode = &exec.partition_search_mode;
+            let input = exec.input();
+            let res = can_skip_ordering_util(
+                window_expr[0].partition_by(),
+                window_expr[0].order_by(),
+                input,
+            )?;
+            if let Some((_, new_mode)) = res {
+                if new_mode > *search_mode {
+                    let new_plan = Arc::new(BoundedWindowAggExec::try_new(
+                        window_expr.to_vec(),
+                        input.clone(),
+                        input.schema(),
+                        exec.partition_keys.clone(),
+                        input.output_ordering().map(|elem| elem.to_vec()),
+                        new_mode,
+                    )?) as _;
+                    return Ok(Some(PlanWithCorrespondingSort::new(new_plan)));
+                }
+            }
+        };
     }
     Ok(Some(PlanWithCorrespondingSort {
         plan: plan.with_new_children(children)?,
@@ -552,12 +583,21 @@ fn analyze_window_sort_removal(
     sort_tree: &mut ExecTree,
     window_exec: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
-    let (window_expr, partition_keys) = if let Some(exec) =
+    let (window_expr, partition_keys, search_mode) = if let Some(exec) =
         window_exec.as_any().downcast_ref::<BoundedWindowAggExec>()
     {
-        (exec.window_expr(), &exec.partition_keys)
+        // println!("partition_search_mode:{:?}", exec.partition_search_mode);
+        (
+            exec.window_expr(),
+            &exec.partition_keys,
+            exec.partition_search_mode.clone(),
+        )
     } else if let Some(exec) = window_exec.as_any().downcast_ref::<WindowAggExec>() {
-        (exec.window_expr(), &exec.partition_keys)
+        (
+            exec.window_expr(),
+            &exec.partition_keys,
+            PartitionSearchMode::Sorted,
+        )
     } else {
         return Err(DataFusionError::Plan(
             "Expects to receive either WindowAggExec of BoundedWindowAggExec".to_string(),
@@ -573,6 +613,15 @@ fn analyze_window_sort_removal(
         // cannot skip sort
         return Ok(None);
     };
+    // println!("search_mode:{:?}", search_mode);
+    // println!("partition_search_mode:{:?}", partition_search_mode);
+    // println!("should_reverse:{:?}", should_reverse);
+    if search_mode > partition_search_mode {
+        // println!("cannot skip sort, because relaxed");
+        // More relaxed than requirement
+        // cannot skip sort
+        return Ok(None);
+    }
 
     let new_window_expr = if should_reverse {
         window_expr
@@ -642,7 +691,6 @@ fn can_skip_ordering_util(
     orderby_keys: &[PhysicalSortExpr],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<(bool, PartitionSearchMode)>> {
-    let is_unbounded = is_plan_unbounded(input)?;
     let physical_ordering = if let Some(physical_ordering) = input.output_ordering() {
         physical_ordering
     } else {
@@ -742,11 +790,6 @@ fn can_skip_ordering_util(
         PartitionSearchMode::Linear
     };
 
-    // Linear and PartiallySorted implementations are not beneficial for finite source cases
-    // (e.g non-streaming). Hence use these implementations only in streaming case to not break pipeline.
-    if !is_unbounded && !matches!(mode, PartitionSearchMode::Sorted) {
-        return Ok(None);
-    }
     Ok(Some((should_reverse, mode)))
 }
 
@@ -1020,22 +1063,6 @@ fn calc_ordering_range(in1: &[usize]) -> usize {
     count
 }
 
-// Calculate whether the plan is unbounded by recursively calculating
-// whether its children are unbounded or not.
-fn is_plan_unbounded(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
-    if plan.children().is_empty() {
-        // Executor is at the bottom
-        plan.unbounded_output(&[])
-    } else {
-        let children_unbounded = plan
-            .children()
-            .iter()
-            .map(is_plan_unbounded)
-            .collect::<Result<Vec<_>>>()?;
-        plan.unbounded_output(&children_unbounded)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1112,16 +1139,12 @@ mod tests {
                 vec![("c", false, false)],
                 // For unbounded Cannot skip sorting
                 None,
-                // For bounded Cannot skip sorting
-                None,
             ),
             // ORDER BY c ASC NULLS FIRST
             (
                 vec![],
                 vec![("c", false, true)],
                 // For unbounded Cannot skip sorting
-                None,
-                // For bounded Cannot skip sorting
                 None,
             ),
             // PARTITION BY b, ORDER BY c ASC NULLS FIRST
@@ -1130,8 +1153,6 @@ mod tests {
                 vec![("c", false, true)],
                 // For unbounded Cannot skip sorting
                 None,
-                // For bounded Cannot skip sorting
-                None,
             ),
             // PARTITION BY b, ORDER BY c ASC NULLS FIRST
             (
@@ -1139,16 +1160,12 @@ mod tests {
                 vec![("c", false, true)],
                 // Cannot skip sorting
                 None,
-                // For bounded Cannot skip sorting
-                None,
             ),
             // PARTITION BY b, ORDER BY c ASC NULLS FIRST
             (
                 vec!["a", "b"],
                 vec![("c", false, true), ("e", false, true)],
                 // For unbounded Cannot skip sorting
-                None,
-                // For bounded Cannot skip sorting
                 None,
             ),
             // PARTITION BY a, ORDER BY b ASC NULLS FIRST
@@ -1158,7 +1175,6 @@ mod tests {
                 // For both unbounded and bounded Expects to work in Sorted mode.
                 // Shouldn't reverse window function.
                 Some((false, PartitionSearchMode::Sorted)),
-                Some((false, PartitionSearchMode::Sorted)),
             ),
             // PARTITION BY a, ORDER BY b ASC NULLS LAST
             (
@@ -1166,7 +1182,6 @@ mod tests {
                 vec![("b", false, false)],
                 // For both unbounded and bounded Expects to work in Sorted mode.
                 // Shouldn't reverse window function.
-                Some((false, PartitionSearchMode::Sorted)),
                 Some((false, PartitionSearchMode::Sorted)),
             ),
             // PARTITION BY a, ORDER BY b DESC NULLS LAST
@@ -1176,7 +1191,6 @@ mod tests {
                 // For both unbounded and bounded Expects to work in Sorted mode.
                 // Should reverse window function.
                 Some((true, PartitionSearchMode::Sorted)),
-                Some((true, PartitionSearchMode::Sorted)),
             ),
             // PARTITION BY a, b ORDER BY c ASC NULLS FIRST
             (
@@ -1184,7 +1198,6 @@ mod tests {
                 vec![("c", false, true)],
                 // For both unbounded and bounded Expects to work in Sorted mode.
                 // Shouldn't reverse window function.
-                Some((false, PartitionSearchMode::Sorted)),
                 Some((false, PartitionSearchMode::Sorted)),
             ),
             // PARTITION BY a, b ORDER BY c DESC NULLS LAST
@@ -1194,7 +1207,6 @@ mod tests {
                 // For both unbounded and bounded Expects to work in Sorted mode.
                 // Should reverse window function.
                 Some((true, PartitionSearchMode::Sorted)),
-                Some((true, PartitionSearchMode::Sorted)),
             ),
             // PARTITION BY e ORDER BY a ASC NULLS FIRST
             (
@@ -1202,7 +1214,6 @@ mod tests {
                 vec![("a", false, true)],
                 // For unbounded, expects to work in Linear mode. Shouldn't reverse window function.
                 Some((false, PartitionSearchMode::Linear)),
-                None,
             ),
             // PARTITION BY b, c ORDER BY a ASC NULLS FIRST, c ASC NULLS FIRST
             (
@@ -1210,7 +1221,6 @@ mod tests {
                 vec![("a", false, true), ("c", false, true)],
                 // For unbounded, Expects to work in Linear mode. Shouldn't reverse window function.
                 Some((false, PartitionSearchMode::Linear)),
-                None,
             ),
             // PARTITION BY b ORDER BY a ASC NULLS FIRST
             (
@@ -1218,7 +1228,6 @@ mod tests {
                 vec![("a", false, true)],
                 // For unbounded, Expects to work in Linear mode. Shouldn't reverse window function.
                 Some((false, PartitionSearchMode::Linear)),
-                None,
             ),
             // PARTITION BY a, e ORDER BY b ASC NULLS FIRST
             (
@@ -1226,7 +1235,6 @@ mod tests {
                 vec![("b", false, true)],
                 // For unbounded, Expects to work in PartiallySorted mode. Shouldn't reverse window function.
                 Some((false, PartitionSearchMode::PartiallySorted(vec![0]))),
-                None,
             ),
             // PARTITION BY a, c ORDER BY b ASC NULLS FIRST
             (
@@ -1234,16 +1242,10 @@ mod tests {
                 vec![("b", false, true)],
                 // For unbounded, Expects to work in PartiallySorted mode. Shouldn't reverse window function.
                 Some((false, PartitionSearchMode::PartiallySorted(vec![0]))),
-                None,
             ),
         ];
         for test_case in test_cases {
-            let (
-                partition_by_columns,
-                order_by_params,
-                expected_unbounded,
-                expected_bounded,
-            ) = &test_case;
+            let (partition_by_columns, order_by_params, expected) = &test_case;
             let mut partition_by_exprs = vec![];
             for col_name in partition_by_columns {
                 partition_by_exprs.push(col(col_name, &test_schema)?);
@@ -1265,18 +1267,8 @@ mod tests {
                     &order_by_exprs,
                     &exec_unbounded
                 )?,
-                *expected_unbounded,
-                "Unexpected result for test case: {:?}",
-                test_case
-            );
-            assert_eq!(
-                can_skip_ordering_util(
-                    &partition_by_exprs,
-                    &order_by_exprs,
-                    &exec_bounded
-                )?,
-                *expected_bounded,
-                "Unexpected result for test case: {:?}",
+                *expected,
+                "Unexpected result for in unbounded test case: {:?}",
                 test_case
             );
         }
