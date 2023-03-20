@@ -15,13 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Trait to make Executionplan rewritable
+//! Trait to make LogicalPlan rewritable
 
-use crate::physical_plan::with_new_children_if_necessary;
-use crate::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
 
-use std::sync::Arc;
+use datafusion_expr::LogicalPlan;
 
 /// a Trait for marking tree node types that are rewritable
 pub trait TreeNodeRewritable: Clone {
@@ -119,6 +117,29 @@ pub trait TreeNodeRewritable: Clone {
     fn map_children<F>(self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>;
+
+    /// Apply the given function `func` to this node and recursively apply to the node's children
+    fn for_each<F>(&self, func: &F) -> Result<()>
+    where
+        F: Fn(&Self) -> Result<()>,
+    {
+        func(self)?;
+        self.apply_children(|node| node.for_each(func))
+    }
+
+    /// Recursively apply the given function `func` to the node's children and to this node
+    fn for_each_up<F>(&self, func: &F) -> Result<()>
+    where
+        F: Fn(&Self) -> Result<()>,
+    {
+        self.apply_children(|node| node.for_each_up(func))?;
+        func(self)
+    }
+
+    /// Apply the given function `func` to the node's children
+    fn apply_children<F>(&self, func: F) -> Result<()>
+    where
+        F: Fn(&Self) -> Result<()>;
 }
 
 /// Trait for potentially recursively transform an [`TreeNodeRewritable`] node
@@ -149,18 +170,30 @@ pub enum RewriteRecursion {
     Skip,
 }
 
-impl TreeNodeRewritable for Arc<dyn ExecutionPlan> {
+impl TreeNodeRewritable for LogicalPlan {
     fn map_children<F>(self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        let children = self.children();
+        let children = self.inputs().into_iter().cloned().collect::<Vec<_>>();
         if !children.is_empty() {
             let new_children: Result<Vec<_>> =
                 children.into_iter().map(transform).collect();
-            with_new_children_if_necessary(self, new_children?)
+            self.with_new_inputs(new_children?.as_slice())
         } else {
             Ok(self)
+        }
+    }
+
+    fn apply_children<F>(&self, func: F) -> Result<()>
+    where
+        F: Fn(&Self) -> Result<()>,
+    {
+        let children = self.inputs();
+        if !children.is_empty() {
+            children.into_iter().try_for_each(func)
+        } else {
+            Ok(())
         }
     }
 }

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, BooleanArray};
+use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
@@ -131,8 +131,7 @@ impl ArrowPredicate for DatafusionArrowPredicate {
             .map(|v| v.into_array(batch.num_rows()))
         {
             Ok(array) => {
-                let mask = as_boolean_array(&array)?;
-                let bool_arr = BooleanArray::from(mask.data().clone());
+                let bool_arr = as_boolean_array(&array)?.clone();
                 let num_filtered = bool_arr.len() - bool_arr.true_count();
                 self.rows_filtered.add(num_filtered);
                 timer.stop();
@@ -219,13 +218,16 @@ impl<'a> TreeNodeRewriter<Arc<dyn PhysicalExpr>> for FilterCandidateBuilder<'a> 
 
                 if DataType::is_nested(self.file_schema.field(idx).data_type()) {
                     self.non_primitive_columns = true;
+                    return Ok(RewriteRecursion::Stop);
                 }
             } else if self.table_schema.index_of(column.name()).is_err() {
                 // If the column does not exist in the (un-projected) table schema then
                 // it must be a projected column.
                 self.projected_columns = true;
+                return Ok(RewriteRecursion::Stop);
             }
         }
+
         Ok(RewriteRecursion::Continue)
     }
 

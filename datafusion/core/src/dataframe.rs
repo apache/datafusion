@@ -30,8 +30,8 @@ use parquet::file::properties::WriterProperties;
 use datafusion_common::from_slice::FromSlice;
 use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::{
-    avg, count, is_null, max, median, min, stddev, TableProviderFilterPushDown,
-    UNNAMED_TABLE,
+    avg, count, is_null, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
+    TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 
 use crate::arrow::datatypes::Schema;
@@ -332,142 +332,128 @@ impl DataFrame {
         let original_schema_fields = self.schema().fields().iter();
 
         //define describe column
-        let mut describe_schemas = original_schema_fields
-            .clone()
-            .map(|field| {
-                if field.data_type().is_numeric() {
-                    Field::new(field.name(), DataType::Float64, true)
-                } else {
-                    Field::new(field.name(), DataType::Utf8, true)
-                }
-            })
-            .collect::<Vec<_>>();
-        describe_schemas.insert(0, Field::new("describe", DataType::Utf8, false));
+        let mut describe_schemas = vec![Field::new("describe", DataType::Utf8, false)];
+        describe_schemas.extend(original_schema_fields.clone().map(|field| {
+            if field.data_type().is_numeric() {
+                Field::new(field.name(), DataType::Float64, true)
+            } else {
+                Field::new(field.name(), DataType::Utf8, true)
+            }
+        }));
 
-        //count aggregation
-        let cnt = self.clone().aggregate(
-            vec![],
-            original_schema_fields
-                .clone()
-                .map(|f| count(col(f.name())))
-                .collect::<Vec<_>>(),
-        )?;
-        // The optimization of AggregateStatistics will rewrite the physical plan
-        // for the count function and ignore alias functions,
-        // as shown in https://github.com/apache/arrow-datafusion/issues/5444.
-        // This logic should be removed when #5444 is fixed.
-        let cnt = cnt.clone().select(
-            cnt.schema()
-                .fields()
-                .iter()
-                .zip(original_schema_fields.clone())
-                .map(|(count_field, orgin_field)| {
-                    col(count_field.name()).alias(orgin_field.name())
-                })
-                .collect::<Vec<_>>(),
-        )?;
-        //should be removed when #5444 is fixed
         //collect recordBatch
         let describe_record_batch = vec![
             // count aggregation
-            cnt.collect().await?,
+            self.clone().aggregate(
+                vec![],
+                original_schema_fields
+                    .clone()
+                    .map(|f| count(col(f.name())).alias(f.name()))
+                    .collect::<Vec<_>>(),
+            ),
             // null_count aggregation
-            self.clone()
-                .aggregate(
-                    vec![],
-                    original_schema_fields
-                        .clone()
-                        .map(|f| count(is_null(col(f.name()))).alias(f.name()))
-                        .collect::<Vec<_>>(),
-                )?
-                .collect()
-                .await?,
+            self.clone().aggregate(
+                vec![],
+                original_schema_fields
+                    .clone()
+                    .map(|f| count(is_null(col(f.name()))).alias(f.name()))
+                    .collect::<Vec<_>>(),
+            ),
             // mean aggregation
-            self.clone()
-                .aggregate(
-                    vec![],
-                    original_schema_fields
-                        .clone()
-                        .filter(|f| f.data_type().is_numeric())
-                        .map(|f| avg(col(f.name())).alias(f.name()))
-                        .collect::<Vec<_>>(),
-                )?
-                .collect()
-                .await?,
+            self.clone().aggregate(
+                vec![],
+                original_schema_fields
+                    .clone()
+                    .filter(|f| f.data_type().is_numeric())
+                    .map(|f| avg(col(f.name())).alias(f.name()))
+                    .collect::<Vec<_>>(),
+            ),
             // std aggregation
-            self.clone()
-                .aggregate(
-                    vec![],
-                    original_schema_fields
-                        .clone()
-                        .filter(|f| f.data_type().is_numeric())
-                        .map(|f| stddev(col(f.name())).alias(f.name()))
-                        .collect::<Vec<_>>(),
-                )?
-                .collect()
-                .await?,
+            self.clone().aggregate(
+                vec![],
+                original_schema_fields
+                    .clone()
+                    .filter(|f| f.data_type().is_numeric())
+                    .map(|f| stddev(col(f.name())).alias(f.name()))
+                    .collect::<Vec<_>>(),
+            ),
             // min aggregation
-            self.clone()
-                .aggregate(
-                    vec![],
-                    original_schema_fields
-                        .clone()
-                        .filter(|f| {
-                            !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
-                        })
-                        .map(|f| min(col(f.name())).alias(f.name()))
-                        .collect::<Vec<_>>(),
-                )?
-                .collect()
-                .await?,
+            self.clone().aggregate(
+                vec![],
+                original_schema_fields
+                    .clone()
+                    .filter(|f| {
+                        !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
+                    })
+                    .map(|f| min(col(f.name())).alias(f.name()))
+                    .collect::<Vec<_>>(),
+            ),
             // max aggregation
-            self.clone()
-                .aggregate(
-                    vec![],
-                    original_schema_fields
-                        .clone()
-                        .filter(|f| {
-                            !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
-                        })
-                        .map(|f| max(col(f.name())).alias(f.name()))
-                        .collect::<Vec<_>>(),
-                )?
-                .collect()
-                .await?,
+            self.clone().aggregate(
+                vec![],
+                original_schema_fields
+                    .clone()
+                    .filter(|f| {
+                        !matches!(f.data_type(), DataType::Binary | DataType::Boolean)
+                    })
+                    .map(|f| max(col(f.name())).alias(f.name()))
+                    .collect::<Vec<_>>(),
+            ),
             // median aggregation
-            self.clone()
-                .aggregate(
-                    vec![],
-                    original_schema_fields
-                        .clone()
-                        .filter(|f| f.data_type().is_numeric())
-                        .map(|f| median(col(f.name())).alias(f.name()))
-                        .collect::<Vec<_>>(),
-                )?
-                .collect()
-                .await?,
+            self.clone().aggregate(
+                vec![],
+                original_schema_fields
+                    .clone()
+                    .filter(|f| f.data_type().is_numeric())
+                    .map(|f| median(col(f.name())).alias(f.name()))
+                    .collect::<Vec<_>>(),
+            ),
         ];
 
-        let mut array_ref_vec: Vec<ArrayRef> = vec![];
+        // first column with function names
+        let mut array_ref_vec: Vec<ArrayRef> = vec![Arc::new(StringArray::from_slice(
+            supported_describe_functions.clone(),
+        ))];
         for field in original_schema_fields {
             let mut array_datas = vec![];
-            for record_batch in describe_record_batch.iter() {
-                let column = record_batch.get(0).unwrap().column_by_name(field.name());
-                match column {
-                    Some(c) => {
-                        if field.data_type().is_numeric() {
-                            array_datas.push(cast(c, &DataType::Float64)?);
-                        } else {
-                            array_datas.push(cast(c, &DataType::Utf8)?);
+            for result in describe_record_batch.iter() {
+                let array_ref = match result {
+                    Ok(df) => {
+                        let batchs = df.clone().collect().await;
+                        match batchs {
+                            Ok(batchs)
+                                if batchs.len() == 1
+                                    && batchs[0]
+                                        .column_by_name(field.name())
+                                        .is_some() =>
+                            {
+                                let column =
+                                    batchs[0].column_by_name(field.name()).unwrap();
+                                if field.data_type().is_numeric() {
+                                    cast(column, &DataType::Float64)?
+                                } else {
+                                    cast(column, &DataType::Utf8)?
+                                }
+                            }
+                            _ => Arc::new(StringArray::from_slice(["null"])),
                         }
                     }
-                    //if None mean the column cannot be min/max aggregation
-                    None => {
-                        array_datas.push(Arc::new(StringArray::from_slice(["null"])));
+                    //Handling error when only boolean/binary column, and in other cases
+                    Err(err)
+                        if err.to_string().contains(
+                            "Error during planning: \
+                                            Aggregate requires at least one grouping \
+                                            or aggregate expression",
+                        ) =>
+                    {
+                        Arc::new(StringArray::from_slice(["null"]))
                     }
-                }
+                    Err(other_err) => {
+                        panic!("{other_err}")
+                    }
+                };
+                array_datas.push(array_ref);
             }
-
             array_ref_vec.push(concat(
                 array_datas
                     .iter()
@@ -476,14 +462,6 @@ impl DataFrame {
                     .as_slice(),
             )?);
         }
-
-        //insert first column with function names
-        array_ref_vec.insert(
-            0,
-            Arc::new(StringArray::from_slice(
-                supported_describe_functions.clone(),
-            )),
-        );
 
         let describe_record_batch =
             RecordBatch::try_new(Arc::new(Schema::new(describe_schemas)), array_ref_vec)?;
@@ -651,7 +629,7 @@ impl DataFrame {
         let rows = self
             .aggregate(
                 vec![],
-                vec![datafusion_expr::count(Expr::Literal(ScalarValue::Null))],
+                vec![datafusion_expr::count(Expr::Literal(COUNT_STAR_EXPANSION))],
             )?
             .collect()
             .await?;
@@ -1393,7 +1371,7 @@ mod tests {
         let join = left
             .join_on(right, JoinType::Inner, [col("c1").eq(col("c1"))])
             .expect_err("join didn't fail check");
-        let expected = "Schema error: Ambiguous reference to unqualified field 'c1'";
+        let expected = "Schema error: Ambiguous reference to unqualified field \"c1\"";
         assert_eq!(join.to_string(), expected);
 
         Ok(())

@@ -28,15 +28,45 @@ use arrow::datatypes::DataType;
 use datafusion_common::{Column, Result};
 use std::sync::Arc;
 
-/// Create a column expression based on a qualified or unqualified column name
+/// Create a column expression based on a qualified or unqualified column name. Will
+/// normalize unquoted identifiers according to SQL rules (identifiers will become lowercase).
 ///
-/// example:
-/// ```
+/// For example:
+///
+/// ```rust
 /// # use datafusion_expr::col;
-/// let c = col("my_column");
+/// let c1 = col("a");
+/// let c2 = col("A");
+/// assert_eq!(c1, c2);
+///
+/// // note how quoting with double quotes preserves the case
+/// let c3 = col(r#""A""#);
+/// assert_ne!(c1, c3);
 /// ```
 pub fn col(ident: impl Into<Column>) -> Expr {
     Expr::Column(ident.into())
+}
+
+/// Create an unqualified column expression from the provided name, without normalizing
+/// the column.
+///
+/// For example:
+///
+/// ```rust
+/// # use datafusion_expr::{col, ident};
+/// let c1 = ident("A"); // not normalized staying as column 'A'
+/// let c2 = col("A"); // normalized via SQL rules becoming column 'a'
+/// assert_ne!(c1, c2);
+///
+/// let c3 = col(r#""A""#);
+/// assert_eq!(c1, c3);
+///
+/// let c4 = col("t1.a"); // parses as relation 't1' column 'a'
+/// let c5 = ident("t1.a"); // parses as column 't1.a'
+/// assert_ne!(c4, c5);
+/// ```
+pub fn ident(name: impl Into<String>) -> Expr {
+    Expr::Column(Column::from_name(name))
 }
 
 /// Return a new expression `left <op> right`
@@ -267,7 +297,10 @@ pub fn approx_percentile_cont_with_weight(
 /// Create an EXISTS subquery expression
 pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
     Expr::Exists {
-        subquery: Subquery { subquery },
+        subquery: Subquery {
+            subquery,
+            outer_ref_columns: vec![],
+        },
         negated: false,
     }
 }
@@ -275,7 +308,10 @@ pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
 /// Create a NOT EXISTS subquery expression
 pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
     Expr::Exists {
-        subquery: Subquery { subquery },
+        subquery: Subquery {
+            subquery,
+            outer_ref_columns: vec![],
+        },
         negated: true,
     }
 }
@@ -284,7 +320,10 @@ pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
 pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
     Expr::InSubquery {
         expr: Box::new(expr),
-        subquery: Subquery { subquery },
+        subquery: Subquery {
+            subquery,
+            outer_ref_columns: vec![],
+        },
         negated: false,
     }
 }
@@ -293,14 +332,20 @@ pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
 pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
     Expr::InSubquery {
         expr: Box::new(expr),
-        subquery: Subquery { subquery },
+        subquery: Subquery {
+            subquery,
+            outer_ref_columns: vec![],
+        },
         negated: true,
     }
 }
 
 /// Create a scalar subquery expression
 pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
-    Expr::ScalarSubquery(Subquery { subquery })
+    Expr::ScalarSubquery(Subquery {
+        subquery,
+        outer_ref_columns: vec![],
+    })
 }
 
 /// Create an expression to represent the stddev() aggregate function
@@ -652,7 +697,7 @@ mod test {
     #[test]
     fn filter_is_null_and_is_not_null() {
         let col_null = col("col1");
-        let col_not_null = col("col2");
+        let col_not_null = ident("col2");
         assert_eq!(format!("{:?}", col_null.is_null()), "col1 IS NULL");
         assert_eq!(
             format!("{:?}", col_not_null.is_not_null()),
