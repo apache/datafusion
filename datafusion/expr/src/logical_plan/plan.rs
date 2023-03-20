@@ -773,7 +773,7 @@ impl LogicalPlan {
                 }
                 Expr::ScalarSubquery(qry) => {
                     let subquery =
-                        Arc::new(qry.subquery.replace_params_with_values(&param_values)?);
+                        Arc::new(qry.subquery.replace_params_with_values(param_values)?);
                     Ok(Expr::ScalarSubquery(plan::Subquery {
                         subquery,
                         outer_ref_columns: qry.outer_ref_columns.clone(),
