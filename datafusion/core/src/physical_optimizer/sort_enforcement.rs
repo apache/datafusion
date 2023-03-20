@@ -37,8 +37,8 @@ use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::sort_pushdown::{pushdown_sorts, SortPushDown};
 use crate::physical_optimizer::utils::{
-    add_sort_above, is_coalesce_partitions, is_limit, is_sort, is_sort_preserving_merge,
-    is_union, is_window,
+    add_sort_above, is_coalesce_partitions, is_limit, is_repartition, is_sort,
+    is_sort_preserving_merge, is_union, is_window,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -635,7 +635,7 @@ fn update_child_to_remove_coalesce(
     coalesce_onwards: &mut Option<ExecTree>,
 ) -> Result<()> {
     if let Some(coalesce_onwards) = coalesce_onwards {
-        *child = remove_corresponding_coalesce_in_sub_plan(coalesce_onwards)?;
+        *child = remove_corresponding_coalesce_in_sub_plan(coalesce_onwards, child)?;
     }
     Ok(())
 }
@@ -643,15 +643,23 @@ fn update_child_to_remove_coalesce(
 /// Removes the `CoalescePartitions` from the plan in `coalesce_onwards`.
 fn remove_corresponding_coalesce_in_sub_plan(
     coalesce_onwards: &mut ExecTree,
+    parent: &Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     Ok(if is_coalesce_partitions(&coalesce_onwards.plan) {
         // We can safely use the 0th index since we have a `CoalescePartitionsExec`.
-        coalesce_onwards.plan.children()[0].clone()
+        let mut new_plan = coalesce_onwards.plan.children()[0].clone();
+        while new_plan.output_partitioning() == parent.output_partitioning()
+            && is_repartition(&new_plan)
+            && is_repartition(parent)
+        {
+            new_plan = new_plan.children()[0].clone()
+        }
+        new_plan
     } else {
         let plan = coalesce_onwards.plan.clone();
         let mut children = plan.children();
         for item in &mut coalesce_onwards.children {
-            children[item.idx] = remove_corresponding_coalesce_in_sub_plan(item)?;
+            children[item.idx] = remove_corresponding_coalesce_in_sub_plan(item, &plan)?;
         }
         plan.with_new_children(children)?
     })
@@ -2295,9 +2303,8 @@ mod tests {
         let expected_optimized = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  SortExec: expr=[nullable_col@0 ASC]",
-            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=0",
-            "        MemoryExec: partitions=0, partition_sizes=[]",
+            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=0",
+            "      MemoryExec: partitions=0, partition_sizes=[]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())

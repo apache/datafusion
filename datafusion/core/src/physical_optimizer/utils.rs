@@ -23,6 +23,7 @@ use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::UnionExec;
@@ -103,4 +104,9 @@ pub fn is_coalesce_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
 /// Checks whether the given executor is a [`UnionExec`].
 pub fn is_union(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<UnionExec>()
+}
+
+/// Checks whether the given executor is a [`RepartitionExec`].
+pub fn is_repartition(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<RepartitionExec>()
 }
