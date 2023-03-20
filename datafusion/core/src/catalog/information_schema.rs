@@ -644,10 +644,7 @@ impl PartitionStream for InformationSchemaDfSettings {
             // TODO: Stream this
             futures::stream::once(async move {
                 // create a mem table with the names of tables
-                config.make_df_settings(
-                    ctx.session_config().config_options(),
-                    &mut builder,
-                );
+                config.make_df_settings(ctx.session_config().options(), &mut builder);
                 Ok(builder.finish())
             }),
         ))
