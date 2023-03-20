@@ -42,11 +42,6 @@ use tokio::task::JoinHandle;
 /// [`MemoryReservation`] used across query execution streams
 pub(crate) type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
 
-/// [`MemoryReservation`] used at query operator level
-/// `Option` wrapper allows to initialize empty reservation in operator constructor,
-/// and set it to actual reservation at stream level.
-pub(crate) type OperatorMemoryReservation = Arc<Mutex<Option<SharedMemoryReservation>>>;
-
 /// Stream of record batches
 pub struct SizedRecordBatchStream {
     schema: SchemaRef,

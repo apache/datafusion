@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod alias;
+pub mod analyzer;
 pub mod common_subexpr_eliminate;
 pub mod decorrelate_where_exists;
 pub mod decorrelate_where_in;
@@ -35,6 +36,7 @@ pub mod push_down_filter;
 pub mod push_down_limit;
 pub mod push_down_projection;
 pub mod replace_distinct_aggregate;
+pub mod rewrite;
 pub mod rewrite_disjunctive_predicate;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;

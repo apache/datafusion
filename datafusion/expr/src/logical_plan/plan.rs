@@ -34,7 +34,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
-    ScalarValue,
+    ScalarValue, TableReference,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -1465,9 +1465,12 @@ impl SubqueryAlias {
         alias: impl Into<String>,
     ) -> datafusion_common::Result<Self> {
         let alias = alias.into();
+        let table_ref = TableReference::bare(&alias);
         let schema: Schema = plan.schema().as_ref().clone().into();
-        let schema =
-            DFSchemaRef::new(DFSchema::try_from_qualified_schema(&alias, &schema)?);
+        let schema = DFSchemaRef::new(DFSchema::try_from_qualified_schema(
+            table_ref.to_owned_reference(),
+            &schema,
+        )?);
         Ok(SubqueryAlias {
             input: Arc::new(plan),
             alias,
@@ -1549,7 +1552,7 @@ pub struct Window {
 #[derive(Clone)]
 pub struct TableScan {
     /// The name of the table
-    pub table_name: String,
+    pub table_name: OwnedTableReference,
     /// The source of the table
     pub source: Arc<dyn TableSource>,
     /// Optional column indices to use as a projection
@@ -2416,7 +2419,7 @@ mod tests {
             Field::new("state", DataType::Utf8, false),
         ]);
 
-        table_scan(None, &schema, Some(vec![0, 1]))
+        table_scan(TableReference::none(), &schema, Some(vec![0, 1]))
             .unwrap()
             .filter(col("state").eq(lit("CO")))
             .unwrap()

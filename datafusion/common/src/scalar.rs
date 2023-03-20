@@ -2358,7 +2358,7 @@ impl ScalarValue {
                     None => v.is_null(),
                 }
             }
-            ScalarValue::Null => array.data().is_null(index),
+            ScalarValue::Null => array.is_null(index),
         }
     }
 

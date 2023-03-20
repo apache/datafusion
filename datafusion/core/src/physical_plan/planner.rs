@@ -1879,7 +1879,7 @@ mod tests {
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::assert_contains;
+    use datafusion_common::{assert_contains, TableReference};
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
     use datafusion_expr::{
         col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder,
@@ -2391,7 +2391,7 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
             Self {
                 schema: DFSchemaRef::new(
                     DFSchema::new_with_metadata(
-                        vec![DFField::new(None, "a", DataType::Int32, false)],
+                        vec![DFField::new_unqualified("a", DataType::Int32, false)],
                         HashMap::new(),
                     )
                     .unwrap(),
@@ -2521,12 +2521,13 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
             match ctx.read_csv(path, options).await?.into_optimized_plan()? {
                 LogicalPlan::TableScan(ref scan) => {
                     let mut scan = scan.clone();
-                    scan.table_name = name.to_string();
+                    let table_reference = TableReference::from(name).to_owned_reference();
+                    scan.table_name = table_reference;
                     let new_schema = scan
                         .projected_schema
                         .as_ref()
                         .clone()
-                        .replace_qualifier(name);
+                        .replace_qualifier(name.to_string());
                     scan.projected_schema = Arc::new(new_schema);
                     LogicalPlan::TableScan(scan)
                 }

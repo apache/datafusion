@@ -17,7 +17,8 @@
 
 //! Manages all available memory during query execution
 
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
+use parking_lot::Mutex;
 use std::sync::Arc;
 
 mod pool;
@@ -163,6 +164,64 @@ impl Drop for MemoryReservation {
     }
 }
 
+pub trait TryGrow: Send + Sync + std::fmt::Debug {
+    fn try_grow(&self, capacity: usize) -> Result<()>;
+}
+
+/// Cloneable reference to [`MemoryReservation`] instance with interior mutability support
+#[derive(Clone, Debug)]
+pub struct SharedMemoryReservation(Arc<Mutex<MemoryReservation>>);
+
+impl From<MemoryReservation> for SharedMemoryReservation {
+    /// Creates new [`SharedMemoryReservation`] from [`MemoryReservation`]
+    fn from(reservation: MemoryReservation) -> Self {
+        Self(Arc::new(Mutex::new(reservation)))
+    }
+}
+
+impl TryGrow for SharedMemoryReservation {
+    /// Try to increase the size of this reservation by `capacity` bytes
+    fn try_grow(&self, capacity: usize) -> Result<()> {
+        self.0.lock().try_grow(capacity)
+    }
+}
+
+/// Cloneable reference to [`MemoryReservation`] instance with interior mutability support.
+/// Doesn't require [`MemoryReservation`] while creation, and can be initialized later.
+#[derive(Clone, Debug)]
+pub struct SharedOptionalMemoryReservation(Arc<Mutex<Option<MemoryReservation>>>);
+
+impl SharedOptionalMemoryReservation {
+    /// Initialize inner [`MemoryReservation`] if `None`, otherwise -- do nothing
+    pub fn initialize(&self, name: impl Into<String>, pool: &Arc<dyn MemoryPool>) {
+        let mut locked = self.0.lock();
+        if locked.is_none() {
+            *locked = Some(MemoryConsumer::new(name).register(pool));
+        };
+    }
+}
+
+impl TryGrow for SharedOptionalMemoryReservation {
+    /// Try to increase the size of this reservation by `capacity` bytes
+    fn try_grow(&self, capacity: usize) -> Result<()> {
+        self.0
+            .lock()
+            .as_mut()
+            .ok_or_else(|| {
+                DataFusionError::Internal(
+                    "inner memory reservation not initialized".to_string(),
+                )
+            })?
+            .try_grow(capacity)
+    }
+}
+
+impl Default for SharedOptionalMemoryReservation {
+    fn default() -> Self {
+        Self(Arc::new(Mutex::new(None)))
+    }
+}
+
 const TB: u64 = 1 << 40;
 const GB: u64 = 1 << 30;
 const MB: u64 = 1 << 20;
@@ -218,5 +277,64 @@ mod tests {
 
         a2.try_grow(25).unwrap();
         assert_eq!(pool.reserved(), 25);
+    }
+
+    #[test]
+    fn test_shared_memory_reservation() {
+        let pool = Arc::new(GreedyMemoryPool::new(50)) as _;
+        let a1 = SharedMemoryReservation::from(MemoryConsumer::new("a1").register(&pool));
+        let a2 = a1.clone();
+
+        // Reserve from a1
+        a1.try_grow(10).unwrap();
+        assert_eq!(pool.reserved(), 10);
+
+        // Drop a1 - normally reservation calls `free` on drop.
+        // Ensure that reservation still alive in a2
+        drop(a1);
+        assert_eq!(pool.reserved(), 10);
+
+        // Ensure that after a2 dropped, memory gets back to the pool
+        drop(a2);
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    #[test]
+    fn test_optional_shared_memory_reservation() {
+        let pool = Arc::new(GreedyMemoryPool::new(50)) as _;
+        let a1 = SharedOptionalMemoryReservation::default();
+
+        // try_grow on empty inner reservation
+        let err = a1.try_grow(10).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Internal error: inner memory reservation not initialized. \
+             This was likely caused by a bug in DataFusion's code and we \
+             would welcome that you file an bug report in our issue tracker"
+        );
+
+        // multiple initializations
+        a1.initialize("a1", &pool);
+        a1.initialize("a2", &pool);
+        {
+            let locked = a1.0.lock();
+            let name = locked.as_ref().unwrap().consumer.name();
+            assert_eq!(name, "a1");
+        }
+
+        let a2 = a1.clone();
+
+        // Reserve from a1
+        a1.try_grow(10).unwrap();
+        assert_eq!(pool.reserved(), 10);
+
+        // Drop a1 - normally reservation calls `free` on drop.
+        // Ensure that reservation still alive in a2
+        drop(a1);
+        assert_eq!(pool.reserved(), 10);
+
+        // Ensure that after a2 dropped, memory gets back to the pool
+        drop(a2);
+        assert_eq!(pool.reserved(), 0);
     }
 }

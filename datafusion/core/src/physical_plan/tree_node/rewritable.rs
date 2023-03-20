@@ -15,8 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod disk_manager;
-pub mod memory_pool;
-pub mod object_store;
-pub mod registry;
-pub mod runtime_env;
+//! Tree node rewritable implementations
+
+use crate::physical_plan::tree_node::TreeNodeRewritable;
+use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion_common::Result;
+use std::sync::Arc;
+
+impl TreeNodeRewritable for Arc<dyn ExecutionPlan> {
+    fn map_children<F>(self, transform: F) -> Result<Self>
+    where
+        F: FnMut(Self) -> Result<Self>,
+    {
+        let children = self.children();
+        if !children.is_empty() {
+            let new_children: Result<Vec<_>> =
+                children.into_iter().map(transform).collect();
+            with_new_children_if_necessary(self, new_children?)
+        } else {
+            Ok(self)
+        }
+    }
+}
