@@ -133,7 +133,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         plan: LogicalPlan,
         order_by: Vec<OrderByExpr>,
-        planner_context: &mut PlannerContext
+        planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         if order_by.is_empty() {
             return Ok(plan);
