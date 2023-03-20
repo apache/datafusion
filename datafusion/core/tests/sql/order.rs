@@ -53,6 +53,7 @@ async fn create_external_table_with_order() -> Result<()> {
         let listing_table_factory = Arc::new(ListingTableFactory::new());
         let table_dyn = listing_table_factory.create(&ctx.state(), &cmd).await?;
         let table = table_dyn.as_any().downcast_ref::<ListingTable>().unwrap();
+        assert_eq!(cmd.order_exprs.len(), 1);
         assert_eq!(
             &cmd.order_exprs,
             table.options().file_sort_order.as_ref().unwrap()
@@ -67,6 +68,25 @@ async fn create_external_table_with_order() -> Result<()> {
 async fn create_external_table_with_ddl_ordered_non_cols() -> Result<()> {
     let ctx = SessionContext::new();
     let sql = "CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS CSV WITH ORDER (a ASC) LOCATION 'file://path/to/table';";
-    assert!(ctx.state().create_logical_plan(sql).await.is_err());
+    match ctx.state().create_logical_plan(sql).await {
+        Ok(_) => panic!("Expecting error."),
+        Err(e) => {
+            assert_eq!(e.to_string(), "Error during planning: Column a is not in schema")
+        }
+    }
     Ok(())
 }
+
+#[tokio::test]
+async fn create_external_table_with_ddl_ordered_without_schema() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = "CREATE EXTERNAL TABLE dt STORED AS CSV WITH ORDER (a ASC) LOCATION 'file://path/to/table';";
+    match ctx.state().create_logical_plan(sql).await {
+        Ok(_) => panic!("Expecting error."),
+        Err(e) => {
+            assert_eq!(e.to_string(), "Error during planning: Provide a schema before specifying the order while creating a table.")
+        }
+    }
+    Ok(())
+}
+

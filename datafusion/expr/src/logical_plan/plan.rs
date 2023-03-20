@@ -1632,7 +1632,7 @@ pub struct CreateExternalTable {
     pub if_not_exists: bool,
     /// SQL used to create the table, if available
     pub definition: Option<String>,
-    /// Order expressions
+    /// Order expressions supplied by user
     pub order_exprs: Vec<Expr>,
     /// File compression type (GZIP, BZIP2, XZ, ZSTD)
     pub file_compression_type: CompressionTypeVariant,

@@ -783,54 +783,49 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // Ordered Col
-        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1) LOCATION 'foo.csv'";
-        let display = None;
-        let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
-            columns: vec![make_column_def("c1", DataType::Int(display))],
-            file_type: "CSV".to_string(),
-            has_header: false,
-            delimiter: ',',
-            location: "foo.csv".into(),
-            table_partition_cols: vec![],
-            order_exprs: vec![OrderByExpr {
-                expr: Identifier(Ident {
-                    value: "c1".to_owned(),
-                    quote_style: None,
-                }),
-                asc: None,
-                nulls_first: None,
-            }],
-            if_not_exists: false,
-            file_compression_type: UNCOMPRESSED,
-            options: HashMap::new(),
-        });
-        expect_parse_ok(sql, expected)?;
-
-        // Ordered Col
-        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 NULLS FIRST) LOCATION 'foo.csv'";
-        let display = None;
-        let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
-            columns: vec![make_column_def("c1", DataType::Int(display))],
-            file_type: "CSV".to_string(),
-            has_header: false,
-            delimiter: ',',
-            location: "foo.csv".into(),
-            table_partition_cols: vec![],
-            order_exprs: vec![OrderByExpr {
-                expr: Identifier(Ident {
-                    value: "c1".to_owned(),
-                    quote_style: None,
-                }),
-                asc: None,
-                nulls_first: Some(true),
-            }],
-            if_not_exists: false,
-            file_compression_type: UNCOMPRESSED,
-            options: HashMap::new(),
-        });
-        expect_parse_ok(sql, expected)?;
+        let sqls = vec!["CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1) LOCATION 'foo.csv'",
+                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 NULLS FIRST) LOCATION 'foo.csv'",
+                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 NULLS LAST) LOCATION 'foo.csv'",
+                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC) LOCATION 'foo.csv'",
+                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 DESC) LOCATION 'foo.csv'",
+                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 DESC NULLS FIRST) LOCATION 'foo.csv'",
+                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 DESC NULLS LAST) LOCATION 'foo.csv'",
+                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC NULLS FIRST) LOCATION 'foo.csv'",
+                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC NULLS LAST) LOCATION 'foo.csv'"];
+        let expected = vec![
+            (None, None),
+            (None, Some(true)),
+            (None, Some(false)),
+            (Some(true), None),
+            (Some(false), None),
+            (Some(false), Some(true)),
+            (Some(false), Some(false)),
+            (Some(true), Some(true)),
+            (Some(true), Some(false)),
+        ];
+        for (sql, (asc, nulls_first)) in sqls.iter().zip(expected.into_iter()) {
+            let expected = Statement::CreateExternalTable(CreateExternalTable {
+                name: "t".into(),
+                columns: vec![make_column_def("c1", DataType::Int(None))],
+                file_type: "CSV".to_string(),
+                has_header: false,
+                delimiter: ',',
+                location: "foo.csv".into(),
+                table_partition_cols: vec![],
+                order_exprs: vec![OrderByExpr {
+                    expr: Identifier(Ident {
+                        value: "c1".to_owned(),
+                        quote_style: None,
+                    }),
+                    asc,
+                    nulls_first,
+                }],
+                if_not_exists: false,
+                file_compression_type: UNCOMPRESSED,
+                options: HashMap::new(),
+            });
+            expect_parse_ok(sql, expected)?;
+        }
 
         // Ordered Col
         let sql = "CREATE EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV WITH ORDER (c1 ASC, c2 DESC NULLS FIRST) LOCATION 'foo.csv'";
