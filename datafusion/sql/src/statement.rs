@@ -40,8 +40,8 @@ use datafusion_expr::{
 };
 use sqlparser::ast;
 use sqlparser::ast::{
-    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query, SchemaName,
-    SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableFactor,
+    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, OrderByExpr, Query,
+    SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableFactor,
     TableWithJoins, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
@@ -413,9 +413,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let DescribeTableStmt { table_name } = statement;
         let table_ref = self.object_name_to_table_reference(table_name)?;
 
-        let table_source = self
-            .schema_provider
-            .get_table_provider((&table_ref).into())?;
+        let table_source = self.schema_provider.get_table_provider(table_ref)?;
 
         let schema = table_source.schema();
 
@@ -423,6 +421,41 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             schema,
             dummy_schema: DFSchemaRef::new(DFSchema::empty()),
         }))
+    }
+
+    fn build_order_by(
+        &self,
+        order_exprs: Vec<OrderByExpr>,
+        schema: &DFSchemaRef,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Vec<datafusion_expr::Expr>> {
+        // Ask user to provide a schema if schema is empty.
+        if !order_exprs.is_empty() && schema.fields().is_empty() {
+            return Err(DataFusionError::Plan(
+                "Provide a schema before specifying the order while creating a table."
+                    .to_owned(),
+            ));
+        }
+        // Convert each OrderByExpr to a SortExpr:
+        let result = order_exprs
+            .into_iter()
+            .map(|e| self.order_by_to_sort_expr(e, schema, planner_context))
+            .collect::<Result<Vec<_>>>()?;
+        // Verify that columns of all SortExprs exist in the schema:
+        for expr in result.iter() {
+            for column in expr.to_columns()?.iter() {
+                if !schema.has_column(column) {
+                    // Return an error if any column is not in the schema:
+                    return Err(DataFusionError::Plan(format!(
+                        "Column {} is not in schema",
+                        column
+                    )));
+                }
+            }
+        }
+
+        // If all SortExprs are valid, return them as an expression vector
+        Ok(result)
     }
 
     /// Generate a logical plan from a CREATE EXTERNAL TABLE statement
@@ -441,6 +474,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             table_partition_cols,
             if_not_exists,
             file_compression_type,
+            order_exprs,
             options,
         } = statement;
 
@@ -461,12 +495,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         let schema = self.build_schema(columns)?;
+        let df_schema = schema.to_dfschema_ref()?;
+
+        let ordered_exprs =
+            self.build_order_by(order_exprs, &df_schema, &mut PlannerContext::new())?;
 
         // External tables do not support schemas at the moment, so the name is just a table name
-        let name = OwnedTableReference::Bare { table: name };
+        let name = OwnedTableReference::bare(name);
 
         Ok(LogicalPlan::CreateExternalTable(PlanCreateExternalTable {
-            schema: schema.to_dfschema_ref()?,
+            schema: df_schema,
             name,
             location,
             file_type,
@@ -476,6 +514,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             if_not_exists,
             definition,
             file_compression_type,
+            order_exprs: ordered_exprs,
             options,
         }))
     }
@@ -634,9 +673,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
-        let provider = self
-            .schema_provider
-            .get_table_provider((&table_ref).into())?;
+        let provider = self.schema_provider.get_table_provider(table_ref.clone())?;
         let schema = (*provider.schema()).clone();
         let schema = DFSchema::try_from(schema)?;
         let scan =
@@ -688,7 +725,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let table_name = self.object_name_to_table_reference(table_name)?;
         let provider = self
             .schema_provider
-            .get_table_provider((&table_name).into())?;
+            .get_table_provider(table_name.clone())?;
         let arrow_schema = (*provider.schema()).clone();
         let table_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
         let values = table_schema.fields().iter().map(|f| {
@@ -790,7 +827,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let table_name = self.object_name_to_table_reference(table_name)?;
         let provider = self
             .schema_provider
-            .get_table_provider((&table_name).into())?;
+            .get_table_provider(table_name.clone())?;
         let arrow_schema = (*provider.schema()).clone();
         let table_schema = DFSchema::try_from(arrow_schema)?;
 
@@ -896,9 +933,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(sql_table_name)?;
-        let _ = self
-            .schema_provider
-            .get_table_provider((&table_ref).into())?;
+        let _ = self.schema_provider.get_table_provider(table_ref)?;
 
         // treat both FULL and EXTENDED as the same
         let select_list = if full || extended {
@@ -934,9 +969,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(sql_table_name)?;
-        let _ = self
-            .schema_provider
-            .get_table_provider((&table_ref).into())?;
+        let _ = self.schema_provider.get_table_provider(table_ref)?;
 
         let query = format!(
             "SELECT table_catalog, table_schema, table_name, definition FROM information_schema.views WHERE {where_clause}"

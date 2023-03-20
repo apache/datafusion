@@ -35,6 +35,7 @@ use crate::{
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    TableReference,
 };
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -96,7 +97,45 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             Expr::ScalarVariable(_, var_names) => {
                 accum.insert(Column::from_name(var_names.join(".")));
             }
-            _ => {}
+            // Use explicit pattern match instead of a default
+            // implementation, so that in the future if someone adds
+            // new Expr types, they will check here as well
+            Expr::Alias(_, _)
+            | Expr::Literal(_)
+            | Expr::BinaryExpr { .. }
+            | Expr::Like { .. }
+            | Expr::ILike { .. }
+            | Expr::SimilarTo { .. }
+            | Expr::Not(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsNull(_)
+            | Expr::IsTrue(_)
+            | Expr::IsFalse(_)
+            | Expr::IsUnknown(_)
+            | Expr::IsNotTrue(_)
+            | Expr::IsNotFalse(_)
+            | Expr::IsNotUnknown(_)
+            | Expr::Negative(_)
+            | Expr::Between { .. }
+            | Expr::Case { .. }
+            | Expr::Cast { .. }
+            | Expr::TryCast { .. }
+            | Expr::Sort { .. }
+            | Expr::ScalarFunction { .. }
+            | Expr::ScalarUDF { .. }
+            | Expr::WindowFunction { .. }
+            | Expr::AggregateFunction { .. }
+            | Expr::GroupingSet(_)
+            | Expr::AggregateUDF { .. }
+            | Expr::InList { .. }
+            | Expr::Exists { .. }
+            | Expr::InSubquery { .. }
+            | Expr::ScalarSubquery(_)
+            | Expr::Wildcard
+            | Expr::QualifiedWildcard { .. }
+            | Expr::GetIndexedField { .. }
+            | Expr::Placeholder { .. }
+            | Expr::OuterReferenceColumn { .. } => {}
         }
         Ok(())
     })
@@ -154,8 +193,9 @@ pub fn expand_qualified_wildcard(
     qualifier: &str,
     schema: &DFSchema,
 ) -> Result<Vec<Expr>> {
+    let qualifier = TableReference::from(qualifier);
     let qualified_fields: Vec<DFField> = schema
-        .fields_with_qualified(qualifier)
+        .fields_with_qualified(&qualifier)
         .into_iter()
         .cloned()
         .collect();
@@ -340,6 +380,14 @@ pub fn find_sort_exprs(exprs: &[Expr]) -> Vec<Expr> {
 pub fn find_window_exprs(exprs: &[Expr]) -> Vec<Expr> {
     find_exprs_in_exprs(exprs, &|nested_expr| {
         matches!(nested_expr, Expr::WindowFunction { .. })
+    })
+}
+
+/// Collect all deeply nested `Expr::OuterReferenceColumn`. They are returned in order of occurrence
+/// (depth first), with duplicates omitted.
+pub fn find_out_reference_exprs(expr: &Expr) -> Vec<Expr> {
+    find_exprs_in_expr(expr, &|nested_expr| {
+        matches!(nested_expr, Expr::OuterReferenceColumn { .. })
     })
 }
 
@@ -598,21 +646,20 @@ pub fn from_plan(
             let right = inputs[1].clone();
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
         }
-        LogicalPlan::Subquery(_) => {
+        LogicalPlan::Subquery(Subquery {
+            outer_ref_columns, ..
+        }) => {
             let subquery = LogicalPlanBuilder::from(inputs[0].clone()).build()?;
             Ok(LogicalPlan::Subquery(Subquery {
                 subquery: Arc::new(subquery),
+                outer_ref_columns: outer_ref_columns.clone(),
             }))
         }
         LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
-            let schema = inputs[0].schema().as_ref().clone().into();
-            let schema =
-                DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
-            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
-                alias: alias.clone(),
-                input: Arc::new(inputs[0].clone()),
-                schema,
-            }))
+            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+                inputs[0].clone(),
+                alias.clone(),
+            )?))
         }
         LogicalPlan::Limit(Limit { skip, fetch, .. }) => Ok(LogicalPlan::Limit(Limit {
             skip: *skip,
@@ -815,6 +862,7 @@ pub fn exprlist_to_fields<'a>(
 pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
     match e {
         Expr::Column(_) => e,
+        Expr::OuterReferenceColumn(_, _) => e,
         Expr::Alias(inner_expr, name) => {
             columnize_expr(*inner_expr, input_schema).alias(name)
         }

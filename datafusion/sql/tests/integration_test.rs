@@ -226,11 +226,11 @@ Dml: op=[Insert] table=[test_decimal]
 #[rstest]
 #[case::duplicate_columns(
     "INSERT INTO test_decimal (id, price, price) VALUES (1, 2, 3), (4, 5, 6)",
-    "Schema error: Schema contains duplicate unqualified field name 'price'"
+    "Schema error: Schema contains duplicate unqualified field name \"price\""
 )]
 #[case::non_existing_column(
     "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
-    "Schema error: No field named 'nonexistent'. Valid fields are 'id', 'price'."
+    "Schema error: No field named \"nonexistent\". Valid fields are \"id\", \"price\"."
 )]
 #[case::type_mismatch(
     "INSERT INTO test_decimal SELECT '2022-01-01', to_timestamp('2022-01-01T12:00:00')",
@@ -515,7 +515,7 @@ fn select_with_ambiguous_column() {
     let sql = "SELECT id FROM person a, person b";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "SchemaError(AmbiguousReference { qualifier: None, name: \"id\" })",
+        "SchemaError(AmbiguousReference { field: Column { relation: None, name: \"id\" } })",
         format!("{err:?}")
     );
 }
@@ -538,7 +538,7 @@ fn where_selection_with_ambiguous_column() {
     let sql = "SELECT * FROM person a, person b WHERE id = id + 1";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "SchemaError(AmbiguousReference { qualifier: None, name: \"id\" })",
+        "SchemaError(AmbiguousReference { field: Column { relation: None, name: \"id\" } })",
         format!("{err:?}")
     );
 }
@@ -1121,9 +1121,9 @@ fn select_simple_aggregate_with_groupby_column_unselected() {
 fn select_simple_aggregate_with_groupby_and_column_in_group_by_does_not_exist() {
     let sql = "SELECT SUM(age) FROM person GROUP BY doesnotexist";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!("Schema error: No field named 'doesnotexist'. Valid fields are 'SUM(person.age)', \
-        'person'.'id', 'person'.'first_name', 'person'.'last_name', 'person'.'age', 'person'.'state', \
-        'person'.'salary', 'person'.'birth_date', 'person'.'😀'.", format!("{err}"));
+    assert_eq!("Schema error: No field named \"doesnotexist\". Valid fields are \"SUM(person.age)\", \
+        \"person\".\"id\", \"person\".\"first_name\", \"person\".\"last_name\", \"person\".\"age\", \"person\".\"state\", \
+        \"person\".\"salary\", \"person\".\"birth_date\", \"person\".\"😀\".", format!("{err}"));
 }
 
 #[test]
@@ -1429,6 +1429,17 @@ fn select_where_with_positive_operator() {
     let expected = "Projection: aggregate_test_100.c3\
             \n  Filter: aggregate_test_100.c3 > Float64(0.1) AND aggregate_test_100.c4 > Int64(0)\
             \n    TableScan: aggregate_test_100";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn select_where_compound_identifiers() {
+    let sql = "SELECT aggregate_test_100.c3 \
+    FROM public.aggregate_test_100 \
+    WHERE aggregate_test_100.c3 > 0.1";
+    let expected = "Projection: public.aggregate_test_100.c3\
+            \n  Filter: public.aggregate_test_100.c3 > Float64(0.1)\
+            \n    TableScan: public.aggregate_test_100";
     quick_test(sql, expected);
 }
 
@@ -2635,7 +2646,7 @@ fn exists_subquery() {
         \n  Filter: EXISTS (<subquery>)\
         \n    Subquery:\
         \n      Projection: person.first_name\
-        \n        Filter: person.last_name = p.last_name AND person.state = p.state\
+        \n        Filter: person.last_name = outer_ref(p.last_name) AND person.state = outer_ref(p.state)\
         \n          TableScan: person\
         \n    SubqueryAlias: p\
         \n      TableScan: person";
@@ -2656,7 +2667,7 @@ fn exists_subquery_schema_outer_schema_overlap() {
         \n  Filter: person.id = p.id AND EXISTS (<subquery>)\
         \n    Subquery:\
         \n      Projection: person.first_name\
-        \n        Filter: person.id = p2.id AND person.last_name = p.last_name AND person.state = p.state\
+        \n        Filter: person.id = p2.id AND person.last_name = outer_ref(p.last_name) AND person.state = outer_ref(p.state)\
         \n          CrossJoin:\
         \n            TableScan: person\
         \n            SubqueryAlias: p2\
@@ -2679,7 +2690,7 @@ fn exists_subquery_wildcard() {
         \n  Filter: EXISTS (<subquery>)\
         \n    Subquery:\
         \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀\
-        \n        Filter: person.last_name = p.last_name AND person.state = p.state\
+        \n        Filter: person.last_name = outer_ref(p.last_name) AND person.state = outer_ref(p.state)\
         \n          TableScan: person\
         \n    SubqueryAlias: p\
         \n      TableScan: person";
@@ -2710,7 +2721,7 @@ fn not_in_subquery_correlated() {
         \n  Filter: p.id NOT IN (<subquery>)\
         \n    Subquery:\
         \n      Projection: person.id\
-        \n        Filter: person.last_name = p.last_name AND person.state = Utf8(\"CO\")\
+        \n        Filter: person.last_name = outer_ref(p.last_name) AND person.state = Utf8(\"CO\")\
         \n          TableScan: person\
         \n    SubqueryAlias: p\
         \n      TableScan: person";
@@ -2725,7 +2736,7 @@ fn scalar_subquery() {
         \n  Subquery:\
         \n    Projection: MAX(person.id)\
         \n      Aggregate: groupBy=[[]], aggr=[[MAX(person.id)]]\
-        \n        Filter: person.last_name = p.last_name\
+        \n        Filter: person.last_name = outer_ref(p.last_name)\
         \n          TableScan: person\
         \n  SubqueryAlias: p\
         \n    TableScan: person";
@@ -2747,7 +2758,7 @@ fn scalar_subquery_reference_outer_field() {
         \n    Subquery:\
         \n      Projection: COUNT(UInt8(1))\
         \n        Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-        \n          Filter: j2.j2_id = j1.j1_id AND j1.j1_id = j3.j3_id\
+        \n          Filter: outer_ref(j2.j2_id) = j1.j1_id AND j1.j1_id = j3.j3_id\
         \n            CrossJoin:\
         \n              TableScan: j1\
         \n              TableScan: j3\
@@ -2768,7 +2779,7 @@ fn subquery_references_cte() {
         \n  Filter: EXISTS (<subquery>)\
         \n    Subquery:\
         \n      Projection: cte.id, cte.first_name, cte.last_name, cte.age, cte.state, cte.salary, cte.birth_date, cte.😀\
-        \n        Filter: cte.id = person.id\
+        \n        Filter: cte.id = outer_ref(person.id)\
         \n          SubqueryAlias: cte\
         \n            Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀\
         \n              TableScan: person\
@@ -2964,7 +2975,7 @@ fn order_by_unaliased_name() {
 #[test]
 fn order_by_ambiguous_name() {
     let sql = "select * from person a join person b using (id) order by age";
-    let expected = "Schema error: Ambiguous reference to unqualified field 'age'";
+    let expected = "Schema error: Ambiguous reference to unqualified field \"age\"";
 
     let err = logical_plan(sql).unwrap_err();
     assert_eq!(err.to_string(), expected);
@@ -2973,7 +2984,7 @@ fn order_by_ambiguous_name() {
 #[test]
 fn group_by_ambiguous_name() {
     let sql = "select max(id) from person a join person b using (id) group by age";
-    let expected = "Schema error: Ambiguous reference to unqualified field 'age'";
+    let expected = "Schema error: Ambiguous reference to unqualified field \"age\"";
 
     let err = logical_plan(sql).unwrap_err();
     assert_eq!(err.to_string(), expected);
@@ -3242,6 +3253,17 @@ fn test_select_distinct_order_by() {
 }
 
 #[test]
+fn select_order_by_with_cast() {
+    let sql =
+        "SELECT first_name AS first_name FROM (SELECT first_name AS first_name FROM person) ORDER BY CAST(first_name as INT)";
+    let expected = "Sort: CAST(first_name AS first_name AS Int32) ASC NULLS LAST\
+                        \n  Projection: first_name AS first_name\
+                        \n    Projection: person.first_name AS first_name\
+                        \n      TableScan: person";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn test_duplicated_left_join_key_inner_join() {
     //  person.id * 2 happen twice in left side.
     let sql = "SELECT person.id, person.age
@@ -3278,7 +3300,7 @@ fn test_ambiguous_column_references_in_on_join() {
             INNER JOIN person as p2
             ON id = 1";
 
-    let expected = "Schema error: Ambiguous reference to unqualified field 'id'";
+    let expected = "Schema error: Ambiguous reference to unqualified field \"id\"";
 
     // It should return error.
     let result = logical_plan(sql);
@@ -3875,7 +3897,7 @@ fn assert_field_not_found(err: DataFusionError, name: &str) {
     match err {
         DataFusionError::SchemaError { .. } => {
             let msg = format!("{err}");
-            let expected = format!("Schema error: No field named '{name}'.");
+            let expected = format!("Schema error: No field named \"{name}\".");
             if !msg.starts_with(&expected) {
                 panic!("error [{msg}] did not start with [{expected}]");
             }

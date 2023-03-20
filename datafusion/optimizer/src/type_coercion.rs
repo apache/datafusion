@@ -125,14 +125,23 @@ impl ExprRewriter for TypeCoercionRewriter {
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         match expr {
-            Expr::ScalarSubquery(Subquery { subquery }) => {
+            Expr::ScalarSubquery(Subquery {
+                subquery,
+                outer_ref_columns,
+            }) => {
                 let new_plan = optimize_internal(&self.schema, &subquery)?;
-                Ok(Expr::ScalarSubquery(Subquery::new(new_plan)))
+                Ok(Expr::ScalarSubquery(Subquery {
+                    subquery: Arc::new(new_plan),
+                    outer_ref_columns,
+                }))
             }
             Expr::Exists { subquery, negated } => {
                 let new_plan = optimize_internal(&self.schema, &subquery.subquery)?;
                 Ok(Expr::Exists {
-                    subquery: Subquery::new(new_plan),
+                    subquery: Subquery {
+                        subquery: Arc::new(new_plan),
+                        outer_ref_columns: subquery.outer_ref_columns,
+                    },
                     negated,
                 })
             }
@@ -144,7 +153,10 @@ impl ExprRewriter for TypeCoercionRewriter {
                 let new_plan = optimize_internal(&self.schema, &subquery.subquery)?;
                 Ok(Expr::InSubquery {
                     expr,
-                    subquery: Subquery::new(new_plan),
+                    subquery: Subquery {
+                        subquery: Arc::new(new_plan),
+                        outer_ref_columns: subquery.outer_ref_columns,
+                    },
                     negated,
                 })
             }
@@ -664,7 +676,7 @@ mod test {
             produce_one_row: false,
             schema: Arc::new(
                 DFSchema::new_with_metadata(
-                    vec![DFField::new(None, "a", DataType::Float64, true)],
+                    vec![DFField::new_unqualified("a", DataType::Float64, true)],
                     std::collections::HashMap::new(),
                 )
                 .unwrap(),
@@ -682,7 +694,7 @@ mod test {
             produce_one_row: false,
             schema: Arc::new(
                 DFSchema::new_with_metadata(
-                    vec![DFField::new(None, "a", DataType::Float64, true)],
+                    vec![DFField::new_unqualified("a", DataType::Float64, true)],
                     std::collections::HashMap::new(),
                 )
                 .unwrap(),
@@ -881,7 +893,7 @@ mod test {
             produce_one_row: false,
             schema: Arc::new(
                 DFSchema::new_with_metadata(
-                    vec![DFField::new(None, "a", DataType::Int64, true)],
+                    vec![DFField::new_unqualified("a", DataType::Int64, true)],
                     std::collections::HashMap::new(),
                 )
                 .unwrap(),
@@ -899,7 +911,11 @@ mod test {
             produce_one_row: false,
             schema: Arc::new(
                 DFSchema::new_with_metadata(
-                    vec![DFField::new(None, "a", DataType::Decimal128(12, 4), true)],
+                    vec![DFField::new_unqualified(
+                        "a",
+                        DataType::Decimal128(12, 4),
+                        true,
+                    )],
                     std::collections::HashMap::new(),
                 )
                 .unwrap(),
@@ -1082,7 +1098,7 @@ mod test {
             produce_one_row: false,
             schema: Arc::new(
                 DFSchema::new_with_metadata(
-                    vec![DFField::new(None, "a", data_type, true)],
+                    vec![DFField::new_unqualified("a", data_type, true)],
                     std::collections::HashMap::new(),
                 )
                 .unwrap(),
@@ -1095,7 +1111,7 @@ mod test {
         // gt
         let schema = Arc::new(
             DFSchema::new_with_metadata(
-                vec![DFField::new(None, "a", DataType::Int64, true)],
+                vec![DFField::new_unqualified("a", DataType::Int64, true)],
                 std::collections::HashMap::new(),
             )
             .unwrap(),
@@ -1109,7 +1125,7 @@ mod test {
         // eq
         let schema = Arc::new(
             DFSchema::new_with_metadata(
-                vec![DFField::new(None, "a", DataType::Int64, true)],
+                vec![DFField::new_unqualified("a", DataType::Int64, true)],
                 std::collections::HashMap::new(),
             )
             .unwrap(),
@@ -1123,7 +1139,7 @@ mod test {
         // lt
         let schema = Arc::new(
             DFSchema::new_with_metadata(
-                vec![DFField::new(None, "a", DataType::Int64, true)],
+                vec![DFField::new_unqualified("a", DataType::Int64, true)],
                 std::collections::HashMap::new(),
             )
             .unwrap(),

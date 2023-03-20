@@ -37,11 +37,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 (
                     match (
                         cte,
-                        self.schema_provider.get_table_provider((&table_ref).into()),
+                        self.schema_provider.get_table_provider(table_ref.clone()),
                     ) {
                         (Some(cte_plan), _) => Ok(cte_plan.clone()),
                         (_, Ok(provider)) => {
-                            LogicalPlanBuilder::scan(&table_name, provider, None)?.build()
+                            LogicalPlanBuilder::scan(table_ref, provider, None)?.build()
                         }
                         (None, Err(e)) => Err(e),
                     }?,

@@ -254,6 +254,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::AggregateUDF { .. }
             | Expr::ScalarVariable(_, _)
             | Expr::Column(_)
+            | Expr::OuterReferenceColumn(_, _)
             | Expr::Exists { .. }
             | Expr::InSubquery { .. }
             | Expr::ScalarSubquery(_)
@@ -388,6 +389,22 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 negated,
             } if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => {
                 lit(negated)
+            }
+
+            // expr IN ((subquery)) -> expr IN (subquery), see ##5529
+            Expr::InList {
+                expr,
+                mut list,
+                negated,
+            } if list.len() == 1
+                && matches!(list.first(), Some(Expr::ScalarSubquery { .. })) =>
+            {
+                let Expr::ScalarSubquery(subquery) = list.remove(0) else { unreachable!() };
+                Expr::InSubquery {
+                    expr,
+                    subquery,
+                    negated,
+                }
             }
 
             // if expr is a single column reference:
@@ -1003,6 +1020,11 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             Expr::Not(inner) => negate_clause(*inner),
 
             //
+            // Rules for Negative
+            //
+            Expr::Negative(inner) => distribute_negation(*inner),
+
+            //
             // Rules for Case
             //
 
@@ -1110,6 +1132,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::test::test_table_scan_with_name;
     use arrow::{
         array::{ArrayRef, Int32Array},
         datatypes::{DataType, Field, Schema},
@@ -2123,6 +2146,37 @@ mod tests {
     }
 
     #[test]
+    fn test_simplify_by_de_morgan_laws() {
+        // Laws with logical operations
+        // !(c3 AND c4) --> !c3 OR !c4
+        let expr = and(col("c3"), col("c4")).not();
+        let expected = or(col("c3").not(), col("c4").not());
+        assert_eq!(simplify(expr), expected);
+        // !(c3 OR c4) --> !c3 AND !c4
+        let expr = or(col("c3"), col("c4")).not();
+        let expected = and(col("c3").not(), col("c4").not());
+        assert_eq!(simplify(expr), expected);
+        // !(!c3) --> c3
+        let expr = col("c3").not().not();
+        let expected = col("c3");
+        assert_eq!(simplify(expr), expected);
+
+        // Laws with bitwise operations
+        // !(c3 & c4) --> !c3 | !c4
+        let expr = -bitwise_and(col("c3"), col("c4"));
+        let expected = bitwise_or(-col("c3"), -col("c4"));
+        assert_eq!(simplify(expr), expected);
+        // !(c3 | c4) --> !c3 & !c4
+        let expr = -bitwise_or(col("c3"), col("c4"));
+        let expected = bitwise_and(-col("c3"), -col("c4"));
+        assert_eq!(simplify(expr), expected);
+        // !(!c3) --> c3
+        let expr = -(-col("c3"));
+        let expected = col("c3");
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
     fn test_simplify_null_and_false() {
         let expr = and(lit_bool_null(), lit(false));
         let expr_eq = lit(false);
@@ -2410,24 +2464,19 @@ mod tests {
         Arc::new(
             DFSchema::new_with_metadata(
                 vec![
-                    DFField::new(None, "c1", DataType::Utf8, true),
-                    DFField::new(None, "c2", DataType::Boolean, true),
-                    DFField::new(None, "c3", DataType::Int64, true),
-                    DFField::new(None, "c4", DataType::UInt32, true),
-                    DFField::new(None, "c1_non_null", DataType::Utf8, false),
-                    DFField::new(None, "c2_non_null", DataType::Boolean, false),
-                    DFField::new(None, "c3_non_null", DataType::Int64, false),
-                    DFField::new(None, "c4_non_null", DataType::UInt32, false),
+                    DFField::new_unqualified("c1", DataType::Utf8, true),
+                    DFField::new_unqualified("c2", DataType::Boolean, true),
+                    DFField::new_unqualified("c3", DataType::Int64, true),
+                    DFField::new_unqualified("c4", DataType::UInt32, true),
+                    DFField::new_unqualified("c1_non_null", DataType::Utf8, false),
+                    DFField::new_unqualified("c2_non_null", DataType::Boolean, false),
+                    DFField::new_unqualified("c3_non_null", DataType::Int64, false),
+                    DFField::new_unqualified("c4_non_null", DataType::UInt32, false),
                 ],
                 HashMap::new(),
             )
             .unwrap(),
         )
-    }
-
-    #[test]
-    fn simplify_expr_not_not() {
-        assert_eq!(simplify(col("c2").not().not().not()), col("c2").not(),);
     }
 
     #[test]
@@ -2687,6 +2736,51 @@ mod tests {
         assert_eq!(
             simplify(in_list(col("c1"), vec![lit(1), lit(2)], true)),
             col("c1").not_eq(lit(2)).and(col("c1").not_eq(lit(1)))
+        );
+
+        let subquery = Arc::new(test_table_scan_with_name("test").unwrap());
+        assert_eq!(
+            simplify(in_list(
+                col("c1"),
+                vec![scalar_subquery(subquery.clone())],
+                false
+            )),
+            in_subquery(col("c1"), subquery.clone())
+        );
+        assert_eq!(
+            simplify(in_list(
+                col("c1"),
+                vec![scalar_subquery(subquery.clone())],
+                true
+            )),
+            not_in_subquery(col("c1"), subquery)
+        );
+
+        let subquery1 =
+            scalar_subquery(Arc::new(test_table_scan_with_name("test1").unwrap()));
+        let subquery2 =
+            scalar_subquery(Arc::new(test_table_scan_with_name("test2").unwrap()));
+
+        // c1 NOT IN (<subquery1>, <subquery2>) -> c1 != <subquery2> AND c1 != <subquery1>
+        assert_eq!(
+            simplify(in_list(
+                col("c1"),
+                vec![subquery1.clone(), subquery2.clone()],
+                true
+            )),
+            col("c1")
+                .not_eq(subquery2.clone())
+                .and(col("c1").not_eq(subquery1.clone()))
+        );
+
+        // c1 IN (<subquery1>, <subquery2>) -> c1 == <subquery2> OR c1 == <subquery1>
+        assert_eq!(
+            simplify(in_list(
+                col("c1"),
+                vec![subquery1.clone(), subquery2.clone()],
+                false
+            )),
+            col("c1").eq(subquery2).or(col("c1").eq(subquery1))
         );
     }
 

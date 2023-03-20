@@ -18,11 +18,11 @@
 //! Join related functionality used both on logical and physical plans
 
 use arrow::array::{
-    new_null_array, Array, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
+    downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
     UInt32Builder, UInt64Array,
 };
 use arrow::compute;
-use arrow::datatypes::{Field, Schema, UInt32Type, UInt64Type};
+use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
@@ -783,8 +783,8 @@ pub(crate) fn apply_join_filter_to_indices(
         filter.schema(),
         build_input_buffer,
         probe_batch,
-        PrimitiveArray::from(build_indices.data().clone()),
-        PrimitiveArray::from(probe_indices.data().clone()),
+        build_indices.clone(),
+        probe_indices.clone(),
         filter.column_indices(),
         build_side,
     )?;
@@ -794,13 +794,12 @@ pub(crate) fn apply_join_filter_to_indices(
         .into_array(intermediate_batch.num_rows());
     let mask = as_boolean_array(&filter_result)?;
 
-    let left_filtered = PrimitiveArray::<UInt64Type>::from(
-        compute::filter(&build_indices, mask)?.data().clone(),
-    );
-    let right_filtered = PrimitiveArray::<UInt32Type>::from(
-        compute::filter(&probe_indices, mask)?.data().clone(),
-    );
-    Ok((left_filtered, right_filtered))
+    let left_filtered = compute::filter(&build_indices, mask)?;
+    let right_filtered = compute::filter(&probe_indices, mask)?;
+    Ok((
+        downcast_array(left_filtered.as_ref()),
+        downcast_array(right_filtered.as_ref()),
+    ))
 }
 
 /// Returns a new [RecordBatch] by combining the `left` and `right` according to `indices`.

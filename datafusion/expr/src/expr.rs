@@ -21,7 +21,7 @@ use crate::aggregate_function;
 use crate::built_in_function;
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
-use crate::utils::expr_to_columns;
+use crate::utils::{expr_to_columns, find_out_reference_exprs};
 use crate::window_frame;
 use crate::window_function;
 use crate::AggregateUDF;
@@ -220,6 +220,9 @@ pub enum Expr {
         /// The type the parameter will be filled in with
         data_type: Option<DataType>,
     },
+    /// A place holder which hold a reference to a qualified field
+    /// in the outer query, used for correlated sub queries.
+    OuterReferenceColumn(DataType, Column),
 }
 
 /// Binary expression
@@ -567,6 +570,7 @@ impl Expr {
             Expr::Case { .. } => "Case",
             Expr::Cast { .. } => "Cast",
             Expr::Column(..) => "Column",
+            Expr::OuterReferenceColumn(_, _) => "Outer",
             Expr::Exists { .. } => "Exists",
             Expr::GetIndexedField { .. } => "GetIndexedField",
             Expr::GroupingSet(..) => "GroupingSet",
@@ -785,6 +789,11 @@ impl Expr {
 
         Ok(using_columns)
     }
+
+    /// Return true when the expression contains out reference(correlated) expressions.
+    pub fn contains_outer(&self) -> bool {
+        !find_out_reference_exprs(self).is_empty()
+    }
 }
 
 impl Not for Expr {
@@ -830,6 +839,7 @@ impl fmt::Debug for Expr {
         match self {
             Expr::Alias(expr, alias) => write!(f, "{expr:?} AS {alias}"),
             Expr::Column(c) => write!(f, "{c}"),
+            Expr::OuterReferenceColumn(_, c) => write!(f, "outer_ref({})", c),
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v) => write!(f, "{v:?}"),
             Expr::Case(case) => {
@@ -1110,6 +1120,7 @@ fn create_name(e: &Expr) -> Result<String> {
     match e {
         Expr::Alias(_, name) => Ok(name.clone()),
         Expr::Column(c) => Ok(c.flat_name()),
+        Expr::OuterReferenceColumn(_, c) => Ok(format!("outer_ref({})", c.flat_name())),
         Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
         Expr::Literal(value) => Ok(format!("{value:?}")),
         Expr::BinaryExpr(binary_expr) => {
