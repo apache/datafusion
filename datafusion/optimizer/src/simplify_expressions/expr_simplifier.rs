@@ -27,7 +27,7 @@ use arrow::{
     error::ArrowError,
     record_batch::RecordBatch,
 };
-use datafusion_common::tree_node::{Recursion, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     and, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Volatility,
@@ -170,7 +170,7 @@ struct ConstEvaluator<'a> {
 impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
     type N = Expr;
 
-    fn pre_visit(&mut self, expr: &Expr) -> Result<Recursion> {
+    fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
         // Default to being able to evaluate this node
         self.can_evaluate.push(true);
 
@@ -194,7 +194,7 @@ impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
         // NB: do not short circuit recursion even if we find a non
         // evaluatable node (so we can fold other children, args to
         // functions, etc)
-        Ok(Recursion::Continue)
+        Ok(RewriteRecursion::Continue)
     }
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {

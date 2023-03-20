@@ -16,7 +16,7 @@
 // under the License.
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Recursion, TreeNode};
+use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::utils::inspect_expr_pre;
 use datafusion_expr::{Expr, LogicalPlan};
@@ -87,7 +87,7 @@ fn log_plan(description: &str, plan: &LogicalPlan) {
 
 /// Do necessary check and fail the invalid plan
 fn check_plan(plan: &LogicalPlan) -> Result<()> {
-    plan.collect(&mut |plan: &LogicalPlan| {
+    plan.apply(&mut |plan: &LogicalPlan| {
         for expr in plan.expressions().iter() {
             // recursively look for subqueries
             inspect_expr_pre(expr, |expr| match expr {
@@ -100,8 +100,10 @@ fn check_plan(plan: &LogicalPlan) -> Result<()> {
             })?;
         }
 
-        Ok(Recursion::Continue)
-    })
+        Ok(VisitRecursion::Continue)
+    })?;
+
+    Ok(())
 }
 
 /// Do necessary check on subquery expressions and fail the invalid plan
@@ -176,14 +178,14 @@ fn check_correlations_in_subquery(
         | LogicalPlan::Subquery(_)
         | LogicalPlan::SubqueryAlias(_) => {
             for child in inner_plan.inputs() {
-                child.collect(&mut |plan| {
+                child.apply_children(&mut |plan| {
                     check_correlations_in_subquery(
                         outer_plan,
                         plan,
                         expr,
                         can_contain_outer_ref,
                     )?;
-                    Ok(Recursion::Continue)
+                    Ok(VisitRecursion::Continue)
                 })?;
             }
             Ok(())
@@ -191,14 +193,14 @@ fn check_correlations_in_subquery(
         LogicalPlan::Join(_) => {
             // TODO support correlation columns in the subquery join
             for child in inner_plan.inputs() {
-                child.collect(&mut |plan| {
+                child.apply_children(&mut |plan| {
                     check_correlations_in_subquery(
                         outer_plan,
                         plan,
                         expr,
                         can_contain_outer_ref,
                     )?;
-                    Ok(Recursion::Continue)
+                    Ok(VisitRecursion::Continue)
                 })?;
             }
             Ok(())

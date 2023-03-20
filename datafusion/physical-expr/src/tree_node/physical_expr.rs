@@ -18,14 +18,25 @@
 //! Tree node implementation for physical expr
 
 use crate::physical_expr::with_new_children_if_necessary;
-use crate::tree_node::TreeNode;
+use crate::tree_node::{TreeNode, VisitRecursion};
 use crate::PhysicalExpr;
 use datafusion_common::Result;
 use std::sync::Arc;
 
 impl TreeNode for Arc<dyn PhysicalExpr> {
-    fn get_children(&self) -> Vec<Self> {
-        self.children()
+    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    where
+        F: FnMut(&Self) -> Result<VisitRecursion>,
+    {
+        for child in self.children() {
+            match op(&child)? {
+                VisitRecursion::Continue => {}
+                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+            }
+        }
+
+        Ok(VisitRecursion::Continue)
     }
 
     fn map_children<F>(self, transform: F) -> Result<Self>

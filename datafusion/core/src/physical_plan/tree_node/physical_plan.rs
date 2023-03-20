@@ -17,14 +17,25 @@
 
 //! Tree node implementation for physical plan
 
-use crate::physical_plan::tree_node::TreeNode;
+use crate::physical_plan::tree_node::{TreeNode, VisitRecursion};
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use datafusion_common::Result;
 use std::sync::Arc;
 
 impl TreeNode for Arc<dyn ExecutionPlan> {
-    fn get_children(&self) -> Vec<Self> {
-        self.children()
+    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    where
+        F: FnMut(&Self) -> Result<VisitRecursion>,
+    {
+        for child in self.children() {
+            match op(&child)? {
+                VisitRecursion::Continue => {}
+                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+            }
+        }
+
+        Ok(VisitRecursion::Continue)
     }
 
     fn map_children<F>(self, transform: F) -> Result<Self>

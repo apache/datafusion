@@ -227,7 +227,7 @@ mod test {
     use super::*;
     use crate::{col, lit};
     use arrow::datatypes::DataType;
-    use datafusion_common::tree_node::{Recursion, TreeNode, TreeNodeRewriter};
+    use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
     use datafusion_common::{DFField, DFSchema, ScalarValue};
 
     #[ctor::ctor]
@@ -243,9 +243,9 @@ mod test {
     impl TreeNodeRewriter for RecordingRewriter {
         type N = Expr;
 
-        fn pre_visit(&mut self, expr: &Expr) -> Result<Recursion> {
+        fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
             self.v.push(format!("Previsited {expr:?}"));
-            Ok(Recursion::Continue)
+            Ok(RewriteRecursion::Continue)
         }
 
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {

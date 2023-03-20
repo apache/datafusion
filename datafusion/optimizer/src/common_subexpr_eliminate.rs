@@ -23,7 +23,7 @@ use std::sync::Arc;
 use arrow::datatypes::DataType;
 
 use datafusion_common::tree_node::{
-    Recursion, TreeNode, TreeNodeRewriter, TreeNodeVisitor,
+    RewriteRecursion, TreeNode, TreeNodeRewriter, TreeNodeVisitor, VisitRecursion,
 };
 use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::{
@@ -425,16 +425,16 @@ impl ExprIdentifierVisitor<'_> {
 impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
     type N = Expr;
 
-    fn pre_visit(&mut self, _expr: &Expr) -> Result<Recursion> {
+    fn pre_visit(&mut self, _expr: &Expr) -> Result<VisitRecursion> {
         self.visit_stack
             .push(VisitRecord::EnterMark(self.node_count));
         self.node_count += 1;
         // put placeholder
         self.id_array.push((0, "".to_string()));
-        Ok(Recursion::Continue)
+        Ok(VisitRecursion::Continue)
     }
 
-    fn post_visit(&mut self, expr: &Expr) -> Result<Recursion> {
+    fn post_visit(&mut self, expr: &Expr) -> Result<VisitRecursion> {
         self.series_number += 1;
 
         let (idx, sub_expr_desc) = self.pop_enter_mark();
@@ -451,7 +451,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
             self.id_array[idx].0 = self.series_number;
             let desc = Self::desc_expr(expr);
             self.visit_stack.push(VisitRecord::ExprItem(desc));
-            return Ok(Recursion::Continue);
+            return Ok(VisitRecursion::Continue);
         }
         let mut desc = Self::desc_expr(expr);
         desc.push_str(&sub_expr_desc);
@@ -465,7 +465,7 @@ impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
             .entry(desc)
             .or_insert_with(|| (expr.clone(), 0, data_type))
             .1 += 1;
-        Ok(Recursion::Continue)
+        Ok(VisitRecursion::Continue)
     }
 }
 
@@ -508,27 +508,27 @@ struct CommonSubexprRewriter<'a> {
 impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
     type N = Expr;
 
-    fn pre_visit(&mut self, _: &Expr) -> Result<Recursion> {
+    fn pre_visit(&mut self, _: &Expr) -> Result<RewriteRecursion> {
         if self.curr_index >= self.id_array.len()
             || self.max_series_number > self.id_array[self.curr_index].0
         {
-            return Ok(Recursion::Stop);
+            return Ok(RewriteRecursion::Stop);
         }
 
         let curr_id = &self.id_array[self.curr_index].1;
         // skip `Expr`s without identifier (empty identifier).
         if curr_id.is_empty() {
             self.curr_index += 1;
-            return Ok(Recursion::Skip);
+            return Ok(RewriteRecursion::Skip);
         }
         match self.expr_set.get(curr_id) {
             Some((_, counter, _)) => {
                 if *counter > 1 {
                     self.affected_id.insert(curr_id.clone());
-                    Ok(Recursion::Mutate)
+                    Ok(RewriteRecursion::Mutate)
                 } else {
                     self.curr_index += 1;
-                    Ok(Recursion::Skip)
+                    Ok(RewriteRecursion::Skip)
                 }
             }
             _ => Err(DataFusionError::Internal(

@@ -36,7 +36,7 @@ use crate::{
 
 use super::PartitionedFile;
 use crate::datasource::listing::ListingTableUrl;
-use datafusion_common::tree_node::{Recursion, TreeNode};
+use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{
     cast::{as_date64_array, as_string_array, as_uint64_array},
     Column, DataFusionError,
@@ -56,11 +56,15 @@ const FILE_MODIFIED_COLUMN_NAME: &str = "_df_part_file_modified_";
 /// was performed
 pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
     let mut is_applicable = true;
-    expr.collect(&mut |expr| {
+    expr.apply(&mut |expr| {
         Ok(match expr {
             Expr::Column(Column { ref name, .. }) => {
                 is_applicable &= col_names.contains(name);
-                Recursion::Stop // leaf node anyway
+                if is_applicable {
+                    VisitRecursion::Skip
+                } else {
+                    VisitRecursion::Stop
+                }
             }
             Expr::Literal(_)
             | Expr::Alias(_, _)
@@ -88,25 +92,25 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::ScalarSubquery(_)
             | Expr::GetIndexedField { .. }
             | Expr::GroupingSet(_)
-            | Expr::Case { .. } => Recursion::Continue,
+            | Expr::Case { .. } => VisitRecursion::Continue,
 
             Expr::ScalarFunction { fun, .. } => {
                 match fun.volatility() {
-                    Volatility::Immutable => Recursion::Continue,
+                    Volatility::Immutable => VisitRecursion::Continue,
                     // TODO: Stable functions could be `applicable`, but that would require access to the context
                     Volatility::Stable | Volatility::Volatile => {
                         is_applicable = false;
-                        Recursion::Stop
+                        VisitRecursion::Stop
                     }
                 }
             }
             Expr::ScalarUDF { fun, .. } => {
                 match fun.signature.volatility {
-                    Volatility::Immutable => Recursion::Continue,
+                    Volatility::Immutable => VisitRecursion::Continue,
                     // TODO: Stable functions could be `applicable`, but that would require access to the context
                     Volatility::Stable | Volatility::Volatile => {
                         is_applicable = false;
-                        Recursion::Stop
+                        VisitRecursion::Stop
                     }
                 }
             }
@@ -123,7 +127,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::QualifiedWildcard { .. }
             | Expr::Placeholder { .. } => {
                 is_applicable = false;
-                Recursion::Stop
+                VisitRecursion::Stop
             }
         })
     })

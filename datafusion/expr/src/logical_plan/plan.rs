@@ -30,7 +30,7 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::tree_node::{Recursion, TreeNode, TreeNodeVisitor};
+use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
 use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
     ScalarValue, TableReference,
@@ -394,7 +394,7 @@ impl LogicalPlan {
     pub fn using_columns(&self) -> Result<Vec<HashSet<Column>>, DataFusionError> {
         let mut using_columns: Vec<HashSet<Column>> = vec![];
 
-        self.collect(&mut |plan| {
+        self.apply(&mut |plan| {
             if let LogicalPlan::Join(Join {
                 join_constraint: JoinConstraint::Using,
                 on,
@@ -410,7 +410,7 @@ impl LogicalPlan {
                     })?;
                 using_columns.push(columns);
             }
-            Ok(Recursion::Continue)
+            Ok(VisitRecursion::Continue)
         })?;
 
         Ok(using_columns)
@@ -463,12 +463,9 @@ impl LogicalPlan {
 
 impl LogicalPlan {
     /// applies collect to any subqueries in the plan
-    pub(crate) fn collect_subqueries<F>(
-        &self,
-        op: &mut F,
-    ) -> datafusion_common::Result<Recursion>
+    pub(crate) fn apply_subqueries<F>(&self, op: &mut F) -> datafusion_common::Result<()>
     where
-        F: FnMut(&Self) -> datafusion_common::Result<Recursion>,
+        F: FnMut(&Self) -> datafusion_common::Result<VisitRecursion>,
     {
         self.inspect_expressions(|expr| {
             // recursively look for subqueries
@@ -481,22 +478,18 @@ impl LogicalPlan {
                         // LogicalPlan::Subquery (even though it is
                         // actually a Subquery alias)
                         let synthetic_plan = LogicalPlan::Subquery(subquery.clone());
-                        synthetic_plan.collect(op)?;
+                        synthetic_plan.apply(op)?;
                     }
                     _ => {}
                 }
                 Ok::<(), DataFusionError>(())
             })
         })?;
-        // continue recursion
-        Ok(Recursion::Continue)
+        Ok(())
     }
 
     /// applies visitor to any subqueries in the plan
-    pub(crate) fn visit_subqueries<V>(
-        &self,
-        v: &mut V,
-    ) -> datafusion_common::Result<Recursion>
+    pub(crate) fn visit_subqueries<V>(&self, v: &mut V) -> datafusion_common::Result<()>
     where
         V: TreeNodeVisitor<N = LogicalPlan>,
     {
@@ -518,8 +511,7 @@ impl LogicalPlan {
                 Ok::<(), DataFusionError>(())
             })
         })?;
-        // continue recursion
-        Ok(Recursion::Continue)
+        Ok(())
     }
 
     /// Return a logical plan with all placeholders/params (e.g $1 $2,
@@ -551,9 +543,9 @@ impl LogicalPlan {
     ) -> Result<HashMap<String, Option<DataType>>, DataFusionError> {
         let mut param_types: HashMap<String, Option<DataType>> = HashMap::new();
 
-        self.collect(&mut |plan| {
+        self.apply(&mut |plan| {
             plan.inspect_expressions(|expr| {
-                expr.collect(&mut |expr| {
+                expr.apply(&mut |expr| {
                     if let Expr::Placeholder { id, data_type } = expr {
                         let prev = param_types.get(id);
                         match (prev, data_type) {
@@ -570,10 +562,11 @@ impl LogicalPlan {
                             _ => {}
                         }
                     }
-                    Ok(Recursion::Continue)
-                })
+                    Ok(VisitRecursion::Continue)
+                })?;
+                Ok::<(), DataFusionError>(())
             })?;
-            Ok(Recursion::Continue)
+            Ok(VisitRecursion::Continue)
         })?;
 
         Ok(param_types)
@@ -2029,7 +2022,7 @@ mod tests {
     impl TreeNodeVisitor for OkVisitor {
         type N = LogicalPlan;
 
-        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<Recursion> {
+        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "pre_visit Projection",
                 LogicalPlan::Filter { .. } => "pre_visit Filter",
@@ -2042,10 +2035,10 @@ mod tests {
             };
 
             self.strings.push(s.into());
-            Ok(Recursion::Continue)
+            Ok(VisitRecursion::Continue)
         }
 
-        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<Recursion> {
+        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "post_visit Projection",
                 LogicalPlan::Filter { .. } => "post_visit Filter",
@@ -2058,7 +2051,7 @@ mod tests {
             };
 
             self.strings.push(s.into());
-            Ok(Recursion::Continue)
+            Ok(VisitRecursion::Continue)
         }
     }
 
@@ -2116,18 +2109,18 @@ mod tests {
     impl TreeNodeVisitor for StoppingVisitor {
         type N = LogicalPlan;
 
-        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<Recursion> {
+        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             if self.return_false_from_pre_in.dec() {
-                return Ok(Recursion::Stop);
+                return Ok(VisitRecursion::Stop);
             }
             self.inner.pre_visit(plan)?;
 
-            Ok(Recursion::Continue)
+            Ok(VisitRecursion::Continue)
         }
 
-        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<Recursion> {
+        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             if self.return_false_from_post_in.dec() {
-                return Ok(Recursion::Stop);
+                return Ok(VisitRecursion::Stop);
             }
 
             self.inner.post_visit(plan)
@@ -2185,7 +2178,7 @@ mod tests {
     impl TreeNodeVisitor for ErrorVisitor {
         type N = LogicalPlan;
 
-        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<Recursion> {
+        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             if self.return_error_from_pre_in.dec() {
                 return Err(DataFusionError::NotImplemented(
                     "Error in pre_visit".to_string(),
@@ -2195,7 +2188,7 @@ mod tests {
             self.inner.pre_visit(plan)
         }
 
-        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<Recursion> {
+        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             if self.return_error_from_post_in.dec() {
                 return Err(DataFusionError::NotImplemented(
                     "Error in post_visit".to_string(),

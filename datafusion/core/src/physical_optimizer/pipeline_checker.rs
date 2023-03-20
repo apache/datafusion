@@ -22,7 +22,7 @@
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::tree_node::TreeNode;
+use crate::physical_plan::tree_node::{TreeNode, VisitRecursion};
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use std::sync::Arc;
 
@@ -79,8 +79,20 @@ impl PipelineStatePropagator {
 }
 
 impl TreeNode for PipelineStatePropagator {
-    fn get_children(&self) -> Vec<Self> {
-        unimplemented!()
+    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    where
+        F: FnMut(&Self) -> Result<VisitRecursion>,
+    {
+        let children = self.plan.children();
+        for child in children {
+            match op(&PipelineStatePropagator::new(child))? {
+                VisitRecursion::Continue => {}
+                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+            }
+        }
+
+        Ok(VisitRecursion::Continue)
     }
 
     fn map_children<F>(self, transform: F) -> Result<Self>

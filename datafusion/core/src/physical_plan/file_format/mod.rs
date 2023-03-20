@@ -45,7 +45,7 @@ use crate::datasource::{
     listing::{FileRange, PartitionedFile},
     object_store::ObjectStoreUrl,
 };
-use crate::physical_plan::tree_node::{Recursion, TreeNode};
+use crate::physical_plan::tree_node::{TreeNode, VisitRecursion};
 use crate::physical_plan::ExecutionPlan;
 use crate::{
     error::{DataFusionError, Result},
@@ -93,7 +93,7 @@ pub fn get_scan_files(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Vec<Vec<Vec<PartitionedFile>>>> {
     let mut collector: Vec<Vec<Vec<PartitionedFile>>> = vec![];
-    plan.collect(&mut |plan| {
+    plan.apply(&mut |plan| {
         let plan_any = plan.as_any();
         let file_groups =
             if let Some(parquet_exec) = plan_any.downcast_ref::<ParquetExec>() {
@@ -105,11 +105,11 @@ pub fn get_scan_files(
             } else if let Some(csv_exec) = plan_any.downcast_ref::<CsvExec>() {
                 csv_exec.base_config().file_groups.clone()
             } else {
-                return Ok(Recursion::Continue);
+                return Ok(VisitRecursion::Continue);
             };
 
         collector.push(file_groups);
-        Ok(Recursion::Stop)
+        Ok(VisitRecursion::Skip)
     })?;
     Ok(collector)
 }

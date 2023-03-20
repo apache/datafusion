@@ -22,11 +22,15 @@ use crate::expr::{
     Like, Sort, TryCast, WindowFunction,
 };
 use crate::Expr;
+use datafusion_common::tree_node::VisitRecursion;
 use datafusion_common::{tree_node::TreeNode, Result};
 
 impl TreeNode for Expr {
-    fn get_children(&self) -> Vec<Self> {
-        match self {
+    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    where
+        F: FnMut(&Self) -> Result<VisitRecursion>,
+    {
+        let children = match self {
             Expr::Alias(expr, _)
             | Expr::Not(expr)
             | Expr::IsNotNull(expr)
@@ -117,7 +121,17 @@ impl TreeNode for Expr {
                 expr_vec.extend(list.clone());
                 expr_vec
             }
+        };
+
+        for child in children.iter() {
+            match op(child)? {
+                VisitRecursion::Continue => {}
+                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+            }
         }
+
+        Ok(VisitRecursion::Continue)
     }
 
     fn map_children<F>(self, transform: F) -> Result<Self>

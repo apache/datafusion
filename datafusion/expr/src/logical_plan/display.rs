@@ -18,7 +18,7 @@
 
 use crate::LogicalPlan;
 use arrow::datatypes::Schema;
-use datafusion_common::tree_node::{Recursion, TreeNodeVisitor};
+use datafusion_common::tree_node::{TreeNodeVisitor, VisitRecursion};
 use datafusion_common::DataFusionError;
 use std::fmt;
 
@@ -50,7 +50,10 @@ impl<'a, 'b> IndentVisitor<'a, 'b> {
 impl<'a, 'b> TreeNodeVisitor for IndentVisitor<'a, 'b> {
     type N = LogicalPlan;
 
-    fn pre_visit(&mut self, plan: &LogicalPlan) -> datafusion_common::Result<Recursion> {
+    fn pre_visit(
+        &mut self,
+        plan: &LogicalPlan,
+    ) -> datafusion_common::Result<VisitRecursion> {
         if self.indent > 0 {
             writeln!(self.f)?;
         }
@@ -65,15 +68,15 @@ impl<'a, 'b> TreeNodeVisitor for IndentVisitor<'a, 'b> {
         }
 
         self.indent += 1;
-        Ok(Recursion::Continue)
+        Ok(VisitRecursion::Continue)
     }
 
     fn post_visit(
         &mut self,
         _plan: &LogicalPlan,
-    ) -> datafusion_common::Result<Recursion> {
+    ) -> datafusion_common::Result<VisitRecursion> {
         self.indent -= 1;
-        Ok(Recursion::Continue)
+        Ok(VisitRecursion::Continue)
     }
 }
 
@@ -192,7 +195,10 @@ impl<'a, 'b> GraphvizVisitor<'a, 'b> {
 impl<'a, 'b> TreeNodeVisitor for GraphvizVisitor<'a, 'b> {
     type N = LogicalPlan;
 
-    fn pre_visit(&mut self, plan: &LogicalPlan) -> datafusion_common::Result<Recursion> {
+    fn pre_visit(
+        &mut self,
+        plan: &LogicalPlan,
+    ) -> datafusion_common::Result<VisitRecursion> {
         let id = self.graphviz_builder.next_id();
 
         // Create a new graph node for `plan` such as
@@ -226,18 +232,18 @@ impl<'a, 'b> TreeNodeVisitor for GraphvizVisitor<'a, 'b> {
         }
 
         self.parent_ids.push(id);
-        Ok(Recursion::Continue)
+        Ok(VisitRecursion::Continue)
     }
 
     fn post_visit(
         &mut self,
         _plan: &LogicalPlan,
-    ) -> datafusion_common::Result<Recursion> {
+    ) -> datafusion_common::Result<VisitRecursion> {
         // always be non-empty as pre_visit always pushes
         // So it should always be Ok(true)
         let res = self.parent_ids.pop();
         match res {
-            Some(_) => Ok(Recursion::Continue),
+            Some(_) => Ok(VisitRecursion::Continue),
             None => Err(DataFusionError::Internal("Fail to format".to_string())),
         }
     }

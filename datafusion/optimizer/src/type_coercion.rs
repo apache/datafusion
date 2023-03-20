@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, IntervalUnit};
 
-use datafusion_common::tree_node::{Recursion, TreeNodeRewriter};
+use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{
     parse_interval, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
@@ -121,8 +121,8 @@ pub(crate) struct TypeCoercionRewriter {
 impl TreeNodeRewriter for TypeCoercionRewriter {
     type N = Expr;
 
-    fn pre_visit(&mut self, _expr: &Expr) -> Result<Recursion> {
-        Ok(Recursion::Continue)
+    fn pre_visit(&mut self, _expr: &Expr) -> Result<RewriteRecursion> {
+        Ok(RewriteRecursion::Continue)
     }
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {

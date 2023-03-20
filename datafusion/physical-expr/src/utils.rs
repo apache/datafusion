@@ -22,7 +22,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Operator;
 
-use crate::tree_node::{Recursion, TreeNode, TreeNodeRewriter};
+use crate::tree_node::{TreeNode, TreeNodeRewriter, VisitRecursion};
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 use std::collections::HashMap;
@@ -265,8 +265,19 @@ impl<T> ExprTreeNode<T> {
 }
 
 impl<T: Clone> TreeNode for ExprTreeNode<T> {
-    fn get_children(&self) -> Vec<Self> {
-        self.children()
+    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    where
+        F: FnMut(&Self) -> Result<VisitRecursion>,
+    {
+        for child in self.children() {
+            match op(&child)? {
+                VisitRecursion::Continue => {}
+                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+            }
+        }
+
+        Ok(VisitRecursion::Continue)
     }
 
     fn map_children<F>(mut self, transform: F) -> Result<Self>
@@ -357,13 +368,13 @@ where
 /// Recursively extract referenced [`Column`]s within a [`PhysicalExpr`].
 pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     let mut columns = HashSet::<Column>::new();
-    expr.collect(&mut |expr| {
+    expr.apply(&mut |expr| {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             if !columns.iter().any(|c| c.eq(column)) {
                 columns.insert(column.clone());
             }
         }
-        Ok(Recursion::Continue)
+        Ok(VisitRecursion::Continue)
     })
     // pre_visit always returns OK, so this will always too
     .expect("no way to return error during recursion");

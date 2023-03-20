@@ -29,7 +29,9 @@ use crate::{
     Operator, TableScan, TryCast,
 };
 use arrow::datatypes::{DataType, TimeUnit};
-use datafusion_common::tree_node::{Recursion, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{
+    RewriteRecursion, TreeNode, TreeNodeRewriter, VisitRecursion,
+};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
     TableReference,
@@ -405,16 +407,16 @@ where
     F: Fn(&Expr) -> bool,
 {
     let mut exprs = vec![];
-    expr.collect(&mut |expr| {
+    expr.apply(&mut |expr| {
         if test_fn(expr) {
             if !(exprs.contains(expr)) {
                 exprs.push(expr.clone())
             }
             // stop recursing down this expr once we find a match
-            return Ok(Recursion::Stop);
+            return Ok(VisitRecursion::Skip);
         }
 
-        Ok(Recursion::Continue)
+        Ok(VisitRecursion::Continue)
     })
     // pre_visit always returns OK, so this will always too
     .expect("no way to return error during recursion");
@@ -427,14 +429,14 @@ where
     F: FnMut(&Expr) -> Result<(), E>,
 {
     let mut err = Ok(());
-    expr.collect(&mut |expr| {
+    expr.apply(&mut |expr| {
         if let Err(e) = f(expr) {
             // save the error for later (it may not be a DataFusionError
             err = Err(e);
-            Ok(Recursion::Stop)
+            Ok(VisitRecursion::Stop)
         } else {
             // keep going
-            Ok(Recursion::Continue)
+            Ok(VisitRecursion::Continue)
         }
     })
     // The closure always returns OK, so this will always too
@@ -514,16 +516,16 @@ pub fn from_plan(
             impl TreeNodeRewriter for RemoveAliases {
                 type N = Expr;
 
-                fn pre_visit(&mut self, expr: &Expr) -> Result<Recursion> {
+                fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
                     match expr {
                         Expr::Exists { .. }
                         | Expr::ScalarSubquery(_)
                         | Expr::InSubquery { .. } => {
                             // subqueries could contain aliases so we don't recurse into those
-                            Ok(Recursion::Stop)
+                            Ok(RewriteRecursion::Stop)
                         }
-                        Expr::Alias(_, _) => Ok(Recursion::Mutate),
-                        _ => Ok(Recursion::Continue),
+                        Expr::Alias(_, _) => Ok(RewriteRecursion::Mutate),
+                        _ => Ok(RewriteRecursion::Continue),
                     }
                 }
 

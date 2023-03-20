@@ -22,36 +22,27 @@
 
 pub mod physical_expr;
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::Result;
 
-/// Trait for tree node. It can be [`ExecutionPlan`], [`PhysicalExpr`], [`LogicalExpr`], etc.
+/// Trait for tree node. It can be [`ExecutionPlan`], [`PhysicalExpr`], [`LogicalPlan`], [`Expr`], etc.
 pub trait TreeNode: Clone {
-    /// Return the children of this tree node
-    fn get_children(&self) -> Vec<Self>;
-
     /// Use preorder to iterate the node on the tree so that we can stop fast for some cases.
     ///
-    /// `op` can be used to collect some info from the tree node.
-    fn collect<F>(&self, op: &mut F) -> Result<()>
+    /// [`op`] can be used to collect some info from the tree node
+    ///      or do some checking for the tree node.
+    fn apply<F>(&self, op: &mut F) -> Result<VisitRecursion>
     where
-        F: FnMut(&Self) -> Result<Recursion>,
+        F: FnMut(&Self) -> Result<VisitRecursion>,
     {
         match op(self)? {
-            Recursion::Continue => {}
-            // If the recursion should stop, do not visit children
-            Recursion::Stop => return Ok(()),
-            r => {
-                return Err(DataFusionError::Execution(format!(
-                    "Recursion {r:?} is not supported for collect"
-                )))
-            }
+            VisitRecursion::Continue => {}
+            // If the recursion should skip, do not apply to its children. And let the recursion continue
+            VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+            // If the recursion should stop, do not apply to its children
+            VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
         };
 
-        for child in self.get_children() {
-            child.collect(op)?;
-        }
-
-        Ok(())
+        self.apply_children(&mut |node| node.apply(op))
     }
 
     /// Visit the tree node using the given [TreeNodeVisitor]
@@ -76,34 +67,29 @@ pub trait TreeNode: Clone {
     ///
     /// If an Err result is returned, recursion is stopped immediately
     ///
-    /// If [`Recursion::Stop`] is returned on a call to pre_visit, no
+    /// If [`VisitRecursion::Stop`] is returned on a call to pre_visit, no
     /// children of that node will be visited, nor is post_visit
-    /// called on that node
+    /// called on that node. Details see [`TreeNodeVisitor`]
     ///
-    /// If using the default [`post_visit`] with nothing to do, the [`collect`] should be preferred
-    fn visit<V: TreeNodeVisitor<N = Self>>(&self, visitor: &mut V) -> Result<Recursion> {
+    /// If using the default [`post_visit`] with nothing to do, the [`apply`] should be preferred
+    fn visit<V: TreeNodeVisitor<N = Self>>(
+        &self,
+        visitor: &mut V,
+    ) -> Result<VisitRecursion> {
         match visitor.pre_visit(self)? {
-            Recursion::Continue => {}
-            // If the recursion should stop, do not visit children
-            Recursion::Stop => return Ok(Recursion::Stop),
-            r => {
-                return Err(DataFusionError::Execution(format!(
-                    "Recursion {r:?} is not supported for collect_using"
-                )))
-            }
+            VisitRecursion::Continue => {}
+            // If the recursion should skip, do not apply to its children. And let the recursion continue
+            VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+            // If the recursion should stop, do not apply to its children
+            VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
         };
 
-        for child in self.get_children() {
-            match child.visit(visitor)? {
-                Recursion::Continue => {}
-                // If the recursion should stop, do not visit children
-                Recursion::Stop => return Ok(Recursion::Stop),
-                r => {
-                    return Err(DataFusionError::Execution(format!(
-                        "Recursion {r:?} is not supported for collect_using"
-                    )))
-                }
-            }
+        match self.apply_children(&mut |node| node.visit(visitor))? {
+            VisitRecursion::Continue => {}
+            // If the recursion should skip, do not apply to its children. And let the recursion continue
+            VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+            // If the recursion should stop, do not apply to its children
+            VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
         }
 
         visitor.post_visit(self)
@@ -180,10 +166,10 @@ pub trait TreeNode: Clone {
     /// If using the default [`pre_visit`] with [`true`] returned, the [`transform`] should be preferred
     fn rewrite<R: TreeNodeRewriter<N = Self>>(self, rewriter: &mut R) -> Result<Self> {
         let need_mutate = match rewriter.pre_visit(&self)? {
-            Recursion::Mutate => return rewriter.mutate(self),
-            Recursion::Stop => return Ok(self),
-            Recursion::Continue => true,
-            Recursion::Skip => false,
+            RewriteRecursion::Mutate => return rewriter.mutate(self),
+            RewriteRecursion::Stop => return Ok(self),
+            RewriteRecursion::Continue => true,
+            RewriteRecursion::Skip => false,
         };
 
         let after_op_children = self.map_children(|node| node.rewrite(rewriter))?;
@@ -195,6 +181,11 @@ pub trait TreeNode: Clone {
             Ok(after_op_children)
         }
     }
+
+    /// Apply the closure `F` to the node's children
+    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    where
+        F: FnMut(&Self) -> Result<VisitRecursion>;
 
     /// Apply transform `F` to the node's children, the transform `F` might have a direction(Preorder or Postorder)
     fn map_children<F>(self, transform: F) -> Result<Self>
@@ -208,43 +199,50 @@ pub trait TreeNode: Clone {
 /// [`TreeNodeVisitor`] allows keeping the algorithms
 /// separate from the code to traverse the structure of the `TreeNode`
 /// tree and makes it easier to add new types of tree node and
-/// algorithms by.
+/// algorithms.
 ///
-/// When passed to[`TreeNode::accept`], [`TreeNode::pre_visit`]
+/// When passed to[`TreeNode::visit`], [`TreeNode::pre_visit`]
 /// and [`TreeNode::post_visit`] are invoked recursively
 /// on an node tree.
 ///
 /// If an [`Err`] result is returned, recursion is stopped
 /// immediately.
 ///
-/// If [`Recursion::Stop`] is returned on a call to pre_visit, no
+/// If [`VisitRecursion::Stop`] is returned on a call to pre_visit, no
 /// children of that tree node are visited, nor is post_visit
 /// called on that tree node
+///
+/// If [`VisitRecursion::Stop`] is returned on a call to post_visit, no
+/// siblings of that tree node are visited, nor is post_visit
+/// called on its parent tree node
+///
+/// If [`VisitRecursion::Skip`] is returned on a call to pre_visit, no
+/// children of that tree node are visited.
 pub trait TreeNodeVisitor: Sized {
     /// The node type which is visitable.
     type N: TreeNode;
 
     /// Invoked before any children of `node` are visited.
-    fn pre_visit(&mut self, node: &Self::N) -> Result<Recursion>;
+    fn pre_visit(&mut self, node: &Self::N) -> Result<VisitRecursion>;
 
     /// Invoked after all children of `node` are visited. Default
     /// implementation does nothing.
-    fn post_visit(&mut self, _node: &Self::N) -> Result<Recursion> {
-        Ok(Recursion::Continue)
+    fn post_visit(&mut self, _node: &Self::N) -> Result<VisitRecursion> {
+        Ok(VisitRecursion::Continue)
     }
 }
 
 /// Trait for potentially recursively transform an [`TreeNode`] node
-/// tree. When passed to `TreeNode::transform_using`, `TreeNodeRewriter::mutate` is
+/// tree. When passed to `TreeNode::rewrite`, `TreeNodeRewriter::mutate` is
 /// invoked recursively on all nodes of a tree.
 pub trait TreeNodeRewriter: Sized {
     /// The node type which is rewritable.
     type N: TreeNode;
 
     /// Invoked before (Preorder) any children of `node` are rewritten /
-    /// visited. Default implementation returns `Ok(RewriteRecursion::Continue)`
-    fn pre_visit(&mut self, _node: &Self::N) -> Result<Recursion> {
-        Ok(Recursion::Continue)
+    /// visited. Default implementation returns `Ok(Recursion::Continue)`
+    fn pre_visit(&mut self, _node: &Self::N) -> Result<RewriteRecursion> {
+        Ok(RewriteRecursion::Continue)
     }
 
     /// Invoked after (Postorder) all children of `node` have been mutated and
@@ -252,15 +250,26 @@ pub trait TreeNodeRewriter: Sized {
     fn mutate(&mut self, node: Self::N) -> Result<Self::N>;
 }
 
-/// Controls how the [TreeNode] recursion should proceed.
+/// Controls how the [TreeNode] recursion should proceed for [`rewrite`].
 #[derive(Debug)]
-pub enum Recursion {
-    /// Continue rewrite / visit this node tree.
+pub enum RewriteRecursion {
+    /// Continue rewrite this node tree.
     Continue,
     /// Call 'op' immediately and return.
     Mutate,
-    /// Do not rewrite / visit the children of this node.
+    /// Do not rewrite the children of this node.
     Stop,
     /// Keep recursive but skip apply op on this node
     Skip,
+}
+
+/// Controls how the [TreeNode] recursion should proceed for [`visit`].
+#[derive(Debug)]
+pub enum VisitRecursion {
+    /// Continue the visit to this node tree.
+    Continue,
+    /// Keep recursive but skip applying op on the children
+    Skip,
+    /// Stop the visit to this node tree.
+    Stop,
 }
