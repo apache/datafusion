@@ -17,10 +17,9 @@ jobs:
       - name: Checkout docs sources
         uses: actions/checkout@v3
 
-      - name: Checkout docs target branch
+      - name: Checkout asf-site branch
         uses: actions/checkout@v3
         with:
-          repository: apache/arrow-site
           ref: asf-site
           path: asf-site
 
@@ -48,7 +47,7 @@ jobs:
           set -x
           cd asf-site/
           # delete anything but: 1) '.'; 2) '..'; 3) .git/
-          find ./ | grep -vE "^./$|^../$|^./.git/" | xargs rm -rf
+          find ./ | grep -vE "^./$|^../$|^./.git" | xargs rm -rf
           cp ../.asf.yaml .
           cp -rT ../docs/build/html/ .
           git status --porcelain
