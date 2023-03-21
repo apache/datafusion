@@ -110,9 +110,7 @@ async fn datafusion_sql_benchmarks(ctx: &mut SessionContext, opt: Opt) -> Result
         println!("Executing '{name}'");
         rundata.start_new_case(name);
         for i in 0..iterations {
-            let start = Instant::now();
-            let rows = execute_sql(ctx, sql, debug).await?;
-            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+            let (rows, elapsed) = execute_sql(ctx, sql, debug).await?;
             println!("Query '{}' iteration {} took {} ms", name, i, elapsed);
             rundata.write_iter(elapsed, rows);
         }
@@ -123,16 +121,23 @@ async fn datafusion_sql_benchmarks(ctx: &mut SessionContext, opt: Opt) -> Result
     Ok(())
 }
 
-async fn execute_sql(ctx: &SessionContext, sql: &str, debug: bool) -> Result<usize> {
+async fn execute_sql(
+    ctx: &SessionContext,
+    sql: &str,
+    debug: bool,
+) -> Result<(usize, f64)> {
+    let start = Instant::now();
     let dataframe = ctx.sql(sql).await?;
     if debug {
         println!("Optimized logical plan:\n{:?}", dataframe.logical_plan());
     }
     let result = dataframe.collect().await?;
+    let elapsed = start.elapsed().as_secs_f64() * 1000.0;
     if debug {
         pretty::print_batches(&result)?;
     }
-    Ok(result.iter().map(|b| b.num_rows()).sum())
+    let rowcount = result.iter().map(|b| b.num_rows()).sum();
+    Ok((rowcount, elapsed))
 }
 
 fn nyctaxi_schema() -> Schema {

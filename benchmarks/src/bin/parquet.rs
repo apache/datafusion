@@ -205,9 +205,7 @@ async fn run_sort_benchmarks(opt: Opt, test_file: &TestParquetFile) -> Result<()
         for i in 0..opt.iterations {
             let config = SessionConfig::new().with_target_partitions(opt.partitions);
             let ctx = SessionContext::with_config(config);
-            let start = Instant::now();
-            let rows = exec_sort(&ctx, &expr, test_file, opt.debug).await?;
-            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+            let (rows, elapsed) = exec_sort(&ctx, &expr, test_file, opt.debug).await?;
             println!("Iteration {i} finished in {elapsed}ms");
             rundata.write_iter(elapsed, rows);
         }
@@ -283,14 +281,11 @@ async fn run_filter_benchmarks(opt: Opt, test_file: &TestParquetFile) -> Result<
             rundata
                 .start_new_case(&format!("{name}: {}", parquet_scan_disp(scan_options)));
             for i in 0..opt.iterations {
-                let start = Instant::now();
-
                 let config = scan_options.config().with_target_partitions(opt.partitions);
                 let ctx = SessionContext::with_config(config);
 
-                let rows =
+                let (rows, elapsed) =
                     exec_scan(&ctx, test_file, filter_expr.clone(), opt.debug).await?;
-                let elapsed = start.elapsed().as_secs_f64() * 1000.0;
                 println!("Iteration {} returned {} rows in {elapsed} ms", i, rows);
                 rundata.write_iter(elapsed, rows);
             }
@@ -308,16 +303,18 @@ async fn exec_scan(
     test_file: &TestParquetFile,
     filter: Expr,
     debug: bool,
-) -> Result<usize> {
+) -> Result<(usize, f64)> {
+    let start = Instant::now();
     let exec = test_file.create_scan(Some(filter)).await?;
 
     let task_ctx = ctx.task_ctx();
     let result = collect(exec, task_ctx).await?;
-
+    let elapsed = start.elapsed().as_secs_f64() * 1000.0;
     if debug {
         pretty::print_batches(&result)?;
     }
-    Ok(result.iter().map(|b| b.num_rows()).sum())
+    let rows = result.iter().map(|b| b.num_rows()).sum();
+    Ok((rows, elapsed))
 }
 
 async fn exec_sort(
@@ -325,15 +322,18 @@ async fn exec_sort(
     expr: &[PhysicalSortExpr],
     test_file: &TestParquetFile,
     debug: bool,
-) -> Result<usize> {
+) -> Result<(usize, f64)> {
+    let start = Instant::now();
     let scan = test_file.create_scan(None).await?;
     let exec = Arc::new(SortExec::try_new(expr.to_owned(), scan, None)?);
     let task_ctx = ctx.task_ctx();
     let result = collect(exec, task_ctx).await?;
+    let elapsed = start.elapsed().as_secs_f64() * 1000.0;
     if debug {
         pretty::print_batches(&result)?;
     }
-    Ok(result.iter().map(|b| b.num_rows()).sum())
+    let rows = result.iter().map(|b| b.num_rows()).sum();
+    Ok((rows, elapsed))
 }
 
 fn gen_data(
