@@ -35,7 +35,11 @@
 //! by another SortExec. Therefore, this rule removes it from the physical plan.
 use crate::config::ConfigOptions;
 use crate::error::Result;
-use crate::physical_optimizer::utils::add_sort_above;
+use crate::physical_optimizer::utils::{
+    add_sort_above, calc_ordering_range, compare_set_equality, find_match_indices,
+    get_at_indices, get_ordered_merged_indices, get_set_diff_indices, is_consecutive,
+    is_consecutive_from_zero,
+};
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
@@ -53,9 +57,7 @@ use datafusion_physical_expr::utils::{
     ordering_satisfy_concrete,
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use hashbrown::HashSet;
 use itertools::{concat, izip, Itertools};
-use std::hash::Hash;
 use std::sync::Arc;
 
 /// This rule inspects `SortExec`'s in the given physical plan and removes the
@@ -503,7 +505,7 @@ fn ensure_sorting(
             let window_expr = exec.window_expr();
             let search_mode = &exec.partition_search_mode;
             let input = exec.input();
-            let res = can_skip_ordering_util(
+            let res = can_skip_sort(
                 window_expr[0].partition_by(),
                 window_expr[0].order_by(),
                 input,
@@ -586,7 +588,6 @@ fn analyze_window_sort_removal(
     let (window_expr, partition_keys, search_mode) = if let Some(exec) =
         window_exec.as_any().downcast_ref::<BoundedWindowAggExec>()
     {
-        // println!("partition_search_mode:{:?}", exec.partition_search_mode);
         (
             exec.window_expr(),
             &exec.partition_keys,
@@ -603,21 +604,41 @@ fn analyze_window_sort_removal(
             "Expects to receive either WindowAggExec of BoundedWindowAggExec".to_string(),
         ));
     };
+    let partitionby_exprs = window_expr[0].partition_by();
     let orderby_sort_keys = window_expr[0].order_by();
 
-    let (should_reverse, partition_search_mode) = if let Some(res) =
-        can_skip_ordering(sort_tree, window_expr[0].partition_by(), orderby_sort_keys)?
-    {
+    let mut res = None;
+    for sort_any in sort_tree.get_leaves() {
+        // Variable `sort_any` will either be a `SortExec` or a
+        // `SortPreservingMergeExec`, and both have a single child.
+        // Therefore, we can use the 0th index without loss of generality.
+        let sort_input = sort_any.children()[0].clone();
+        // TODO: Once we can ensure that required ordering information propagates with
+        //       the necessary lineage information, compare `physical_ordering` and the
+        //       ordering required by the window executor instead of `sort_output_ordering`.
+        //       This will enable us to handle cases such as (a,b) -> Sort -> (a,b,c) -> Required(a,b).
+        //       Currently, we can not remove such sorts.
+        if let Some(new_res) =
+            can_skip_sort(partitionby_exprs, orderby_sort_keys, &sort_input)?
+        {
+            if let Some(res) = &res {
+                if res != &new_res {
+                    return Ok(None);
+                }
+            } else {
+                res = Some(new_res);
+            };
+        } else {
+            return Ok(None);
+        };
+    }
+    let (should_reverse, partition_search_mode) = if let Some(res) = res {
         res
     } else {
         // cannot skip sort
         return Ok(None);
     };
-    // println!("search_mode:{:?}", search_mode);
-    // println!("partition_search_mode:{:?}", partition_search_mode);
-    // println!("should_reverse:{:?}", should_reverse);
     if search_mode > partition_search_mode {
-        // println!("cannot skip sort, because relaxed");
         // More relaxed than requirement
         // cannot skip sort
         return Ok(None);
@@ -686,7 +707,7 @@ fn analyze_window_sort_removal(
     Ok(None)
 }
 
-fn can_skip_ordering_util(
+fn can_skip_sort(
     partitionby_exprs: &[Arc<dyn PhysicalExpr>],
     orderby_keys: &[PhysicalSortExpr],
     input: &Arc<dyn ExecutionPlan>,
@@ -791,44 +812,6 @@ fn can_skip_ordering_util(
     };
 
     Ok(Some((should_reverse, mode)))
-}
-
-// Returns Option<(bool, PartitionSearchMode)>
-// None means SortExecs cannot removed from the plan.
-// Some means that we can remove SortExecs.
-// first entry in the tuple indicates whether we need to reverse window function to calculate true result with existing ordering
-// Second entry indicates at which mode PartitionSearcher should work to produce correct result given existing ordering.
-fn can_skip_ordering(
-    sort_tree: &ExecTree,
-    partitionby_exprs: &[Arc<dyn PhysicalExpr>],
-    orderby_keys: &[PhysicalSortExpr],
-) -> Result<Option<(bool, PartitionSearchMode)>> {
-    let mut res = None;
-    for sort_any in sort_tree.get_leaves() {
-        // Variable `sort_any` will either be a `SortExec` or a
-        // `SortPreservingMergeExec`, and both have a single child.
-        // Therefore, we can use the 0th index without loss of generality.
-        let sort_input = sort_any.children()[0].clone();
-        // TODO: Once we can ensure that required ordering information propagates with
-        //       the necessary lineage information, compare `physical_ordering` and the
-        //       ordering required by the window executor instead of `sort_output_ordering`.
-        //       This will enable us to handle cases such as (a,b) -> Sort -> (a,b,c) -> Required(a,b).
-        //       Currently, we can not remove such sorts.
-        if let Some((should_reverse, mode)) =
-            can_skip_ordering_util(partitionby_exprs, orderby_keys, &sort_input)?
-        {
-            if let Some((first_should_reverse, first_mode)) = &res {
-                if *first_should_reverse != should_reverse || first_mode != &mode {
-                    return Ok(None);
-                }
-            } else {
-                res = Some((should_reverse, mode));
-            };
-        } else {
-            return Ok(None);
-        };
-    }
-    Ok(res)
 }
 
 /// Updates child to remove the unnecessary `CoalescePartitions` below it.
@@ -979,90 +962,6 @@ fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExp
     }
 }
 
-// Find the indices of each element if the to_search vector inside the searched vector
-fn find_match_indices<T: PartialEq>(to_search: &[T], searched: &[T]) -> Vec<usize> {
-    let mut result = vec![];
-    for item in to_search {
-        if let Some(idx) = searched.iter().position(|e| e.eq(item)) {
-            result.push(idx);
-        }
-    }
-    result
-}
-
-// Compares the equality of two vectors independent of the ordering and duplicates
-// See https://stackoverflow.com/a/42748484/10554257
-fn compare_set_equality<T>(a: &[T], b: &[T]) -> bool
-where
-    T: Eq + Hash,
-{
-    let a: HashSet<_> = a.iter().collect();
-    let b: HashSet<_> = b.iter().collect();
-    a == b
-}
-
-/// Create a new vector from the elements at the `indices` of `searched` vector
-pub fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec<T>> {
-    let mut result = vec![];
-    for idx in indices {
-        result.push(searched[*idx].clone());
-    }
-    Ok(result)
-}
-
-// Merges vectors `in1` and `in2` (removes duplicates) then sorts the result.
-fn get_ordered_merged_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
-    let set: HashSet<_> = in1.iter().chain(in2.iter()).copied().collect();
-    let mut res: Vec<_> = set.into_iter().collect();
-    res.sort();
-    res
-}
-
-// Checks if the vector in the form 0,1,2...n (Consecutive starting from zero)
-// Assumes input has ascending order
-fn is_consecutive_from_zero(in1: &[usize]) -> bool {
-    in1.iter().enumerate().all(|(idx, elem)| idx == *elem)
-}
-
-// Checks if the vector in the form 1,2,3,..n (Consecutive) not necessarily starting from zero
-// Assumes input has ascending order
-fn is_consecutive(in1: &[usize]) -> bool {
-    if !in1.is_empty() {
-        in1.iter()
-            .zip(in1[0]..in1[0] + in1.len())
-            .all(|(lhs, rhs)| *lhs == rhs)
-    } else {
-        true
-    }
-}
-
-// Returns the vector consisting of elements inside `in1` that are not inside `in2`.
-// Resulting vector have the same ordering as `in1` (except elements inside `in2` are removed.)
-fn get_set_diff_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
-    let mut res = vec![];
-    for lhs in in1 {
-        if !in2.iter().contains(lhs) {
-            res.push(*lhs);
-        }
-    }
-    res
-}
-
-// Find the largest range that satisfy 0,1,2 .. n in the `in1`
-// For 0,1,2,4,5 we would produce 3. meaning 0,1,2 is the largest consecutive range (starting from zero).
-// For 1,2,3,4 we would produce 0. Meaning there is no consecutive range (starting from zero).
-fn calc_ordering_range(in1: &[usize]) -> usize {
-    let mut count = 0;
-    for (idx, elem) in in1.iter().enumerate() {
-        if idx != *elem {
-            break;
-        } else {
-            count += 1
-        }
-    }
-    count
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1128,8 +1027,7 @@ mod tests {
             sort_expr("c", &test_schema),
             sort_expr("d", &test_schema),
         ];
-        let exec_unbounded = csv_exec_sorted(&test_schema, sort_exprs.clone(), true);
-        let exec_bounded = csv_exec_sorted(&test_schema, sort_exprs, false);
+        let exec_unbounded = csv_exec_sorted(&test_schema, sort_exprs, true);
 
         let test_cases = vec![
             // PARTITION BY a, b ORDER BY c ASC NULLS LAST
@@ -1262,72 +1160,13 @@ mod tests {
             }
 
             assert_eq!(
-                can_skip_ordering_util(
-                    &partition_by_exprs,
-                    &order_by_exprs,
-                    &exec_unbounded
-                )?,
+                can_skip_sort(&partition_by_exprs, &order_by_exprs, &exec_unbounded)?,
                 *expected,
                 "Unexpected result for in unbounded test case: {:?}",
                 test_case
             );
         }
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_sorted_merged_indices() -> Result<()> {
-        assert_eq!(
-            get_ordered_merged_indices(&[0, 3, 4], &[1, 3, 5]),
-            vec![0, 1, 3, 4, 5]
-        );
-        // Result should be ordered, even if inputs are not
-        assert_eq!(
-            get_ordered_merged_indices(&[3, 0, 4], &[5, 1, 3]),
-            vec![0, 1, 3, 4, 5]
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_is_consecutive_from_zero() -> Result<()> {
-        assert!(!is_consecutive_from_zero(&[0, 3, 4]));
-        assert!(is_consecutive_from_zero(&[0, 1, 2]));
-        assert!(is_consecutive_from_zero(&[]));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_get_set_diff_indices() -> Result<()> {
-        assert_eq!(get_set_diff_indices(&[0, 3, 4], &[1, 2]), vec![0, 3, 4]);
-        assert_eq!(get_set_diff_indices(&[0, 3, 4], &[1, 2, 4]), vec![0, 3]);
-        // return value should have same ordering with the in1
-        assert_eq!(get_set_diff_indices(&[3, 4, 0], &[1, 2, 4]), vec![3, 0]);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_calc_ordering_range() -> Result<()> {
-        assert_eq!(calc_ordering_range(&[0, 3, 4]), 1);
-        assert_eq!(calc_ordering_range(&[0, 1, 3, 4]), 2);
-        assert_eq!(calc_ordering_range(&[0, 1, 2, 3, 4]), 5);
-        assert_eq!(calc_ordering_range(&[1, 2, 3, 4]), 0);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_find_match_indices() -> Result<()> {
-        assert_eq!(find_match_indices(&[0, 3, 4], &[0, 3, 4]), vec![0, 1, 2]);
-        assert_eq!(find_match_indices(&[0, 4, 3], &[0, 3, 4]), vec![0, 2, 1]);
-        assert_eq!(find_match_indices(&[0, 4, 3, 5], &[0, 3, 4]), vec![0, 2, 1]);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_compare_set_equality() -> Result<()> {
-        assert!(compare_set_equality(&[4, 3, 2], &[3, 2, 4]));
-        assert!(!compare_set_equality(&[4, 3, 2, 1], &[3, 2, 4]));
         Ok(())
     }
 

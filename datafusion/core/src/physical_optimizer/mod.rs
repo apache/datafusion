@@ -28,7 +28,7 @@ pub mod pipeline_checker;
 pub mod pruning;
 pub mod repartition;
 pub mod sort_enforcement;
-mod utils;
+pub mod utils;
 
 pub mod pipeline_fixer;
 #[cfg(test)]

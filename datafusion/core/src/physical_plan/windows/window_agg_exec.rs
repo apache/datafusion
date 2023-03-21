@@ -19,7 +19,7 @@
 
 use crate::error::Result;
 use crate::execution::context::TaskContext;
-use crate::physical_optimizer::sort_enforcement::get_at_indices;
+use crate::physical_optimizer::utils::get_at_indices;
 use crate::physical_plan::common::transpose;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{

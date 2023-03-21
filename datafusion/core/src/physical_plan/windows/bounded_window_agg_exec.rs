@@ -51,7 +51,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::physical_optimizer::sort_enforcement::get_at_indices;
+use crate::physical_optimizer::utils::get_at_indices;
 use arrow::compute::sort_to_indices;
 use datafusion_common::utils::{
     get_arrayref_at_indices, get_record_batch_at_indices, get_row_at_idx,
