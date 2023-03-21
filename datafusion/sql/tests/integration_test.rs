@@ -2856,8 +2856,8 @@ fn aggregate_with_rollup() {
     let sql =
         "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, ROLLUP (state, age)";
     let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
-        \n  Aggregate: groupBy=[[person.id, ROLLUP (person.state, person.age)]], aggr=[[COUNT(UInt8(1))]]\
-        \n    TableScan: person";
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[COUNT(UInt8(1))]]\
+    \n    TableScan: person";
     quick_test(sql, expected);
 }
 
@@ -2866,8 +2866,8 @@ fn aggregate_with_rollup_with_grouping() {
     let sql = "SELECT id, state, age, grouping(state), grouping(age), grouping(state) + grouping(age), COUNT(*) \
         FROM person GROUP BY id, ROLLUP (state, age)";
     let expected = "Projection: person.id, person.state, person.age, GROUPING(person.state), GROUPING(person.age), GROUPING(person.state) + GROUPING(person.age), COUNT(UInt8(1))\
-        \n  Aggregate: groupBy=[[person.id, ROLLUP (person.state, person.age)]], aggr=[[GROUPING(person.state), GROUPING(person.age), COUNT(UInt8(1))]]\
-        \n    TableScan: person";
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[GROUPING(person.state), GROUPING(person.age), COUNT(UInt8(1))]]\
+    \n    TableScan: person";
     quick_test(sql, expected);
 }
 
@@ -2898,8 +2898,8 @@ fn aggregate_with_cube() {
     let sql =
         "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, CUBE (state, age)";
     let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
-        \n  Aggregate: groupBy=[[person.id, CUBE (person.state, person.age)]], aggr=[[COUNT(UInt8(1))]]\
-        \n    TableScan: person";
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.age), (person.id, person.state, person.age))]], aggr=[[COUNT(UInt8(1))]]\
+    \n    TableScan: person";
     quick_test(sql, expected);
 }
 
@@ -2915,8 +2915,8 @@ fn round_decimal() {
 fn aggregate_with_grouping_sets() {
     let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
     let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
-        \n  Aggregate: groupBy=[[person.id, GROUPING SETS ((person.state), (person.state, person.age), (person.id, person.state))]], aggr=[[COUNT(UInt8(1))]]\
-        \n    TableScan: person";
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id, person.state), (person.id, person.state, person.age), (person.id, person.id, person.state))]], aggr=[[COUNT(UInt8(1))]]\
+    \n    TableScan: person";
     quick_test(sql, expected);
 }
 
@@ -3890,6 +3890,38 @@ fn test_inner_join_with_cast_key() {
             \n  Inner Join:  Filter: CAST(person.id AS Int32) = CAST(orders.customer_id AS Int32)\
             \n    TableScan: person\
             \n    TableScan: orders";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn test_multi_grouping_sets() {
+    let sql = "SELECT person.id, person.age
+            FROM person
+            GROUP BY 
+                person.id,
+                GROUPING SETS ((person.age,person.salary),(person.age))";
+
+    let expected = "Projection: person.id, person.age\
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id, person.age, person.salary), (person.id, person.age))]], aggr=[[]]\
+    \n    TableScan: person";
+    quick_test(sql, expected);
+
+    let sql = "SELECT person.id, person.age
+            FROM person
+            GROUP BY
+                person.id,
+                GROUPING SETS ((person.age, person.salary),(person.age)),
+                ROLLUP(person.state, person.birth_date)";
+
+    let expected = "Projection: person.id, person.age\
+    \n  Aggregate: groupBy=[[GROUPING SETS (\
+        (person.id, person.age, person.salary), \
+        (person.id, person.age, person.salary, person.state), \
+        (person.id, person.age, person.salary, person.state, person.birth_date), \
+        (person.id, person.age), \
+        (person.id, person.age, person.state), \
+        (person.id, person.age, person.state, person.birth_date))]], aggr=[[]]\
+    \n    TableScan: person";
     quick_test(sql, expected);
 }
 
