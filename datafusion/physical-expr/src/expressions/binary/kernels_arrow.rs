@@ -25,9 +25,10 @@ use arrow::compute::{
 };
 use arrow::datatypes::Decimal128Type;
 use arrow::{array::*, datatypes::ArrowNumericType, downcast_dictionary_array};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE};
 use datafusion_common::cast::as_decimal128_array;
 use datafusion_common::{DataFusionError, Result};
+use std::cmp::min;
 use std::sync::Arc;
 
 // Simple (low performance) kernels until optimized kernels are added to arrow
@@ -370,12 +371,15 @@ pub(crate) fn multiply_dyn_decimal(
     left: &dyn Array,
     right: &dyn Array,
 ) -> Result<ArrayRef> {
-    let (precision, scale) = get_precision_scale(left)?;
-
-    let divide = 10_i128.pow(scale as u32);
+    let (left_precision, left_scale) = get_precision_scale(left)?;
+    let (right_precision, right_scale) = get_precision_scale(right)?;
+    let product_precision = min(
+        left_precision + right_precision + 1,
+        DECIMAL128_MAX_PRECISION,
+    );
+    let product_scale = min(left_scale + right_scale, DECIMAL128_MAX_SCALE);
     let array = multiply_dyn(left, right)?;
-    let array = divide_scalar_dyn::<Decimal128Type>(&array, divide)?;
-    decimal_array_with_precision_scale(array, precision, scale)
+    decimal_array_with_precision_scale(array, product_precision, product_scale)
 }
 
 pub(crate) fn divide_dyn_opt_decimal(
@@ -526,7 +530,8 @@ mod tests {
         // multiply
         let result = multiply_dyn_decimal(&left_decimal_array, &right_decimal_array)?;
         let result = as_decimal128_array(&result)?;
-        let expect = create_decimal_array(&[Some(15), None, Some(15), Some(15)], 25, 3);
+        let expect =
+            create_decimal_array(&[Some(15129), None, Some(15006), Some(15252)], 38, 6);
         assert_eq!(&expect, result);
         let result = multiply_decimal_dyn_scalar(&left_decimal_array, 10)?;
         let result = as_decimal128_array(&result)?;

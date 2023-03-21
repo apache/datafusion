@@ -4004,9 +4004,9 @@ mod tests {
 
         // multiply: decimal array multiply int32 array
         let expect = Arc::new(create_decimal_array(
-            &[Some(15129), None, Some(15006), Some(15376)],
-            21,
-            2,
+            &[Some(1512900), None, Some(1500600), Some(1537600)],
+            38,
+            4,
         )) as ArrayRef;
         apply_arithmetic_op(
             &schema,
