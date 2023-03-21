@@ -1,0 +1,1413 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.19: https://docutils.sourceforge.io/" />
+
+    <title>Scalar Functions &#8212; Arrow DataFusion  documentation</title>
+    
+    <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+  
+    
+    <link rel="stylesheet"
+      href="../../_static/vendor/fontawesome/5.13.0/css/all.min.css">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
+  
+    
+      
+  
+    
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/pydata-sphinx-theme.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/theme_overrides.css" />
+    
+    <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
+  
+    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+    <script src="../../_static/doctools.js"></script>
+    <script src="../../_static/sphinx_highlight.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Status" href="sql_status.html" />
+    <link rel="prev" title="Aggregate Functions" href="aggregate_functions.html" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="docsearch:language" content="en">
+    
+
+    <!-- Google Analytics -->
+    
+  </head>
+  <body data-spy="scroll" data-target="#bd-toc-nav" data-offset="80">
+    
+    <div class="container-fluid" id="banner"></div>
+
+    
+
+
+    <div class="container-xl">
+      <div class="row">
+          
+            
+            <!-- Only show if we have sidebars configured, else just a small margin  -->
+            <div class="col-12 col-md-3 bd-sidebar">
+              <div class="sidebar-start-items">
+
+<form class="bd-search d-flex align-items-center" action="../../search.html" method="get">
+  <i class="icon fas fa-search"></i>
+  <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
+</form>
+
+<nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  User Guide
+ </span>
+</p>
+<ul class="current nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../introduction.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../example-usage.html">
+   Example Usage
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library.html">
+   Using DataFusion as a library
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../cli.html">
+   DataFusion Command-line SQL Utility
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../dataframe.html">
+   DataFrame API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../expressions.html">
+   Expressions
+  </a>
+ </li>
+ <li class="toctree-l1 current active has-children">
+  <a class="reference internal" href="index.html">
+   SQL Reference
+  </a>
+  <input checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
+  <label for="toctree-checkbox-1">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul class="current">
+   <li class="toctree-l2">
+    <a class="reference internal" href="data_types.html">
+     Data Types
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="select.html">
+     SELECT syntax
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="subqueries.html">
+     Subqueries
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="ddl.html">
+     DDL
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="explain.html">
+     EXPLAIN
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="information_schema.html">
+     Information Schema
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="aggregate_functions.html">
+     Aggregate Functions
+    </a>
+   </li>
+   <li class="toctree-l2 current active">
+    <a class="current reference internal" href="#">
+     Scalar Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql_status.html">
+     Status
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../configs.html">
+   Configuration Settings
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../faq.html">
+   Frequently Asked Questions
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://docs.rs/crate/datafusion/">
+   Rust Crate Documentation
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Contributor Guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/index.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/communication.html">
+   Communication
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/roadmap.html">
+   Roadmap
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/quarterly_roadmap.html">
+   Quarterly Roadmap
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../contributor-guide/specification/index.html">
+   Specifications
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+  <label for="toctree-checkbox-2">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../contributor-guide/specification/invariants.html">
+     Invariants
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../contributor-guide/specification/output-field-name-semantic.html">
+     Output field name semantics
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues">
+   Issue tracker
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/CODE_OF_CONDUCT.md">
+   Code of conduct
+  </a>
+ </li>
+</ul>
+
+    
+  </div>
+</nav>
+              </div>
+              <div class="sidebar-end-items">
+              </div>
+            </div>
+            
+          
+
+          
+          <div class="d-none d-xl-block col-xl-2 bd-toc">
+            
+              
+              <div class="toc-item">
+                
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
+
+<nav id="bd-toc-nav">
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#math-functions">
+   Math Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#abs-x">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       abs(x)
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#acos-x">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       acos(x)
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#asin-x">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       asin(x)
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#atan-x">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       atan(x)
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#atan2-y-x">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       atan2(y,
+      </span>
+      <span class="pre">
+       x)
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#ceil-x">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ceil(x)
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#cos-x">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       cos(x)
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#exp-x">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       exp(x)
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#floor-x">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       floor(x)
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#ln-x">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ln(x)
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#log10-x">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       log10(x)
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#log2-x">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       log2(x)
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#power-base-exponent">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       power(base,
+      </span>
+      <span class="pre">
+       exponent)
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#round-x">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       round(x)
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#signum-x">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       signum(x)
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#sin-x">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       sin(x)
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#sqrt-x">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       sqrt(x)
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#tan-x">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       tan(x)
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#trunc-x">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       trunc(x)
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#conditional-functions">
+   Conditional Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#coalesce">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       coalesce
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#nullif">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       nullif
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#string-functions">
+   String Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#ascii">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ascii
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#bit-length">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       bit_length
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#btrim">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       btrim
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#char-length">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       char_length
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#character-length">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       character_length
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#concat">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       concat
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#concat-ws">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       concat_ws
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#chr">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       chr
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#initcap">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       initcap
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#left">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       left
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#length">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       length
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#lower">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       lower
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#lpad">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       lpad
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#ltrim">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ltrim
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#md5">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       md5
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#octet-length">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       octet_length
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#repeat">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       repeat
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#replace">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       replace
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#reverse">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       reverse
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#right">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       right
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#rpad">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       rpad
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#rtrim">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       rtrim
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#digest">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       digest
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#split-part">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       split_part
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#starts-with">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       starts_with
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#strpos">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       strpos
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#substr">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       substr
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#translate">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       translate
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#trim">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       trim
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#upper">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       upper
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#regular-expression-functions">
+   Regular Expression Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#regexp-match">
+     regexp_match
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#regexp-replace">
+     regexp_replace
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#temporal-functions">
+   Temporal Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#to-timestamp">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       to_timestamp
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#to-timestamp-millis">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       to_timestamp_millis
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#to-timestamp-micros">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       to_timestamp_micros
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#to-timestamp-seconds">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       to_timestamp_seconds
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#extract">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       extract
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#date-part">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       date_part
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#date-trunc">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       date_trunc
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#date-bin">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       date_bin
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#from-unixtime">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       from_unixtime
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#now">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       now
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#other-functions">
+   Other Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#array">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       array
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#arrow-typeof">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       arrow_typeof
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#in-list">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       in_list
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#random">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       random
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#sha224">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       sha224
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#sha256">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       sha256
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#sha384">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       sha384
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#sha512">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       sha512
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#struct">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       struct
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#to-hex">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       to_hex
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+
+</nav>
+              </div>
+              
+              <div class="toc-item">
+                
+
+<div class="tocsection editthispage">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/sql/scalar_functions.md">
+        <i class="fas fa-pencil-alt"></i> Edit this page
+    </a>
+</div>
+
+              </div>
+              
+            
+          </div>
+          
+
+          
+          
+            
+          
+          <main class="col-12 col-md-9 col-xl-7 py-md-5 pl-md-5 pr-md-4 bd-content" role="main">
+              
+              <div>
+                
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="scalar-functions">
+<h1>Scalar Functions<a class="headerlink" href="#scalar-functions" title="Permalink to this heading">¶</a></h1>
+<section id="math-functions">
+<h2>Math Functions<a class="headerlink" href="#math-functions" title="Permalink to this heading">¶</a></h2>
+<section id="abs-x">
+<h3><code class="docutils literal notranslate"><span class="pre">abs(x)</span></code><a class="headerlink" href="#abs-x" title="Permalink to this heading">¶</a></h3>
+<p>absolute value</p>
+</section>
+<section id="acos-x">
+<h3><code class="docutils literal notranslate"><span class="pre">acos(x)</span></code><a class="headerlink" href="#acos-x" title="Permalink to this heading">¶</a></h3>
+<p>inverse cosine</p>
+</section>
+<section id="asin-x">
+<h3><code class="docutils literal notranslate"><span class="pre">asin(x)</span></code><a class="headerlink" href="#asin-x" title="Permalink to this heading">¶</a></h3>
+<p>inverse sine</p>
+</section>
+<section id="atan-x">
+<h3><code class="docutils literal notranslate"><span class="pre">atan(x)</span></code><a class="headerlink" href="#atan-x" title="Permalink to this heading">¶</a></h3>
+<p>inverse tangent</p>
+</section>
+<section id="atan2-y-x">
+<h3><code class="docutils literal notranslate"><span class="pre">atan2(y,</span> <span class="pre">x)</span></code><a class="headerlink" href="#atan2-y-x" title="Permalink to this heading">¶</a></h3>
+<p>inverse tangent of y / x</p>
+</section>
+<section id="ceil-x">
+<h3><code class="docutils literal notranslate"><span class="pre">ceil(x)</span></code><a class="headerlink" href="#ceil-x" title="Permalink to this heading">¶</a></h3>
+<p>nearest integer greater than or equal to argument</p>
+</section>
+<section id="cos-x">
+<h3><code class="docutils literal notranslate"><span class="pre">cos(x)</span></code><a class="headerlink" href="#cos-x" title="Permalink to this heading">¶</a></h3>
+<p>cosine</p>
+</section>
+<section id="exp-x">
+<h3><code class="docutils literal notranslate"><span class="pre">exp(x)</span></code><a class="headerlink" href="#exp-x" title="Permalink to this heading">¶</a></h3>
+<p>exponential</p>
+</section>
+<section id="floor-x">
+<h3><code class="docutils literal notranslate"><span class="pre">floor(x)</span></code><a class="headerlink" href="#floor-x" title="Permalink to this heading">¶</a></h3>
+<p>nearest integer less than or equal to argument</p>
+</section>
+<section id="ln-x">
+<h3><code class="docutils literal notranslate"><span class="pre">ln(x)</span></code><a class="headerlink" href="#ln-x" title="Permalink to this heading">¶</a></h3>
+<p>natural logarithm</p>
+</section>
+<section id="log10-x">
+<h3><code class="docutils literal notranslate"><span class="pre">log10(x)</span></code><a class="headerlink" href="#log10-x" title="Permalink to this heading">¶</a></h3>
+<p>base 10 logarithm</p>
+</section>
+<section id="log2-x">
+<h3><code class="docutils literal notranslate"><span class="pre">log2(x)</span></code><a class="headerlink" href="#log2-x" title="Permalink to this heading">¶</a></h3>
+<p>base 2 logarithm</p>
+</section>
+<section id="power-base-exponent">
+<h3><code class="docutils literal notranslate"><span class="pre">power(base,</span> <span class="pre">exponent)</span></code><a class="headerlink" href="#power-base-exponent" title="Permalink to this heading">¶</a></h3>
+<p>base raised to the power of exponent</p>
+</section>
+<section id="round-x">
+<h3><code class="docutils literal notranslate"><span class="pre">round(x)</span></code><a class="headerlink" href="#round-x" title="Permalink to this heading">¶</a></h3>
+<p>round to nearest integer</p>
+</section>
+<section id="signum-x">
+<h3><code class="docutils literal notranslate"><span class="pre">signum(x)</span></code><a class="headerlink" href="#signum-x" title="Permalink to this heading">¶</a></h3>
+<p>sign of the argument (-1, 0, +1)</p>
+</section>
+<section id="sin-x">
+<h3><code class="docutils literal notranslate"><span class="pre">sin(x)</span></code><a class="headerlink" href="#sin-x" title="Permalink to this heading">¶</a></h3>
+<p>sine</p>
+</section>
+<section id="sqrt-x">
+<h3><code class="docutils literal notranslate"><span class="pre">sqrt(x)</span></code><a class="headerlink" href="#sqrt-x" title="Permalink to this heading">¶</a></h3>
+<p>square root</p>
+</section>
+<section id="tan-x">
+<h3><code class="docutils literal notranslate"><span class="pre">tan(x)</span></code><a class="headerlink" href="#tan-x" title="Permalink to this heading">¶</a></h3>
+<p>tangent</p>
+</section>
+<section id="trunc-x">
+<h3><code class="docutils literal notranslate"><span class="pre">trunc(x)</span></code><a class="headerlink" href="#trunc-x" title="Permalink to this heading">¶</a></h3>
+<p>truncate toward zero</p>
+</section>
+</section>
+<section id="conditional-functions">
+<h2>Conditional Functions<a class="headerlink" href="#conditional-functions" title="Permalink to this heading">¶</a></h2>
+<section id="coalesce">
+<h3><code class="docutils literal notranslate"><span class="pre">coalesce</span></code><a class="headerlink" href="#coalesce" title="Permalink to this heading">¶</a></h3>
+<p>Returns the first of its arguments that is not null. Null is returned only if all arguments are null. It is often used to substitute a default value for null values when data is retrieved for display.</p>
+</section>
+<section id="nullif">
+<h3><code class="docutils literal notranslate"><span class="pre">nullif</span></code><a class="headerlink" href="#nullif" title="Permalink to this heading">¶</a></h3>
+<p>Returns a null value if value1 equals value2; otherwise it returns value1. This can be used to perform the inverse operation of the <code class="docutils literal notranslate"><span class="pre">coalesce</span></code> expression. |</p>
+</section>
+</section>
+<section id="string-functions">
+<h2>String Functions<a class="headerlink" href="#string-functions" title="Permalink to this heading">¶</a></h2>
+<section id="ascii">
+<h3><code class="docutils literal notranslate"><span class="pre">ascii</span></code><a class="headerlink" href="#ascii" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="bit-length">
+<h3><code class="docutils literal notranslate"><span class="pre">bit_length</span></code><a class="headerlink" href="#bit-length" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="btrim">
+<h3><code class="docutils literal notranslate"><span class="pre">btrim</span></code><a class="headerlink" href="#btrim" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="char-length">
+<h3><code class="docutils literal notranslate"><span class="pre">char_length</span></code><a class="headerlink" href="#char-length" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="character-length">
+<h3><code class="docutils literal notranslate"><span class="pre">character_length</span></code><a class="headerlink" href="#character-length" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="concat">
+<h3><code class="docutils literal notranslate"><span class="pre">concat</span></code><a class="headerlink" href="#concat" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="concat-ws">
+<h3><code class="docutils literal notranslate"><span class="pre">concat_ws</span></code><a class="headerlink" href="#concat-ws" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="chr">
+<h3><code class="docutils literal notranslate"><span class="pre">chr</span></code><a class="headerlink" href="#chr" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="initcap">
+<h3><code class="docutils literal notranslate"><span class="pre">initcap</span></code><a class="headerlink" href="#initcap" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="left">
+<h3><code class="docutils literal notranslate"><span class="pre">left</span></code><a class="headerlink" href="#left" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="length">
+<h3><code class="docutils literal notranslate"><span class="pre">length</span></code><a class="headerlink" href="#length" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="lower">
+<h3><code class="docutils literal notranslate"><span class="pre">lower</span></code><a class="headerlink" href="#lower" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="lpad">
+<h3><code class="docutils literal notranslate"><span class="pre">lpad</span></code><a class="headerlink" href="#lpad" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="ltrim">
+<h3><code class="docutils literal notranslate"><span class="pre">ltrim</span></code><a class="headerlink" href="#ltrim" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="md5">
+<h3><code class="docutils literal notranslate"><span class="pre">md5</span></code><a class="headerlink" href="#md5" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="octet-length">
+<h3><code class="docutils literal notranslate"><span class="pre">octet_length</span></code><a class="headerlink" href="#octet-length" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="repeat">
+<h3><code class="docutils literal notranslate"><span class="pre">repeat</span></code><a class="headerlink" href="#repeat" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="replace">
+<h3><code class="docutils literal notranslate"><span class="pre">replace</span></code><a class="headerlink" href="#replace" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="reverse">
+<h3><code class="docutils literal notranslate"><span class="pre">reverse</span></code><a class="headerlink" href="#reverse" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="right">
+<h3><code class="docutils literal notranslate"><span class="pre">right</span></code><a class="headerlink" href="#right" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="rpad">
+<h3><code class="docutils literal notranslate"><span class="pre">rpad</span></code><a class="headerlink" href="#rpad" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="rtrim">
+<h3><code class="docutils literal notranslate"><span class="pre">rtrim</span></code><a class="headerlink" href="#rtrim" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="digest">
+<h3><code class="docutils literal notranslate"><span class="pre">digest</span></code><a class="headerlink" href="#digest" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="split-part">
+<h3><code class="docutils literal notranslate"><span class="pre">split_part</span></code><a class="headerlink" href="#split-part" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="starts-with">
+<h3><code class="docutils literal notranslate"><span class="pre">starts_with</span></code><a class="headerlink" href="#starts-with" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="strpos">
+<h3><code class="docutils literal notranslate"><span class="pre">strpos</span></code><a class="headerlink" href="#strpos" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="substr">
+<h3><code class="docutils literal notranslate"><span class="pre">substr</span></code><a class="headerlink" href="#substr" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="translate">
+<h3><code class="docutils literal notranslate"><span class="pre">translate</span></code><a class="headerlink" href="#translate" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="trim">
+<h3><code class="docutils literal notranslate"><span class="pre">trim</span></code><a class="headerlink" href="#trim" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="upper">
+<h3><code class="docutils literal notranslate"><span class="pre">upper</span></code><a class="headerlink" href="#upper" title="Permalink to this heading">¶</a></h3>
+</section>
+</section>
+<section id="regular-expression-functions">
+<h2>Regular Expression Functions<a class="headerlink" href="#regular-expression-functions" title="Permalink to this heading">¶</a></h2>
+<section id="regexp-match">
+<h3>regexp_match<a class="headerlink" href="#regexp-match" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="regexp-replace">
+<h3>regexp_replace<a class="headerlink" href="#regexp-replace" title="Permalink to this heading">¶</a></h3>
+</section>
+</section>
+<section id="temporal-functions">
+<h2>Temporal Functions<a class="headerlink" href="#temporal-functions" title="Permalink to this heading">¶</a></h2>
+<section id="to-timestamp">
+<h3><code class="docutils literal notranslate"><span class="pre">to_timestamp</span></code><a class="headerlink" href="#to-timestamp" title="Permalink to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">to_timestamp()</span></code> is similar to the standard SQL function. It performs conversions to type <code class="docutils literal notranslate"><span class="pre">Timestamp(Nanoseconds,</span> <span class="pre">None)</span></code>, from:</p>
+<ul class="simple">
+<li><p>Timestamp strings</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31T09:26:56.123Z</span></code> # RCF3339</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31T09:26:56.123-05:00</span></code> # RCF3339</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31</span> <span class="pre">09:26:56.123-05:00</span></code> # close to RCF3339 but with a space er than T</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31T09:26:56.123</span></code> # close to RCF3339 but no timezone et specified</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31</span> <span class="pre">09:26:56.123</span></code> # close to RCF3339 but uses a space and timezone offset</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31</span> <span class="pre">09:26:56</span></code> # close to RCF3339, no fractional seconds</p></li>
+</ul>
+</li>
+<li><p>An Int64 array/column, values are nanoseconds since Epoch UTC</p></li>
+<li><p>Other Timestamp() columns or values</p></li>
+</ul>
+<p>Note that conversions from other Timestamp and Int64 types can also be performed using <code class="docutils literal notranslate"><span class="pre">CAST(..</span> <span class="pre">AS</span> <span class="pre">Timestamp)</span></code>. However, the conversion functionality here is present for consistency with the other <code class="docutils literal notranslate"><span class="pre">to_timestamp_xx()</span></code> functions.</p>
+</section>
+<section id="to-timestamp-millis">
+<h3><code class="docutils literal notranslate"><span class="pre">to_timestamp_millis</span></code><a class="headerlink" href="#to-timestamp-millis" title="Permalink to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">to_timestamp_millis()</span></code> does conversions to type <code class="docutils literal notranslate"><span class="pre">Timestamp(Milliseconds,</span> <span class="pre">None)</span></code>, from:</p>
+<ul class="simple">
+<li><p>Timestamp strings, the same as supported by the regular timestamp() function (except the output is a timestamp of Milliseconds resolution)</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31T09:26:56.123Z</span></code> # RCF3339</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31T09:26:56.123-05:00</span></code> # RCF3339</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31</span> <span class="pre">09:26:56.123-05:00</span></code> # close to RCF3339 but with a space er than T</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31T09:26:56.123</span></code> # close to RCF3339 but no timezone et specified</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31</span> <span class="pre">09:26:56.123</span></code> # close to RCF3339 but uses a space and timezone offset</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31</span> <span class="pre">09:26:56</span></code> # close to RCF3339, no fractional seconds</p></li>
+</ul>
+</li>
+<li><p>An Int64 array/column, values are milliseconds since Epoch UTC</p></li>
+<li><p>Other Timestamp() columns or values</p></li>
+</ul>
+<p>Note that <code class="docutils literal notranslate"><span class="pre">CAST(..</span> <span class="pre">AS</span> <span class="pre">Timestamp)</span></code> converts to Timestamps with Nanosecond resolution; this function is the only way to convert/cast to millisecond resolution.</p>
+</section>
+<section id="to-timestamp-micros">
+<h3><code class="docutils literal notranslate"><span class="pre">to_timestamp_micros</span></code><a class="headerlink" href="#to-timestamp-micros" title="Permalink to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">to_timestamp_micros()</span></code> does conversions to type <code class="docutils literal notranslate"><span class="pre">Timestamp(Microseconds,</span> <span class="pre">None)</span></code>, from:</p>
+<ul class="simple">
+<li><p>Timestamp strings, the same as supported by the regular timestamp() function (except the output is a timestamp of microseconds resolution)</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31T09:26:56.123Z</span></code> # RCF3339</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31T09:26:56.123-05:00</span></code> # RCF3339</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31</span> <span class="pre">09:26:56.123-05:00</span></code> # close to RCF3339 but with a space er than T</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31T09:26:56.123</span></code> # close to RCF3339 but no timezone et specified</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31</span> <span class="pre">09:26:56.123</span></code> # close to RCF3339 but uses a space and timezone offset</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31</span> <span class="pre">09:26:56</span></code> # close to RCF3339, no fractional seconds</p></li>
+</ul>
+</li>
+<li><p>An Int64 array/column, values are microseconds since Epoch UTC</p></li>
+<li><p>Other Timestamp() columns or values</p></li>
+</ul>
+<p>Note that <code class="docutils literal notranslate"><span class="pre">CAST(..</span> <span class="pre">AS</span> <span class="pre">Timestamp)</span></code> converts to Timestamps with Nanosecond resolution; this function is the only way to convert/cast to microsecond resolution.</p>
+</section>
+<section id="to-timestamp-seconds">
+<h3><code class="docutils literal notranslate"><span class="pre">to_timestamp_seconds</span></code><a class="headerlink" href="#to-timestamp-seconds" title="Permalink to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">to_timestamp_seconds()</span></code> does conversions to type <code class="docutils literal notranslate"><span class="pre">Timestamp(Seconds,</span> <span class="pre">None)</span></code>, from:</p>
+<ul class="simple">
+<li><p>Timestamp strings, the same as supported by the regular timestamp() function (except the output is a timestamp of secondseconds resolution)</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31T09:26:56.123Z</span></code> # RCF3339</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31T09:26:56.123-05:00</span></code> # RCF3339</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31</span> <span class="pre">09:26:56.123-05:00</span></code> # close to RCF3339 but with a space er than T</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31T09:26:56.123</span></code> # close to RCF3339 but no timezone et specified</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31</span> <span class="pre">09:26:56.123</span></code> # close to RCF3339 but uses a space and timezone offset</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1997-01-31</span> <span class="pre">09:26:56</span></code> # close to RCF3339, no fractional seconds</p></li>
+</ul>
+</li>
+<li><p>An Int64 array/column, values are seconds since Epoch UTC</p></li>
+<li><p>Other Timestamp() columns or values</p></li>
+</ul>
+<p>Note that <code class="docutils literal notranslate"><span class="pre">CAST(..</span> <span class="pre">AS</span> <span class="pre">Timestamp)</span></code> converts to Timestamps with Nanosecond resolution; this function is the only way to convert/cast to seconds resolution.</p>
+</section>
+<section id="extract">
+<h3><code class="docutils literal notranslate"><span class="pre">extract</span></code><a class="headerlink" href="#extract" title="Permalink to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">extract(field</span> <span class="pre">FROM</span> <span class="pre">source)</span></code></p>
+<ul class="simple">
+<li><p>The <code class="docutils literal notranslate"><span class="pre">extract</span></code> function retrieves subfields such as year or hour from date/time values.
+<code class="docutils literal notranslate"><span class="pre">source</span></code> must be a value expression of type timestamp, Date32, or Date64. <code class="docutils literal notranslate"><span class="pre">field</span></code> is an identifier that selects what field to extract from the source value.
+The <code class="docutils literal notranslate"><span class="pre">extract</span></code> function returns values of type u32.</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">year</span></code> :<code class="docutils literal notranslate"><span class="pre">extract(year</span> <span class="pre">FROM</span> <span class="pre">to_timestamp('2020-09-08T12:00:00+00:00'))</span> <span class="pre">-&gt;</span> <span class="pre">2020</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">month</span></code>:<code class="docutils literal notranslate"><span class="pre">extract(month</span> <span class="pre">FROM</span> <span class="pre">to_timestamp('2020-09-08T12:00:00+00:00'))</span> <span class="pre">-&gt;</span> <span class="pre">9</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">week</span></code> :<code class="docutils literal notranslate"><span class="pre">extract(week</span> <span class="pre">FROM</span> <span class="pre">to_timestamp('2020-09-08T12:00:00+00:00'))</span> <span class="pre">-&gt;</span> <span class="pre">37</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">day</span></code>: <code class="docutils literal notranslate"><span class="pre">extract(day</span> <span class="pre">FROM</span> <span class="pre">to_timestamp('2020-09-08T12:00:00+00:00'))</span> <span class="pre">-&gt;</span> <span class="pre">8</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">hour</span></code>: <code class="docutils literal notranslate"><span class="pre">extract(hour</span> <span class="pre">FROM</span> <span class="pre">to_timestamp('2020-09-08T12:00:00+00:00'))</span> <span class="pre">-&gt;</span> <span class="pre">12</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">minute</span></code>: <code class="docutils literal notranslate"><span class="pre">extract(minute</span> <span class="pre">FROM</span> <span class="pre">to_timestamp('2020-09-08T12:01:00+00:00'))</span> <span class="pre">-&gt;</span> <span class="pre">1</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">second</span></code>: <code class="docutils literal notranslate"><span class="pre">extract(second</span> <span class="pre">FROM</span> <span class="pre">to_timestamp('2020-09-08T12:00:03+00:00'))</span> <span class="pre">-&gt;</span> <span class="pre">3</span></code></p></li>
+</ul>
+</li>
+</ul>
+</section>
+<section id="date-part">
+<h3><code class="docutils literal notranslate"><span class="pre">date_part</span></code><a class="headerlink" href="#date-part" title="Permalink to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">date_part('field',</span> <span class="pre">source)</span></code></p>
+<ul class="simple">
+<li><p>The <code class="docutils literal notranslate"><span class="pre">date_part</span></code> function is modeled on the postgres equivalent to the SQL-standard function <code class="docutils literal notranslate"><span class="pre">extract</span></code>.
+Note that here the field parameter needs to be a string value, not a name.
+The valid field names for <code class="docutils literal notranslate"><span class="pre">date_part</span></code> are the same as for <code class="docutils literal notranslate"><span class="pre">extract</span></code>.</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">date_part('second',</span> <span class="pre">to_timestamp('2020-09-08T12:00:12+00:00'))</span> <span class="pre">-&gt;</span> <span class="pre">12</span></code></p></li>
+</ul>
+</li>
+</ul>
+</section>
+<section id="date-trunc">
+<h3><code class="docutils literal notranslate"><span class="pre">date_trunc</span></code><a class="headerlink" href="#date-trunc" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="date-bin">
+<h3><code class="docutils literal notranslate"><span class="pre">date_bin</span></code><a class="headerlink" href="#date-bin" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="from-unixtime">
+<h3><code class="docutils literal notranslate"><span class="pre">from_unixtime</span></code><a class="headerlink" href="#from-unixtime" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="now">
+<h3><code class="docutils literal notranslate"><span class="pre">now</span></code><a class="headerlink" href="#now" title="Permalink to this heading">¶</a></h3>
+<p>Returns current time as <code class="docutils literal notranslate"><span class="pre">Timestamp(Nanoseconds,</span> <span class="pre">UTC)</span></code>. Returns same value for the function
+wherever it appears in the statement, using a value chosen at planning time.</p>
+</section>
+</section>
+<section id="other-functions">
+<h2>Other Functions<a class="headerlink" href="#other-functions" title="Permalink to this heading">¶</a></h2>
+<section id="array">
+<h3><code class="docutils literal notranslate"><span class="pre">array</span></code><a class="headerlink" href="#array" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="arrow-typeof">
+<h3><code class="docutils literal notranslate"><span class="pre">arrow_typeof</span></code><a class="headerlink" href="#arrow-typeof" title="Permalink to this heading">¶</a></h3>
+<p>Returns the underlying Arrow type of the the expression:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span>❯ select arrow_typeof(4 + 4.3);
++--------------------------------------+
+| arrowtypeof(Int64(4) + Float64(4.3)) |
++--------------------------------------+
+| Float64                              |
++--------------------------------------+
+</pre></div>
+</div>
+</section>
+<section id="in-list">
+<h3><code class="docutils literal notranslate"><span class="pre">in_list</span></code><a class="headerlink" href="#in-list" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="random">
+<h3><code class="docutils literal notranslate"><span class="pre">random</span></code><a class="headerlink" href="#random" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="sha224">
+<h3><code class="docutils literal notranslate"><span class="pre">sha224</span></code><a class="headerlink" href="#sha224" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="sha256">
+<h3><code class="docutils literal notranslate"><span class="pre">sha256</span></code><a class="headerlink" href="#sha256" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="sha384">
+<h3><code class="docutils literal notranslate"><span class="pre">sha384</span></code><a class="headerlink" href="#sha384" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="sha512">
+<h3><code class="docutils literal notranslate"><span class="pre">sha512</span></code><a class="headerlink" href="#sha512" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="struct">
+<h3><code class="docutils literal notranslate"><span class="pre">struct</span></code><a class="headerlink" href="#struct" title="Permalink to this heading">¶</a></h3>
+</section>
+<section id="to-hex">
+<h3><code class="docutils literal notranslate"><span class="pre">to_hex</span></code><a class="headerlink" href="#to-hex" title="Permalink to this heading">¶</a></h3>
+</section>
+</section>
+</section>
+
+
+              </div>
+              
+              
+              <!-- Previous / next buttons -->
+<div class='prev-next-area'>
+    <a class='left-prev' id="prev-link" href="aggregate_functions.html" title="previous page">
+        <i class="fas fa-angle-left"></i>
+        <div class="prev-next-info">
+            <p class="prev-next-subtitle">previous</p>
+            <p class="prev-next-title">Aggregate Functions</p>
+        </div>
+    </a>
+    <a class='right-next' id="next-link" href="sql_status.html" title="next page">
+    <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Status</p>
+    </div>
+    <i class="fas fa-angle-right"></i>
+    </a>
+</div>
+              
+          </main>
+          
+
+      </div>
+    </div>
+  
+    <script src="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
+  <footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p class="copyright">
+    &copy; Copyright 2022, Apache Software Foundation.<br>
+</p>
+    </div>
+    
+    <div class="footer-item">
+      <p class="sphinx-version">
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 6.1.3.<br>
+</p>
+    </div>
+    
+  </div>
+</footer>
+  </body>
+</html>

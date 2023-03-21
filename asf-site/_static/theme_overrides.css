@@ -1,0 +1,93 @@
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+
+/* Customizing with theme CSS variables */
+
+:root {
+  --pst-color-active-navigation: 215, 70, 51;
+  --pst-color-link-hover: 215, 70, 51;
+  --pst-color-headerlink: 215, 70, 51;
+  /* Use normal text color (like h3, ..) instead of primary color */
+  --pst-color-h1: var(--color-text-base);
+  --pst-color-h2: var(--color-text-base);
+  /* Use softer blue from bootstrap's default info color */
+  --pst-color-info: 23, 162, 184;
+  --pst-header-height: 0px;
+}
+
+code {
+  color: rgb(215, 70, 51);
+}
+
+.footer {
+  text-align: center;
+}
+
+/* Ensure the logo is properly displayed */
+
+.navbar-brand {
+  height: auto;
+  width: auto;
+}
+
+a.navbar-brand img {
+  height: auto;
+  width: auto;
+  max-height: 15vh;
+  max-width: 100%;
+}
+
+
+/* This is the bootstrap CSS style for "table-striped". Since the theme does
+not yet provide an easy way to configure this globaly, it easier to simply
+include this snippet here than updating each table in all rst files to
+add ":class: table-striped" */
+
+.table tbody tr:nth-of-type(odd) {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+
+/* Limit the max height of the sidebar navigation section. Because in our
+custimized template, there is more content above the navigation, i.e.
+larger logo: if we don't decrease the max-height, it will overlap with
+the footer.
+Details: min(15vh, 110px) for the logo size, 8rem for search box etc*/
+
+@media (min-width:720px) {
+  @supports (position:-webkit-sticky) or (position:sticky) {
+    .bd-links {
+      max-height: calc(100vh - min(15vh, 110px) - 8rem)
+    }
+  }
+}
+
+
+/* Fix table text wrapping in RTD theme,
+ * see https://rackerlabs.github.io/docs-rackspace/tools/rtd-tables.html
+ */
+
+@media screen {
+    table.docutils td {
+        /* !important prevents the common CSS stylesheets from overriding
+          this as on RTD they are loaded after this stylesheet */
+        white-space: normal !important;
+    }
+}
