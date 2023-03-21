@@ -321,7 +321,7 @@ fn date_bin_single(stride: i64, source: i64, origin: i64) -> i64 {
 pub fn date_bin(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() == 2 {
         // Default to unix EPOCH
-        let origin = &ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+        let origin = ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
             Some(0),
             Some("+00:00".to_owned()),
         ));
