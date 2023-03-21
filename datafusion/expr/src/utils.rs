@@ -1211,7 +1211,7 @@ pub fn find_valid_equijoin_key_pair(
                     right_schema.clone(),
                 )?;
 
-        Result::<_, DataFusionError>::Ok(result)
+        Result::<_>::Ok(result)
     };
 
     let join_key_pair = match (l_is_left, r_is_right) {
