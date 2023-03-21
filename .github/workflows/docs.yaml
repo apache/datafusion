@@ -45,11 +45,13 @@ jobs:
         run: |
           set -x
           cd asf-site/
-          # delete anything but: 1) '.'; 2) '..'; 3) .git/
-          rm -rf .github .buildinfo .gitattributes .github_changelog_generator .gitignore .gitmodules
-          find ./ | grep -vE "^./$|^../$|^./.git" | xargs rm -rf
+          rsync \
+            -a \
+            --delete \
+            --exclude '/.git/' \
+            ../docs/build/html/ \
+            ./
           cp ../.asf.yaml .
-          cp -rT ../docs/build/html/ .
           git status --porcelain
           if [ "$(git status --porcelain)" != "" ]; then
             git config user.name "github-actions[bot]"
