@@ -125,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_by_url_hdfs() {
+    fn test_get_or_lazy_register_store_hdfs() {
         let sut = DefaultObjectStoreRegistry::default();
         register_with_scheme_and_host(
             &sut,
@@ -134,11 +134,11 @@ mod tests {
             Arc::new(LocalFileSystem::new()),
         );
         let url = ListingTableUrl::parse("hdfs://localhost:8020/key").unwrap();
-        sut.get_by_url(url.as_ref()).unwrap();
+        sut.get_or_lazy_register_store(url.as_ref()).unwrap();
     }
 
     #[test]
-    fn test_get_by_url_s3() {
+    fn test_get_or_lazy_register_store_s3() {
         let sut = DefaultObjectStoreRegistry::default();
         register_with_scheme_and_host(
             &sut,
@@ -147,20 +147,20 @@ mod tests {
             Arc::new(LocalFileSystem::new()),
         );
         let url = ListingTableUrl::parse("s3://bucket/key").unwrap();
-        sut.get_by_url(url.as_ref()).unwrap();
+        sut.get_or_lazy_register_store(url.as_ref()).unwrap();
     }
 
     #[test]
-    fn test_get_by_url_file() {
+    fn test_get_or_lazy_register_store_file() {
         let sut = DefaultObjectStoreRegistry::default();
         let url = ListingTableUrl::parse("file:///bucket/key").unwrap();
-        sut.get_by_url(url.as_ref()).unwrap();
+        sut.get_or_lazy_register_store(url.as_ref()).unwrap();
     }
 
     #[test]
-    fn test_get_by_url_local() {
+    fn test_get_or_lazy_register_store_local() {
         let sut = DefaultObjectStoreRegistry::default();
         let url = ListingTableUrl::parse("../").unwrap();
-        sut.get_by_url(url.as_ref()).unwrap();
+        sut.get_or_lazy_register_store(url.as_ref()).unwrap();
     }
 }

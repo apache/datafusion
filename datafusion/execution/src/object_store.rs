@@ -98,7 +98,7 @@ impl std::fmt::Display for ObjectStoreUrl {
 /// ```
 ///
 /// In this particular case, the url `s3://my_bucket/lineitem/` will be provided to
-/// [`ObjectStoreRegistry::get_by_url`] and one of three things will happen:
+/// [`ObjectStoreRegistry::get_or_lazy_register_store`] and one of three things will happen:
 ///
 /// - If an [`ObjectStore`] has been registered with [`ObjectStoreRegistry::register_store`] with
 /// `s3://my_bucket`, that [`ObjectStore`] will be returned
@@ -122,7 +122,7 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// If a store with the same key existed before, it is replaced and returned
     fn register_store(
         &self,
-        key: &str,
+        url: &Url,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>>;
 
@@ -134,7 +134,7 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     ///
     /// If no [`ObjectStore`] found for the `url`, ad-hoc discovery may be executed depending on
     /// the `url`. An [`ObjectStore`] may be lazily created and registered.
-    fn get_by_url(&self, url: &Url) -> Result<Arc<dyn ObjectStore>>;
+    fn get_or_lazy_register_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>>;
 }
 
 /// The default [`ObjectStoreRegistry`]
@@ -176,16 +176,17 @@ impl DefaultObjectStoreRegistry {
 impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     fn register_store(
         &self,
-        key: &str,
+        url: &Url,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        self.object_stores.insert(String::from(key), store)
+        let s = get_url_key(url);
+        self.object_stores.insert(String::from(s), store)
     }
 
     /// The [`DefaultObjectStoreRegistry`] will only depend on the inner object store cache
     /// to decide whether it's able to find an [`ObjectStore`] for a url. No ad-hoc discovery
-    /// will be executed.
-    fn get_by_url(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
+    /// and lazy registration will be executed.
+    fn get_or_lazy_register_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
         let s = get_url_key(url);
         self.object_stores
             .get(s)
@@ -205,20 +206,8 @@ pub fn register_with_scheme_and_host(
     host: &str,
     store: Arc<dyn ObjectStore>,
 ) -> Option<Arc<dyn ObjectStore>> {
-    let key = format!("{scheme}://{host}");
-    registry.register_store(&key, store)
-}
-
-/// Insert a [`ObjectStore`] with the key of a given url got by [`get_url_key()`]
-///
-/// If a store with the same url key, it is replaced and returned
-pub fn register_with_url(
-    registry: &dyn ObjectStoreRegistry,
-    url: &Url,
-    store: Arc<dyn ObjectStore>,
-) -> Option<Arc<dyn ObjectStore>> {
-    let key = get_url_key(url);
-    registry.register_store(key, store)
+    let url = ObjectStoreUrl::parse(format!("{scheme}://{host}")).unwrap();
+    registry.register_store(&url.url, store)
 }
 
 /// Get the key of a url for object store registration
