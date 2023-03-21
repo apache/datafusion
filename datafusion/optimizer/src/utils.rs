@@ -18,7 +18,7 @@
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{plan_err, Column, DFSchemaRef, DataFusionError};
+use datafusion_common::{plan_err, Column, DFSchemaRef};
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr::{BinaryExpr, Sort};
 use datafusion_expr::expr_rewriter::{
@@ -535,7 +535,7 @@ pub(crate) fn collect_subquery_cols(
         }
 
         cols.extend(using_cols);
-        Result::<_, DataFusionError>::Ok(cols)
+        Result::<_>::Ok(cols)
     })
 }
 
