@@ -385,7 +385,7 @@ pub fn find_window_exprs(exprs: &[Expr]) -> Vec<Expr> {
 /// Search the provided `Expr`'s, and all of their nested `Expr`, for any that
 /// pass the provided test. The returned `Expr`'s are deduplicated and returned
 /// in order of appearance (depth first).
-fn find_exprs_in_exprs<F>(exprs: &[Expr], test_fn: &F) -> Vec<Expr>
+pub fn find_exprs_in_exprs<F>(exprs: &[Expr], test_fn: &F) -> Vec<Expr>
 where
     F: Fn(&Expr) -> bool,
 {
@@ -403,7 +403,7 @@ where
 /// Search an `Expr`, and all of its nested `Expr`'s, for any that pass the
 /// provided test. The returned `Expr`'s are deduplicated and returned in order
 /// of appearance (depth first).
-fn find_exprs_in_expr<F>(expr: &Expr, test_fn: &F) -> Vec<Expr>
+pub fn find_exprs_in_expr<F>(expr: &Expr, test_fn: &F) -> Vec<Expr>
 where
     F: Fn(&Expr) -> bool,
 {

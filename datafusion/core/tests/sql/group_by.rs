@@ -905,3 +905,25 @@ async fn csv_query_group_by_order_by_avg_group_by_substr() -> Result<()> {
     assert_batches_sorted_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn csv_query_group_by_with_grouping_functions() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT GROUPING(c1), GROUPING_ID(c1), c1, avg(c12) FROM aggregate_test_100 GROUP BY GROUPING SETS((c1),(c1))";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----+-----------------------------+",
+        "| c1 | AVG(aggregate_test_100.c12) |",
+        "+----+-----------------------------+",
+        "| a  | 0.48754517466109415         |",
+        "| b  | 0.41040709263815384         |",
+        "| c  | 0.6600456536439784          |",
+        "| d  | 0.48855379387549824         |",
+        "| e  | 0.48600669271341534         |",
+        "+----+-----------------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+

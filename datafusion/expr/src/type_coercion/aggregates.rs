@@ -217,6 +217,7 @@ pub fn coerce_types(
         }
         AggregateFunction::Median => Ok(input_types.to_vec()),
         AggregateFunction::Grouping => Ok(vec![input_types[0].clone()]),
+        AggregateFunction::GroupingID => Ok(input_types.to_vec()),
     }
 }
 
@@ -262,6 +263,9 @@ fn check_arg_count(
                     input_types.len()
                 )));
             }
+        }
+        TypeSignature::Arbitrary => {
+            return Ok(())
         }
         _ => {
             return Err(DataFusionError::Internal(format!(

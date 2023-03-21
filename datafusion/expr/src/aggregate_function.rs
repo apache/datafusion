@@ -63,6 +63,8 @@ pub enum AggregateFunction {
     ApproxMedian,
     /// Grouping
     Grouping,
+    /// GroupingID
+    GroupingID,
 }
 
 impl fmt::Display for AggregateFunction {
@@ -101,6 +103,7 @@ impl FromStr for AggregateFunction {
             }
             "approx_median" => AggregateFunction::ApproxMedian,
             "grouping" => AggregateFunction::Grouping,
+            "grouping_id" => AggregateFunction::GroupingID,
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in function named {name}"
@@ -158,6 +161,7 @@ pub fn return_type(
             Ok(coerced_data_types[0].clone())
         }
         AggregateFunction::Grouping => Ok(DataType::Int32),
+        AggregateFunction::GroupingID => Ok(DataType::Int32),
     }
 }
 
@@ -220,5 +224,11 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
                 .collect(),
             Volatility::Immutable,
         ),
+        AggregateFunction::GroupingID => {
+            Signature {
+                type_signature: TypeSignature::Arbitrary,
+                volatility: Volatility::Immutable,
+            }
+        }
     }
 }

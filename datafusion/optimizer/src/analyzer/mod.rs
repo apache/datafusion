@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod replace_grouping_func;
+
 use crate::rewrite::TreeNodeRewritable;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
@@ -23,6 +25,7 @@ use datafusion_expr::{Expr, LogicalPlan};
 use log::{debug, trace};
 use std::sync::Arc;
 use std::time::Instant;
+use crate::analyzer::replace_grouping_func::ReplaceGroupingFunc;
 
 /// `AnalyzerRule` transforms the unresolved ['LogicalPlan']s and unresolved ['Expr']s into
 /// the resolved form.
@@ -49,7 +52,9 @@ impl Default for Analyzer {
 impl Analyzer {
     /// Create a new analyzer using the recommended list of rules
     pub fn new() -> Self {
-        let rules = vec![];
+        let rules: Vec<Arc<dyn AnalyzerRule + Sync + Send>> = vec![
+            Arc::new(ReplaceGroupingFunc::new()),
+        ];
         Self::with_rules(rules)
     }
 
