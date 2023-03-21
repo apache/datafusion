@@ -107,7 +107,7 @@ impl From<ObjectMeta> for PartitionedFile {
 #[cfg(test)]
 mod tests {
     use datafusion_execution::object_store::{
-        DefaultObjectStoreRegistry, ObjectStoreRegistry,
+        register_with_scheme_and_host, DefaultObjectStoreRegistry, ObjectStoreRegistry,
     };
     use object_store::local::LocalFileSystem;
 
@@ -127,7 +127,12 @@ mod tests {
     #[test]
     fn test_get_by_url_hdfs() {
         let sut = DefaultObjectStoreRegistry::default();
-        sut.register_store("hdfs", "localhost:8020", Arc::new(LocalFileSystem::new()));
+        register_with_scheme_and_host(
+            &sut,
+            "hdfs",
+            "localhost:8020",
+            Arc::new(LocalFileSystem::new()),
+        );
         let url = ListingTableUrl::parse("hdfs://localhost:8020/key").unwrap();
         sut.get_by_url(url.as_ref()).unwrap();
     }
@@ -135,7 +140,12 @@ mod tests {
     #[test]
     fn test_get_by_url_s3() {
         let sut = DefaultObjectStoreRegistry::default();
-        sut.register_store("s3", "bucket", Arc::new(LocalFileSystem::new()));
+        register_with_scheme_and_host(
+            &sut,
+            "s3",
+            "bucket",
+            Arc::new(LocalFileSystem::new()),
+        );
         let url = ListingTableUrl::parse("s3://bucket/key").unwrap();
         sut.get_by_url(url.as_ref()).unwrap();
     }

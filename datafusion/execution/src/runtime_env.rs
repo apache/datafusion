@@ -24,6 +24,7 @@ use crate::{
     object_store::{DefaultObjectStoreRegistry, ObjectStoreRegistry},
 };
 
+use crate::object_store::register_with_scheme_and_host;
 use datafusion_common::{DataFusionError, Result};
 use object_store::ObjectStore;
 use std::fmt::{Debug, Formatter};
@@ -82,7 +83,8 @@ impl RuntimeEnv {
         host: impl AsRef<str>,
         object_store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        self.object_store_registry.register_store(
+        register_with_scheme_and_host(
+            self.object_store_registry.as_ref(),
             scheme.as_ref(),
             host.as_ref(),
             object_store,
@@ -90,7 +92,7 @@ impl RuntimeEnv {
     }
 
     /// Retrieves a `ObjectStore` instance for a url by consulting the
-    /// registery. See [`ObjectStoreRegistry::get_by_url`] for more
+    /// registry. See [`ObjectStoreRegistry::get_by_url`] for more
     /// details.
     pub fn object_store(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
         self.object_store_registry

@@ -60,19 +60,10 @@ impl DatafusionCliObjectStoreRegistry {
 impl ObjectStoreRegistry for DatafusionCliObjectStoreRegistry {
     fn register_store(
         &self,
-        scheme: &str,
-        host: &str,
+        key: &str,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        self.inner.register_store(scheme, host, store)
-    }
-
-    fn put_with_url(
-        &self,
-        url: &Url,
-        store: Arc<dyn ObjectStore>,
-    ) -> Option<Arc<dyn ObjectStore>> {
-        self.inner.put_with_url(url, store)
+        self.inner.register_store(key, store)
     }
 
     fn get_by_url(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
@@ -85,7 +76,7 @@ impl ObjectStoreRegistry for DatafusionCliObjectStoreRegistry {
                     },
                 )??;
 
-            self.put_with_url(url, store.clone());
+            register_with_url(&self.inner, url, store.clone());
 
             Ok(store)
         })
