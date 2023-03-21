@@ -207,10 +207,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     definition: sql,
                 }))
             }
-            Statement::CreateTable { .. } => Err(DataFusionError::NotImplemented(
-                "Only `CREATE TABLE table_name AS SELECT ...` statement is supported"
-                    .to_string(),
-            )),
             Statement::ShowCreate { obj_type, obj_name } => match obj_type {
                 ShowCreateObject::Table => self.show_create_table_to_plan(obj_name),
                 _ => Err(DataFusionError::NotImplemented(
