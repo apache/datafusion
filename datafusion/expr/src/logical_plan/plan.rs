@@ -666,7 +666,7 @@ impl LogicalPlan {
             .inputs()
             .into_iter()
             .map(|inp| inp.replace_params_with_values(param_values))
-            .collect::<Result<Vec<_>, DataFusionError>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         from_plan(self, &new_exprs, &new_inputs_with_values)
     }

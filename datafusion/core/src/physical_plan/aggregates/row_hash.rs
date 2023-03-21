@@ -46,7 +46,7 @@ use arrow::compute::cast;
 use arrow::datatypes::{DataType, Schema, UInt32Type};
 use arrow::{array::ArrayRef, compute};
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use datafusion_row::accessor::RowAccessor;
 use datafusion_row::layout::RowLayout;
@@ -503,9 +503,7 @@ impl GroupedHashAggregateStream {
                         .and({
                             group_state.indices.clear();
                             Ok(())
-                        })?;
-
-                    Ok::<(), DataFusionError>(())
+                        })
                 })?;
         }
         allocated += self

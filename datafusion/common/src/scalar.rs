@@ -857,7 +857,7 @@ fn ts_sub_to_interval(
     lhs_tz: &Option<String>,
     rhs_tz: &Option<String>,
     mode: IntervalMode,
-) -> Result<ScalarValue, DataFusionError> {
+) -> Result<ScalarValue> {
     let lhs_dt = with_timezone_to_naive_datetime(lhs_ts, lhs_tz, mode)?;
     let rhs_dt = with_timezone_to_naive_datetime(rhs_ts, rhs_tz, mode)?;
     let delta_secs = lhs_dt.signed_duration_since(rhs_dt);
@@ -892,7 +892,7 @@ fn with_timezone_to_naive_datetime(
     ts: i64,
     tz: &Option<String>,
     mode: IntervalMode,
-) -> Result<NaiveDateTime, DataFusionError> {
+) -> Result<NaiveDateTime> {
     let datetime = if let IntervalMode::Milli = mode {
         ticks_to_naive_datetime::<1_000_000>(ts)
     } else {
