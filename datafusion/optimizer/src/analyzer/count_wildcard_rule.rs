@@ -22,6 +22,7 @@ use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::{aggregate_function, lit, Aggregate, Expr, LogicalPlan, Window};
 
 use crate::analyzer::AnalyzerRule;
+use crate::rewrite::TreeNodeRewritable;
 
 /// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
 /// Resolve issue: https://github.com/apache/arrow-datafusion/issues/5473.
@@ -40,32 +41,36 @@ impl CountWildcardRule {
 }
 impl AnalyzerRule for CountWildcardRule {
     fn analyze(&self, plan: &LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
-        let new_plan = match plan {
-            LogicalPlan::Window(window) => {
-                let window_expr = handle_wildcard(&window.window_expr);
-                LogicalPlan::Window(Window {
-                    input: window.input.clone(),
-                    window_expr,
-                    schema: plan.schema().clone(),
-                })
-            }
-
-            LogicalPlan::Aggregate(agg) => {
-                let aggr_expr = handle_wildcard(&agg.aggr_expr);
-                LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
-                    agg.input.clone(),
-                    agg.group_expr.clone(),
-                    aggr_expr,
-                    plan.schema().clone(),
-                )?)
-            }
-            _ => plan.clone(),
-        };
-        Ok(new_plan)
+        plan.clone().transform_down(&analyze_internal)
     }
 
     fn name(&self) -> &str {
         "count_wildcard_rule"
+    }
+}
+
+fn analyze_internal(plan: LogicalPlan) -> Result<Option<LogicalPlan>> {
+    match plan {
+        LogicalPlan::Window(window) => {
+            let window_expr = handle_wildcard(&window.window_expr);
+            Ok(Some(LogicalPlan::Window(Window {
+                input: window.input.clone(),
+                window_expr,
+                schema: window.schema,
+            })))
+        }
+        LogicalPlan::Aggregate(agg) => {
+            let aggr_expr = handle_wildcard(&agg.aggr_expr);
+            Ok(Some(LogicalPlan::Aggregate(
+                Aggregate::try_new_with_schema(
+                    agg.input.clone(),
+                    agg.group_expr.clone(),
+                    aggr_expr,
+                    agg.schema,
+                )?,
+            )))
+        }
+        _ => Ok(None),
     }
 }
 
