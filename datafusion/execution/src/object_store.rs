@@ -180,7 +180,7 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
         let s = get_url_key(url);
-        self.object_stores.insert(String::from(s), store)
+        self.object_stores.insert(s, store)
     }
 
     /// The [`DefaultObjectStoreRegistry`] will only depend on the inner object store cache
@@ -189,7 +189,7 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     fn get_or_lazy_register_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
         let s = get_url_key(url);
         self.object_stores
-            .get(s)
+            .get(&s)
             .map(|o| o.value().clone())
             .ok_or_else(|| {
                 DataFusionError::Internal(format!(
@@ -199,20 +199,19 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     }
 }
 
-/// If a store with the same schema and host existed before, it is replaced and returned
-pub fn register_with_scheme_and_host(
-    registry: &dyn ObjectStoreRegistry,
-    scheme: &str,
-    host: &str,
-    store: Arc<dyn ObjectStore>,
-) -> Option<Arc<dyn ObjectStore>> {
-    let url = ObjectStoreUrl::parse(format!("{scheme}://{host}")).unwrap();
-    registry.register_store(&url.url, store)
-}
-
-/// Get the key of a url for object store registration
-fn get_url_key(url: &Url) -> &str {
-    &url[url::Position::BeforeScheme..url::Position::BeforePath]
+/// Get the key of a url for object store registration.
+/// The credential info will be removed
+fn get_url_key(url: &Url) -> String {
+    let port_info = url
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or(String::new());
+    format!(
+        "{}://{}{}/",
+        &url[url::Position::BeforeScheme..url::Position::AfterScheme],
+        &url[url::Position::BeforeHost..url::Position::AfterHost],
+        port_info
+    )
 }
 
 #[cfg(test)]
@@ -245,5 +244,20 @@ mod tests {
         let err =
             ObjectStoreUrl::parse("s3://username:password@host:123/foo").unwrap_err();
         assert_eq!(err.to_string(), "Execution error: ObjectStoreUrl must only contain scheme and authority, got: /foo");
+    }
+
+    #[test]
+    fn test_get_url_key() {
+        let file = ObjectStoreUrl::parse("file://").unwrap();
+        let key = get_url_key(&file.url);
+        assert_eq!(key.as_str(), "file:///");
+
+        let url = ObjectStoreUrl::parse("s3://bucket").unwrap();
+        let key = get_url_key(&url.url);
+        assert_eq!(key.as_str(), "s3://bucket/");
+
+        let url = ObjectStoreUrl::parse("s3://username:password@host:123").unwrap();
+        let key = get_url_key(&url.url);
+        assert_eq!(key.as_str(), "s3://host:123/");
     }
 }

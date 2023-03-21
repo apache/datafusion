@@ -24,7 +24,6 @@ use crate::{
     object_store::{DefaultObjectStoreRegistry, ObjectStoreRegistry},
 };
 
-use crate::object_store::register_with_scheme_and_host;
 use datafusion_common::{DataFusionError, Result};
 use object_store::ObjectStore;
 use std::fmt::{Debug, Formatter};
@@ -68,10 +67,9 @@ impl RuntimeEnv {
         })
     }
 
-    /// Registers a custom `ObjectStore` to be used when accessing a
-    /// specific scheme and host. This allows DataFusion to create
-    /// external tables from urls that do not have built in support
-    /// such as `hdfs://...`.
+    /// Registers a custom `ObjectStore` to be used with a specific url.
+    /// This allows DataFusion to create external tables from urls that do not have
+    /// built in support such as `hdfs://namenode:port/...`.
     ///
     /// Returns the [`ObjectStore`] previously registered for this
     /// scheme, if any.
@@ -79,16 +77,10 @@ impl RuntimeEnv {
     /// See [`ObjectStoreRegistry`] for more details
     pub fn register_object_store(
         &self,
-        scheme: impl AsRef<str>,
-        host: impl AsRef<str>,
+        url: &Url,
         object_store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        register_with_scheme_and_host(
-            self.object_store_registry.as_ref(),
-            scheme.as_ref(),
-            host.as_ref(),
-            object_store,
-        )
+        self.object_store_registry.register_store(url, object_store)
     }
 
     /// Retrieves a `ObjectStore` instance for a url by consulting the

@@ -106,12 +106,13 @@ impl From<ObjectMeta> for PartitionedFile {
 
 #[cfg(test)]
 mod tests {
+    use crate::datasource::listing::ListingTableUrl;
     use datafusion_execution::object_store::{
-        register_with_scheme_and_host, DefaultObjectStoreRegistry, ObjectStoreRegistry,
+        DefaultObjectStoreRegistry, ObjectStoreRegistry,
     };
     use object_store::local::LocalFileSystem;
-
-    use super::*;
+    use std::sync::Arc;
+    use url::Url;
 
     #[test]
     fn test_object_store_listing_url() {
@@ -127,12 +128,8 @@ mod tests {
     #[test]
     fn test_get_or_lazy_register_store_hdfs() {
         let sut = DefaultObjectStoreRegistry::default();
-        register_with_scheme_and_host(
-            &sut,
-            "hdfs",
-            "localhost:8020",
-            Arc::new(LocalFileSystem::new()),
-        );
+        let url = Url::parse("hdfs://localhost:8020").unwrap();
+        sut.register_store(&url, Arc::new(LocalFileSystem::new()));
         let url = ListingTableUrl::parse("hdfs://localhost:8020/key").unwrap();
         sut.get_or_lazy_register_store(url.as_ref()).unwrap();
     }
@@ -140,12 +137,8 @@ mod tests {
     #[test]
     fn test_get_or_lazy_register_store_s3() {
         let sut = DefaultObjectStoreRegistry::default();
-        register_with_scheme_and_host(
-            &sut,
-            "s3",
-            "bucket",
-            Arc::new(LocalFileSystem::new()),
-        );
+        let url = Url::parse("s3://bucket/key").unwrap();
+        sut.register_store(&url, Arc::new(LocalFileSystem::new()));
         let url = ListingTableUrl::parse("s3://bucket/key").unwrap();
         sut.get_or_lazy_register_store(url.as_ref()).unwrap();
     }

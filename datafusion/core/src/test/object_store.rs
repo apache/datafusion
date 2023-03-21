@@ -19,11 +19,13 @@ use crate::prelude::SessionContext;
 use futures::FutureExt;
 use object_store::{memory::InMemory, path::Path, ObjectMeta, ObjectStore};
 use std::sync::Arc;
+use url::Url;
 
 /// Returns a test object store with the provided `ctx`
 pub fn register_test_store(ctx: &SessionContext, files: &[(&str, u64)]) {
+    let url = Url::parse("test://").unwrap();
     ctx.runtime_env()
-        .register_object_store("test", "", make_test_store(files));
+        .register_object_store(&url, make_test_store(files));
 }
 
 /// Create a test object store with the provided files

@@ -45,6 +45,7 @@ use object_store::{
     path::Path, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
 };
 use tokio::io::AsyncWrite;
+use url::Url;
 
 #[tokio::test]
 async fn parquet_distinct_partition_col() -> Result<()> {
@@ -517,9 +518,9 @@ fn register_partitioned_aggregate_csv(
     let testdata = arrow_test_data();
     let csv_file_path = format!("{testdata}/csv/aggregate_test_100.csv");
     let file_schema = test_util::aggr_test_schema();
+    let url = Url::parse("mirror://").unwrap();
     ctx.runtime_env().register_object_store(
-        "mirror",
-        "",
+        &url,
         MirroringObjectStore::new_arc(csv_file_path, store_paths),
     );
 
@@ -550,9 +551,9 @@ async fn register_partitioned_alltypes_parquet(
 ) {
     let testdata = parquet_test_data();
     let parquet_file_path = format!("{testdata}/{source_file}");
+    let url = Url::parse("mirror://").unwrap();
     ctx.runtime_env().register_object_store(
-        "mirror",
-        "",
+        &url,
         MirroringObjectStore::new_arc(parquet_file_path.clone(), store_paths),
     );
 

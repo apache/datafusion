@@ -326,8 +326,8 @@ mod tests {
         store: Arc<dyn ObjectStore>,
     ) {
         let ctx = SessionContext::new();
-        ctx.runtime_env()
-            .register_object_store("file", "", store.clone());
+        let url = Url::parse("file://").unwrap();
+        ctx.runtime_env().register_object_store(&url, store.clone());
         let filename = "1.json";
         let file_groups = partitioned_file_groups(
             TEST_DATA_BASE,
