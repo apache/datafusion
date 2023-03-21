@@ -557,7 +557,7 @@ pub trait ExtensionOptions: Send + Sync + std::fmt::Debug + 'static {
 }
 
 /// A type-safe container for [`ConfigExtension`]
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Extensions(BTreeMap<&'static str, ExtensionBox>);
 
 impl Extensions {
