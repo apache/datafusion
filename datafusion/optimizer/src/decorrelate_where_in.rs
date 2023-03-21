@@ -53,7 +53,7 @@ impl DecorrelateWhereIn {
         &self,
         predicate: &Expr,
         config: &dyn OptimizerConfig,
-    ) -> datafusion_common::Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
+    ) -> Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
         let filters = split_conjunction(predicate); // TODO: disjunctions
 
         let mut subqueries = vec![];
