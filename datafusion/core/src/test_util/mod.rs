@@ -296,7 +296,7 @@ impl TableProviderFactory for TestTableFactory {
         &self,
         _: &SessionState,
         cmd: &CreateExternalTable,
-    ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
+    ) -> Result<Arc<dyn TableProvider>> {
         Ok(Arc::new(TestTableProvider {
             url: cmd.location.to_string(),
             schema: Arc::new(cmd.schema.as_ref().into()),
@@ -334,7 +334,7 @@ impl TableProvider for TestTableProvider {
         _projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
-    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         unimplemented!("TestTableProvider is a stub for testing.")
     }
 }
@@ -516,7 +516,7 @@ pub async fn test_create_unbounded_sorted_file(
     ctx: &SessionContext,
     file_path: PathBuf,
     table_name: &str,
-) -> datafusion_common::Result<()> {
+) -> Result<()> {
     // Create schema:
     let schema = Arc::new(Schema::new(vec![
         Field::new("a1", DataType::UInt32, false),

@@ -447,8 +447,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if !schema.has_column(column) {
                     // Return an error if any column is not in the schema:
                     return Err(DataFusionError::Plan(format!(
-                        "Column {} is not in schema",
-                        column
+                        "Column {column} is not in schema"
                     )));
                 }
             }
