@@ -2,6 +2,7 @@ on:
   push:
     branches:
       - master
+      - issue-5500-asf.yaml-docs
     paths:
       - .github/workflows/docs.yaml
       - docs/**
@@ -21,7 +22,7 @@ jobs:
         with:
           repository: apache/arrow-site
           ref: asf-site
-          path: docs-target
+          path: asf-site
 
       - name: Setup Python
         uses: actions/setup-python@v4
@@ -45,9 +46,11 @@ jobs:
       - name: Copy & push the generated HTML
         run: |
           set -x
-          cd docs-target/
-          rm -rf datafusion/*
-          cp -rT ../docs/build/html/ datafusion/
+          cd asf-site/
+          # delete anything but: 1) '.'; 2) '..'; 3) .git/
+          find ./ | grep -vE "^./$|^../$|^./.git/" | xargs rm -rf
+          cp ../.asf.yaml .
+          cp -rT ../docs/build/html/ .
           git status --porcelain
           if [ "$(git status --porcelain)" != "" ]; then
             git config user.name "github-actions[bot]"
