@@ -297,7 +297,10 @@ pub fn approx_percentile_cont_with_weight(
 /// Create an EXISTS subquery expression
 pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
     Expr::Exists {
-        subquery: Subquery { subquery },
+        subquery: Subquery {
+            subquery,
+            outer_ref_columns: vec![],
+        },
         negated: false,
     }
 }
@@ -305,7 +308,10 @@ pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
 /// Create a NOT EXISTS subquery expression
 pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
     Expr::Exists {
-        subquery: Subquery { subquery },
+        subquery: Subquery {
+            subquery,
+            outer_ref_columns: vec![],
+        },
         negated: true,
     }
 }
@@ -314,7 +320,10 @@ pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
 pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
     Expr::InSubquery {
         expr: Box::new(expr),
-        subquery: Subquery { subquery },
+        subquery: Subquery {
+            subquery,
+            outer_ref_columns: vec![],
+        },
         negated: false,
     }
 }
@@ -323,14 +332,20 @@ pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
 pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
     Expr::InSubquery {
         expr: Box::new(expr),
-        subquery: Subquery { subquery },
+        subquery: Subquery {
+            subquery,
+            outer_ref_columns: vec![],
+        },
         negated: true,
     }
 }
 
 /// Create a scalar subquery expression
 pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
-    Expr::ScalarSubquery(Subquery { subquery })
+    Expr::ScalarSubquery(Subquery {
+        subquery,
+        outer_ref_columns: vec![],
+    })
 }
 
 /// Create an expression to represent the stddev() aggregate function

@@ -24,7 +24,7 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::plan;
 use crate::utils::{
-    self, exprlist_to_fields, from_plan, grouping_set_expr_count,
+    exprlist_to_fields, find_out_reference_exprs, from_plan, grouping_set_expr_count,
     grouping_set_to_exprlist,
 };
 use crate::{
@@ -263,6 +263,31 @@ impl LogicalPlan {
         })
         // closure always returns OK
         .unwrap();
+        exprs
+    }
+
+    /// Returns all the out reference(correlated) expressions (recursively) in the current
+    /// logical plan nodes and all its descendant nodes.
+    pub fn all_out_ref_exprs(self: &LogicalPlan) -> Vec<Expr> {
+        let mut exprs = vec![];
+        self.inspect_expressions(|e| {
+            find_out_reference_exprs(e).into_iter().for_each(|e| {
+                if !exprs.contains(&e) {
+                    exprs.push(e)
+                }
+            });
+            Ok(()) as Result<(), DataFusionError>
+        })
+        // closure always returns OK
+        .unwrap();
+        self.inputs()
+            .into_iter()
+            .flat_map(|child| child.all_out_ref_exprs())
+            .for_each(|e| {
+                if !exprs.contains(&e) {
+                    exprs.push(e)
+                }
+            });
         exprs
     }
 
@@ -632,22 +657,21 @@ impl LogicalPlan {
     /// params_values
     pub fn replace_params_with_values(
         &self,
-        param_values: &Vec<ScalarValue>,
+        param_values: &[ScalarValue],
     ) -> Result<LogicalPlan, DataFusionError> {
-        let exprs = self.expressions();
-        let mut new_exprs = vec![];
-        for expr in exprs {
-            new_exprs.push(Self::replace_placeholders_with_values(expr, param_values)?);
-        }
+        let new_exprs = self
+            .expressions()
+            .into_iter()
+            .map(|e| Self::replace_placeholders_with_values(e, param_values))
+            .collect::<Result<Vec<_>, DataFusionError>>()?;
 
-        let new_inputs = self.inputs();
-        let mut new_inputs_with_values = vec![];
-        for input in new_inputs {
-            new_inputs_with_values.push(input.replace_params_with_values(param_values)?);
-        }
+        let new_inputs_with_values = self
+            .inputs()
+            .into_iter()
+            .map(|inp| inp.replace_params_with_values(param_values))
+            .collect::<Result<Vec<_>, DataFusionError>>()?;
 
-        let new_plan = utils::from_plan(self, &new_exprs, &new_inputs_with_values)?;
-        Ok(new_plan)
+        from_plan(self, &new_exprs, &new_inputs_with_values)
     }
 
     /// Walk the logical plan, find any `PlaceHolder` tokens, and return a map of their IDs and DataTypes
@@ -748,11 +772,12 @@ impl LogicalPlan {
                     Ok(Expr::Literal(value.clone()))
                 }
                 Expr::ScalarSubquery(qry) => {
-                    let subquery = Arc::new(
-                        qry.subquery
-                            .replace_params_with_values(&param_values.to_vec())?,
-                    );
-                    Ok(Expr::ScalarSubquery(plan::Subquery { subquery }))
+                    let subquery =
+                        Arc::new(qry.subquery.replace_params_with_values(param_values)?);
+                    Ok(Expr::ScalarSubquery(plan::Subquery {
+                        subquery,
+                        outer_ref_columns: qry.outer_ref_columns.clone(),
+                    }))
                 }
                 _ => Ok(expr),
             }
@@ -1635,6 +1660,8 @@ pub struct CreateExternalTable {
     pub if_not_exists: bool,
     /// SQL used to create the table, if available
     pub definition: Option<String>,
+    /// Order expressions supplied by user
+    pub order_exprs: Vec<Expr>,
     /// File compression type (GZIP, BZIP2, XZ, ZSTD)
     pub file_compression_type: CompressionTypeVariant,
     /// Table(provider) specific options
@@ -1655,6 +1682,7 @@ impl Hash for CreateExternalTable {
         self.if_not_exists.hash(state);
         self.definition.hash(state);
         self.file_compression_type.hash(state);
+        self.order_exprs.hash(state);
         self.options.len().hash(state); // HashMap is not hashable
     }
 }
@@ -1922,14 +1950,11 @@ impl Join {
 pub struct Subquery {
     /// The subquery
     pub subquery: Arc<LogicalPlan>,
+    /// The outer references used in the subquery
+    pub outer_ref_columns: Vec<Expr>,
 }
 
 impl Subquery {
-    pub fn new(plan: LogicalPlan) -> Self {
-        Subquery {
-            subquery: Arc::new(plan),
-        }
-    }
     pub fn try_from_expr(plan: &Expr) -> datafusion_common::Result<&Subquery> {
         match plan {
             Expr::ScalarSubquery(it) => Ok(it),

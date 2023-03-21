@@ -20,7 +20,7 @@ use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, normalize_ident, rebase_expr,
     resolve_aliases_to_exprs, resolve_columns, resolve_positions_to_exprs,
 };
-use datafusion_common::{DFSchema, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check,
 };
@@ -44,7 +44,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         select: Select,
         planner_context: &mut PlannerContext,
-        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         // check for unsupported syntax first
         if !select.cluster_by.is_empty() {
@@ -68,12 +67,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
 
         // process `where` clause
-        let plan = self.plan_selection(
-            select.selection,
-            plan,
-            outer_query_schema,
-            planner_context,
-        )?;
+        let plan = self.plan_selection(select.selection, plan, planner_context)?;
 
         // process the SELECT expressions, with wildcards expanded.
         let select_exprs = self.prepare_select_exprs(
@@ -234,28 +228,26 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         selection: Option<SQLExpr>,
         plan: LogicalPlan,
-        outer_query_schema: Option<&DFSchema>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         match selection {
             Some(predicate_expr) => {
-                let mut join_schema = (**plan.schema()).clone();
-
                 let fallback_schemas = plan.fallback_normalize_schemas();
-                let outer_query_schema = if let Some(outer) = outer_query_schema {
-                    join_schema.merge(outer);
-                    vec![outer]
-                } else {
-                    vec![]
-                };
+                let outer_query_schema = planner_context.outer_query_schema.clone();
+                let outer_query_schema_vec =
+                    if let Some(outer) = outer_query_schema.as_ref() {
+                        vec![outer]
+                    } else {
+                        vec![]
+                    };
 
                 let filter_expr =
-                    self.sql_to_expr(predicate_expr, &join_schema, planner_context)?;
+                    self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
                 let filter_expr = normalize_col_with_schemas_and_ambiguity_check(
                     filter_expr,
-                    &[&[plan.schema()], &fallback_schemas, &outer_query_schema],
+                    &[&[plan.schema()], &fallback_schemas, &outer_query_schema_vec],
                     &[using_columns],
                 )?;
 

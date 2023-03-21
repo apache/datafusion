@@ -134,7 +134,8 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
             | Expr::GetIndexedField { .. }
-            | Expr::Placeholder { .. } => {}
+            | Expr::Placeholder { .. }
+            | Expr::OuterReferenceColumn { .. } => {}
         }
         Ok(())
     })
@@ -379,6 +380,14 @@ pub fn find_sort_exprs(exprs: &[Expr]) -> Vec<Expr> {
 pub fn find_window_exprs(exprs: &[Expr]) -> Vec<Expr> {
     find_exprs_in_exprs(exprs, &|nested_expr| {
         matches!(nested_expr, Expr::WindowFunction { .. })
+    })
+}
+
+/// Collect all deeply nested `Expr::OuterReferenceColumn`. They are returned in order of occurrence
+/// (depth first), with duplicates omitted.
+pub fn find_out_reference_exprs(expr: &Expr) -> Vec<Expr> {
+    find_exprs_in_expr(expr, &|nested_expr| {
+        matches!(nested_expr, Expr::OuterReferenceColumn { .. })
     })
 }
 
@@ -637,10 +646,13 @@ pub fn from_plan(
             let right = inputs[1].clone();
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
         }
-        LogicalPlan::Subquery(_) => {
+        LogicalPlan::Subquery(Subquery {
+            outer_ref_columns, ..
+        }) => {
             let subquery = LogicalPlanBuilder::from(inputs[0].clone()).build()?;
             Ok(LogicalPlan::Subquery(Subquery {
                 subquery: Arc::new(subquery),
+                outer_ref_columns: outer_ref_columns.clone(),
             }))
         }
         LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
@@ -850,6 +862,7 @@ pub fn exprlist_to_fields<'a>(
 pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
     match e {
         Expr::Column(_) => e,
+        Expr::OuterReferenceColumn(_, _) => e,
         Expr::Alias(inner_expr, name) => {
             columnize_expr(*inner_expr, input_schema).alias(name)
         }
