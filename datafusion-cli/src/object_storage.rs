@@ -19,7 +19,7 @@ use datafusion::error::Result;
 use std::{env, str::FromStr, sync::Arc};
 
 use datafusion::datasource::object_store::{
-    DefaultObjectStoreRegistry, ObjectStoreRegistry,
+    register_with_url, DefaultObjectStoreRegistry, ObjectStoreRegistry,
 };
 use datafusion::error::DataFusionError;
 use object_store::{aws::AmazonS3Builder, gcp::GoogleCloudStorageBuilder, ObjectStore};
