@@ -264,9 +264,7 @@ fn check_arg_count(
                 )));
             }
         }
-        TypeSignature::Arbitrary => {
-            return Ok(())
-        }
+        TypeSignature::Arbitrary => return Ok(()),
         _ => {
             return Err(DataFusionError::Internal(format!(
                 "Aggregate functions do not support this {signature:?}"

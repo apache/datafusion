@@ -224,11 +224,9 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
                 .collect(),
             Volatility::Immutable,
         ),
-        AggregateFunction::GroupingID => {
-            Signature {
-                type_signature: TypeSignature::Arbitrary,
-                volatility: Volatility::Immutable,
-            }
-        }
+        AggregateFunction::GroupingID => Signature {
+            type_signature: TypeSignature::Arbitrary,
+            volatility: Volatility::Immutable,
+        },
     }
 }

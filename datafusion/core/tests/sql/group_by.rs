@@ -926,4 +926,3 @@ async fn csv_query_group_by_with_grouping_functions() -> Result<()> {
     assert_batches_sorted_eq!(expected, &actual);
     Ok(())
 }
-

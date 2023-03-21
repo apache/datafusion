@@ -60,11 +60,15 @@ impl AnalyzerRule for ReplaceGroupingFunc {
                     relation: None,
                     name: INTERNAL_GROUPING_COLUMN.to_owned(),
                 };
-                let distinct_group_by =  distinct_group_exprs(&group_expr);
+                let distinct_group_by = distinct_group_exprs(&group_expr);
                 let new_agg_expr = aggr_expr
                     .into_iter()
                     .map(|expr| {
-                        replace_grouping_func(expr, &distinct_group_by, gid_column.clone())
+                        replace_grouping_func(
+                            expr,
+                            &distinct_group_by,
+                            gid_column.clone(),
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Some(LogicalPlan::Aggregate(Aggregate::try_new(

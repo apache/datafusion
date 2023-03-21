@@ -291,6 +291,8 @@ pub struct CreateExternalTableNode {
     pub definition: ::prost::alloc::string::String,
     #[prost(string, tag = "10")]
     pub file_compression_type: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "13")]
+    pub order_exprs: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(map = "string, string", tag = "11")]
     pub options: ::std::collections::HashMap<
         ::prost::alloc::string::String,
@@ -2309,7 +2311,7 @@ pub enum AggregateFunction {
     ApproxPercentileContWithWeight = 16,
     Grouping = 17,
     Median = 18,
-    GroupingID = 19,
+    GroupingId = 19,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2338,8 +2340,8 @@ impl AggregateFunction {
                 "APPROX_PERCENTILE_CONT_WITH_WEIGHT"
             }
             AggregateFunction::Grouping => "GROUPING",
-            AggregateFunction::GroupingID => "GROUPING_ID",
             AggregateFunction::Median => "MEDIAN",
+            AggregateFunction::GroupingId => "GROUPING_ID",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2365,8 +2367,8 @@ impl AggregateFunction {
                 Some(Self::ApproxPercentileContWithWeight)
             }
             "GROUPING" => Some(Self::Grouping),
-            "GROUPING_ID" => Some(Self::GroupingID),
             "MEDIAN" => Some(Self::Median),
+            "GROUPING_ID" => Some(Self::GroupingId),
             _ => None,
         }
     }
