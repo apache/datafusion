@@ -21,6 +21,7 @@ use regex::Regex;
 
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
 use crate::{DFSchema, DataFusionError, OwnedTableReference, Result, SchemaError};
+use lazy_static::lazy_static;
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fmt;
@@ -116,8 +117,11 @@ impl Column {
     pub fn quoted_flat_name(&self) -> String {
         match &self.relation {
             Some(r) => {
-                let regexp = Regex::new(r"^[a-zA-Z][_a-zA-Z0-9]*$").unwrap();
-                let column_name = if regexp.is_match(&self.name) {
+                lazy_static! {
+                    static ref CAPTURE_VALID_RE: Regex =
+                        Regex::new(r"^[_a-zA-Z][_a-zA-Z0-9]*$").unwrap();
+                }
+                let column_name = if CAPTURE_VALID_RE.is_match(&self.name) {
                     self.name.clone()
                 } else {
                     quote_identifier(&self.name)
