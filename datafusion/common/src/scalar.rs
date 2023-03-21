@@ -4953,8 +4953,8 @@ mod tests {
         for (lhs, rhs, expected) in cases.iter() {
             let result = lhs.add(rhs).unwrap();
             let result_commute = rhs.add(lhs).unwrap();
-            assert_eq!(*expected, result, "lhs:{:?} + rhs:{:?}", lhs, rhs);
-            assert_eq!(*expected, result_commute, "lhs:{:?} + rhs:{:?}", rhs, lhs);
+            assert_eq!(*expected, result, "lhs:{lhs:?} + rhs:{rhs:?}");
+            assert_eq!(*expected, result_commute, "lhs:{rhs:?} + rhs:{lhs:?}");
         }
     }
 
@@ -5009,7 +5009,7 @@ mod tests {
         ];
         for (lhs, rhs, expected) in cases.iter() {
             let result = lhs.sub(rhs).unwrap();
-            assert_eq!(*expected, result, "lhs:{:?} - rhs:{:?}", lhs, rhs);
+            assert_eq!(*expected, result, "lhs:{lhs:?} - rhs:{rhs:?}");
         }
     }
 
@@ -5043,20 +5043,14 @@ mod tests {
                 assert_eq!(
                     intervals[idx],
                     timestamp2.sub(ts1).unwrap(),
-                    "index:{}, operands: {:?} (-) {:?}",
-                    idx,
-                    timestamp2,
-                    ts1
+                    "index:{idx}, operands: {timestamp2:?} (-) {ts1:?}"
                 );
             } else {
                 let timestamp2 = ts1.sub(intervals[idx].clone()).unwrap();
                 assert_eq!(
                     intervals[idx],
                     ts1.sub(timestamp2.clone()).unwrap(),
-                    "index:{}, operands: {:?} (-) {:?}",
-                    idx,
-                    ts1,
-                    timestamp2
+                    "index:{idx}, operands: {ts1:?} (-) {timestamp2:?}"
                 );
             };
         }
