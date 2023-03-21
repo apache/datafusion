@@ -118,16 +118,17 @@ async fn group_by(opt: &GroupBy) -> Result<()> {
     let start = Instant::now();
     let df = ctx.sql(sql).await?;
     let batches = df.collect().await?;
-    let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+    let elapsed = start.elapsed();
     let numrows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
     if opt.debug {
         pretty::print_batches(&batches)?;
     }
     rundata.write_iter(elapsed, numrows);
-    println!("h2o groupby query {} took {} ms", opt.query, elapsed);
-
-    if let Some(path) = &opt.output_path {
-        std::fs::write(path, rundata.to_json())?;
-    }
+    println!(
+        "h2o groupby query {} took {} ms",
+        opt.query,
+        elapsed.as_secs_f64() * 1000.0
+    );
+    rundata.maybe_write_json(opt.output_path.as_ref())?;
     Ok(())
 }

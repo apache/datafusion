@@ -206,7 +206,8 @@ async fn run_sort_benchmarks(opt: Opt, test_file: &TestParquetFile) -> Result<()
             let config = SessionConfig::new().with_target_partitions(opt.partitions);
             let ctx = SessionContext::with_config(config);
             let (rows, elapsed) = exec_sort(&ctx, &expr, test_file, opt.debug).await?;
-            println!("Iteration {i} finished in {elapsed}ms");
+            let ms = elapsed.as_secs_f64() * 1000.0;
+            println!("Iteration {i} finished in {ms} ms");
             rundata.write_iter(elapsed, rows);
         }
         println!("\n");
@@ -286,15 +287,14 @@ async fn run_filter_benchmarks(opt: Opt, test_file: &TestParquetFile) -> Result<
 
                 let (rows, elapsed) =
                     exec_scan(&ctx, test_file, filter_expr.clone(), opt.debug).await?;
-                println!("Iteration {} returned {} rows in {elapsed} ms", i, rows);
+                let ms = elapsed.as_secs_f64() * 1000.0;
+                println!("Iteration {} returned {} rows in {ms} ms", i, rows);
                 rundata.write_iter(elapsed, rows);
             }
         }
         println!("\n");
     }
-    if let Some(path) = &opt.output_path {
-        std::fs::write(path, rundata.to_json())?;
-    }
+    rundata.maybe_write_json(opt.output_path.as_ref())?;
     Ok(())
 }
 
@@ -303,13 +303,13 @@ async fn exec_scan(
     test_file: &TestParquetFile,
     filter: Expr,
     debug: bool,
-) -> Result<(usize, f64)> {
+) -> Result<(usize, std::time::Duration)> {
     let start = Instant::now();
     let exec = test_file.create_scan(Some(filter)).await?;
 
     let task_ctx = ctx.task_ctx();
     let result = collect(exec, task_ctx).await?;
-    let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+    let elapsed = start.elapsed();
     if debug {
         pretty::print_batches(&result)?;
     }
@@ -322,13 +322,13 @@ async fn exec_sort(
     expr: &[PhysicalSortExpr],
     test_file: &TestParquetFile,
     debug: bool,
-) -> Result<(usize, f64)> {
+) -> Result<(usize, std::time::Duration)> {
     let start = Instant::now();
     let scan = test_file.create_scan(None).await?;
     let exec = Arc::new(SortExec::try_new(expr.to_owned(), scan, None)?);
     let task_ctx = ctx.task_ctx();
     let result = collect(exec, task_ctx).await?;
-    let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+    let elapsed = start.elapsed();
     if debug {
         pretty::print_batches(&result)?;
     }

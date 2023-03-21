@@ -111,13 +111,16 @@ async fn datafusion_sql_benchmarks(ctx: &mut SessionContext, opt: Opt) -> Result
         rundata.start_new_case(name);
         for i in 0..iterations {
             let (rows, elapsed) = execute_sql(ctx, sql, debug).await?;
-            println!("Query '{}' iteration {} took {} ms", name, i, elapsed);
+            println!(
+                "Query '{}' iteration {} took {} ms",
+                name,
+                i,
+                elapsed.as_secs_f64() * 1000.0
+            );
             rundata.write_iter(elapsed, rows);
         }
     }
-    if let Some(path) = output {
-        std::fs::write(path, rundata.to_json())?;
-    }
+    rundata.maybe_write_json(output.as_ref())?;
     Ok(())
 }
 
@@ -125,14 +128,14 @@ async fn execute_sql(
     ctx: &SessionContext,
     sql: &str,
     debug: bool,
-) -> Result<(usize, f64)> {
+) -> Result<(usize, std::time::Duration)> {
     let start = Instant::now();
     let dataframe = ctx.sql(sql).await?;
     if debug {
         println!("Optimized logical plan:\n{:?}", dataframe.logical_plan());
     }
     let result = dataframe.collect().await?;
-    let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+    let elapsed = start.elapsed();
     if debug {
         pretty::print_batches(&result)?;
     }

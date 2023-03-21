@@ -196,10 +196,7 @@ async fn benchmark_datafusion(
             benchmark_run.write_iter(iter.elapsed, iter.row_count);
         }
     }
-
-    if let Some(path) = &opt.output_path {
-        std::fs::write(path, benchmark_run.to_json())?;
-    }
+    benchmark_run.maybe_write_json(opt.output_path.as_ref())?;
     Ok(results)
 }
 
@@ -243,11 +240,12 @@ async fn benchmark_query(
             }
         }
 
-        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
-        millis.push(elapsed);
+        let elapsed = start.elapsed(); //.as_secs_f64() * 1000.0;
+        let ms = elapsed.as_secs_f64() * 1000.0;
+        millis.push(ms);
         let row_count = result.iter().map(|b| b.num_rows()).sum();
         println!(
-            "Query {query_id} iteration {i} took {elapsed:.1} ms and returned {row_count} rows"
+            "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
         );
         query_results.push(QueryResult { elapsed, row_count });
     }
@@ -399,7 +397,7 @@ async fn get_table(
 }
 
 struct QueryResult {
-    elapsed: f64,
+    elapsed: std::time::Duration,
     row_count: usize,
 }
 
