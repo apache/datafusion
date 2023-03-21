@@ -122,6 +122,7 @@ impl ExprRewritable for Expr {
             Expr::Alias(expr, name) => Expr::Alias(rewrite_boxed(expr, rewriter)?, name),
             Expr::Column(_) => self.clone(),
             Expr::OuterReferenceColumn(_, _) => self.clone(),
+            Expr::VirtualColumn(_, _) => self.clone(),
             Expr::Exists { .. } => self.clone(),
             Expr::InSubquery {
                 expr,

@@ -66,6 +66,7 @@ impl ExprSchemable for Expr {
             Expr::Sort(Sort { expr, .. }) | Expr::Negative(expr) => expr.get_type(schema),
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
             Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
+            Expr::VirtualColumn(ty, _) => Ok(ty.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l) => Ok(l.get_datatype()),
             Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
@@ -212,6 +213,7 @@ impl ExprSchemable for Expr {
             | Expr::IsNotUnknown(_)
             | Expr::Exists { .. }
             | Expr::Placeholder { .. } => Ok(true),
+            | Expr::VirtualColumn(_, _) => Ok(false),
             Expr::InSubquery { expr, .. } => expr.nullable(input_schema),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())

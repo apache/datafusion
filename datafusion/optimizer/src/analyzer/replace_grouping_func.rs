@@ -41,7 +41,7 @@ impl ReplaceGroupingFunc {
     }
 }
 
-const INTERNAL_GROUPING_COLUMN: &str = "_grouping_id";
+const INTERNAL_GROUPING_COLUMN: &str = "grouping_id";
 
 impl AnalyzerRule for ReplaceGroupingFunc {
     fn analyze(
@@ -56,10 +56,7 @@ impl AnalyzerRule for ReplaceGroupingFunc {
                 group_expr,
                 ..
             }) if contains_grouping_funcs_in_exprs(&aggr_expr) => {
-                let gid_column = Column {
-                    relation: None,
-                    name: INTERNAL_GROUPING_COLUMN.to_owned(),
-                };
+                let gid_column = Expr::VirtualColumn(DataType::Int32, INTERNAL_GROUPING_COLUMN.to_string());
                 let distinct_group_by = distinct_group_exprs(&group_expr);
                 let new_agg_expr = aggr_expr
                     .into_iter()
@@ -166,7 +163,7 @@ fn contains_grouping_funcs(expr: &Expr) -> bool {
 fn replace_grouping_func(
     expr: Expr,
     group_by_exprs: &[Expr],
-    gid_column: Column,
+    gid_column: Expr,
 ) -> Result<Expr> {
     rewrite_expr(expr, |expr| {
         let display_name = expr.display_name()?;
@@ -181,7 +178,7 @@ fn replace_grouping_func(
                     Some(idx) => Ok(cast(
                         bitwise_and(
                             bitwise_shift_right(
-                                col(gid_column.clone()),
+                                gid_column.clone(),
                                 lit((group_by_exprs.len() - 1 - idx) as u32),
                             ),
                             lit(1),
@@ -203,7 +200,7 @@ fn replace_grouping_func(
                     || (group_by_exprs.len() == args.len()
                         && group_by_exprs.iter().zip(args.iter()).all(|(g, a)| g == a))
                 {
-                    Ok(col(gid_column.clone()).alias(display_name))
+                    Ok(gid_column.clone().alias(display_name))
                 } else {
                     Err(DataFusionError::Plan(format!(
                         "Columns of GROUPING_ID({:?})  does not match GROUP BY columns {:?}",

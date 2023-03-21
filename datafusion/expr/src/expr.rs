@@ -223,6 +223,8 @@ pub enum Expr {
     /// A place holder which hold a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
     OuterReferenceColumn(DataType, Column),
+    /// A virtual column used by the system internally
+    VirtualColumn(DataType, String),
 }
 
 /// Binary expression
@@ -600,6 +602,7 @@ impl Expr {
             Expr::TryCast { .. } => "TryCast",
             Expr::WindowFunction { .. } => "WindowFunction",
             Expr::Wildcard => "Wildcard",
+            Expr::VirtualColumn(..) => "VirtualColumn",
         }
     }
 
@@ -1081,6 +1084,7 @@ impl fmt::Debug for Expr {
                 }
             },
             Expr::Placeholder { id, .. } => write!(f, "{id}"),
+            Expr::VirtualColumn(_, c) => write!(f, "_virtual_{}", c),
         }
     }
 }
@@ -1364,6 +1368,7 @@ fn create_name(e: &Expr) -> Result<String> {
             "Create name does not support qualified wildcard".to_string(),
         )),
         Expr::Placeholder { id, .. } => Ok((*id).to_string()),
+        Expr::VirtualColumn(_, c) => Ok(format!("_virtual_{}", c)),
     }
 }
 

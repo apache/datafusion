@@ -82,6 +82,7 @@ impl ExpressionVisitor for ApplicabilityVisitor<'_> {
             Expr::Literal(_)
             | Expr::Alias(_, _)
             | Expr::OuterReferenceColumn(_, _)
+            | Expr::VirtualColumn(_, _)
             | Expr::ScalarVariable(_, _)
             | Expr::Not(_)
             | Expr::IsNotNull(_)

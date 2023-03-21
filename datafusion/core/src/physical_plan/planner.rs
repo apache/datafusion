@@ -349,6 +349,9 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::OuterReferenceColumn(_, _) => Err(DataFusionError::Internal(
             "Create physical name does not support OuterReferenceColumn".to_string(),
         )),
+        Expr::VirtualColumn(_dt, c) => {
+            Ok(c.to_string())
+        }
     }
 }
 

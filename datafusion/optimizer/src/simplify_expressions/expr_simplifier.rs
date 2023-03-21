@@ -255,6 +255,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::ScalarVariable(_, _)
             | Expr::Column(_)
             | Expr::OuterReferenceColumn(_, _)
+            | Expr::VirtualColumn(_, _)
             | Expr::Exists { .. }
             | Expr::InSubquery { .. }
             | Expr::ScalarSubquery(_)

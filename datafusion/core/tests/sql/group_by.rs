@@ -911,6 +911,23 @@ async fn csv_query_group_by_with_grouping_functions() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT GROUPING(c1), GROUPING_ID(c1), c1, avg(c12) FROM aggregate_test_100 GROUP BY GROUPING SETS((c1),(c1))";
+
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
+    let expected = vec![
+        "Projection: GROUPING(aggregate_test_100.c1), GROUPINGID(aggregate_test_100.c1), aggregate_test_100.c1, AVG(aggregate_test_100.c12) [GROUPING(aggregate_test_100.c1):Int32;N, GROUPINGID(aggregate_test_100.c1):Int32;N, c1:Utf8, AVG(aggregate_test_100.c12):Float64;N]",
+        "  Aggregate: groupBy=[[GROUPING SETS ((aggregate_test_100.c1), (aggregate_test_100.c1))]], aggr=[[CAST(CAST(_virtual_grouping_id AS _virtual_grouping_id AS Int64) & Int64(1) AS Binary) AS GROUPING(aggregate_test_100.c1), _virtual_grouping_id AS _virtual_grouping_id AS GROUPINGID(aggregate_test_100.c1), AVG(aggregate_test_100.c12)]] [c1:Utf8, GROUPING(aggregate_test_100.c1):Binary, GROUPINGID(aggregate_test_100.c1):Int32, AVG(aggregate_test_100.c12):Float64;N]",
+        "    Projection: _virtual_grouping_id, aggregate_test_100.c1, aggregate_test_100.c12 [_virtual_grouping_id:Int32, c1:Utf8, c12:Float64]",
+        "      TableScan: aggregate_test_100 projection=[c1, c12] [c1:Utf8, c12:Float64]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+-----------------------------+",
