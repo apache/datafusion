@@ -83,6 +83,11 @@ pub struct FileStream<F: FileOpener> {
     baseline_metrics: BaselineMetrics,
 }
 
+enum NextOpen {
+    Future(FileOpenFuture),
+    Reader(Result<BoxStream<'static, Result<RecordBatch, ArrowError>>>),
+}
+
 enum FileStreamState {
     /// The idle state, no file is currently being read
     Idle,
@@ -105,7 +110,7 @@ enum FileStreamState {
         /// and its corresponding partition column values, if any.
         /// This allows the next file to be opened in parallel while the
         /// current file is read.
-        next: Option<(FileOpenFuture, Vec<ScalarValue>)>,
+        next: Option<(NextOpen, Vec<ScalarValue>)>,
     },
     /// Encountered an error
     Error,
@@ -267,7 +272,10 @@ impl<F: FileOpener> FileStream<F> {
                                 self.state = FileStreamState::Scan {
                                     partition_values,
                                     reader,
-                                    next: Some((next_future, next_partition_values)),
+                                    next: Some((
+                                        NextOpen::Future(next_future),
+                                        next_partition_values,
+                                    )),
                                 };
                             }
                             Ok(None) => {
@@ -292,54 +300,75 @@ impl<F: FileOpener> FileStream<F> {
                     reader,
                     partition_values,
                     next,
-                } => match ready!(reader.poll_next_unpin(cx)) {
-                    Some(result) => {
-                        self.file_stream_metrics.time_scanning_until_data.stop();
-                        self.file_stream_metrics.time_scanning_total.stop();
-                        let result = result
-                            .and_then(|b| {
-                                self.pc_projector
-                                    .project(b, partition_values)
-                                    .map_err(|e| ArrowError::ExternalError(e.into()))
-                            })
-                            .map(|batch| match &mut self.remain {
-                                Some(remain) => {
-                                    if *remain > batch.num_rows() {
-                                        *remain -= batch.num_rows();
-                                        batch
-                                    } else {
-                                        let batch = batch.slice(0, *remain);
-                                        self.state = FileStreamState::Limit;
-                                        *remain = 0;
-                                        batch
+                } => {
+                    if let Some((next_open_future, _)) = next {
+                        if let NextOpen::Future(f) = next_open_future {
+                            if let Poll::Ready(reader) = f.as_mut().poll(cx) {
+                                *next_open_future = NextOpen::Reader(reader);
+                            }
+                        }
+                    }
+                    match ready!(reader.poll_next_unpin(cx)) {
+                        Some(result) => {
+                            self.file_stream_metrics.time_scanning_until_data.stop();
+                            self.file_stream_metrics.time_scanning_total.stop();
+                            let result = result
+                                .and_then(|b| {
+                                    self.pc_projector
+                                        .project(b, partition_values)
+                                        .map_err(|e| ArrowError::ExternalError(e.into()))
+                                })
+                                .map(|batch| match &mut self.remain {
+                                    Some(remain) => {
+                                        if *remain > batch.num_rows() {
+                                            *remain -= batch.num_rows();
+                                            batch
+                                        } else {
+                                            let batch = batch.slice(0, *remain);
+                                            self.state = FileStreamState::Limit;
+                                            *remain = 0;
+                                            batch
+                                        }
+                                    }
+                                    None => batch,
+                                });
+
+                            if result.is_err() {
+                                self.state = FileStreamState::Error
+                            }
+                            self.file_stream_metrics.time_scanning_total.start();
+                            return Poll::Ready(Some(result.map_err(Into::into)));
+                        }
+                        None => {
+                            self.file_stream_metrics.time_scanning_until_data.stop();
+                            self.file_stream_metrics.time_scanning_total.stop();
+
+                            match mem::take(next) {
+                                Some((future, partition_values)) => {
+                                    self.file_stream_metrics.time_opening.start();
+
+                                    match future {
+                                        NextOpen::Future(future) => {
+                                            self.state = FileStreamState::Open {
+                                                future,
+                                                partition_values,
+                                            }
+                                        }
+                                        NextOpen::Reader(reader) => {
+                                            self.state = FileStreamState::Open {
+                                                future: Box::pin(std::future::ready(
+                                                    reader,
+                                                )),
+                                                partition_values,
+                                            }
+                                        }
                                     }
                                 }
-                                None => batch,
-                            });
-
-                        if result.is_err() {
-                            self.state = FileStreamState::Error
-                        }
-                        self.file_stream_metrics.time_scanning_total.start();
-                        return Poll::Ready(Some(result.map_err(Into::into)));
-                    }
-                    None => {
-                        self.file_stream_metrics.time_scanning_until_data.stop();
-                        self.file_stream_metrics.time_scanning_total.stop();
-
-                        match mem::take(next) {
-                            Some((future, partition_values)) => {
-                                self.file_stream_metrics.time_opening.start();
-
-                                self.state = FileStreamState::Open {
-                                    future,
-                                    partition_values,
-                                }
+                                None => return Poll::Ready(None),
                             }
-                            None => return Poll::Ready(None),
                         }
                     }
-                },
+                }
                 FileStreamState::Error | FileStreamState::Limit => {
                     return Poll::Ready(None)
                 }
