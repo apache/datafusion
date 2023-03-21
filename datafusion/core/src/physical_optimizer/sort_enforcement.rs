@@ -38,11 +38,10 @@ use crate::error::Result;
 use crate::physical_optimizer::utils::{
     add_sort_above, calc_ordering_range, compare_set_equality, find_match_indices,
     get_at_indices, get_ordered_merged_indices, get_set_diff_indices, is_consecutive,
-    is_consecutive_from_zero,
+    is_consecutive_from_zero, is_limit, is_sort, is_sort_preserving_merge, is_window,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::tree_node::TreeNodeRewritable;
@@ -403,28 +402,6 @@ fn parallelize_sorts(
         plan,
         coalesce_onwards,
     }))
-}
-
-/// Checks whether the given executor is a limit;
-/// i.e. either a `WindowAggExec` or a `BoundedWindowAggExec`.
-fn is_window(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.as_any().is::<WindowAggExec>() || plan.as_any().is::<BoundedWindowAggExec>()
-}
-
-/// Checks whether the given executor is a limit;
-/// i.e. either a `LocalLimitExec` or a `GlobalLimitExec`.
-fn is_limit(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.as_any().is::<GlobalLimitExec>() || plan.as_any().is::<LocalLimitExec>()
-}
-
-/// Checks whether the given executor is a `SortExec`.
-fn is_sort(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.as_any().is::<SortExec>()
-}
-
-/// Checks whether the given executor is a `SortPreservingMergeExec`.
-fn is_sort_preserving_merge(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.as_any().is::<SortPreservingMergeExec>()
 }
 
 /// This function enforces sorting requirements and makes optimizations without
@@ -973,6 +950,7 @@ mod tests {
     use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
     use crate::physical_plan::file_format::{CsvExec, FileScanConfig, ParquetExec};
     use crate::physical_plan::filter::FilterExec;
+    use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;

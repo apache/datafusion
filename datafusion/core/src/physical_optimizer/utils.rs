@@ -23,7 +23,10 @@ use std::hash::Hash;
 
 use crate::config::ConfigOptions;
 use crate::error::Result;
+use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::sorts::sort::SortExec;
+use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use datafusion_physical_expr::utils::ordering_satisfy;
 use datafusion_physical_expr::PhysicalSortExpr;
@@ -159,6 +162,28 @@ pub(crate) fn calc_ordering_range(in1: &[usize]) -> usize {
         }
     }
     count
+}
+
+/// Checks whether the given executor is a limit;
+/// i.e. either a `WindowAggExec` or a `BoundedWindowAggExec`.
+pub fn is_window(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<WindowAggExec>() || plan.as_any().is::<BoundedWindowAggExec>()
+}
+
+/// Checks whether the given executor is a limit;
+/// i.e. either a `LocalLimitExec` or a `GlobalLimitExec`.
+pub fn is_limit(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<GlobalLimitExec>() || plan.as_any().is::<LocalLimitExec>()
+}
+
+/// Checks whether the given executor is a `SortExec`.
+pub fn is_sort(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<SortExec>()
+}
+
+/// Checks whether the given executor is a `SortPreservingMergeExec`.
+pub fn is_sort_preserving_merge(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<SortPreservingMergeExec>()
 }
 
 #[cfg(test)]
