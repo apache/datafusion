@@ -666,7 +666,7 @@ impl LogicalPlan {
             .inputs()
             .into_iter()
             .map(|inp| inp.replace_params_with_values(param_values))
-            .collect::<Result<Vec<_>, DataFusionError>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         from_plan(self, &new_exprs, &new_inputs_with_values)
     }
@@ -682,10 +682,7 @@ impl LogicalPlan {
         }
 
         impl ExpressionVisitor for ExprParamTypeVisitor {
-            fn pre_visit(
-                mut self,
-                expr: &Expr,
-            ) -> datafusion_common::Result<Recursion<Self>>
+            fn pre_visit(mut self, expr: &Expr) -> Result<Recursion<Self>>
             where
                 Self: ExpressionVisitor,
             {
@@ -1427,7 +1424,7 @@ impl Projection {
         }
     }
 
-    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Projection> {
+    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Projection> {
         match plan {
             LogicalPlan::Projection(it) => Ok(it),
             _ => plan_err!("Could not coerce into Projection!"),
@@ -1449,10 +1446,7 @@ pub struct SubqueryAlias {
 }
 
 impl SubqueryAlias {
-    pub fn try_new(
-        plan: LogicalPlan,
-        alias: impl Into<String>,
-    ) -> datafusion_common::Result<Self> {
+    pub fn try_new(plan: LogicalPlan, alias: impl Into<String>) -> Result<Self> {
         let alias = alias.into();
         let table_ref = TableReference::bare(&alias);
         let schema: Schema = plan.schema().as_ref().clone().into();
@@ -1490,10 +1484,7 @@ pub struct Filter {
 
 impl Filter {
     /// Create a new filter operator.
-    pub fn try_new(
-        predicate: Expr,
-        input: Arc<LogicalPlan>,
-    ) -> datafusion_common::Result<Self> {
+    pub fn try_new(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
@@ -1518,7 +1509,7 @@ impl Filter {
         Ok(Self { predicate, input })
     }
 
-    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Filter> {
+    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Filter> {
         match plan {
             LogicalPlan::Filter(it) => Ok(it),
             _ => plan_err!("Could not coerce into Filter!"),
@@ -1818,7 +1809,7 @@ impl Aggregate {
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
-    ) -> datafusion_common::Result<Self> {
+    ) -> Result<Self> {
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
         let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
         validate_unique_names("Aggregations", all_expr.clone())?;
@@ -1839,7 +1830,7 @@ impl Aggregate {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
         schema: DFSchemaRef,
-    ) -> datafusion_common::Result<Self> {
+    ) -> Result<Self> {
         if group_expr.is_empty() && aggr_expr.is_empty() {
             return Err(DataFusionError::Plan(
                 "Aggregate requires at least one grouping or aggregate expression"
@@ -1862,7 +1853,7 @@ impl Aggregate {
         })
     }
 
-    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Aggregate> {
+    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Aggregate> {
         match plan {
             LogicalPlan::Aggregate(it) => Ok(it),
             _ => plan_err!("Could not coerce into Aggregate!"),
@@ -1947,7 +1938,7 @@ pub struct Subquery {
 }
 
 impl Subquery {
-    pub fn try_from_expr(plan: &Expr) -> datafusion_common::Result<&Subquery> {
+    pub fn try_from_expr(plan: &Expr) -> Result<&Subquery> {
         match plan {
             Expr::ScalarSubquery(it) => Ok(it),
             Expr::Cast(cast) => Subquery::try_from_expr(cast.expr.as_ref()),
@@ -2069,7 +2060,6 @@ mod tests {
     use crate::{col, exists, in_subquery, lit};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::DFSchema;
-    use datafusion_common::Result;
     use std::collections::HashMap;
 
     fn employee_schema() -> Schema {

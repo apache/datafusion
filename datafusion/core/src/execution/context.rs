@@ -330,8 +330,7 @@ impl SessionContext {
                     provider.insert_into(&self.state(), &input).await?;
                 } else {
                     return Err(DataFusionError::Execution(format!(
-                        "Table '{}' does not exist",
-                        table_name
+                        "Table '{table_name}' does not exist"
                     )));
                 }
                 self.return_empty_dataframe()
