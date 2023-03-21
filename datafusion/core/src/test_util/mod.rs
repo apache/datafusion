@@ -39,7 +39,7 @@ use crate::prelude::{CsvReadOptions, SessionContext};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion_common::{DataFusionError, Statistics, TableReference};
+use datafusion_common::{Statistics, TableReference};
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
 use datafusion_physical_expr::PhysicalSortExpr;
 use futures::Stream;
@@ -216,7 +216,7 @@ pub fn scan_empty(
     name: Option<&str>,
     table_schema: &Schema,
     projection: Option<Vec<usize>>,
-) -> Result<LogicalPlanBuilder, DataFusionError> {
+) -> Result<LogicalPlanBuilder> {
     let table_schema = Arc::new(table_schema.clone());
     let provider = Arc::new(EmptyTable::new(table_schema));
     let name = TableReference::bare(name.unwrap_or(UNNAMED_TABLE).to_string());
@@ -229,7 +229,7 @@ pub fn scan_empty_with_partitions(
     table_schema: &Schema,
     projection: Option<Vec<usize>>,
     partitions: usize,
-) -> Result<LogicalPlanBuilder, DataFusionError> {
+) -> Result<LogicalPlanBuilder> {
     let table_schema = Arc::new(table_schema.clone());
     let provider = Arc::new(EmptyTable::new(table_schema).with_partitions(partitions));
     let name = TableReference::bare(name.unwrap_or(UNNAMED_TABLE).to_string());
