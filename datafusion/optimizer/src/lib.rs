@@ -45,7 +45,6 @@ pub mod type_coercion;
 pub mod unwrap_cast_in_comparison;
 pub mod utils;
 
-pub mod count_wildcard_rule;
 #[cfg(test)]
 pub mod test;
 
