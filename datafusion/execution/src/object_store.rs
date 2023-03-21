@@ -168,7 +168,9 @@ impl DefaultObjectStoreRegistry {
     /// This will register [`LocalFileSystem`] to handle `file://` paths
     pub fn new() -> Self {
         let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
-        object_stores.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
+        let url = Url::parse("file://").unwrap();
+        let key = get_url_key(&url);
+        object_stores.insert(key, Arc::new(LocalFileSystem::new()));
         Self { object_stores }
     }
 }
