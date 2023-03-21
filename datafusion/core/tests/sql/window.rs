@@ -215,7 +215,11 @@ async fn get_test_context(tmpdir: &TempDir, n_batch: usize) -> Result<SessionCon
     Ok(ctx)
 }
 
-async fn get_test_context2(tmpdir: &TempDir, n_batch: usize) -> Result<SessionContext> {
+async fn get_test_context2(
+    tmpdir: &TempDir,
+    n_batch: usize,
+    infinite_source: bool,
+) -> Result<SessionContext> {
     let session_config = SessionConfig::new().with_target_partitions(1);
     let ctx = SessionContext::with_config(session_config);
 
@@ -225,7 +229,7 @@ async fn get_test_context2(tmpdir: &TempDir, n_batch: usize) -> Result<SessionCo
     let options_sort = csv_read_options
         .to_listing_options(&ctx.copied_config())
         .with_file_sort_order(Some(file_sort_order))
-        .with_infinite_source(true);
+        .with_infinite_source(infinite_source);
 
     write_test_data_to_csv(tmpdir, n_batch, &batch)?;
     let sql_definition = None;
@@ -507,10 +511,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_source_partially_sorted_partition_by() -> Result<()> {
+    async fn test_infinite_source_partition_by() -> Result<()> {
         let tmpdir = TempDir::new()?;
         // Source is ordered by low_card_col1, low_card_col2, inc_col
-        let ctx = get_test_context2(&tmpdir, 1).await?;
+        let ctx = get_test_context2(&tmpdir, 1, true).await?;
 
         let sql = "SELECT low_card_col1, low_card_col2, inc_col,
         SUM(inc_col) OVER(PARTITION BY low_card_col1, unsorted_col ORDER BY low_card_col2, inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum1,
@@ -542,6 +546,79 @@ mod tests {
                 "          BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Following(UInt64(1)), end_bound: Following(UInt64(5)) }], mode=[PartiallySorted([0])]",
                 "            BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(5)), end_bound: CurrentRow }], mode=[PartiallySorted([0, 1])]",
                 "              BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(5)), end_bound: Following(UInt64(5)) }], mode=[Sorted]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        let actual_len = actual.len();
+        let actual_trim_last = &actual[..actual_len - 1];
+        assert_eq!(
+            expected, actual_trim_last,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        let actual = execute_to_batches(&ctx, sql).await;
+
+        let expected = vec![
+            "+---------------+---------------+---------+------+------+------+------+------+------+------+------+------+-------+-------+-------+",
+            "| low_card_col1 | low_card_col2 | inc_col | sum1 | sum2 | sum3 | sum4 | sum5 | sum6 | sum7 | sum8 | sum9 | sum10 | sum11 | sum12 |",
+            "+---------------+---------------+---------+------+------+------+------+------+------+------+------+------+-------+-------+-------+",
+            "| 0             | 0             | 0       | 2    | 53   | 2    |      | 1    | 15   | 1    | 15   | 2    | 0     | 2     | 2     |",
+            "| 0             | 0             | 1       | 8    | 61   | 8    |      | 3    | 21   | 3    | 21   | 8    | 1     | 8     | 8     |",
+            "| 0             | 0             | 2       | 5    | 74   | 5    | 0    | 6    | 28   | 6    | 28   | 5    | 2     | 5     | 5     |",
+            "| 0             | 0             | 3       | 11   | 96   | 11   | 2    | 10   | 36   | 10   | 36   | 11   | 5     | 11    | 9     |",
+            "| 0             | 0             | 4       | 9    | 72   | 9    |      | 14   | 45   | 14   | 45   | 9    | 4     | 9     | 9     |",
+            "+---------------+---------------+---------+------+------+------+------+------+------+------+------+------+-------+-------+-------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_finite_source_partition_by() -> Result<()> {
+        let tmpdir = TempDir::new()?;
+        // Source is ordered by low_card_col1, low_card_col2, inc_col
+        // Source is finite.
+        let ctx = get_test_context2(&tmpdir, 1, false).await?;
+
+        let sql = "SELECT low_card_col1, low_card_col2, inc_col,
+        SUM(inc_col) OVER(PARTITION BY low_card_col1, unsorted_col ORDER BY low_card_col2, inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum1,
+        SUM(inc_col) OVER(PARTITION BY low_card_col1, unsorted_col ORDER BY low_card_col2, inc_col ASC ROWS BETWEEN 1 FOLLOWING AND 5 FOLLOWING) as sum2,
+        SUM(inc_col) OVER(PARTITION BY unsorted_col ORDER BY low_card_col1, low_card_col2, inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum3,
+        SUM(inc_col) OVER(PARTITION BY unsorted_col ORDER BY low_card_col1, low_card_col2, inc_col ASC ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING) as sum4,
+        SUM(inc_col) OVER(PARTITION BY low_card_col1, low_card_col2 ORDER BY inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum5,
+        SUM(inc_col) OVER(PARTITION BY low_card_col1, low_card_col2 ORDER BY inc_col ASC ROWS BETWEEN 5 PRECEDING AND 5 FOLLOWING) as sum6,
+        SUM(inc_col) OVER(PARTITION BY low_card_col2, low_card_col1 ORDER BY inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum7,
+        SUM(inc_col) OVER(PARTITION BY low_card_col2, low_card_col1 ORDER BY inc_col ASC ROWS BETWEEN 5 PRECEDING AND 5 FOLLOWING) as sum8,
+        SUM(inc_col) OVER(PARTITION BY low_card_col1, low_card_col2, unsorted_col ORDER BY inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum9,
+        SUM(inc_col) OVER(PARTITION BY low_card_col1, low_card_col2, unsorted_col ORDER BY inc_col ASC ROWS BETWEEN 5 PRECEDING AND CURRENT ROW) as sum10,
+        SUM(inc_col) OVER(PARTITION BY low_card_col2, low_card_col1, unsorted_col ORDER BY inc_col ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum11,
+        SUM(inc_col) OVER(PARTITION BY low_card_col2, low_card_col1, unsorted_col ORDER BY inc_col ASC ROWS BETWEEN CURRENT ROW  AND 1 FOLLOWING) as sum12
+           FROM annotated_data2
+           ORDER BY inc_col
+           LIMIT 5";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        // We should produce `BoundedWindowAggExec`s that only works in Sorted mode, since source is finite.
+        // To satisfy, requirements for Sorted mode. We should introduce `SortExec`s through physical plan.
+        let expected = {
+            vec![
+                "GlobalLimitExec: skip=0, fetch=5",
+                "  SortExec: fetch=5, expr=[inc_col@2 ASC NULLS LAST]",
+                "    ProjectionExec: expr=[low_card_col1@0 as low_card_col1, low_card_col2@1 as low_card_col2, inc_col@2 as inc_col, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col1, annotated_data2.unsorted_col] ORDER BY [annotated_data2.low_card_col2 ASC NULLS LAST, annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@8 as sum1, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col1, annotated_data2.unsorted_col] ORDER BY [annotated_data2.low_card_col2 ASC NULLS LAST, annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 1 FOLLOWING AND 5 FOLLOWING@9 as sum2, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.unsorted_col] ORDER BY [annotated_data2.low_card_col1 ASC NULLS LAST, annotated_data2.low_card_col2 ASC NULLS LAST, annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@14 as sum3, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.unsorted_col] ORDER BY [annotated_data2.low_card_col1 ASC NULLS LAST, annotated_data2.low_card_col2 ASC NULLS LAST, annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING@15 as sum4, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col1, annotated_data2.low_card_col2] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@4 as sum5, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col1, annotated_data2.low_card_col2] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 5 PRECEDING AND 5 FOLLOWING@5 as sum6, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col2, annotated_data2.low_card_col1] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@10 as sum7, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col2, annotated_data2.low_card_col1] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 5 PRECEDING AND 5 FOLLOWING@11 as sum8, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col1, annotated_data2.low_card_col2, annotated_data2.unsorted_col] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@6 as sum9, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col1, annotated_data2.low_card_col2, annotated_data2.unsorted_col] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 5 PRECEDING AND CURRENT ROW@7 as sum10, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col2, annotated_data2.low_card_col1, annotated_data2.unsorted_col] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@12 as sum11, SUM(annotated_data2.inc_col) PARTITION BY [annotated_data2.low_card_col2, annotated_data2.low_card_col1, annotated_data2.unsorted_col] ORDER BY [annotated_data2.inc_col ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING@13 as sum12]",
+                "      BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(5)), end_bound: Preceding(UInt64(1)) }], mode=[Sorted]",
+                "        SortExec: expr=[unsorted_col@3 ASC NULLS LAST,low_card_col1@0 ASC NULLS LAST,low_card_col2@1 ASC NULLS LAST,inc_col@2 ASC NULLS LAST]",
+                "          BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: CurrentRow, end_bound: Following(UInt64(1)) }], mode=[Sorted]",
+                "            SortExec: expr=[low_card_col2@1 ASC NULLS LAST,low_card_col1@0 ASC NULLS LAST,unsorted_col@3 ASC NULLS LAST,inc_col@2 ASC NULLS LAST]",
+                "              BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(5)), end_bound: Following(UInt64(5)) }], mode=[Sorted]",
+                "                SortExec: expr=[low_card_col2@1 ASC NULLS LAST,low_card_col1@0 ASC NULLS LAST,inc_col@2 ASC NULLS LAST]",
+                "                  BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Following(UInt64(1)), end_bound: Following(UInt64(5)) }], mode=[Sorted]",
+                "                    SortExec: expr=[low_card_col1@0 ASC NULLS LAST,unsorted_col@3 ASC NULLS LAST,low_card_col2@1 ASC NULLS LAST,inc_col@2 ASC NULLS LAST]",
+                "                      BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(5)), end_bound: CurrentRow }], mode=[Sorted]",
+                "                        SortExec: expr=[low_card_col1@0 ASC NULLS LAST,low_card_col2@1 ASC NULLS LAST,unsorted_col@3 ASC NULLS LAST,inc_col@2 ASC NULLS LAST]",
+                "                          BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(5)), end_bound: Following(UInt64(5)) }], mode=[Sorted]",
             ]
         };
 

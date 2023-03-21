@@ -25,6 +25,7 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
+use crate::physical_plan::windows::calc_requirements;
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
     ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
@@ -63,8 +64,6 @@ pub struct WindowAggExec {
     input_schema: SchemaRef,
     /// Partition Keys
     pub partition_keys: Vec<Arc<dyn PhysicalExpr>>,
-    /// Sort Keys
-    pub sort_keys: Option<Vec<PhysicalSortExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Partition by indices that define ordering
@@ -78,12 +77,12 @@ impl WindowAggExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
         partition_keys: Vec<Arc<dyn PhysicalExpr>>,
-        sort_keys: Option<Vec<PhysicalSortExpr>>,
     ) -> Result<Self> {
         let schema = create_schema(&input_schema, &window_expr)?;
         let schema = Arc::new(schema);
         let partition_by_exprs = window_expr[0].partition_by();
-        let input_ordering = sort_keys.as_deref().unwrap_or(&[]);
+        let input_ordering = input.output_ordering();
+        let input_ordering = input_ordering.unwrap_or(&[]);
         let input_ordering_exprs = convert_to_expr(input_ordering);
         let equal_properties = || input.equivalence_properties();
         let ordered_partition_by_indices = get_indices_of_matching_exprs(
@@ -91,18 +90,12 @@ impl WindowAggExec {
             &input_ordering_exprs,
             equal_properties,
         );
-        assert_eq!(
-            ordered_partition_by_indices.len(),
-            partition_by_exprs.len(),
-            "missing partition keys in the ordering"
-        );
         Ok(Self {
             input,
             window_expr,
             schema,
             input_schema,
             partition_keys,
-            sort_keys,
             metrics: ExecutionPlanMetricsSet::new(),
             ordered_partition_by_indices,
         })
@@ -130,7 +123,8 @@ impl WindowAggExec {
     // to calculate partition separation points
     pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
         // Partition by sort keys indices are stored in self.ordered_partition_by_indices.
-        let sort_keys = self.sort_keys.as_deref().unwrap_or(&[]);
+        let sort_keys = self.input.output_ordering();
+        let sort_keys = sort_keys.unwrap_or(&[]);
         get_at_indices(sort_keys, &self.ordered_partition_by_indices)
     }
 }
@@ -179,9 +173,12 @@ impl ExecutionPlan for WindowAggExec {
         vec![true]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
-        let sort_keys = self.sort_keys.as_deref();
-        vec![sort_keys]
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortExpr>>> {
+        let reqs = calc_requirements(
+            self.window_expr[0].partition_by(),
+            self.window_expr()[0].order_by(),
+        );
+        vec![reqs]
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -207,7 +204,6 @@ impl ExecutionPlan for WindowAggExec {
             children[0].clone(),
             self.input_schema.clone(),
             self.partition_keys.clone(),
-            self.sort_keys.clone(),
         )?))
     }
 
@@ -325,6 +321,11 @@ impl WindowAggStream {
         partition_by_sort_keys: Vec<PhysicalSortExpr>,
         ordered_partition_by_indices: Vec<usize>,
     ) -> Self {
+        // In WindowAggExec all partition by columns should be ordered.
+        assert_eq!(
+            ordered_partition_by_indices.len(),
+            window_expr[0].partition_by().len()
+        );
         Self {
             schema,
             input,
@@ -345,11 +346,6 @@ impl WindowAggStream {
             return Ok(RecordBatch::new_empty(self.schema.clone()));
         }
 
-        // In WindowAggExec all partition by columns should be ordered.
-        assert_eq!(
-            self.ordered_partition_by_indices.len(),
-            self.partition_by_sort_keys.len()
-        );
         let partition_by_sort_keys = self
             .ordered_partition_by_indices
             .iter()

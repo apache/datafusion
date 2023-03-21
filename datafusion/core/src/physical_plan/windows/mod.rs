@@ -28,6 +28,7 @@ use crate::physical_plan::{
     udaf, PhysicalExpr,
 };
 use crate::scalar::ScalarValue;
+use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
 use datafusion_expr::{
     window_function::{signature_for_built_in, BuiltInWindowFunction, WindowFunction},
@@ -188,6 +189,33 @@ fn create_built_in_window_expr(
     })
 }
 
+pub(crate) fn calc_requirements(
+    partition_by_exprs: &[Arc<dyn PhysicalExpr>],
+    orderby_sort_exprs: &[PhysicalSortExpr],
+) -> Option<Vec<PhysicalSortExpr>> {
+    let mut sort_reqs = vec![];
+    for partition_by in partition_by_exprs {
+        sort_reqs.push(PhysicalSortExpr {
+            expr: partition_by.clone(),
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        });
+    }
+    for PhysicalSortExpr { expr, options } in orderby_sort_exprs {
+        let contains = sort_reqs.iter().any(|e| expr.eq(&e.expr));
+        if !contains {
+            sort_reqs.push(PhysicalSortExpr {
+                expr: expr.clone(),
+                options: *options,
+            });
+        }
+    }
+    // Convert empty result to None. Otherwise wrap result inside Some()
+    (!sort_reqs.is_empty()).then_some(sort_reqs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,7 +298,6 @@ mod tests {
             input,
             schema.clone(),
             vec![],
-            None,
         )?);
 
         let result: Vec<RecordBatch> = collect(window_exec, task_ctx).await?;
@@ -324,7 +351,6 @@ mod tests {
             input,
             schema.clone(),
             vec![],
-            None,
         )?);
 
         let result: Vec<RecordBatch> = collect(window_exec, task_ctx).await?;
@@ -372,7 +398,6 @@ mod tests {
             blocking_exec,
             schema,
             vec![],
-            None,
         )?);
 
         let fut = collect(window_agg_exec, task_ctx);

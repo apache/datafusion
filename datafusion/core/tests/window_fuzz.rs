@@ -422,7 +422,6 @@ async fn run_window_test(
             exec1,
             schema.clone(),
             vec![],
-            Some(sort_keys.clone()),
         )
         .unwrap(),
     ) as _;
@@ -450,8 +449,8 @@ async fn run_window_test(
             exec2,
             schema.clone(),
             vec![],
-            Some(sort_keys),
             search_mode,
+            true,
         )
         .unwrap(),
     );

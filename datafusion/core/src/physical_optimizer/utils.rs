@@ -19,7 +19,6 @@
 
 use super::optimizer::PhysicalOptimizerRule;
 use std::collections::HashSet;
-use std::hash::Hash;
 
 use crate::config::ConfigOptions;
 use crate::error::Result;
@@ -28,6 +27,7 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion_common::DataFusionError;
 use datafusion_physical_expr::utils::ordering_satisfy;
 use datafusion_physical_expr::PhysicalSortExpr;
 use itertools::Itertools;
@@ -75,29 +75,32 @@ pub fn add_sort_above(
 }
 
 // Find the indices of each element if the to_search vector inside the searched vector
+// Assumes that each entry in the `to_search` occurs in the `searched`.
 pub(crate) fn find_match_indices<T: PartialEq>(
     to_search: &[T],
     searched: &[T],
-) -> Vec<usize> {
+) -> Result<Vec<usize>> {
     let mut result = vec![];
     for item in to_search {
         if let Some(idx) = searched.iter().position(|e| e.eq(item)) {
             result.push(idx);
+        } else {
+            return Err(DataFusionError::Execution("item not found".to_string()));
         }
     }
-    result
+    Ok(result)
 }
 
-// Compares the equality of two vectors independent of the ordering and duplicates
-// See https://stackoverflow.com/a/42748484/10554257
-pub(crate) fn compare_set_equality<T>(a: &[T], b: &[T]) -> bool
-where
-    T: Eq + Hash,
-{
-    let a: HashSet<_> = a.iter().collect();
-    let b: HashSet<_> = b.iter().collect();
-    a == b
-}
+// // Compares the equality of two vectors independent of the ordering and duplicates
+// // See https://stackoverflow.com/a/42748484/10554257
+// pub(crate) fn compare_set_equality<T>(a: &[T], b: &[T]) -> bool
+// where
+//     T: Eq + Hash,
+// {
+//     let a: HashSet<_> = a.iter().collect();
+//     let b: HashSet<_> = b.iter().collect();
+//     a == b
+// }
 
 /// Create a new vector from the elements at the `indices` of `searched` vector
 pub(crate) fn get_at_indices<T: Clone>(
@@ -117,12 +120,6 @@ pub(crate) fn get_ordered_merged_indices(in1: &[usize], in2: &[usize]) -> Vec<us
     let mut res: Vec<_> = set.into_iter().collect();
     res.sort();
     res
-}
-
-// Checks if the vector in the form 0,1,2...n (Consecutive starting from zero)
-// Assumes input has ascending order
-pub(crate) fn is_consecutive_from_zero(in1: &[usize]) -> bool {
-    in1.iter().enumerate().all(|(idx, elem)| idx == *elem)
 }
 
 // Checks if the vector in the form 1,2,3,..n (Consecutive) not necessarily starting from zero
@@ -205,10 +202,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_is_consecutive_from_zero() -> Result<()> {
-        assert!(!is_consecutive_from_zero(&[0, 3, 4]));
-        assert!(is_consecutive_from_zero(&[0, 1, 2]));
-        assert!(is_consecutive_from_zero(&[]));
+    async fn test_is_consecutive() -> Result<()> {
+        assert!(!is_consecutive(&[0, 3, 4]));
+        assert!(is_consecutive(&[0, 1, 2]));
+        assert!(!is_consecutive(&[0, 1, 4]));
+        assert!(is_consecutive(&[]));
+        assert!(is_consecutive(&[1, 2]));
+        assert!(!is_consecutive(&[3, 2]));
         Ok(())
     }
 
@@ -232,16 +232,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_match_indices() -> Result<()> {
-        assert_eq!(find_match_indices(&[0, 3, 4], &[0, 3, 4]), vec![0, 1, 2]);
-        assert_eq!(find_match_indices(&[0, 4, 3], &[0, 3, 4]), vec![0, 2, 1]);
-        assert_eq!(find_match_indices(&[0, 4, 3, 5], &[0, 3, 4]), vec![0, 2, 1]);
+        assert_eq!(find_match_indices(&[0, 3, 4], &[0, 3, 4])?, vec![0, 1, 2]);
+        assert_eq!(find_match_indices(&[0, 4, 3], &[0, 3, 4])?, vec![0, 2, 1]);
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_compare_set_equality() -> Result<()> {
-        assert!(compare_set_equality(&[4, 3, 2], &[3, 2, 4]));
-        assert!(!compare_set_equality(&[4, 3, 2, 1], &[3, 2, 4]));
-        Ok(())
-    }
+    // #[tokio::test]
+    // async fn test_compare_set_equality() -> Result<()> {
+    //     assert!(compare_set_equality(&[4, 3, 2], &[3, 2, 4]));
+    //     assert!(!compare_set_equality(&[4, 3, 2, 1], &[3, 2, 4]));
+    //     Ok(())
+    // }
 }

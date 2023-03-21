@@ -141,7 +141,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// NOTE that checking `!is_empty()` does **not** check for a
     /// required input ordering. Instead, the correct check is that at
     /// least one entry must be `Some`
-    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortExpr>>> {
         vec![None; self.children().len()]
     }
 

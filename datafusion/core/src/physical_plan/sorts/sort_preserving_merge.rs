@@ -125,8 +125,8 @@ impl ExecutionPlan for SortPreservingMergeExec {
         vec![Distribution::UnspecifiedDistribution]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
-        vec![Some(&self.expr)]
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortExpr>>> {
+        vec![Some(self.expr.clone())]
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {

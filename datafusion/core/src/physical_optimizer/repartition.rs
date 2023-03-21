@@ -1122,8 +1122,8 @@ mod tests {
         }
 
         // model that it requires the output ordering of its input
-        fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
-            vec![self.input.output_ordering()]
+        fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortExpr>>> {
+            vec![self.input.output_ordering().map(|elem| elem.to_vec())]
         }
 
         fn with_new_children(

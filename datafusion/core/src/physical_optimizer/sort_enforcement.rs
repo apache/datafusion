@@ -36,9 +36,9 @@
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::utils::{
-    add_sort_above, calc_ordering_range, compare_set_equality, find_match_indices,
-    get_at_indices, get_ordered_merged_indices, get_set_diff_indices, is_consecutive,
-    is_consecutive_from_zero, is_limit, is_sort, is_sort_preserving_merge, is_window,
+    add_sort_above, calc_ordering_range, find_match_indices, get_at_indices,
+    get_ordered_merged_indices, get_set_diff_indices, is_consecutive, is_limit, is_sort,
+    is_sort_preserving_merge, is_window,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -50,6 +50,7 @@ use crate::physical_plan::windows::{
     BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
 };
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
+use arrow::datatypes::SchemaRef;
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::utils::{
     convert_to_expr, get_indices_of_matching_exprs, ordering_satisfy,
@@ -431,7 +432,7 @@ fn ensure_sorting(
             (Some(required_ordering), Some(physical_ordering)) => {
                 let is_ordering_satisfied = ordering_satisfy_concrete(
                     physical_ordering,
-                    required_ordering,
+                    &required_ordering,
                     || child.equivalence_properties(),
                 );
                 if !is_ordering_satisfied {
@@ -478,29 +479,6 @@ fn ensure_sorting(
                 return Ok(Some(result));
             }
         }
-        if let Some(exec) = plan.as_any().downcast_ref::<BoundedWindowAggExec>() {
-            let window_expr = exec.window_expr();
-            let search_mode = &exec.partition_search_mode;
-            let input = exec.input();
-            let res = can_skip_sort(
-                window_expr[0].partition_by(),
-                window_expr[0].order_by(),
-                input,
-            )?;
-            if let Some((_, new_mode)) = res {
-                if new_mode > *search_mode {
-                    let new_plan = Arc::new(BoundedWindowAggExec::try_new(
-                        window_expr.to_vec(),
-                        input.clone(),
-                        input.schema(),
-                        exec.partition_keys.clone(),
-                        input.output_ordering().map(|elem| elem.to_vec()),
-                        new_mode,
-                    )?) as _;
-                    return Ok(Some(PlanWithCorrespondingSort::new(new_plan)));
-                }
-            }
-        };
     }
     Ok(Some(PlanWithCorrespondingSort {
         plan: plan.with_new_children(children)?,
@@ -562,20 +540,16 @@ fn analyze_window_sort_removal(
     sort_tree: &mut ExecTree,
     window_exec: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
-    let (window_expr, partition_keys, search_mode) = if let Some(exec) =
+    let (window_expr, partition_keys, source_unbounded) = if let Some(exec) =
         window_exec.as_any().downcast_ref::<BoundedWindowAggExec>()
     {
         (
             exec.window_expr(),
             &exec.partition_keys,
-            exec.partition_search_mode.clone(),
+            exec.source_unbounded,
         )
     } else if let Some(exec) = window_exec.as_any().downcast_ref::<WindowAggExec>() {
-        (
-            exec.window_expr(),
-            &exec.partition_keys,
-            PartitionSearchMode::Sorted,
-        )
+        (exec.window_expr(), &exec.partition_keys, false)
     } else {
         return Err(DataFusionError::Plan(
             "Expects to receive either WindowAggExec of BoundedWindowAggExec".to_string(),
@@ -610,16 +584,15 @@ fn analyze_window_sort_removal(
         };
     }
     let (should_reverse, partition_search_mode) = if let Some(res) = res {
+        if !source_unbounded && !matches!(res.1, PartitionSearchMode::Sorted) {
+            // Skipping sort. Removing it, is not helpful in this case.
+            return Ok(None);
+        }
         res
     } else {
         // cannot skip sort
         return Ok(None);
     };
-    if search_mode > partition_search_mode {
-        // More relaxed than requirement
-        // cannot skip sort
-        return Ok(None);
-    }
 
     let new_window_expr = if should_reverse {
         window_expr
@@ -643,15 +616,14 @@ fn analyze_window_sort_removal(
         let uses_bounded_memory = window_expr.iter().all(|e| e.uses_bounded_memory());
         // If all window expressions can run with bounded memory, choose the
         // bounded window variant:
-        let physical_ordering = new_child.output_ordering().map(|elem| elem.to_vec());
         let new_plan = if uses_bounded_memory {
             Arc::new(BoundedWindowAggExec::try_new(
                 window_expr,
                 new_child,
                 new_schema,
                 partition_keys.to_vec(),
-                physical_ordering,
                 partition_search_mode,
+                source_unbounded,
             )?) as _
         } else {
             match partition_search_mode {
@@ -660,21 +632,19 @@ fn analyze_window_sort_removal(
                     new_child,
                     new_schema,
                     partition_keys.to_vec(),
-                    physical_ordering,
                 )?) as _,
                 _ => {
                     // For `WindowAggExec` to work correctly PARTITION BY columns should be sorted.
                     // Hence if `PartitionSearchMode` is not `Sorted` we should satisfy required ordering.
                     // Effectively `WindowAggExec` works only in PartitionSearchMode::Sorted mode.
-                    let sort_keys =
-                        window_exec.required_input_ordering()[0].unwrap_or(&[]);
+                    let sort_keys = window_exec.required_input_ordering()[0].clone();
+                    let sort_keys = sort_keys.unwrap_or(vec![]);
                     add_sort_above(&mut new_child, sort_keys.to_vec())?;
                     Arc::new(WindowAggExec::try_new(
                         window_expr,
                         new_child,
                         new_schema,
                         partition_keys.to_vec(),
-                        Some(sort_keys.to_vec()),
                     )?) as _
                 }
             }
@@ -705,6 +675,12 @@ fn can_skip_sort(
         &physical_ordering_exprs,
         equal_properties,
     );
+    let contains_all_orderbys = ob_indices.len() == orderby_exprs.len();
+    if !contains_all_orderbys {
+        // If all order by expressions are not in the input ordering. There is no way to remove a sort
+        // immediately return
+        return Ok(None);
+    }
     // indices of the partition by expressions among input ordering expressions
     let pb_indices = get_indices_of_matching_exprs(
         partitionby_exprs,
@@ -712,79 +688,56 @@ fn can_skip_sort(
         equal_properties,
     );
     let ordered_merged_indices = get_ordered_merged_indices(&pb_indices, &ob_indices);
-    let is_merge_consecutive = is_consecutive_from_zero(&ordered_merged_indices);
-    // Check whether (partition by columns) ∪ (order by columns) equal to the (partition by columns).
-    // Where `∪` represents set  union.
-    let all_partition = compare_set_equality(&ordered_merged_indices, &pb_indices);
-    let contains_all_orderbys = ob_indices.len() == orderby_keys.len();
     // Indices of order by columns that doesn't seen in partition by
     // Equivalently (Order by columns) ∖ (Partition by columns) where `∖` represents set difference.
     let unique_ob_indices = get_set_diff_indices(&ob_indices, &pb_indices);
-    // Check whether values are in the form n, n+1, n+2, .. n+k.
-    let is_unique_ob_indices_consecutive = is_consecutive(&unique_ob_indices);
+    if !is_consecutive(&unique_ob_indices) {
+        // ORDER BY indices should be consecutive
+        return Ok(None);
+    }
+    let first_n = calc_ordering_range(&ordered_merged_indices);
+    let furthest_ob_index = *unique_ob_indices.last().unwrap_or(&0);
+    let consecutive_till_ob_end = first_n > furthest_ob_index;
+    if !consecutive_till_ob_end {
+        return Ok(None);
+    }
     let input_orderby_columns = get_at_indices(physical_ordering, &unique_ob_indices)?;
     let expected_orderby_columns = get_at_indices(
         orderby_keys,
-        &find_match_indices(&unique_ob_indices, &ob_indices),
+        &find_match_indices(&unique_ob_indices, &ob_indices)?,
     )?;
-    let schema = input.schema();
-    let nullables = input_orderby_columns
-        .iter()
-        .map(|elem| elem.expr.nullable(&schema))
-        .collect::<Result<Vec<_>>>()?;
-    let is_same_ordering = izip!(
+    let should_reverse = if let Some(should_reverse) = check_alignments(
+        &input.schema(),
         &input_orderby_columns,
         &expected_orderby_columns,
-        &nullables
-    )
-    .all(|(input, expected, is_nullable)| {
-        if *is_nullable {
-            input.options == expected.options
-        } else {
-            input.options.descending == expected.options.descending
-        }
-    });
-    let should_reverse = izip!(
-        &input_orderby_columns,
-        &expected_orderby_columns,
-        &nullables
-    )
-    .all(|(input, expected, is_nullable)| {
-        if *is_nullable {
-            input.options == !expected.options
-        } else {
-            // have reversed direction
-            input.options.descending != expected.options.descending
-        }
-    });
-    let is_aligned = is_same_ordering || should_reverse;
-
-    // Determine If 0th column in the sort_keys comes from partition by
-    let is_first_pb = pb_indices.contains(&0);
-    let can_skip_sort = (is_merge_consecutive || (all_partition && is_first_pb))
-        && contains_all_orderbys
-        && is_aligned
-        && is_unique_ob_indices_consecutive;
-    if !can_skip_sort {
+    )? {
+        should_reverse
+    } else {
+        // If ordering directions are not aligned. We cannot calculate result without changing existing ordering.
         return Ok(None);
-    }
+    };
 
     let ordered_pb_indices = pb_indices.iter().copied().sorted().collect::<Vec<_>>();
-    let is_pb_consecutive = is_consecutive_from_zero(&ordered_pb_indices);
-    let contains_all_partition_bys = pb_indices.len() == partitionby_exprs.len();
-    let mode = if (is_first_pb && is_pb_consecutive && contains_all_partition_bys)
-        || partitionby_exprs.is_empty()
-    {
+    // Determine how many elements in the partition by columns defines a consecutive range from zero.
+    let first_n = calc_ordering_range(&ordered_pb_indices);
+    let mode = if first_n == partitionby_exprs.len() {
+        // All of the partition by columns defines a consecutive range from zero.
         let first_n = calc_ordering_range(&ordered_pb_indices);
         assert_eq!(first_n, partitionby_exprs.len());
         PartitionSearchMode::Sorted
-    } else if is_first_pb {
-        let first_n = calc_ordering_range(&ordered_pb_indices);
+    } else if first_n > 0 {
+        // All of the partition by columns defines a consecutive range from zero.
         assert!(first_n < partitionby_exprs.len());
         let ordered_range = &ordered_pb_indices[0..first_n];
-        let partially_ordered_indices = find_match_indices(&pb_indices, ordered_range);
+        let input_pb_exprs = get_at_indices(&physical_ordering_exprs, ordered_range)?;
+        let partially_ordered_indices = get_indices_of_matching_exprs(
+            &input_pb_exprs,
+            partitionby_exprs,
+            equal_properties,
+        );
         PartitionSearchMode::PartiallySorted(partially_ordered_indices)
     } else {
+        // None of the partition by columns defines a consecutive range from zero.
         PartitionSearchMode::Linear
     };
 
@@ -939,6 +892,57 @@ fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExp
     }
 }
 
+fn check_alignments(
+    schema: &SchemaRef,
+    physical_ordering: &[PhysicalSortExpr],
+    required: &[PhysicalSortExpr],
+) -> Result<Option<bool>> {
+    let res = izip!(physical_ordering, required)
+        .map(|(lhs, rhs)| check_alignment(schema, lhs, rhs))
+        .collect::<Result<Option<Vec<_>>>>()?;
+    Ok(if let Some(res) = res {
+        if !res.is_empty() {
+            let first = res[0];
+            let all_same = res.into_iter().all(|elem| elem == first);
+            all_same.then_some(first)
+        } else {
+            Some(false)
+        }
+    } else {
+        // Cannot skip some of the requirements in the input.
+        None
+    })
+}
+
+/// Compares `physical_ordering` and `required` ordering, returns a tuple
+/// indicating (1) whether this column requires sorting, and (2) whether we
+/// should reverse the window expression in order to avoid sorting.
+fn check_alignment(
+    input_schema: &SchemaRef,
+    physical_ordering: &PhysicalSortExpr,
+    required: &PhysicalSortExpr,
+) -> Result<Option<bool>> {
+    Ok(if required.expr.eq(&physical_ordering.expr) {
+        let nullable = required.expr.nullable(input_schema)?;
+        let physical_opts = physical_ordering.options;
+        let required_opts = required.options;
+        if nullable {
+            let is_reversed = physical_opts == !required_opts;
+            if is_reversed || (physical_opts == required_opts) {
+                Some(is_reversed)
+            } else {
+                None
+            }
+        } else {
+            // If the column is not nullable, NULLS FIRST/LAST is not important.
+            let is_reversed = physical_opts.descending != required_opts.descending;
+            Some(is_reversed)
+        }
+    } else {
+        None
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -994,6 +998,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_is_column_aligned_nullable() -> Result<()> {
+        let schema = create_test_schema()?;
+        let params = vec![
+            ((true, true), (false, false), Some(true)),
+            ((true, true), (false, true), None),
+            ((true, true), (true, false), None),
+            ((true, false), (false, true), Some(true)),
+            ((true, false), (false, false), None),
+            ((true, false), (true, true), None),
+        ];
+        for (
+            (physical_desc, physical_nulls_first),
+            (req_desc, req_nulls_first),
+            expected,
+        ) in params
+        {
+            let physical_ordering = PhysicalSortExpr {
+                expr: col("nullable_col", &schema)?,
+                options: SortOptions {
+                    descending: physical_desc,
+                    nulls_first: physical_nulls_first,
+                },
+            };
+            let required_ordering = PhysicalSortExpr {
+                expr: col("nullable_col", &schema)?,
+                options: SortOptions {
+                    descending: req_desc,
+                    nulls_first: req_nulls_first,
+                },
+            };
+            let res = check_alignment(&schema, &physical_ordering, &required_ordering)?;
+            assert_eq!(res, expected);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_is_column_aligned_non_nullable() -> Result<()> {
+        let schema = create_test_schema()?;
+
+        let params = vec![
+            ((true, true), (false, false), Some(true)),
+            ((true, true), (false, true), Some(true)),
+            ((true, true), (true, false), Some(false)),
+            ((true, false), (false, true), Some(true)),
+            ((true, false), (false, false), Some(true)),
+            ((true, false), (true, true), Some(false)),
+        ];
+        for (
+            (physical_desc, physical_nulls_first),
+            (req_desc, req_nulls_first),
+            expected,
+        ) in params
+        {
+            let physical_ordering = PhysicalSortExpr {
+                expr: col("non_nullable_col", &schema)?,
+                options: SortOptions {
+                    descending: physical_desc,
+                    nulls_first: physical_nulls_first,
+                },
+            };
+            let required_ordering = PhysicalSortExpr {
+                expr: col("non_nullable_col", &schema)?,
+                options: SortOptions {
+                    descending: req_desc,
+                    nulls_first: req_nulls_first,
+                },
+            };
+            let res = check_alignment(&schema, &physical_ordering, &required_ordering)?;
+            assert_eq!(res, expected);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_can_skip_ordering() -> Result<()> {
         let test_schema = create_test_schema2()?;
         // Columns a,c are nullable whereas b,d are not nullable.
@@ -1007,81 +1088,92 @@ mod tests {
         ];
         let exec_unbounded = csv_exec_sorted(&test_schema, sort_exprs, true);
 
+        // test cases consists of vector of tuples. Where each tuple represents a single test case.
+        // First field in the tuple is Vec<str> where each element in the vector represents PARTITION BY columns
+        // For instance `vec!["a", "b"]` corresponds to PARTITION BY a, b
+        // Second field in the tuple is Vec<(str, bool, bool)> where each element in the vector represents ORDER BY columns
+        // For instance, vec![("c", false, false)], corresponds to ORDER BY c ASC NULLS LAST,
+        // similarly, vec![("c", true, true)], corresponds to ORDER BY c DESC NULLS FIRST,
+        // Third field in the tuple is Option<(bool, PartitionSearchMode)>, which corresponds to expected result.
+        // None represents that existing ordering is not sufficient to run executor with any one of the algorithms
+        // (We need to add SortExec to be able to run it).
+        // Some((bool, PartitionSearchMode)) represents, we can run algorithm with existing ordering. Algorithm should work in
+        // PartitionSearchMode, bool field represents whether we should reverse window expressions to run executor with existing ordering.
+        // For instance, `Some((false, PartitionSearchMode::Sorted))`, represents that we shouldn't reverse window expressions. And algorithm
+        // should work in Sorted mode to work with existing ordering.
         let test_cases = vec![
             // PARTITION BY a, b ORDER BY c ASC NULLS LAST
-            (
-                vec!["a", "b"],
-                // c is nullable hence we cannot calculate result in reverse order without changing ordering.
-                vec![("c", false, false)],
-                // For unbounded Cannot skip sorting
-                None,
-            ),
+            (vec!["a", "b"], vec![("c", false, false)], None),
             // ORDER BY c ASC NULLS FIRST
-            (
-                vec![],
-                vec![("c", false, true)],
-                // For unbounded Cannot skip sorting
-                None,
-            ),
+            (vec![], vec![("c", false, true)], None),
             // PARTITION BY b, ORDER BY c ASC NULLS FIRST
-            (
-                vec!["b"],
-                vec![("c", false, true)],
-                // For unbounded Cannot skip sorting
-                None,
-            ),
-            // PARTITION BY b, ORDER BY c ASC NULLS FIRST
-            (
-                vec!["a"],
-                vec![("c", false, true)],
-                // Cannot skip sorting
-                None,
-            ),
+            (vec!["b"], vec![("c", false, true)], None),
+            // PARTITION BY a, ORDER BY c ASC NULLS FIRST
+            (vec!["a"], vec![("c", false, true)], None),
             // PARTITION BY b, ORDER BY c ASC NULLS FIRST
             (
                 vec!["a", "b"],
                 vec![("c", false, true), ("e", false, true)],
-                // For unbounded Cannot skip sorting
                 None,
             ),
             // PARTITION BY a, ORDER BY b ASC NULLS FIRST
             (
                 vec!["a"],
                 vec![("b", false, true)],
-                // For both unbounded and bounded Expects to work in Sorted mode.
-                // Shouldn't reverse window function.
+                Some((false, PartitionSearchMode::Sorted)),
+            ),
+            // PARTITION BY a, ORDER BY a ASC NULLS FIRST
+            (
+                vec!["a"],
+                vec![("a", false, true)],
+                Some((false, PartitionSearchMode::Sorted)),
+            ),
+            // PARTITION BY a, ORDER BY a ASC NULLS LAST
+            (
+                vec!["a"],
+                vec![("a", false, false)],
+                Some((false, PartitionSearchMode::Sorted)),
+            ),
+            // PARTITION BY a, ORDER BY a DESC NULLS FIRST
+            (
+                vec!["a"],
+                vec![("a", true, true)],
+                Some((false, PartitionSearchMode::Sorted)),
+            ),
+            // PARTITION BY a, ORDER BY a DESC NULLS LAST
+            (
+                vec!["a"],
+                vec![("a", true, false)],
                 Some((false, PartitionSearchMode::Sorted)),
             ),
             // PARTITION BY a, ORDER BY b ASC NULLS LAST
             (
                 vec!["a"],
                 vec![("b", false, false)],
-                // For both unbounded and bounded Expects to work in Sorted mode.
-                // Shouldn't reverse window function.
                 Some((false, PartitionSearchMode::Sorted)),
             ),
             // PARTITION BY a, ORDER BY b DESC NULLS LAST
             (
                 vec!["a"],
                 vec![("b", true, false)],
-                // For both unbounded and bounded Expects to work in Sorted mode.
-                // Should reverse window function.
                 Some((true, PartitionSearchMode::Sorted)),
             ),
             // PARTITION BY a, b ORDER BY c ASC NULLS FIRST
             (
                 vec!["a", "b"],
                 vec![("c", false, true)],
-                // For both unbounded and bounded Expects to work in Sorted mode.
-                // Shouldn't reverse window function.
+                Some((false, PartitionSearchMode::Sorted)),
+            ),
+            // PARTITION BY b, a ORDER BY c ASC NULLS FIRST
+            (
+                vec!["b", "a"],
+                vec![("c", false, true)],
                 Some((false, PartitionSearchMode::Sorted)),
             ),
             // PARTITION BY a, b ORDER BY c DESC NULLS LAST
             (
                 vec!["a", "b"],
                 vec![("c", true, false)],
-                // For both unbounded and bounded Expects to work in Sorted mode.
-                // Should reverse window function.
                 Some((true, PartitionSearchMode::Sorted)),
             ),
             // PARTITION BY e ORDER BY a ASC NULLS FIRST
@@ -1095,30 +1187,58 @@ mod tests {
             (
                 vec!["b", "c"],
                 vec![("a", false, true), ("c", false, true)],
-                // For unbounded, Expects to work in Linear mode. Shouldn't reverse window function.
                 Some((false, PartitionSearchMode::Linear)),
             ),
             // PARTITION BY b ORDER BY a ASC NULLS FIRST
             (
                 vec!["b"],
                 vec![("a", false, true)],
-                // For unbounded, Expects to work in Linear mode. Shouldn't reverse window function.
                 Some((false, PartitionSearchMode::Linear)),
             ),
             // PARTITION BY a, e ORDER BY b ASC NULLS FIRST
             (
                 vec!["a", "e"],
                 vec![("b", false, true)],
-                // For unbounded, Expects to work in PartiallySorted mode. Shouldn't reverse window function.
                 Some((false, PartitionSearchMode::PartiallySorted(vec![0]))),
             ),
             // PARTITION BY a, c ORDER BY b ASC NULLS FIRST
             (
                 vec!["a", "c"],
                 vec![("b", false, true)],
-                // For unbounded, Expects to work in PartiallySorted mode. Shouldn't reverse window function.
                 Some((false, PartitionSearchMode::PartiallySorted(vec![0]))),
             ),
+            // PARTITION BY c, a ORDER BY b ASC NULLS FIRST
+            (
+                vec!["c", "a"],
+                vec![("b", false, true)],
+                Some((false, PartitionSearchMode::PartiallySorted(vec![1]))),
+            ),
+            // PARTITION BY d, b, a ORDER BY c ASC NULLS FIRST
+            (
+                vec!["d", "b", "a"],
+                vec![("c", false, true)],
+                Some((false, PartitionSearchMode::PartiallySorted(vec![2, 1]))),
+            ),
+            // PARTITION BY e, b, a ORDER BY c ASC NULLS FIRST
+            (
+                vec!["e", "b", "a"],
+                vec![("c", false, true)],
+                Some((false, PartitionSearchMode::PartiallySorted(vec![2, 1]))),
+            ),
+            // PARTITION BY d, a ORDER BY b ASC NULLS FIRST
+            (
+                vec!["d", "a"],
+                vec![("b", false, true)],
+                Some((false, PartitionSearchMode::PartiallySorted(vec![1]))),
+            ),
+            // PARTITION BY b, ORDER BY b, a ASC NULLS FIRST
+            (
+                vec!["a"],
+                vec![("b", false, true), ("a", false, true)],
+                Some((false, PartitionSearchMode::Sorted)),
+            ),
+            // ORDER BY b, a ASC NULLS FIRST
+            (vec![], vec![("b", false, true), ("a", false, true)], None),
         ];
         for test_case in test_cases {
             let (partition_by_columns, order_by_params, expected) = &test_case;
@@ -2000,7 +2120,6 @@ mod tests {
                 input.clone(),
                 input.schema(),
                 vec![],
-                Some(sort_exprs),
             )
             .unwrap(),
         )

@@ -399,10 +399,10 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         self.schema.clone()
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortExpr>>> {
         vec![
-            Some(&self.left_required_sort_exprs),
-            Some(&self.right_required_sort_exprs),
+            Some(self.left_required_sort_exprs.clone()),
+            Some(self.right_required_sort_exprs.clone()),
         ]
     }
 
