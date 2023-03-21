@@ -56,7 +56,7 @@ impl AnalyzerRule for ReplaceGroupingFunc {
                 group_expr,
                 ..
             }) if contains_grouping_funcs_in_exprs(&aggr_expr) => {
-                let gid_column = Expr::VirtualColumn(DataType::Int32, INTERNAL_GROUPING_COLUMN.to_string());
+                let gid_column = Expr::VirtualColumn(DataType::UInt32, INTERNAL_GROUPING_COLUMN.to_string());
                 let distinct_group_by = distinct_group_exprs(&group_expr);
                 let new_agg_expr = aggr_expr
                     .into_iter()
@@ -181,7 +181,7 @@ fn replace_grouping_func(
                                 gid_column.clone(),
                                 lit((group_by_exprs.len() - 1 - idx) as u32),
                             ),
-                            lit(1),
+                            lit(1u32),
                         ),
                         DataType::Binary,
                     ).alias(display_name)),

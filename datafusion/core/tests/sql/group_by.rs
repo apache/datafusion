@@ -917,9 +917,8 @@ async fn csv_query_group_by_with_grouping_functions() -> Result<()> {
     let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
         "Projection: GROUPING(aggregate_test_100.c1), GROUPINGID(aggregate_test_100.c1), aggregate_test_100.c1, AVG(aggregate_test_100.c12) [GROUPING(aggregate_test_100.c1):Int32;N, GROUPINGID(aggregate_test_100.c1):Int32;N, c1:Utf8, AVG(aggregate_test_100.c12):Float64;N]",
-        "  Aggregate: groupBy=[[GROUPING SETS ((aggregate_test_100.c1), (aggregate_test_100.c1))]], aggr=[[CAST(CAST(_virtual_grouping_id AS _virtual_grouping_id AS Int64) & Int64(1) AS Binary) AS GROUPING(aggregate_test_100.c1), _virtual_grouping_id AS _virtual_grouping_id AS GROUPINGID(aggregate_test_100.c1), AVG(aggregate_test_100.c12)]] [c1:Utf8, GROUPING(aggregate_test_100.c1):Binary, GROUPINGID(aggregate_test_100.c1):Int32, AVG(aggregate_test_100.c12):Float64;N]",
-        "    Projection: _virtual_grouping_id, aggregate_test_100.c1, aggregate_test_100.c12 [_virtual_grouping_id:Int32, c1:Utf8, c12:Float64]",
-        "      TableScan: aggregate_test_100 projection=[c1, c12] [c1:Utf8, c12:Float64]",
+        "  Aggregate: groupBy=[[GROUPING SETS ((aggregate_test_100.c1), (aggregate_test_100.c1))]], aggr=[[CAST(_virtual_grouping_id & UInt32(1) AS Binary) AS GROUPING(aggregate_test_100.c1), _virtual_grouping_id AS GROUPINGID(aggregate_test_100.c1), AVG(aggregate_test_100.c12)]] [c1:Utf8, GROUPING(aggregate_test_100.c1):Binary, GROUPINGID(aggregate_test_100.c1):UInt32, AVG(aggregate_test_100.c12):Float64;N]",
+        "    TableScan: aggregate_test_100 projection=[c1, c12] [c1:Utf8, c12:Float64]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
