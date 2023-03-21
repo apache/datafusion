@@ -24,7 +24,7 @@ use self::error::{DFSqlLogicTestError, Result};
 use async_trait::async_trait;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
-use datafusion_sql::parser::{DFParser, Statement};
+use datafusion_sql::parser::DFParser;
 use sqllogictest::DBOutput;
 
 mod error;
@@ -74,12 +74,9 @@ impl sqllogictest::AsyncDB for DataFusion {
 
 async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DFOutput> {
     let sql = sql.into();
-    // Check if the sql is `insert`
+    // check if the sql is more than one statement
     if let Ok(mut statements) = DFParser::parse_sql(&sql) {
-        let statement0 = statements.pop_front().expect("at least one SQL statement");
-        if let Statement::Statement(_) = statement0 {
-            {}
-        }
+        statements.pop_front().expect("at least one SQL statement");
     }
     let df = ctx.sql(sql.as_str()).await?;
 
