@@ -862,6 +862,7 @@ dependencies = [
  "arrow-schema",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-optimizer",
  "log",
  "sqlparser",
 ]
