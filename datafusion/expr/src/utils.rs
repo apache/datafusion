@@ -29,8 +29,8 @@ use crate::logical_plan::{
     SubqueryAlias, Union, Unnest, Values, Window,
 };
 use crate::{
-    BinaryExpr, Cast, DmlStatement, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
-    Operator, TableScan, TryCast,
+    BinaryExpr, Cast, DmlStatement, Expr, ExprSchemable, GroupingSet, LogicalPlan,
+    LogicalPlanBuilder, Operator, TableScan, TryCast,
 };
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{
@@ -68,6 +68,182 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
     } else {
         Ok(group_expr.len())
     }
+}
+
+/// The power set (or powerset) of a set S is the set of all subsets of S, \
+/// including the empty set and S itself.
+///
+/// Example:
+///
+/// If S is the set {x, y, z}, then all the subsets of S are \
+///  {} \
+///  {x} \
+///  {y} \
+///  {z} \
+///  {x, y} \
+///  {x, z} \
+///  {y, z} \
+///  {x, y, z} \
+///  and hence the power set of S is {{}, {x}, {y}, {z}, {x, y}, {x, z}, {y, z}, {x, y, z}}.
+///
+/// Reference: https://en.wikipedia.org/wiki/Power_set
+fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>, String> {
+    if slice.len() >= 64 {
+        return Err("The size of the set must be less than 64.".into());
+    }
+
+    let mut v = Vec::new();
+    for mask in 0..(1 << slice.len()) {
+        let mut ss = vec![];
+        let mut bitset = mask;
+        while bitset > 0 {
+            let rightmost: u64 = bitset & !(bitset - 1);
+            let idx = rightmost.trailing_zeros();
+            let item = slice.get(idx as usize).unwrap();
+            ss.push(item);
+            // zero the trailing bit
+            bitset &= bitset - 1;
+        }
+        v.push(ss);
+    }
+    Ok(v)
+}
+
+/// check the number of expressions contained in the grouping_set
+fn check_grouping_set_size_limit(size: usize) -> Result<()> {
+    let max_grouping_set_size = 65535;
+    if size > max_grouping_set_size {
+        return Err(DataFusionError::Plan(format!("The number of group_expression in grouping_set exceeds the maximum limit {}, found {}", max_grouping_set_size, size)));
+    }
+
+    Ok(())
+}
+
+/// check the number of grouping_set contained in the grouping sets
+fn check_grouping_sets_size_limit(size: usize) -> Result<()> {
+    let max_grouping_sets_size = 4096;
+    if size > max_grouping_sets_size {
+        return Err(DataFusionError::Plan(format!("The number of grouping_set in grouping_sets exceeds the maximum limit {}, found {}", max_grouping_sets_size, size)));
+    }
+
+    Ok(())
+}
+
+/// Merge two grouping_set
+///
+///
+/// Example:
+///
+/// (A, B), (C, D) -> (A, B, C, D)
+///
+/// Error:
+///
+/// [`DataFusionError`] The number of group_expression in grouping_set exceeds the maximum limit
+fn merge_grouping_set<T: Clone>(left: &[T], right: &[T]) -> Result<Vec<T>> {
+    check_grouping_set_size_limit(left.len() + right.len())?;
+    Ok(left.iter().chain(right.iter()).cloned().collect())
+}
+
+/// Compute the cross product of two grouping_sets
+///
+///
+/// Example:
+///
+/// \[(A, B), (C, D)], [(E), (F)\] -> \[(A, B, E), (A, B, F), (C, D, E), (C, D, F)\]
+///
+/// Error:
+///
+/// [`DataFusionError`] The number of group_expression in grouping_set exceeds the maximum limit \
+/// [`DataFusionError`] The number of grouping_set in grouping_sets exceeds the maximum limit
+fn cross_join_grouping_sets<T: Clone>(
+    left: &[Vec<T>],
+    right: &[Vec<T>],
+) -> Result<Vec<Vec<T>>> {
+    let grouping_sets_size = left.len() * right.len();
+
+    check_grouping_sets_size_limit(grouping_sets_size)?;
+
+    let mut result = Vec::with_capacity(grouping_sets_size);
+    for le in left {
+        for re in right {
+            result.push(merge_grouping_set(le, re)?);
+        }
+    }
+    Ok(result)
+}
+
+/// Convert multiple grouping expressions into one [`GroupingSet::GroupingSets`],\
+/// if the grouping expression does not contain [`Expr::GroupingSet`] or only has one expression,\
+/// no conversion will be performed.
+///
+/// e.g.
+///
+/// person.id,\
+/// GROUPING SETS ((person.age, person.salary),(person.age)),\
+/// ROLLUP(person.state, person.birth_date)
+///
+/// =>
+///
+/// GROUPING SETS (\
+///   (person.id, person.age, person.salary),\
+///   (person.id, person.age, person.salary, person.state),\
+///   (person.id, person.age, person.salary, person.state, person.birth_date),\
+///   (person.id, person.age),\
+///   (person.id, person.age, person.state),\
+///   (person.id, person.age, person.state, person.birth_date)\
+/// )
+pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
+    let has_grouping_set = group_expr
+        .iter()
+        .any(|expr| matches!(expr, Expr::GroupingSet(_)));
+    if !has_grouping_set || group_expr.len() == 1 {
+        return Ok(group_expr);
+    }
+    // only process mix grouping sets
+    let partial_sets = group_expr
+        .iter()
+        .map(|expr| {
+            let exprs = match expr {
+                Expr::GroupingSet(GroupingSet::GroupingSets(grouping_sets)) => {
+                    check_grouping_sets_size_limit(grouping_sets.len())?;
+                    grouping_sets.iter().map(|e| e.iter().collect()).collect()
+                }
+                Expr::GroupingSet(GroupingSet::Cube(group_exprs)) => {
+                    let grouping_sets =
+                        powerset(group_exprs).map_err(DataFusionError::Plan)?;
+                    check_grouping_sets_size_limit(grouping_sets.len())?;
+                    grouping_sets
+                }
+                Expr::GroupingSet(GroupingSet::Rollup(group_exprs)) => {
+                    let size = group_exprs.len();
+                    let slice = group_exprs.as_slice();
+                    check_grouping_sets_size_limit(size * (size + 1) / 2 + 1)?;
+                    (0..(size + 1))
+                        .map(|i| slice[0..i].iter().collect())
+                        .collect()
+                }
+                expr => vec![vec![expr]],
+            };
+            Ok(exprs)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // cross join
+    let grouping_sets = partial_sets
+        .into_iter()
+        .map(Ok)
+        .reduce(|l, r| cross_join_grouping_sets(&l?, &r?))
+        .transpose()?
+        .map(|e| {
+            e.into_iter()
+                .map(|e| e.into_iter().cloned().collect())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(vec![Expr::GroupingSet(GroupingSet::GroupingSets(
+        grouping_sets,
+    ))])
 }
 
 /// Find all distinct exprs in a list of group by expressions. If the
@@ -1035,7 +1211,7 @@ pub fn find_valid_equijoin_key_pair(
                     right_schema.clone(),
                 )?;
 
-        Result::<_, DataFusionError>::Ok(result)
+        Result::<_>::Ok(result)
     };
 
     let join_key_pair = match (l_is_left, r_is_right) {
@@ -1052,7 +1228,10 @@ pub fn find_valid_equijoin_key_pair(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{col, expr, AggregateFunction, WindowFrame, WindowFunction};
+    use crate::{
+        col, cube, expr, grouping_set, rollup, AggregateFunction, WindowFrame,
+        WindowFunction,
+    };
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_case() -> Result<()> {
@@ -1241,6 +1420,126 @@ mod tests {
                 assert_eq!(expected, result);
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_enumerate_grouping_sets() -> Result<()> {
+        let multi_cols = vec![col("col1"), col("col2"), col("col3")];
+        let simple_col = col("simple_col");
+        let cube = cube(multi_cols.clone());
+        let rollup = rollup(multi_cols.clone());
+        let grouping_set = grouping_set(vec![multi_cols]);
+
+        // 1. col
+        let sets = enumerate_grouping_sets(vec![simple_col.clone()])?;
+        let result = format!("{sets:?}");
+        assert_eq!("[simple_col]", &result);
+
+        // 2. cube
+        let sets = enumerate_grouping_sets(vec![cube.clone()])?;
+        let result = format!("{sets:?}");
+        assert_eq!("[CUBE (col1, col2, col3)]", &result);
+
+        // 3. rollup
+        let sets = enumerate_grouping_sets(vec![rollup.clone()])?;
+        let result = format!("{sets:?}");
+        assert_eq!("[ROLLUP (col1, col2, col3)]", &result);
+
+        // 4. col + cube
+        let sets = enumerate_grouping_sets(vec![simple_col.clone(), cube.clone()])?;
+        let result = format!("{sets:?}");
+        assert_eq!(
+            "[GROUPING SETS (\
+            (simple_col), \
+            (simple_col, col1), \
+            (simple_col, col2), \
+            (simple_col, col1, col2), \
+            (simple_col, col3), \
+            (simple_col, col1, col3), \
+            (simple_col, col2, col3), \
+            (simple_col, col1, col2, col3))]",
+            &result
+        );
+
+        // 5. col + rollup
+        let sets = enumerate_grouping_sets(vec![simple_col.clone(), rollup.clone()])?;
+        let result = format!("{sets:?}");
+        assert_eq!(
+            "[GROUPING SETS (\
+            (simple_col), \
+            (simple_col, col1), \
+            (simple_col, col1, col2), \
+            (simple_col, col1, col2, col3))]",
+            &result
+        );
+
+        // 6. col + grouping_set
+        let sets =
+            enumerate_grouping_sets(vec![simple_col.clone(), grouping_set.clone()])?;
+        let result = format!("{sets:?}");
+        assert_eq!(
+            "[GROUPING SETS (\
+            (simple_col, col1, col2, col3))]",
+            &result
+        );
+
+        // 7. col + grouping_set + rollup
+        let sets = enumerate_grouping_sets(vec![
+            simple_col.clone(),
+            grouping_set,
+            rollup.clone(),
+        ])?;
+        let result = format!("{sets:?}");
+        assert_eq!(
+            "[GROUPING SETS (\
+            (simple_col, col1, col2, col3), \
+            (simple_col, col1, col2, col3, col1), \
+            (simple_col, col1, col2, col3, col1, col2), \
+            (simple_col, col1, col2, col3, col1, col2, col3))]",
+            &result
+        );
+
+        // 8. col + cube + rollup
+        let sets = enumerate_grouping_sets(vec![simple_col, cube, rollup])?;
+        let result = format!("{sets:?}");
+        assert_eq!(
+            "[GROUPING SETS (\
+            (simple_col), \
+            (simple_col, col1), \
+            (simple_col, col1, col2), \
+            (simple_col, col1, col2, col3), \
+            (simple_col, col1), \
+            (simple_col, col1, col1), \
+            (simple_col, col1, col1, col2), \
+            (simple_col, col1, col1, col2, col3), \
+            (simple_col, col2), \
+            (simple_col, col2, col1), \
+            (simple_col, col2, col1, col2), \
+            (simple_col, col2, col1, col2, col3), \
+            (simple_col, col1, col2), \
+            (simple_col, col1, col2, col1), \
+            (simple_col, col1, col2, col1, col2), \
+            (simple_col, col1, col2, col1, col2, col3), \
+            (simple_col, col3), \
+            (simple_col, col3, col1), \
+            (simple_col, col3, col1, col2), \
+            (simple_col, col3, col1, col2, col3), \
+            (simple_col, col1, col3), \
+            (simple_col, col1, col3, col1), \
+            (simple_col, col1, col3, col1, col2), \
+            (simple_col, col1, col3, col1, col2, col3), \
+            (simple_col, col2, col3), \
+            (simple_col, col2, col3, col1), \
+            (simple_col, col2, col3, col1, col2), \
+            (simple_col, col2, col3, col1, col2, col3), \
+            (simple_col, col1, col2, col3), \
+            (simple_col, col1, col2, col3, col1), \
+            (simple_col, col1, col2, col3, col1, col2), \
+            (simple_col, col1, col2, col3, col1, col2, col3))]",
+            &result
+        );
+
         Ok(())
     }
 }

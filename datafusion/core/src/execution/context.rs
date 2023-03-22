@@ -330,8 +330,7 @@ impl SessionContext {
                     provider.insert_into(&self.state(), &input).await?;
                 } else {
                     return Err(DataFusionError::Execution(format!(
-                        "Table '{}' does not exist",
-                        table_name
+                        "Table '{table_name}' does not exist"
                     )));
                 }
                 self.return_empty_dataframe()
@@ -2618,7 +2617,7 @@ mod tests {
     fn task_context_extensions() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let task_props = HashMap::from([("test.value".to_string(), "24".to_string())]);
-        let mut extensions = Extensions::default();
+        let mut extensions = Extensions::new();
         extensions.insert(TestExtension::default());
 
         let task_context = TaskContext::try_new(

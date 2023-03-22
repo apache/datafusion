@@ -319,14 +319,27 @@ fn date_bin_single(stride: i64, source: i64, origin: i64) -> i64 {
 
 /// DATE_BIN sql function
 pub fn date_bin(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 3 {
-        return Err(DataFusionError::Execution(
-            "DATE_BIN expected three arguments".to_string(),
+    if args.len() == 2 {
+        // Default to unix EPOCH
+        let origin = ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+            Some(0),
+            Some("+00:00".to_owned()),
         ));
+        date_bin_impl(&args[0], &args[1], &origin)
+    } else if args.len() == 3 {
+        date_bin_impl(&args[0], &args[1], &args[2])
+    } else {
+        Err(DataFusionError::Execution(
+            "DATE_BIN expected two or three arguments".to_string(),
+        ))
     }
+}
 
-    let (stride, array, origin) = (&args[0], &args[1], &args[2]);
-
+fn date_bin_impl(
+    stride: &ColumnarValue,
+    array: &ColumnarValue,
+    origin: &ColumnarValue,
+) -> Result<ColumnarValue> {
     let stride = match stride {
         ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(v))) => {
             let (days, ms) = IntervalDayTimeType::to_parts(*v);
@@ -783,18 +796,22 @@ mod tests {
         ]);
         assert!(res.is_ok());
 
+        let res = date_bin(&[
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ]);
+        assert!(res.is_ok());
+
         //
         // Fallible test cases
         //
 
         // invalid number of arguments
-        let res = date_bin(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
+        let res =
+            date_bin(&[ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1)))]);
         assert_eq!(
             res.err().unwrap().to_string(),
-            "Execution error: DATE_BIN expected three arguments"
+            "Execution error: DATE_BIN expected two or three arguments"
         );
 
         // stride: invalid type

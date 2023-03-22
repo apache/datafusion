@@ -20,6 +20,7 @@ use datafusion::prelude::*;
 use object_store::aws::AmazonS3Builder;
 use std::env;
 use std::sync::Arc;
+use url::Url;
 
 /// This example demonstrates querying data in an S3 bucket.
 ///
@@ -45,8 +46,10 @@ async fn main() -> Result<()> {
         .with_secret_access_key(env::var("AWS_SECRET_ACCESS_KEY").unwrap())
         .build()?;
 
+    let path = format!("s3://{bucket_name}");
+    let s3_url = Url::parse(&path).unwrap();
     ctx.runtime_env()
-        .register_object_store("s3", bucket_name, Arc::new(s3));
+        .register_object_store(&s3_url, Arc::new(s3));
 
     // cannot query the parquet files from this bucket because the path contains a whitespace
     // and we don't support that yet

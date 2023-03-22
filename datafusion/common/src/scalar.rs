@@ -857,7 +857,7 @@ fn ts_sub_to_interval(
     lhs_tz: &Option<String>,
     rhs_tz: &Option<String>,
     mode: IntervalMode,
-) -> Result<ScalarValue, DataFusionError> {
+) -> Result<ScalarValue> {
     let lhs_dt = with_timezone_to_naive_datetime(lhs_ts, lhs_tz, mode)?;
     let rhs_dt = with_timezone_to_naive_datetime(rhs_ts, rhs_tz, mode)?;
     let delta_secs = lhs_dt.signed_duration_since(rhs_dt);
@@ -892,7 +892,7 @@ fn with_timezone_to_naive_datetime(
     ts: i64,
     tz: &Option<String>,
     mode: IntervalMode,
-) -> Result<NaiveDateTime, DataFusionError> {
+) -> Result<NaiveDateTime> {
     let datetime = if let IntervalMode::Milli = mode {
         ticks_to_naive_datetime::<1_000_000>(ts)
     } else {
@@ -4953,8 +4953,8 @@ mod tests {
         for (lhs, rhs, expected) in cases.iter() {
             let result = lhs.add(rhs).unwrap();
             let result_commute = rhs.add(lhs).unwrap();
-            assert_eq!(*expected, result, "lhs:{:?} + rhs:{:?}", lhs, rhs);
-            assert_eq!(*expected, result_commute, "lhs:{:?} + rhs:{:?}", rhs, lhs);
+            assert_eq!(*expected, result, "lhs:{lhs:?} + rhs:{rhs:?}");
+            assert_eq!(*expected, result_commute, "lhs:{rhs:?} + rhs:{lhs:?}");
         }
     }
 
@@ -5009,7 +5009,7 @@ mod tests {
         ];
         for (lhs, rhs, expected) in cases.iter() {
             let result = lhs.sub(rhs).unwrap();
-            assert_eq!(*expected, result, "lhs:{:?} - rhs:{:?}", lhs, rhs);
+            assert_eq!(*expected, result, "lhs:{lhs:?} - rhs:{rhs:?}");
         }
     }
 
@@ -5043,20 +5043,14 @@ mod tests {
                 assert_eq!(
                     intervals[idx],
                     timestamp2.sub(ts1).unwrap(),
-                    "index:{}, operands: {:?} (-) {:?}",
-                    idx,
-                    timestamp2,
-                    ts1
+                    "index:{idx}, operands: {timestamp2:?} (-) {ts1:?}"
                 );
             } else {
                 let timestamp2 = ts1.sub(intervals[idx].clone()).unwrap();
                 assert_eq!(
                     intervals[idx],
                     ts1.sub(timestamp2.clone()).unwrap(),
-                    "index:{}, operands: {:?} (-) {:?}",
-                    idx,
-                    ts1,
-                    timestamp2
+                    "index:{idx}, operands: {ts1:?} (-) {timestamp2:?}"
                 );
             };
         }

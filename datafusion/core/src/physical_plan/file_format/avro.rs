@@ -221,6 +221,7 @@ mod tests {
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
     use rstest::*;
+    use url::Url;
 
     use super::*;
 
@@ -245,9 +246,10 @@ mod tests {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
 
+        let url = Url::parse("file://").unwrap();
         state
             .runtime_env()
-            .register_object_store("file", "", store.clone());
+            .register_object_store(&url, store.clone());
 
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/alltypes_plain.avro");

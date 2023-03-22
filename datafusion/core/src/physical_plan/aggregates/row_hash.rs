@@ -29,7 +29,6 @@ use datafusion_physical_expr::hash_utils::create_hashes;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
-use crate::error::Result;
 use crate::execution::context::TaskContext;
 use crate::execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use crate::physical_plan::aggregates::{
@@ -48,7 +47,7 @@ use arrow::compute::cast;
 use arrow::datatypes::{DataType, Schema, UInt32Type};
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::utils::get_arrayref_at_indices;
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use datafusion_row::accessor::RowAccessor;
 use datafusion_row::layout::RowLayout;
@@ -506,9 +505,7 @@ impl GroupedHashAggregateStream {
                         .and({
                             group_state.indices.clear();
                             Ok(())
-                        })?;
-
-                    Ok::<(), DataFusionError>(())
+                        })
                 })?;
         }
         allocated += self

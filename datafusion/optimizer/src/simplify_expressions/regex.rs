@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{BinaryExpr, Expr, Like, Operator};
 use regex_syntax::hir::{Hir, HirKind, Literal};
 
@@ -26,7 +26,7 @@ pub fn simplify_regex_expr(
     left: Box<Expr>,
     op: Operator,
     right: Box<Expr>,
-) -> Result<Expr, DataFusionError> {
+) -> Result<Expr> {
     let mode = OperatorMode::new(&op);
 
     if let Expr::Literal(ScalarValue::Utf8(Some(pattern))) = right.as_ref() {

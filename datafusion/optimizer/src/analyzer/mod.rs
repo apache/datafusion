@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::count_wildcard_rule::CountWildcardRule;
+mod count_wildcard_rule;
+
+use crate::analyzer::count_wildcard_rule::CountWildcardRule;
 use crate::rewrite::TreeNodeRewritable;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};

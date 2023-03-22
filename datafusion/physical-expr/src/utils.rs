@@ -20,7 +20,7 @@ use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
 use crate::rewrite::{TreeNodeRewritable, TreeNodeRewriter};
 use crate::{EquivalenceProperties, PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::Result;
 use datafusion_expr::Operator;
 
 use petgraph::graph::NodeIndex;
@@ -419,7 +419,7 @@ pub fn reassign_predicate_columns(
     pred: Arc<dyn PhysicalExpr>,
     schema: &SchemaRef,
     ignore_not_found: bool,
-) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
+) -> Result<Arc<dyn PhysicalExpr>> {
     pred.transform(&|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             let index = match schema.index_of(column.name()) {

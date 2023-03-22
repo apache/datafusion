@@ -51,16 +51,18 @@ async fn count_wildcard() -> Result<()> {
     let sql_results = ctx
         .sql("select count(*) from alltypes_tiny_pages")
         .await?
+        .select(vec![count(Expr::Wildcard)])?
         .explain(false, false)?
         .collect()
         .await?;
 
+    // add `.select(vec![count(Expr::Wildcard)])?` to make sure we can analyze all node instead of just top node.
     let df_results = ctx
         .table("alltypes_tiny_pages")
         .await?
         .aggregate(vec![], vec![count(Expr::Wildcard)])?
-        .explain(false, false)
-        .unwrap()
+        .select(vec![count(Expr::Wildcard)])?
+        .explain(false, false)?
         .collect()
         .await?;
 
