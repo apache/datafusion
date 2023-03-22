@@ -74,12 +74,17 @@ fn split_record_batch(batch: RecordBatch, n_split: usize) -> Vec<RecordBatch> {
     res
 }
 
-fn get_test_data(n_split: usize) -> Result<Vec<RecordBatch>> {
+// Return a static RecordBatch and its ordering for tests. RecordBatch is ordered by ts
+fn get_test_data1() -> Result<(RecordBatch, Vec<Expr>)> {
     let ts_field = Field::new("ts", DataType::Int32, false);
     let inc_field = Field::new("inc_col", DataType::Int32, false);
     let desc_field = Field::new("desc_col", DataType::Int32, false);
 
-    let schema = Arc::new(Schema::new(vec![ts_field, inc_field, desc_field]));
+    let schema = Arc::new(Schema::new(vec![
+        ts_field,
+        inc_field,
+        desc_field,
+    ]));
 
     let batch = RecordBatch::try_new(
         schema,
@@ -113,22 +118,79 @@ fn get_test_data(n_split: usize) -> Result<Vec<RecordBatch>> {
             ])),
         ],
     )?;
-    Ok(split_record_batch(batch, n_split))
+    let file_sort_order = vec![col("ts").sort(true, false)];
+    Ok((batch, file_sort_order))
 }
 
-fn write_test_data_to_parquet(tmpdir: &TempDir, n_split: usize) -> Result<()> {
-    let batches = get_test_data(n_split)?;
-    for (i, batch) in batches.into_iter().enumerate() {
-        let target_file = tmpdir.path().join(format!("{i}.parquet"));
-        let file = File::create(target_file).unwrap();
-        // Default writer properties
-        let props = WriterProperties::builder().build();
-        let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
+// Return a static RecordBatch and its ordering for tests. RecordBatch is ordered by low_card_col1, low_card_col2, inc_col
+fn get_test_data2() -> Result<(RecordBatch, Vec<Expr>)> {
+    let low_card_col1 = Field::new("low_card_col1", DataType::Int32, false);
+    let low_card_col2 = Field::new("low_card_col2", DataType::Int32, false);
+    let inc_col = Field::new("inc_col", DataType::Int32, false);
+    let unsorted_col = Field::new("unsorted_col", DataType::Int32, false);
 
-        writer.write(&batch).expect("Writing batch");
+    let schema = Arc::new(Schema::new(vec![
+        low_card_col1,
+        low_card_col2,
+        inc_col,
+        unsorted_col,
+    ]));
 
-        // writer must be closed to write footer
-        writer.close().unwrap();
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int32Array::from_slice([
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                1, 1, 1, 1,
+            ])),
+            Arc::new(Int32Array::from_slice([
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+                2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+                3, 3, 3, 3,
+            ])),
+            Arc::new(Int32Array::from_slice([
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
+                39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56,
+                57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74,
+                75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92,
+                93, 94, 95, 96, 97, 98, 99,
+            ])),
+            Arc::new(Int32Array::from_slice([
+                0, 2, 0, 0, 1, 1, 0, 2, 1, 4, 4, 2, 2, 1, 2, 3, 3, 2, 1, 4, 0, 3, 0, 0,
+                4, 0, 2, 0, 1, 1, 3, 4, 2, 2, 4, 0, 1, 4, 0, 1, 1, 3, 3, 2, 3, 0, 0, 1,
+                1, 3, 0, 3, 1, 1, 4, 2, 1, 1, 1, 2, 4, 3, 1, 4, 4, 0, 2, 4, 1, 1, 0, 2,
+                1, 1, 4, 2, 0, 2, 1, 4, 2, 0, 4, 2, 1, 1, 1, 4, 3, 4, 1, 2, 0, 0, 2, 0,
+                4, 2, 4, 3,
+            ])),
+        ],
+    )?;
+    let file_sort_order = vec![
+        col("low_card_col1").sort(true, false),
+        col("low_card_col2").sort(true, false),
+        col("inc_col").sort(true, false),
+    ];
+    Ok((batch, file_sort_order))
+}
+
+fn write_test_data_to_csv(
+    tmpdir: &TempDir,
+    n_file: usize,
+    batch: &RecordBatch,
+) -> Result<()> {
+    let n_chunk = batch.num_rows() / n_file;
+    for i in 0..n_file {
+        let target_file = tmpdir.path().join(format!("{i}.csv"));
+        let file = File::create(target_file)?;
+        let chunks_start = i * n_chunk;
+        let cur_batch = batch.slice(chunks_start, n_chunk);
+        let mut writer = arrow::csv::Writer::new(file);
+        writer.write(&cur_batch)?;
     }
     Ok(())
 }
@@ -137,32 +199,55 @@ async fn get_test_context(tmpdir: &TempDir, n_batch: usize) -> Result<SessionCon
     let session_config = SessionConfig::new().with_target_partitions(1);
     let ctx = SessionContext::with_config(session_config);
 
-    let parquet_read_options = ParquetReadOptions::default();
-    let file_sort_order = [col("ts")]
-        .into_iter()
-        .map(|e| {
-            let ascending = true;
-            let nulls_first = false;
-            e.sort(ascending, nulls_first)
-        })
-        .collect::<Vec<_>>();
+    let csv_read_options = CsvReadOptions::default();
 
-    let options_sort = parquet_read_options
+    let (batch, file_sort_order) = get_test_data1()?;
+
+    let options_sort = csv_read_options
         .to_listing_options(&ctx.copied_config())
         .with_file_sort_order(Some(file_sort_order));
 
-    write_test_data_to_parquet(tmpdir, n_batch)?;
-    let provided_schema = None;
+    write_test_data_to_csv(tmpdir, n_batch, &batch)?;
     let sql_definition = None;
     ctx.register_listing_table(
         "annotated_data",
         tmpdir.path().to_string_lossy(),
         options_sort.clone(),
-        provided_schema,
+        Some(batch.schema()),
         sql_definition,
     )
-    .await
-    .unwrap();
+        .await
+        .unwrap();
+    Ok(ctx)
+}
+
+async fn get_test_context2(
+    tmpdir: &TempDir,
+    n_batch: usize,
+    infinite_source: bool,
+) -> Result<SessionContext> {
+    let session_config = SessionConfig::new().with_target_partitions(1);
+    let ctx = SessionContext::with_config(session_config);
+
+    let csv_read_options = CsvReadOptions::default();
+    let (batch, file_sort_order) = get_test_data2()?;
+
+    let options_sort = csv_read_options
+        .to_listing_options(&ctx.copied_config())
+        .with_file_sort_order(Some(file_sort_order))
+        .with_infinite_source(infinite_source);
+
+    write_test_data_to_csv(tmpdir, n_batch, &batch)?;
+    let sql_definition = None;
+    ctx.register_listing_table(
+        "annotated_data2",
+        tmpdir.path().to_string_lossy(),
+        options_sort.clone(),
+        Some(batch.schema()),
+        sql_definition,
+    )
+        .await
+        .unwrap();
     Ok(ctx)
 }
 
@@ -430,4 +515,47 @@ mod tests {
         assert_batches_eq!(expected, &actual);
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_source_sorted_groupby() -> Result<()> {
+        let tmpdir = TempDir::new().unwrap();
+        let ctx = get_test_context2(&tmpdir, 1, false).await?;
+
+        let sql = "SELECT
+           SUM(inc_col) as sum1
+           FROM annotated_data2
+           GROUP BY low_card_col1";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let expected = {
+            vec![
+                "ProjectionExec: expr=[SUM(annotated_data2.inc_col)@1 as sum1]",
+                "  AggregateExec: mode=Final, gby=[low_card_col1@0 as low_card_col1], aggr=[SUM(annotated_data2.inc_col)]",
+                "    AggregateExec: mode=Partial, gby=[low_card_col1@0 as low_card_col1], aggr=[SUM(annotated_data2.inc_col)]",         ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        let actual_len = actual.len();
+        let actual_trim_last = &actual[..actual_len - 1];
+        assert_eq!(
+            expected, actual_trim_last,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+------+",
+            "| sum1 |",
+            "+------+",
+            "| 1225 |",
+            "| 3725 |",
+            "+------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+        Ok(())
+    }
+
 }
