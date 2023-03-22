@@ -69,7 +69,10 @@ impl TaskContext {
 
     /// Create a new task context instance, by first copying all
     /// name/value pairs from `task_props` into a `SessionConfig`.
-    #[deprecated(since = "21.0.0", note = "Construct SessionConfig and call TaskContext::new() instead")]
+    #[deprecated(
+        since = "21.0.0",
+        note = "Construct SessionConfig and call TaskContext::new() instead"
+    )]
     pub fn try_new(
         task_id: String,
         session_id: String,
