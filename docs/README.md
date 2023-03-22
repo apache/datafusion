@@ -61,7 +61,7 @@ When the PR is merged to the `main` branch of the DataFusion
 repository, a [github workflow](https://github.com/apache/arrow-datafusion/blob/main/.github/workflows/docs.yaml) which:
 
 1. Builds the html content
-2. Pushes the html content to the `asf-branch`[asf-site](https://github.com/apache/arrow-datafusion/tree/asf-site) branch in this repostitory.
+2. Pushes the html content to the [`asf-site`](https://github.com/apache/arrow-datafusion/tree/asf-site) branch in this repository.
 
 The Apache Software Foundation provides https://arrow.apache.org/,
 which serves content based on the configuration in
