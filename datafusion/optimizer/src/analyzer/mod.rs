@@ -16,8 +16,10 @@
 // under the License.
 
 mod count_wildcard_rule;
+mod inline_table_scan;
 
 use crate::analyzer::count_wildcard_rule::CountWildcardRule;
+use crate::analyzer::inline_table_scan::InlineTableScan;
 use crate::rewrite::TreeNodeRewritable;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
@@ -52,8 +54,10 @@ impl Default for Analyzer {
 impl Analyzer {
     /// Create a new analyzer using the recommended list of rules
     pub fn new() -> Self {
-        let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> =
-            vec![Arc::new(CountWildcardRule::new())];
+        let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
+            Arc::new(CountWildcardRule::new()),
+            Arc::new(InlineTableScan::new()),
+        ];
         Self::with_rules(rules)
     }
 
