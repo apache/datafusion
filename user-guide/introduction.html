@@ -258,6 +258,11 @@
 <nav id="bd-toc-nav">
     <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#features">
+   Features
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#use-cases">
    Use Cases
   </a>
@@ -315,19 +320,52 @@
 -->
 <section id="introduction">
 <h1>Introduction<a class="headerlink" href="#introduction" title="Permalink to this heading">¶</a></h1>
-<p>DataFusion is an extensible query execution framework, written in
-Rust, that uses <a class="reference external" href="https://arrow.apache.org">Apache Arrow</a> as its
+<p>DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
+<a class="reference external" href="http://rustlang.org">Rust</a>, using the <a class="reference external" href="https://arrow.apache.org">Apache Arrow</a>
 in-memory format.</p>
-<p>DataFusion supports SQL and a DataFrame API for building logical query
-plans, an extensive query optimizer, and a multi-threaded parallel
-execution execution engine for processing partitioned data sources
-such as CSV and Parquet files extremely quickly.</p>
+<p>DataFusion offers SQL and Dataframe APIs, excellent <a class="reference external" href="https://benchmark.clickhouse.com/">performance</a>, built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and a great community.</p>
+<section id="features">
+<h2>Features<a class="headerlink" href="#features" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Feature-rich <a class="reference external" href="https://arrow.apache.org/datafusion/user-guide/sql/index.html">SQL support</a> and <a class="reference external" href="https://arrow.apache.org/datafusion/user-guide/dataframe.html">DataFrame API</a></p></li>
+<li><p>Blazingly fast, vectorized, multi-threaded, streaming execution engine.</p></li>
+<li><p>Native support for Parquet, CSV, JSON, and Avro file formats. Support
+for custom file formats and non file datasources via the <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> trait.</p></li>
+<li><p>Many extension points: user defined scalar/aggregate/window functions, DataSources, SQL,
+other query languages, custom plan and execution nodes, optimizer passes, and more.</p></li>
+<li><p>Streaming, asynchronous IO directly from popular object stores, including AWS S3,
+Azure Blob Storage, and Google Cloud Storage. Other storage systems are supported via the
+<code class="docutils literal notranslate"><span class="pre">ObjectStore</span></code> trait.</p></li>
+<li><p><a class="reference external" href="https://docs.rs/datafusion/latest">Excellent Documentation</a> and a
+<a class="reference external" href="https://arrow.apache.org/datafusion/contributor-guide/communication.html">welcoming community</a>.</p></li>
+<li><p>A state of the art query optimizer with projection and filter pushdown, sort aware optimizations,
+automatic join reordering, expression coercion, and more.</p></li>
+<li><p>Permissive Apache 2.0 License, Apache Software Foundation governance</p></li>
+<li><p>Written in <a class="reference external" href="https://www.rust-lang.org/">Rust</a>, a modern system language with development
+productivity similar to Java or Golang, the performance of C++, and
+<a class="reference external" href="https://insights.stackoverflow.com/survey/2021#technology-most-loved-dreaded-and-wanted">loved by programmers everywhere</a>.</p></li>
+<li><p>Support for <a class="reference external" href="https://substrait.io/">Substrait</a> for query plan serialization, making it easier to integrate DataFusion
+with other projects, and to pass plans across language boundaries.</p></li>
+</ul>
+</section>
 <section id="use-cases">
 <h2>Use Cases<a class="headerlink" href="#use-cases" title="Permalink to this heading">¶</a></h2>
-<p>DataFusion is used to create modern, fast and efficient data
-pipelines, ETL processes, and database systems, which need the
-performance of Rust and Apache Arrow and want to provide their users
-the convenience of an SQL interface or a DataFrame API.</p>
+<p>DataFusion can be used without modification as an embedded SQL
+engine or can be customized and used as a foundation for
+building new systems. Here are some examples of systems built using DataFusion:</p>
+<ul class="simple">
+<li><p>Specialized Analytical Database systems such as [CeresDB] and more general Apache Spark like system such a [Ballista].</p></li>
+<li><p>New query language engines such as [prql-query] and accelerators such as [VegaFusion]</p></li>
+<li><p>Research platform for new Database Systems, such as [Flock]</p></li>
+<li><p>SQL support to another library, such as [dask sql]</p></li>
+<li><p>Streaming data platforms such as [Synnada]</p></li>
+<li><p>Tools for reading / sorting / transcoding Parquet, CSV, AVRO, and JSON files such as [qv]</p></li>
+<li><p>A faster Spark runtime replacement [Blaze]</p></li>
+</ul>
+<p>By using DataFusion, the projects are freed to focus on their specific
+features, and avoid reimplementing general (but still necessary)
+features such as an expression representation, standard optimizations,
+execution plans, file format support, etc.</p>
 </section>
 <section id="why-datafusion">
 <h2>Why DataFusion?<a class="headerlink" href="#why-datafusion" title="Permalink to this heading">¶</a></h2>
