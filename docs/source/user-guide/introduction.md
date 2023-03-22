@@ -47,7 +47,6 @@ DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchm
 - Support for [Substrait](https://substrait.io/) for query plan serialization, making it easier to integrate DataFusion
   with other projects, and to pass plans across language boundaries.
 
-
 ## Use Cases
 
 DataFusion can be used without modification as an embedded SQL
