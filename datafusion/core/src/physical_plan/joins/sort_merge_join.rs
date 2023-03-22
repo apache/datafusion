@@ -223,8 +223,11 @@ impl ExecutionPlan for SortMergeJoinExec {
         ]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
-        vec![Some(&self.left_sort_exprs), Some(&self.right_sort_exprs)]
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortExpr>>> {
+        vec![
+            Some(self.left_sort_exprs.clone()),
+            Some(self.right_sort_exprs.clone()),
+        ]
     }
 
     fn output_partitioning(&self) -> Partitioning {

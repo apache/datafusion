@@ -441,7 +441,7 @@ fn ensure_sorting(
             (Some(required_ordering), Some(physical_ordering)) => {
                 let is_ordering_satisfied = ordering_satisfy_concrete(
                     physical_ordering,
-                    required_ordering,
+                    &required_ordering,
                     || child.equivalence_properties(),
                 );
                 if !is_ordering_satisfied {

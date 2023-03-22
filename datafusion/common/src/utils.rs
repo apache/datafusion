@@ -234,6 +234,30 @@ pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
+// Find the largest range that satisfy 0,1,2 .. n in the `in1`
+// For 0,1,2,4,5 we would produce 3. meaning 0,1,2 is the largest consecutive range (starting from zero).
+// For 1,2,3,4 we would produce 0. Meaning there is no consecutive range (starting from zero).
+pub fn calc_ordering_range(in1: &[usize]) -> usize {
+    let mut count = 0;
+    for (idx, elem) in in1.iter().enumerate() {
+        if idx != *elem {
+            break;
+        } else {
+            count += 1
+        }
+    }
+    count
+}
+
+/// Create a new vector from the elements at the `indices` of `searched` vector
+pub fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Vec<T> {
+    let mut result = vec![];
+    for idx in indices {
+        result.push(searched[*idx].clone());
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use arrow::array::Float64Array;
@@ -244,6 +268,15 @@ mod tests {
     use crate::ScalarValue::Null;
 
     use super::*;
+
+    #[test]
+    fn test_calc_ordering_range() -> Result<()> {
+        assert_eq!(calc_ordering_range(&[0, 3, 4]), 1);
+        assert_eq!(calc_ordering_range(&[0, 1, 3, 4]), 2);
+        assert_eq!(calc_ordering_range(&[0, 1, 2, 3, 4]), 5);
+        assert_eq!(calc_ordering_range(&[1, 2, 3, 4]), 0);
+        Ok(())
+    }
 
     #[test]
     fn test_bisect_linear_left_and_right() -> Result<()> {

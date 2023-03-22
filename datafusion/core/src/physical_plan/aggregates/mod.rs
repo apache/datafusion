@@ -31,13 +31,15 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::expressions::{col, Column};
 use datafusion_physical_expr::{
     expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr,
 };
 use std::any::Any;
 use std::collections::HashMap;
 
+use datafusion_common::utils::{calc_ordering_range, get_at_indices};
+use itertools::Itertools;
 use std::sync::Arc;
 
 mod no_grouping;
@@ -50,6 +52,7 @@ use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
 use datafusion_physical_expr::equivalence::project_equivalence_properties;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::normalize_out_expr_with_alias_schema;
+use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -65,6 +68,12 @@ pub enum AggregateMode {
     /// with Hash repartitioning on the group keys. If a group key is
     /// duplicated, duplicate groups would be produced
     FinalPartitioned,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PartitionSearchMode {
+    PartiallySorted(Vec<usize>),
+    Sorted(Vec<usize>),
 }
 
 /// Represents `GROUP BY` clause in the plan (including the more general GROUPING SET)
@@ -183,6 +192,63 @@ pub struct AggregateExec {
     alias_map: HashMap<Column, Vec<Column>>,
     /// Execution Metrics
     metrics: ExecutionPlanMetricsSet,
+    out_ordering: Vec<PhysicalSortExpr>,
+    ordered_indices: Vec<usize>,
+}
+
+fn get_working_mode(
+    input: &Arc<dyn ExecutionPlan>,
+    group_by: &PhysicalGroupBy,
+) -> Option<PartitionSearchMode> {
+    let output_ordering = input.output_ordering().unwrap_or(&[]);
+    let single_group = group_by.groups.len() == 1;
+    if single_group {
+        let ordering_exprs = convert_to_expr(output_ordering);
+        let groupby_exprs = group_by
+            .expr
+            .iter()
+            .map(|(elem, _)| elem.clone())
+            .collect::<Vec<_>>();
+        let indices =
+            get_indices_of_matching_exprs(&groupby_exprs, &ordering_exprs, || {
+                input.equivalence_properties()
+            });
+        let ordered_indices = indices.iter().copied().sorted().collect::<Vec<_>>();
+        let first_n = calc_ordering_range(&ordered_indices);
+        let ordered_exprs = get_at_indices(&ordering_exprs, &ordered_indices[0..first_n]);
+        let ordered_group_by_indices =
+            get_indices_of_matching_exprs(&ordered_exprs, &groupby_exprs, || {
+                input.equivalence_properties()
+            });
+        if first_n > 0 {
+            if first_n == group_by.expr.len() {
+                Some(PartitionSearchMode::Sorted(ordered_group_by_indices))
+            } else {
+                Some(PartitionSearchMode::PartiallySorted(
+                    ordered_group_by_indices,
+                ))
+            }
+        } else {
+            // println!("cannot run in streaming mode.");
+            None
+        }
+    } else {
+        // println!("cannot run in streaming mode.");
+        None
+    }
+}
+
+fn get_ordered_indices(working_mode: &Option<PartitionSearchMode>) -> Vec<usize> {
+    if let Some(mode) = working_mode {
+        match mode {
+            PartitionSearchMode::Sorted(ordered_indices)
+            | PartitionSearchMode::PartiallySorted(ordered_indices) => {
+                ordered_indices.clone()
+            }
+        }
+    } else {
+        vec![]
+    }
 }
 
 impl AggregateExec {
@@ -215,6 +281,22 @@ impl AggregateExec {
                 }
             };
         }
+        let working_mode = get_working_mode(&input, &group_by);
+        let ordered_indices = get_ordered_indices(&working_mode);
+        let input_out_ordering = input.output_ordering().unwrap_or(&[]);
+        let out_ordering = ordered_indices
+            .iter()
+            .zip(input_out_ordering)
+            .map(|(idx, input_col)| {
+                let name = group_by.expr[*idx].1.as_str();
+                let col_expr = col(name, &schema)?;
+                let options = input_col.options;
+                Ok(PhysicalSortExpr {
+                    expr: col_expr,
+                    options,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(AggregateExec {
             mode,
@@ -225,6 +307,8 @@ impl AggregateExec {
             input_schema,
             alias_map,
             metrics: ExecutionPlanMetricsSet::new(),
+            out_ordering,
+            ordered_indices,
         })
     }
 
@@ -272,6 +356,8 @@ impl AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<StreamType> {
+        // let ordered_indices = self.get_ordered_indices();
+
         let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, Arc::clone(&context))?;
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -297,6 +383,7 @@ impl AggregateExec {
                     batch_size,
                     context,
                     partition,
+                    self.ordered_indices.clone(),
                 )?,
             ))
         }
@@ -346,16 +433,26 @@ impl ExecutionPlan for AggregateExec {
     /// infinite, returns an error to indicate this.    
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
-            Err(DataFusionError::Plan(
-                "Aggregate Error: `GROUP BY` clause (including the more general GROUPING SET) is not supported for unbounded inputs.".to_string(),
-            ))
+            if self.ordered_indices.is_empty() {
+                // Cannot stream
+                Err(DataFusionError::Plan(
+                    "Aggregate Error: `GROUP BY` clause (including the more general GROUPING SET) is not supported for unbounded inputs.".to_string(),
+                ))
+                // Ok(true)
+            } else {
+                Ok(true)
+            }
         } else {
             Ok(false)
         }
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+        if self.out_ordering.is_empty() {
+            None
+        } else {
+            Some(&self.out_ordering)
+        }
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -710,20 +807,25 @@ fn evaluate_group_by(
 
 #[cfg(test)]
 mod tests {
+    use crate::datasource::file_format::file_type::FileCompressionType;
+    use crate::datasource::listing::PartitionedFile;
     use crate::execution::context::{SessionConfig, TaskContext};
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use crate::from_slice::FromSlice;
     use crate::physical_plan::aggregates::{
-        AggregateExec, AggregateMode, PhysicalGroupBy,
+        get_working_mode, AggregateExec, AggregateMode, PhysicalGroupBy,
     };
     use crate::physical_plan::expressions::{col, Avg};
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::{assert_batches_sorted_eq, physical_plan::common};
     use arrow::array::{Float64Array, UInt32Array};
+    use arrow::compute::{concat_batches, SortOptions};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
+    use arrow::util::pretty::print_batches;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
+    use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_expr::expressions::{lit, ApproxDistinct, Count, Median};
     use datafusion_physical_expr::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
     use futures::{FutureExt, Stream};
@@ -732,12 +834,128 @@ mod tests {
     use std::task::{Context, Poll};
 
     use super::StreamType;
+    use crate::physical_plan::aggregates::PartitionSearchMode::{
+        PartiallySorted, Sorted,
+    };
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::{
         ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
         Statistics,
     };
     use crate::prelude::SessionContext;
+
+    // Generate a schema which consists of 5 columns (a, b, c, d, e)
+    fn create_test_schema() -> Result<SchemaRef> {
+        let a = Field::new("a", DataType::Int32, true);
+        let b = Field::new("b", DataType::Int32, true);
+        let c = Field::new("c", DataType::Int32, true);
+        let d = Field::new("d", DataType::Int32, true);
+        let e = Field::new("e", DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
+
+        Ok(schema)
+    }
+
+    // Created a sorted parquet exec
+    fn csv_exec_sorted(
+        schema: &SchemaRef,
+        sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+        infinite_source: bool,
+    ) -> Arc<dyn ExecutionPlan> {
+        let sort_exprs = sort_exprs.into_iter().collect();
+
+        Arc::new(CsvExec::new(
+            FileScanConfig {
+                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+                file_schema: schema.clone(),
+                file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering: Some(sort_exprs),
+                infinite_source,
+            },
+            false,
+            0,
+            FileCompressionType::UNCOMPRESSED,
+        ))
+    }
+
+    /// make PhysicalSortExpr with default options
+    fn sort_expr(name: &str, schema: &Schema) -> PhysicalSortExpr {
+        sort_expr_options(name, schema, SortOptions::default())
+    }
+
+    /// PhysicalSortExpr with specified options
+    fn sort_expr_options(
+        name: &str,
+        schema: &Schema,
+        options: SortOptions,
+    ) -> PhysicalSortExpr {
+        PhysicalSortExpr {
+            expr: col(name, schema).unwrap(),
+            options,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_working_mode() -> Result<()> {
+        let test_schema = create_test_schema()?;
+        // Source is sorted by a ASC NULLS FIRST, b ASC NULLS FIRST, c ASC NULLS FIRST
+        // Column d, e is not ordered.
+        let sort_exprs = vec![
+            sort_expr("a", &test_schema),
+            sort_expr("b", &test_schema),
+            sort_expr("c", &test_schema),
+        ];
+        let input = csv_exec_sorted(&test_schema, sort_exprs, true);
+
+        // test cases consists of vector of tuples. Where each tuple represents a single test case.
+        // First field in the tuple is Vec<str> where each element in the vector represents GROUP BY columns
+        // For instance `vec!["a", "b"]` corresponds to GROUP BY a, b
+        // Second field in the tuple is Option<PartitionSearchMode>, which corresponds to expected algorithm mode.
+        // None represents that existing ordering is not sufficient to run executor with any one of the algorithms
+        // (We need to add SortExec to be able to run it).
+        // Some(PartitionSearchMode) represents, we can run algorithm with existing ordering; and algorithm should work in
+        // PartitionSearchMode.
+        let test_cases = vec![
+            (vec!["a"], Some(Sorted(vec![0]))),
+            (vec!["b"], None),
+            (vec!["c"], None),
+            (vec!["b", "a"], Some(Sorted(vec![1, 0]))),
+            (vec!["c", "b"], None),
+            (vec!["c", "a"], Some(PartiallySorted(vec![1]))),
+            (vec!["c", "b", "a"], Some(Sorted(vec![2, 1, 0]))),
+            (vec!["d", "a"], Some(PartiallySorted(vec![1]))),
+            (vec!["d", "b"], None),
+            (vec!["d", "c"], None),
+            (vec!["d", "b", "a"], Some(PartiallySorted(vec![2, 1]))),
+            (vec!["d", "c", "b"], None),
+            (vec!["d", "c", "a"], Some(PartiallySorted(vec![2]))),
+            (
+                vec!["d", "c", "b", "a"],
+                Some(PartiallySorted(vec![3, 2, 1])),
+            ),
+        ];
+        for (case_idx, test_case) in test_cases.iter().enumerate() {
+            let (group_by_columns, expected) = &test_case;
+            let mut group_by_exprs = vec![];
+            for col_name in group_by_columns {
+                group_by_exprs.push((col(col_name, &test_schema)?, col_name.to_string()));
+            }
+            let group_bys = PhysicalGroupBy::new_single(group_by_exprs);
+            let res = get_working_mode(&input, &group_bys);
+            assert_eq!(
+                res, *expected,
+                "Unexpected result for in unbounded test case#: {:?}, case: {:?}",
+                case_idx, test_case
+            );
+        }
+
+        Ok(())
+    }
 
     /// some mock data to aggregates
     fn some_data() -> (Arc<Schema>, Vec<RecordBatch>) {
@@ -809,6 +1027,7 @@ mod tests {
 
         let result =
             common::collect(partial_aggregate.execute(0, task_ctx.clone())?).await?;
+        print_batches(&result)?;
 
         let expected = vec![
             "+---+-----+-----------------+",
@@ -851,9 +1070,7 @@ mod tests {
 
         let result =
             common::collect(merged_aggregate.execute(0, task_ctx.clone())?).await?;
-        assert_eq!(result.len(), 1);
-
-        let batch = &result[0];
+        let batch = concat_batches(&result[0].schema(), &result)?;
         assert_eq!(batch.num_columns(), 3);
         assert_eq!(batch.num_rows(), 12);
 
@@ -946,9 +1163,7 @@ mod tests {
 
         let result =
             common::collect(merged_aggregate.execute(0, task_ctx.clone())?).await?;
-        assert_eq!(result.len(), 1);
-
-        let batch = &result[0];
+        let batch = concat_batches(&result[0].schema(), &result)?;
         assert_eq!(batch.num_columns(), 2);
         assert_eq!(batch.num_rows(), 3);
 

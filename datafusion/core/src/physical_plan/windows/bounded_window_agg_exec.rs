@@ -167,9 +167,8 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self.input().output_ordering()
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
-        let sort_keys = self.sort_keys.as_deref();
-        vec![sort_keys]
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortExpr>>> {
+        vec![self.sort_keys.clone()]
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {

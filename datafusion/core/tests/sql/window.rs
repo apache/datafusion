@@ -16,9 +16,11 @@
 // under the License.
 
 use super::*;
-use ::parquet::arrow::arrow_writer::ArrowWriter;
-use ::parquet::file::properties::WriterProperties;
+use arrow::compute::SortOptions;
 use datafusion::execution::options::ReadOptions;
+use datafusion::physical_plan;
+use datafusion_expr::expr::Sort;
+use datafusion_physical_expr::PhysicalSortExpr;
 
 #[tokio::test]
 async fn window_frame_creation_type_checking() -> Result<()> {
@@ -80,11 +82,7 @@ fn get_test_data1() -> Result<(RecordBatch, Vec<Expr>)> {
     let inc_field = Field::new("inc_col", DataType::Int32, false);
     let desc_field = Field::new("desc_col", DataType::Int32, false);
 
-    let schema = Arc::new(Schema::new(vec![
-        ts_field,
-        inc_field,
-        desc_field,
-    ]));
+    let schema = Arc::new(Schema::new(vec![ts_field, inc_field, desc_field]));
 
     let batch = RecordBatch::try_new(
         schema,
@@ -216,8 +214,8 @@ async fn get_test_context(tmpdir: &TempDir, n_batch: usize) -> Result<SessionCon
         Some(batch.schema()),
         sql_definition,
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
     Ok(ctx)
 }
 
@@ -225,8 +223,8 @@ async fn get_test_context2(
     tmpdir: &TempDir,
     n_batch: usize,
     infinite_source: bool,
+    session_config: SessionConfig,
 ) -> Result<SessionContext> {
-    let session_config = SessionConfig::new().with_target_partitions(1);
     let ctx = SessionContext::with_config(session_config);
 
     let csv_read_options = CsvReadOptions::default();
@@ -246,13 +244,75 @@ async fn get_test_context2(
         Some(batch.schema()),
         sql_definition,
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
     Ok(ctx)
 }
 
+fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+    let formatted = displayable(plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    println!("{:#?}", actual);
+    Ok(())
+}
+
+/// If file_sort_order is specified, creates the appropriate physical expressions
+fn try_create_output_ordering(
+    file_sort_order: &[Expr],
+    schema: &SchemaRef,
+) -> Result<Vec<PhysicalSortExpr>> {
+    // convert each expr to a physical sort expr
+    let sort_exprs = file_sort_order
+        .iter()
+        .map(|expr| {
+            if let Expr::Sort(Sort { expr, asc, nulls_first }) = expr {
+                if let Expr::Column(col) = expr.as_ref() {
+                    let expr = physical_plan::expressions::col(&col.name, schema)?;
+                    Ok(PhysicalSortExpr {
+                        expr,
+                        options: SortOptions {
+                            descending: !*asc,
+                            nulls_first: *nulls_first,
+                        },
+                    })
+                }
+                else {
+                    Err(DataFusionError::Plan(
+                        format!("Only support single column references in output_ordering, got {expr:?}")
+                    ))
+                }
+            } else {
+                Err(DataFusionError::Plan(
+                    format!("Expected Expr::Sort in output_ordering, but got {expr:?}")
+                ))
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(sort_exprs)
+}
+
 mod tests {
-    use super::*;
+    use crate::sql::execute_to_batches;
+    use crate::sql::window::{
+        get_test_context, get_test_context2, get_test_data2, print_plan,
+        split_record_batch, try_create_output_ordering,
+    };
+    use arrow::datatypes::DataType;
+    use arrow::util::pretty::print_batches;
+    use datafusion::assert_batches_eq;
+    use datafusion::physical_plan::aggregates::{
+        AggregateExec, AggregateMode, PhysicalGroupBy,
+    };
+    use datafusion::physical_plan::memory::MemoryExec;
+    use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::Result;
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_physical_expr::expressions::{col, Sum};
+    use datafusion_physical_expr::AggregateExpr;
+    use std::sync::Arc;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_source_sorted_aggregate() -> Result<()> {
@@ -519,12 +579,14 @@ mod tests {
     #[tokio::test]
     async fn test_source_sorted_groupby() -> Result<()> {
         let tmpdir = TempDir::new().unwrap();
-        let ctx = get_test_context2(&tmpdir, 1, false).await?;
+        let session_config = SessionConfig::new().with_target_partitions(1);
+        let ctx = get_test_context2(&tmpdir, 1, true, session_config).await?;
 
-        let sql = "SELECT
-           SUM(inc_col) as sum1
+        let sql = "SELECT low_card_col1, low_card_col2,
+           SUM(inc_col) as summation1
            FROM annotated_data2
-           GROUP BY low_card_col1";
+           GROUP BY low_card_col2, low_card_col1
+           ORDER BY low_card_col1, low_card_col2";
 
         let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
@@ -532,9 +594,10 @@ mod tests {
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
         let expected = {
             vec![
-                "ProjectionExec: expr=[SUM(annotated_data2.inc_col)@1 as sum1]",
-                "  AggregateExec: mode=Final, gby=[low_card_col1@0 as low_card_col1], aggr=[SUM(annotated_data2.inc_col)]",
-                "    AggregateExec: mode=Partial, gby=[low_card_col1@0 as low_card_col1], aggr=[SUM(annotated_data2.inc_col)]",         ]
+                "ProjectionExec: expr=[low_card_col1@1 as low_card_col1, low_card_col2@0 as low_card_col2, SUM(annotated_data2.inc_col)@2 as summation1]",
+                "  AggregateExec: mode=Final, gby=[low_card_col2@0 as low_card_col2, low_card_col1@1 as low_card_col1], aggr=[SUM(annotated_data2.inc_col)]",
+                "    AggregateExec: mode=Partial, gby=[low_card_col2@1 as low_card_col2, low_card_col1@0 as low_card_col1], aggr=[SUM(annotated_data2.inc_col)]",
+            ]
         };
 
         let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -545,17 +608,118 @@ mod tests {
             "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
 
+        println!("PHYSICAL PLAN:");
+        print_plan(&physical_plan)?;
+
         let actual = execute_to_batches(&ctx, sql).await;
+        print_batches(&actual)?;
         let expected = vec![
-            "+------+",
-            "| sum1 |",
-            "+------+",
-            "| 1225 |",
-            "| 3725 |",
-            "+------+",
+            "+---------------+---------------+------------+",
+            "| low_card_col1 | low_card_col2 | summation1 |",
+            "+---------------+---------------+------------+",
+            "| 0             | 0             | 300        |",
+            "| 0             | 1             | 925        |",
+            "| 1             | 2             | 1550       |",
+            "| 1             | 3             | 2175       |",
+            "+---------------+---------------+------------+",
         ];
         assert_batches_eq!(expected, &actual);
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_source_sorted_groupby2() -> Result<()> {
+        let tmpdir = TempDir::new().unwrap();
+        let session_config = SessionConfig::new().with_target_partitions(1);
+        let ctx = get_test_context2(&tmpdir, 1, true, session_config).await?;
+
+        let sql = "SELECT low_card_col1, unsorted_col,
+           SUM(inc_col) as summation1
+           FROM annotated_data2
+           GROUP BY unsorted_col, low_card_col1
+           ORDER BY low_card_col1";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let expected = {
+            vec![
+                "ProjectionExec: expr=[low_card_col1@1 as low_card_col1, unsorted_col@0 as unsorted_col, SUM(annotated_data2.inc_col)@2 as summation1]",
+                "  AggregateExec: mode=Final, gby=[unsorted_col@0 as unsorted_col, low_card_col1@1 as low_card_col1], aggr=[SUM(annotated_data2.inc_col)]",
+                "    AggregateExec: mode=Partial, gby=[unsorted_col@2 as unsorted_col, low_card_col1@0 as low_card_col1], aggr=[SUM(annotated_data2.inc_col)]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        let actual_len = actual.len();
+        let actual_trim_last = &actual[..actual_len - 1];
+        assert_eq!(
+            expected, actual_trim_last,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        println!("PHYSICAL PLAN:");
+        print_plan(&physical_plan)?;
+
+        let actual = execute_to_batches(&ctx, sql).await;
+        print_batches(&actual)?;
+        let expected = vec![
+            "+---------------+--------------+------------+",
+            "| low_card_col1 | unsorted_col | summation1 |",
+            "+---------------+--------------+------------+",
+            "| 0             | 0            | 292        |",
+            "| 0             | 2            | 196        |",
+            "| 0             | 1            | 315        |",
+            "| 0             | 4            | 164        |",
+            "| 0             | 3            | 258        |",
+            "| 1             | 0            | 622        |",
+            "| 1             | 3            | 299        |",
+            "| 1             | 1            | 1043       |",
+            "| 1             | 4            | 913        |",
+            "| 1             | 2            | 848        |",
+            "+---------------+--------------+------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_source_sorted_groupby_exp() -> Result<()> {
+        let session_config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(session_config);
+        let (record_batch, ordering) = get_test_data2()?;
+        // Source is ordered by low_card_col1, low_card_col2, inc_col
+        let schema = &record_batch.schema();
+        let ordering = try_create_output_ordering(&ordering, schema)?;
+        let batches = split_record_batch(record_batch, 100);
+        let memory_exec = MemoryExec::try_new(&[batches], schema.clone(), None)?
+            .with_sort_information(ordering);
+
+        let input = Arc::new(memory_exec) as Arc<dyn ExecutionPlan>;
+        // let schema = input.schema();
+        let aggregate_expr =
+            vec![
+                Arc::new(Sum::new(col("inc_col", schema)?, "sum1", DataType::Int64))
+                    as Arc<dyn AggregateExpr>,
+            ];
+        let expr = vec![(col("low_card_col1", schema)?, "low_card_col1".to_string())];
+        // let expr = vec![(col("unsorted_col", &schema)?, "unsorted_col".to_string())];
+        let group_by = PhysicalGroupBy::new_single(expr);
+        let mode = AggregateMode::Partial;
+        // let mode = AggregateMode::Final;
+        // let mode = AggregateMode::FinalPartitioned;
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
+            mode,
+            group_by,
+            aggregate_expr,
+            input,
+            schema.clone(),
+        )?) as _;
+        print_plan(&aggregate_exec)?;
+        let task_ctx = ctx.task_ctx();
+        let collected_usual = collect(aggregate_exec, task_ctx.clone()).await.unwrap();
+        print_batches(&collected_usual)?;
+        Ok(())
+    }
 }

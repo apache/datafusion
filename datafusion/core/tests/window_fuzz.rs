@@ -379,6 +379,10 @@ async fn run_window_test(
     let collected_running = collect(running_window_exec, task_ctx.clone())
         .await
         .unwrap();
+
+    // BoundedWindowAggExec should produce more chunk than the usual WindowAggExec.
+    // Otherwise it means that we cannot generate result in running mode.
+    assert!(collected_running.len() > collected_usual.len());
     // compare
     let usual_formatted = pretty_format_batches(&collected_usual).unwrap().to_string();
     let running_formatted = pretty_format_batches(&collected_running)
