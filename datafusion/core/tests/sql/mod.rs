@@ -1363,22 +1363,25 @@ fn make_timestamp_sub_table<A>() -> Result<Arc<MemTable>>
 where
     A: ArrowTimestampType<Native = i64>,
 {
-    make_timestamp_tz_sub_table::<A>(None)
+    make_timestamp_tz_sub_table::<A>(None, None)
 }
 
-fn make_timestamp_tz_sub_table<A>(tz: Option<String>) -> Result<Arc<MemTable>>
+fn make_timestamp_tz_sub_table<A>(
+    tz1: Option<String>,
+    tz2: Option<String>,
+) -> Result<Arc<MemTable>>
 where
     A: ArrowTimestampType<Native = i64>,
 {
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "ts1",
-            DataType::Timestamp(A::get_time_unit(), tz.clone()),
+            DataType::Timestamp(A::get_time_unit(), tz1.clone()),
             false,
         ),
         Field::new(
             "ts2",
-            DataType::Timestamp(A::get_time_unit(), tz.clone()),
+            DataType::Timestamp(A::get_time_unit(), tz2.clone()),
             false,
         ),
         Field::new("val", DataType::Int32, true),
@@ -1392,19 +1395,127 @@ where
     };
 
     let timestamps1 = vec![
-        1678892420_000_000_000i64 / divisor,
-        1678892410_000_000_000i64 / divisor,
-        1678892430_000_000_000i64 / divisor,
+        1_678_892_420_000_000_000i64 / divisor,
+        1_678_892_410_000_000_000i64 / divisor,
+        1_678_892_430_000_000_000i64 / divisor,
     ];
     let timestamps2 = vec![
-        1678892400_000_000_000i64 / divisor,
-        1678892400_000_000_000i64 / divisor,
-        1678892400_000_000_000i64 / divisor,
+        1_678_892_400_000_000_000i64 / divisor,
+        1_678_892_400_000_000_000i64 / divisor,
+        1_678_892_400_000_000_000i64 / divisor,
     ];
 
     let array1 =
-        PrimitiveArray::<A>::from_iter_values(timestamps1).with_timezone_opt(tz.clone());
-    let array2 = PrimitiveArray::<A>::from_iter_values(timestamps2).with_timezone_opt(tz);
+        PrimitiveArray::<A>::from_iter_values(timestamps1).with_timezone_opt(tz1);
+    let array2 =
+        PrimitiveArray::<A>::from_iter_values(timestamps2).with_timezone_opt(tz2);
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(array1),
+            Arc::new(array2),
+            Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+        ],
+    )?;
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+    Ok(Arc::new(table))
+}
+
+fn make_interval_sub_table() -> Result<Arc<MemTable>> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "interval1",
+            DataType::Interval(IntervalUnit::DayTime),
+            false,
+        ),
+        Field::new(
+            "interval2",
+            DataType::Interval(IntervalUnit::DayTime),
+            false,
+        ),
+        Field::new("val", DataType::Int32, true),
+    ]));
+
+    let intervals1 = vec![4_394_969_299, 4_494_969_298, 4_594_969_297];
+    let intervals2 = vec![4_294_969_296, 4_294_969_296, 4_294_969_296];
+
+    let array1 = PrimitiveArray::<IntervalDayTimeType>::from_iter_values(intervals1);
+    let array2 = PrimitiveArray::<IntervalDayTimeType>::from_iter_values(intervals2);
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(array1),
+            Arc::new(array2),
+            Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+        ],
+    )?;
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+    Ok(Arc::new(table))
+}
+
+fn make_ts_interval_sub_table() -> Result<Arc<MemTable>> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "timestamp_",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            false,
+        ),
+        Field::new(
+            "interval_",
+            DataType::Interval(IntervalUnit::DayTime),
+            false,
+        ),
+        Field::new("val", DataType::Int32, true),
+    ]));
+
+    let timestamps = vec![
+        1_678_892_420_000i64,
+        1_688_892_420_000i64,
+        1_698_892_420_000i64,
+    ];
+    let intervals = vec![4_294_969_296, 4_294_969_296, 4_294_969_296];
+
+    let array1 = PrimitiveArray::<TimestampMillisecondType>::from_iter_values(timestamps);
+    let array2 = PrimitiveArray::<IntervalDayTimeType>::from_iter_values(intervals);
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(array1),
+            Arc::new(array2),
+            Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+        ],
+    )?;
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+    Ok(Arc::new(table))
+}
+
+fn make_interval_ts_add_table() -> Result<Arc<MemTable>> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "interval_",
+            DataType::Interval(IntervalUnit::DayTime),
+            false,
+        ),
+        Field::new(
+            "timestamp_",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            false,
+        ),
+        Field::new("val", DataType::Int32, true),
+    ]));
+
+    let timestamps = vec![
+        1_678_892_420_000i64,
+        1_688_892_420_000i64,
+        1_698_892_420_000i64,
+    ];
+    let intervals = vec![4_294_969_296, 4_294_969_296, 4_294_969_296];
+
+    let array1 = PrimitiveArray::<IntervalDayTimeType>::from_iter_values(intervals);
+    let array2 = PrimitiveArray::<TimestampMillisecondType>::from_iter_values(timestamps);
 
     let data = RecordBatch::try_new(
         schema.clone(),

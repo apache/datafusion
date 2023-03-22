@@ -114,10 +114,15 @@ pub fn coerce_types(
         | Operator::GtEq
         | Operator::LtEq => comparison_coercion(lhs_type, rhs_type),
         Operator::Plus | Operator::Minus
-            if is_date(lhs_type)
+            if (is_date(lhs_type)
                 || is_date(rhs_type)
                 || is_timestamp(lhs_type)
-                || is_timestamp(rhs_type) =>
+                || is_timestamp(rhs_type)
+                || is_interval(lhs_type)
+                || is_interval(rhs_type))
+                && (!is_interval(lhs_type)
+                    || !is_timestamp(rhs_type)
+                    || *op != Operator::Minus) =>
         {
             temporal_add_sub_coercion(lhs_type, rhs_type, op)?
         }
@@ -247,9 +252,9 @@ pub fn temporal_add_sub_coercion(
                 DataType::Timestamp(TimeUnit::Nanosecond, _),
             ) => return Ok(Some(DataType::Interval(IntervalUnit::MonthDayNano))),
             (_, _) => {
-                return Err(DataFusionError::Plan(format!(
-                    "The timestamps have different types"
-                )));
+                return Err(DataFusionError::Plan(
+                    "The timestamps have different types".to_string(),
+                ));
             }
         }
     }
@@ -992,11 +997,11 @@ mod tests {
         let err = coerce_types(
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
             &Operator::Minus,
-            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
         )
         .unwrap_err()
         .to_string();
-        assert_contains!(&err, "'Timestamp(Nanosecond, None) - Timestamp(Nanosecond, None)' is an unsupported operation. addition/subtraction on dates/timestamps only supported with interval types");
+        assert_contains!(&err, "The timestamps have different types");
 
         let err = coerce_types(&DataType::Date32, &Operator::Plus, &DataType::Date64)
             .unwrap_err()

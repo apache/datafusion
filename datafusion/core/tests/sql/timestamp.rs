@@ -1693,7 +1693,7 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
 }
 
 #[tokio::test]
-async fn timestamp_sub() -> Result<()> {
+async fn timestamp_sub_simple() -> Result<()> {
     let ctx = SessionContext::new();
     let table_a = make_timestamp_sub_table::<TimestampSecondType>()?;
     ctx.register_table("table_a", table_a)?;
@@ -1711,5 +1711,96 @@ async fn timestamp_sub() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-    return Ok(());
+    Ok(())
+}
+
+#[tokio::test]
+async fn timestamp_sub_with_tz() -> Result<()> {
+    let ctx = SessionContext::new();
+    let table_a = make_timestamp_tz_sub_table::<TimestampSecondType>(
+        Some("America/Los_Angeles".to_string()),
+        Some("Europe/Istanbul".to_string()),
+    )?;
+    ctx.register_table("table_a", table_a)?;
+
+    let sql = "SELECT val, ts1 - ts2 AS ts_diff FROM table_a ORDER BY ts2 - ts1";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----+---------------------------------------------------+",
+        "| val | ts_diff                                           |",
+        "+-----+---------------------------------------------------+",
+        "| 3   | 0 years 0 mons 0 days 10 hours 0 mins 30.000 secs |",
+        "| 1   | 0 years 0 mons 0 days 10 hours 0 mins 20.000 secs |",
+        "| 2   | 0 years 0 mons 0 days 10 hours 0 mins 10.000 secs |",
+        "+-----+---------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn interval_sub() -> Result<()> {
+    let ctx = SessionContext::new();
+    let table_a = make_interval_sub_table()?;
+    ctx.register_table("table_a", table_a)?;
+
+    let sql = "SELECT val, interval1 - interval2 AS interval_diff FROM table_a ORDER BY interval2 - interval1";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----+----------------------------------------------------+",
+        "| val | interval_diff                                      |",
+        "+-----+----------------------------------------------------+",
+        "| 3   | 0 years 0 mons 0 days 83 hours 20 mins 0.001 secs  |",
+        "| 2   | 0 years 0 mons 0 days 55 hours 33 mins 20.002 secs |",
+        "| 1   | 0 years 0 mons 0 days 27 hours 46 mins 40.003 secs |",
+        "+-----+----------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn ts_interval_sub() -> Result<()> {
+    let ctx = SessionContext::new();
+    let table_a = make_ts_interval_sub_table()?;
+    ctx.register_table("table_a", table_a)?;
+
+    let sql = "SELECT val, timestamp_ - interval_ AS diff FROM table_a ORDER BY timestamp_ - interval_";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----+---------------------+",
+        "| val | diff                |",
+        "+-----+---------------------+",
+        "| 1   | 2023-03-14T15:00:18 |",
+        "| 2   | 2023-07-08T08:46:58 |",
+        "| 3   | 2023-11-01T02:33:38 |",
+        "+-----+---------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn interval_ts_add() -> Result<()> {
+    let ctx = SessionContext::new();
+    let table_a = make_interval_ts_add_table()?;
+    ctx.register_table("table_a", table_a)?;
+
+    let sql = "SELECT val, interval_ + timestamp_ AS sum_ FROM table_a ORDER BY interval_ + timestamp_";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----+---------------------+",
+        "| val | sum_                |",
+        "+-----+---------------------+",
+        "| 1   | 2023-03-16T15:00:22 |",
+        "| 2   | 2023-07-10T08:47:02 |",
+        "| 3   | 2023-11-03T02:33:42 |",
+        "+-----+---------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
 }
