@@ -2646,7 +2646,7 @@ fn exists_subquery() {
         \n  Filter: EXISTS (<subquery>)\
         \n    Subquery:\
         \n      Projection: person.first_name\
-        \n        Filter: person.last_name = p.last_name AND person.state = p.state\
+        \n        Filter: person.last_name = outer_ref(p.last_name) AND person.state = outer_ref(p.state)\
         \n          TableScan: person\
         \n    SubqueryAlias: p\
         \n      TableScan: person";
@@ -2667,7 +2667,7 @@ fn exists_subquery_schema_outer_schema_overlap() {
         \n  Filter: person.id = p.id AND EXISTS (<subquery>)\
         \n    Subquery:\
         \n      Projection: person.first_name\
-        \n        Filter: person.id = p2.id AND person.last_name = p.last_name AND person.state = p.state\
+        \n        Filter: person.id = p2.id AND person.last_name = outer_ref(p.last_name) AND person.state = outer_ref(p.state)\
         \n          CrossJoin:\
         \n            TableScan: person\
         \n            SubqueryAlias: p2\
@@ -2690,7 +2690,7 @@ fn exists_subquery_wildcard() {
         \n  Filter: EXISTS (<subquery>)\
         \n    Subquery:\
         \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀\
-        \n        Filter: person.last_name = p.last_name AND person.state = p.state\
+        \n        Filter: person.last_name = outer_ref(p.last_name) AND person.state = outer_ref(p.state)\
         \n          TableScan: person\
         \n    SubqueryAlias: p\
         \n      TableScan: person";
@@ -2721,7 +2721,7 @@ fn not_in_subquery_correlated() {
         \n  Filter: p.id NOT IN (<subquery>)\
         \n    Subquery:\
         \n      Projection: person.id\
-        \n        Filter: person.last_name = p.last_name AND person.state = Utf8(\"CO\")\
+        \n        Filter: person.last_name = outer_ref(p.last_name) AND person.state = Utf8(\"CO\")\
         \n          TableScan: person\
         \n    SubqueryAlias: p\
         \n      TableScan: person";
@@ -2736,7 +2736,7 @@ fn scalar_subquery() {
         \n  Subquery:\
         \n    Projection: MAX(person.id)\
         \n      Aggregate: groupBy=[[]], aggr=[[MAX(person.id)]]\
-        \n        Filter: person.last_name = p.last_name\
+        \n        Filter: person.last_name = outer_ref(p.last_name)\
         \n          TableScan: person\
         \n  SubqueryAlias: p\
         \n    TableScan: person";
@@ -2758,7 +2758,7 @@ fn scalar_subquery_reference_outer_field() {
         \n    Subquery:\
         \n      Projection: COUNT(UInt8(1))\
         \n        Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-        \n          Filter: j2.j2_id = j1.j1_id AND j1.j1_id = j3.j3_id\
+        \n          Filter: outer_ref(j2.j2_id) = j1.j1_id AND j1.j1_id = j3.j3_id\
         \n            CrossJoin:\
         \n              TableScan: j1\
         \n              TableScan: j3\
@@ -2779,7 +2779,7 @@ fn subquery_references_cte() {
         \n  Filter: EXISTS (<subquery>)\
         \n    Subquery:\
         \n      Projection: cte.id, cte.first_name, cte.last_name, cte.age, cte.state, cte.salary, cte.birth_date, cte.😀\
-        \n        Filter: cte.id = person.id\
+        \n        Filter: cte.id = outer_ref(person.id)\
         \n          SubqueryAlias: cte\
         \n            Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀\
         \n              TableScan: person\
@@ -2856,8 +2856,8 @@ fn aggregate_with_rollup() {
     let sql =
         "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, ROLLUP (state, age)";
     let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
-        \n  Aggregate: groupBy=[[person.id, ROLLUP (person.state, person.age)]], aggr=[[COUNT(UInt8(1))]]\
-        \n    TableScan: person";
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[COUNT(UInt8(1))]]\
+    \n    TableScan: person";
     quick_test(sql, expected);
 }
 
@@ -2866,8 +2866,8 @@ fn aggregate_with_rollup_with_grouping() {
     let sql = "SELECT id, state, age, grouping(state), grouping(age), grouping(state) + grouping(age), COUNT(*) \
         FROM person GROUP BY id, ROLLUP (state, age)";
     let expected = "Projection: person.id, person.state, person.age, GROUPING(person.state), GROUPING(person.age), GROUPING(person.state) + GROUPING(person.age), COUNT(UInt8(1))\
-        \n  Aggregate: groupBy=[[person.id, ROLLUP (person.state, person.age)]], aggr=[[GROUPING(person.state), GROUPING(person.age), COUNT(UInt8(1))]]\
-        \n    TableScan: person";
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[GROUPING(person.state), GROUPING(person.age), COUNT(UInt8(1))]]\
+    \n    TableScan: person";
     quick_test(sql, expected);
 }
 
@@ -2898,8 +2898,8 @@ fn aggregate_with_cube() {
     let sql =
         "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, CUBE (state, age)";
     let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
-        \n  Aggregate: groupBy=[[person.id, CUBE (person.state, person.age)]], aggr=[[COUNT(UInt8(1))]]\
-        \n    TableScan: person";
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.age), (person.id, person.state, person.age))]], aggr=[[COUNT(UInt8(1))]]\
+    \n    TableScan: person";
     quick_test(sql, expected);
 }
 
@@ -2915,8 +2915,8 @@ fn round_decimal() {
 fn aggregate_with_grouping_sets() {
     let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
     let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
-        \n  Aggregate: groupBy=[[person.id, GROUPING SETS ((person.state), (person.state, person.age), (person.id, person.state))]], aggr=[[COUNT(UInt8(1))]]\
-        \n    TableScan: person";
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id, person.state), (person.id, person.state, person.age), (person.id, person.id, person.state))]], aggr=[[COUNT(UInt8(1))]]\
+    \n    TableScan: person";
     quick_test(sql, expected);
 }
 
@@ -3890,6 +3890,38 @@ fn test_inner_join_with_cast_key() {
             \n  Inner Join:  Filter: CAST(person.id AS Int32) = CAST(orders.customer_id AS Int32)\
             \n    TableScan: person\
             \n    TableScan: orders";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn test_multi_grouping_sets() {
+    let sql = "SELECT person.id, person.age
+            FROM person
+            GROUP BY 
+                person.id,
+                GROUPING SETS ((person.age,person.salary),(person.age))";
+
+    let expected = "Projection: person.id, person.age\
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id, person.age, person.salary), (person.id, person.age))]], aggr=[[]]\
+    \n    TableScan: person";
+    quick_test(sql, expected);
+
+    let sql = "SELECT person.id, person.age
+            FROM person
+            GROUP BY
+                person.id,
+                GROUPING SETS ((person.age, person.salary),(person.age)),
+                ROLLUP(person.state, person.birth_date)";
+
+    let expected = "Projection: person.id, person.age\
+    \n  Aggregate: groupBy=[[GROUPING SETS (\
+        (person.id, person.age, person.salary), \
+        (person.id, person.age, person.salary, person.state), \
+        (person.id, person.age, person.salary, person.state, person.birth_date), \
+        (person.id, person.age), \
+        (person.id, person.age, person.state), \
+        (person.id, person.age, person.state, person.birth_date))]], aggr=[[]]\
+    \n    TableScan: person";
     quick_test(sql, expected);
 }
 

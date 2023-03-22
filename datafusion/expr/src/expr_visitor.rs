@@ -134,6 +134,8 @@ impl ExprVisitable for Expr {
                 })
             }
             Expr::Column(_)
+            // Treat OuterReferenceColumn as a leaf expression
+            | Expr::OuterReferenceColumn(_, _)
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_)
             | Expr::Exists { .. }

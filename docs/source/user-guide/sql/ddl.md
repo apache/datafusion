@@ -63,6 +63,47 @@ WITH HEADER ROW
 LOCATION '/path/to/aggregate_test_100.csv';
 ```
 
+When creating an output from a data source that is already ordered by an expression, you can pre-specify the order of
+the data using the `WITH ORDER` clause. This applies even if the expression used for sorting is complex,
+allowing for greater flexibility.
+
+Here's an example of how to use `WITH ORDER` query
+
+```sql
+CREATE EXTERNAL TABLE test (
+    c1  VARCHAR NOT NULL,
+    c2  INT NOT NULL,
+    c3  SMALLINT NOT NULL,
+    c4  SMALLINT NOT NULL,
+    c5  INT NOT NULL,
+    c6  BIGINT NOT NULL,
+    c7  SMALLINT NOT NULL,
+    c8  INT NOT NULL,
+    c9  BIGINT NOT NULL,
+    c10 VARCHAR NOT NULL,
+    c11 FLOAT NOT NULL,
+    c12 DOUBLE NOT NULL,
+    c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (c2 ASC, c5 + c8 DESC NULL FIRST)
+LOCATION '/path/to/aggregate_test_100.csv';
+```
+
+where `WITH ORDER` clause specifies the sort order:
+
+```sql
+WITH ORDER (sort_expression1 [ASC | DESC] [NULLS { FIRST | LAST }]
+         [, sort_expression2 [ASC | DESC] [NULLS { FIRST | LAST }] ...])
+```
+
+#### Cautions When Using the WITH ORDER Clause
+
+- It's important to understand that using the `WITH ORDER` clause in the `CREATE EXTERNAL TABLE` statement only specifies the order in which the data should be read from the external file. If the data in the file is not already sorted according to the specified order, then the results may not be correct.
+
+- It's also important to note that the `WITH ORDER` clause does not affect the ordering of the data in the original external file.
+
 If data sources are already partitioned in Hive style, `PARTITIONED BY` can be used for partition pruning.
 
 ```
