@@ -29,11 +29,7 @@ use crate::physical_optimizer::pipeline_checker::{
     check_finiteness_requirements, PipelineStatePropagator,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::joins::utils::JoinSide;
-use crate::physical_plan::joins::{
-    convert_sort_expr_with_filter_schema, HashJoinExec, PartitionMode,
-    SymmetricHashJoinExec,
-};
+use crate::physical_plan::joins::{HashJoinExec, PartitionMode, SymmetricHashJoinExec};
 use crate::physical_plan::tree_node::TreeNodeRewritable;
 use crate::physical_plan::ExecutionPlan;
 use datafusion_common::DataFusionError;
@@ -113,39 +109,17 @@ fn check_support(expr: &Arc<dyn PhysicalExpr>) -> bool {
 /// [PhysicalExpr]s, [Operator]s and data types need to be supported,
 /// and order information must cover every column in the filter expression.
 fn is_suitable_for_symmetric_hash_join(hash_join: &HashJoinExec) -> Result<bool> {
-    if let Some(filter) = hash_join.filter() {
-        let left = hash_join.left();
-        if let Some(left_ordering) = left.output_ordering() {
-            let right = hash_join.right();
-            if let Some(right_ordering) = right.output_ordering() {
-                let expr_supported = check_support(filter.expression());
-                let left_convertible = convert_sort_expr_with_filter_schema(
-                    &JoinSide::Left,
-                    filter,
-                    &left.schema(),
-                    &left_ordering[0],
-                )?
-                .is_some();
-                let right_convertible = convert_sort_expr_with_filter_schema(
-                    &JoinSide::Right,
-                    filter,
-                    &right.schema(),
-                    &right_ordering[0],
-                )?
-                .is_some();
-                let fields_supported = filter
-                    .schema()
-                    .fields()
-                    .iter()
-                    .all(|f| is_datatype_supported(f.data_type()));
-                return Ok(expr_supported
-                    && fields_supported
-                    && left_convertible
-                    && right_convertible);
-            }
-        }
-    }
-    Ok(false)
+    Ok(if let Some(filter) = hash_join.filter() {
+        let expr_supported = check_support(filter.expression());
+        let fields_supported = filter
+            .schema()
+            .fields()
+            .iter()
+            .all(|f| is_datatype_supported(f.data_type()));
+        expr_supported && fields_supported
+    } else {
+        false
+    })
 }
 
 /// This subrule checks if one can replace a hash join with a symmetric hash
@@ -298,7 +272,8 @@ fn apply_subrules_and_check_finiteness_requirements(
             input = value;
         }
     }
-    check_finiteness_requirements(input)
+    // TODO: Accept config here in next PR.
+    check_finiteness_requirements(input, true)
 }
 
 #[cfg(test)]

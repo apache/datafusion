@@ -24,7 +24,6 @@ use std::usize;
 
 use arrow::datatypes::SchemaRef;
 
-use datafusion_common::DataFusionError;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::Interval;
 use datafusion_physical_expr::rewrite::TreeNodeRewritable;
@@ -141,15 +140,13 @@ pub fn build_filter_input_order(
     filter: &JoinFilter,
     schema: &SchemaRef,
     order: &PhysicalSortExpr,
-) -> Result<SortedFilterExpr> {
+) -> Result<Option<SortedFilterExpr>> {
     if let Some(expr) =
         convert_sort_expr_with_filter_schema(&side, filter, schema, order)?
     {
-        Ok(SortedFilterExpr::new(order.clone(), expr))
+        Ok(Some(SortedFilterExpr::new(order.clone(), expr)))
     } else {
-        Err(DataFusionError::Plan(format!(
-            "The {side} side of the join does not have an expression sorted."
-        )))
+        Ok(None)
     }
 }
 
@@ -358,7 +355,8 @@ pub mod tests {
             &filter,
             &Arc::new(left_child_schema),
             &left_child_sort_expr,
-        )?;
+        )?
+        .unwrap();
         assert!(left_child_sort_expr.eq(left_sort_filter_expr.origin_sorted_expr()));
 
         let right_sort_filter_expr = build_filter_input_order(
@@ -366,7 +364,8 @@ pub mod tests {
             &filter,
             &Arc::new(right_child_schema),
             &right_child_sort_expr,
-        )?;
+        )?
+        .unwrap();
         assert!(right_child_sort_expr.eq(right_sort_filter_expr.origin_sorted_expr()));
 
         // Assert that adjusted (left) filter expression matches with `left_child_sort_expr`:
@@ -489,8 +488,8 @@ pub mod tests {
                 expr: col("la1", left_schema.as_ref())?,
                 options: SortOptions::default(),
             }
-        )
-        .is_ok());
+        )?
+        .is_some());
         assert!(build_filter_input_order(
             JoinSide::Left,
             &filter,
@@ -499,8 +498,8 @@ pub mod tests {
                 expr: col("lt1", left_schema.as_ref())?,
                 options: SortOptions::default(),
             }
-        )
-        .is_err());
+        )?
+        .is_none());
         assert!(build_filter_input_order(
             JoinSide::Right,
             &filter,
@@ -509,8 +508,8 @@ pub mod tests {
                 expr: col("ra1", right_schema.as_ref())?,
                 options: SortOptions::default(),
             }
-        )
-        .is_ok());
+        )?
+        .is_some());
         assert!(build_filter_input_order(
             JoinSide::Right,
             &filter,
@@ -519,8 +518,8 @@ pub mod tests {
                 expr: col("rb1", right_schema.as_ref())?,
                 options: SortOptions::default(),
             }
-        )
-        .is_err());
+        )?
+        .is_none());
 
         Ok(())
     }

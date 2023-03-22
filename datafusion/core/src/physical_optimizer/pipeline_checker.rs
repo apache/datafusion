@@ -22,8 +22,10 @@
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
+use crate::physical_plan::joins::SymmetricHashJoinExec;
 use crate::physical_plan::tree_node::TreeNodeRewritable;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion_common::DataFusionError;
 use std::sync::Arc;
 
 /// The PipelineChecker rule rejects non-runnable query plans that use
@@ -45,7 +47,8 @@ impl PhysicalOptimizerRule for PipelineChecker {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let pipeline = PipelineStatePropagator::new(plan);
-        let state = pipeline.transform_up(&check_finiteness_requirements)?;
+        // TODO: Add config to smhj_can_run_unsorted_filter.
+        let state = pipeline.transform_up(&|p| check_finiteness_requirements(p, true))?;
         Ok(state.plan)
     }
 
@@ -111,10 +114,19 @@ impl TreeNodeRewritable for PipelineStatePropagator {
 
 /// This function propagates finiteness information and rejects any plan with
 /// pipeline-breaking operators acting on infinite inputs.
+// TODO: Accept config here in next PR.
 pub fn check_finiteness_requirements(
     input: PipelineStatePropagator,
+    smhj_can_run_unsorted_filter: bool,
 ) -> Result<Option<PipelineStatePropagator>> {
     let plan = input.plan;
+    if let Some(smhj) = plan.as_any().downcast_ref::<SymmetricHashJoinExec>() {
+        if smhj.sorted_filter_exprs().iter().any(|s| s.is_none())
+            && !smhj_can_run_unsorted_filter
+        {
+            return Err(DataFusionError::Plan("Join operation cannot operate on stream without changing the configuration".to_owned()));
+        }
+    }
     let children = input.children_unbounded;
     plan.unbounded_output(&children).map(|value| {
         Some(PipelineStatePropagator {
@@ -305,7 +317,7 @@ mod sql_tests {
                   FROM test
                   LIMIT 5".to_string(),
             cases: vec![Arc::new(test1), Arc::new(test2)],
-            error_operator: "Sort Error".to_string()
+            error_operator: "Window Error".to_string()
         };
 
         case.run().await?;
@@ -328,7 +340,7 @@ mod sql_tests {
                         SUM(c9) OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum1
                   FROM test".to_string(),
             cases: vec![Arc::new(test1), Arc::new(test2)],
-            error_operator: "Sort Error".to_string()
+            error_operator: "Window Error".to_string()
         };
         case.run().await?;
         Ok(())
