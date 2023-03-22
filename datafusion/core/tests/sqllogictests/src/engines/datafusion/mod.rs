@@ -22,14 +22,11 @@ use crate::engines::output::{DFColumnType, DFOutput};
 
 use self::error::{DFSqlLogicTestError, Result};
 use async_trait::async_trait;
-use create_table::create_table;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
-use datafusion_sql::parser::{DFParser, Statement};
+use datafusion_sql::parser::DFParser;
 use sqllogictest::DBOutput;
-use sqlparser::ast::Statement as SQLStatement;
 
-mod create_table;
 mod error;
 mod normalize;
 mod util;
@@ -77,33 +74,9 @@ impl sqllogictest::AsyncDB for DataFusion {
 
 async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DFOutput> {
     let sql = sql.into();
-    // Check if the sql is `insert`
+    // check if the sql is more than one statement
     if let Ok(mut statements) = DFParser::parse_sql(&sql) {
-        let statement0 = statements.pop_front().expect("at least one SQL statement");
-        if let Statement::Statement(statement) = statement0 {
-            let statement = *statement;
-            match statement {
-                SQLStatement::CreateTable {
-                    query,
-                    constraints,
-                    table_properties,
-                    with_options,
-                    name,
-                    columns,
-                    if_not_exists,
-                    or_replace,
-                    ..
-                } if query.is_none()
-                    && constraints.is_empty()
-                    && table_properties.is_empty()
-                    && with_options.is_empty() =>
-                {
-                    return create_table(ctx, name, columns, if_not_exists, or_replace)
-                        .await
-                }
-                _ => {}
-            };
-        }
+        statements.pop_front().expect("at least one SQL statement");
     }
     let df = ctx.sql(sql.as_str()).await?;
 
