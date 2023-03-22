@@ -168,19 +168,21 @@ mod tests {
     #[test]
     fn task_context_extensions() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
-        let task_props = HashMap::from([("test.value".to_string(), "24".to_string())]);
         let mut extensions = Extensions::new();
         extensions.insert(TestExtension::default());
 
-        let task_context = TaskContext::try_new(
-            "task_id".to_string(),
+        let mut config = ConfigOptions::new().with_extensions(extensions);
+        config.set("test.value", "24")?;
+        let session_config = SessionConfig::from(config);
+
+        let task_context = TaskContext::new(
+            Some("task_id".to_string()),
             "session_id".to_string(),
-            task_props,
+            session_config,
             HashMap::default(),
             HashMap::default(),
             runtime,
-            extensions,
-        )?;
+        );
 
         let test = task_context
             .session_config()
