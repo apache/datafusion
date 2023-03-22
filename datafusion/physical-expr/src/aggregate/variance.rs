@@ -31,8 +31,7 @@ use arrow::{
     datatypes::Field,
 };
 use datafusion_common::downcast_value;
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 /// VAR and VAR_SAMP aggregate expression

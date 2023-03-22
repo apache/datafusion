@@ -98,10 +98,7 @@ pub enum DataFusionError {
 #[macro_export]
 macro_rules! context {
     ($desc:expr, $err:expr) => {
-        datafusion_common::DataFusionError::Context(
-            format!("{} at {}:{}", $desc, file!(), line!()),
-            Box::new($err),
-        )
+        $err.context(format!("{} at {}:{}", $desc, file!(), line!()))
     };
 }
 
@@ -422,6 +419,11 @@ impl DataFusionError {
         }
         // return last checkpoint (which may be the original error)
         last_datafusion_error
+    }
+
+    /// wraps self in Self::Context with a description
+    pub fn context(self, description: impl Into<String>) -> Self {
+        Self::Context(description.into(), Box::new(self))
     }
 }
 

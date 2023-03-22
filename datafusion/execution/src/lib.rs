@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! DataFusion execution configuration and runtime structures
+
+pub mod config;
 pub mod disk_manager;
 pub mod memory_pool;
 pub mod object_store;

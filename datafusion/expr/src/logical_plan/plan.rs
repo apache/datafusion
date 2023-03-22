@@ -22,8 +22,8 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::plan;
 use crate::utils::{
-    self, exprlist_to_fields, from_plan, grouping_set_expr_count,
-    grouping_set_to_exprlist, inspect_expr_pre,
+    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs, from_plan,
+    grouping_set_expr_count, grouping_set_to_exprlist, inspect_expr_pre,
 };
 use crate::{
     build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
@@ -33,7 +33,7 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
 use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
-    ScalarValue, TableReference,
+    Result, ScalarValue, TableReference,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -258,10 +258,35 @@ impl LogicalPlan {
         let mut exprs = vec![];
         self.inspect_expressions(|e| {
             exprs.push(e.clone());
+            Ok(()) as Result<()>
+        })
+        // closure always returns OK
+        .unwrap();
+        exprs
+    }
+
+    /// Returns all the out reference(correlated) expressions (recursively) in the current
+    /// logical plan nodes and all its descendant nodes.
+    pub fn all_out_ref_exprs(self: &LogicalPlan) -> Vec<Expr> {
+        let mut exprs = vec![];
+        self.inspect_expressions(|e| {
+            find_out_reference_exprs(e).into_iter().for_each(|e| {
+                if !exprs.contains(&e) {
+                    exprs.push(e)
+                }
+            });
             Ok(()) as Result<(), DataFusionError>
         })
         // closure always returns OK
         .unwrap();
+        self.inputs()
+            .into_iter()
+            .flat_map(|child| child.all_out_ref_exprs())
+            .for_each(|e| {
+                if !exprs.contains(&e) {
+                    exprs.push(e)
+                }
+            });
         exprs
     }
 
@@ -416,10 +441,7 @@ impl LogicalPlan {
         Ok(using_columns)
     }
 
-    pub fn with_new_inputs(
-        &self,
-        inputs: &[LogicalPlan],
-    ) -> Result<LogicalPlan, DataFusionError> {
+    pub fn with_new_inputs(&self, inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
         from_plan(self, &self.expressions(), inputs)
     }
 
@@ -428,7 +450,7 @@ impl LogicalPlan {
     pub fn with_param_values(
         self,
         param_values: Vec<ScalarValue>,
-    ) -> Result<LogicalPlan, DataFusionError> {
+    ) -> Result<LogicalPlan> {
         match self {
             LogicalPlan::Prepare(prepare_lp) => {
                 // Verify if the number of params matches the number of values
@@ -519,22 +541,21 @@ impl LogicalPlan {
     /// params_values
     pub fn replace_params_with_values(
         &self,
-        param_values: &Vec<ScalarValue>,
-    ) -> Result<LogicalPlan, DataFusionError> {
-        let exprs = self.expressions();
-        let mut new_exprs = vec![];
-        for expr in exprs {
-            new_exprs.push(Self::replace_placeholders_with_values(expr, param_values)?);
-        }
+        param_values: &[ScalarValue],
+    ) -> Result<LogicalPlan> {
+        let new_exprs = self
+            .expressions()
+            .into_iter()
+            .map(|e| Self::replace_placeholders_with_values(e, param_values))
+            .collect::<Result<Vec<_>>>()?;
 
-        let new_inputs = self.inputs();
-        let mut new_inputs_with_values = vec![];
-        for input in new_inputs {
-            new_inputs_with_values.push(input.replace_params_with_values(param_values)?);
-        }
+        let new_inputs_with_values = self
+            .inputs()
+            .into_iter()
+            .map(|inp| inp.replace_params_with_values(param_values))
+            .collect::<Result<Vec<_>>>()?;
 
-        let new_plan = utils::from_plan(self, &new_exprs, &new_inputs_with_values)?;
-        Ok(new_plan)
+        from_plan(self, &new_exprs, &new_inputs_with_values)
     }
 
     /// Walk the logical plan, find any `PlaceHolder` tokens, and return a map of their IDs and DataTypes
@@ -577,7 +598,7 @@ impl LogicalPlan {
     fn replace_placeholders_with_values(
         expr: Expr,
         param_values: &[ScalarValue],
-    ) -> Result<Expr, DataFusionError> {
+    ) -> Result<Expr> {
         rewrite_expr(expr, |expr| {
             match &expr {
                 Expr::Placeholder { id, data_type } => {
@@ -605,11 +626,12 @@ impl LogicalPlan {
                     Ok(Expr::Literal(value.clone()))
                 }
                 Expr::ScalarSubquery(qry) => {
-                    let subquery = Arc::new(
-                        qry.subquery
-                            .replace_params_with_values(&param_values.to_vec())?,
-                    );
-                    Ok(Expr::ScalarSubquery(plan::Subquery { subquery }))
+                    let subquery =
+                        Arc::new(qry.subquery.replace_params_with_values(param_values)?);
+                    Ok(Expr::ScalarSubquery(plan::Subquery {
+                        subquery,
+                        outer_ref_columns: qry.outer_ref_columns.clone(),
+                    }))
                 }
                 _ => Ok(expr),
             }
@@ -1225,10 +1247,7 @@ pub struct Projection {
 
 impl Projection {
     /// Create a new Projection
-    pub fn try_new(
-        expr: Vec<Expr>,
-        input: Arc<LogicalPlan>,
-    ) -> Result<Self, DataFusionError> {
+    pub fn try_new(expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
         let schema = Arc::new(DFSchema::new_with_metadata(
             exprlist_to_fields(&expr, &input)?,
             input.schema().metadata().clone(),
@@ -1241,7 +1260,7 @@ impl Projection {
         expr: Vec<Expr>,
         input: Arc<LogicalPlan>,
         schema: DFSchemaRef,
-    ) -> Result<Self, DataFusionError> {
+    ) -> Result<Self> {
         if expr.len() != schema.fields().len() {
             return Err(DataFusionError::Plan(format!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len())));
         }
@@ -1267,7 +1286,7 @@ impl Projection {
         }
     }
 
-    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Projection> {
+    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Projection> {
         match plan {
             LogicalPlan::Projection(it) => Ok(it),
             _ => plan_err!("Could not coerce into Projection!"),
@@ -1289,10 +1308,7 @@ pub struct SubqueryAlias {
 }
 
 impl SubqueryAlias {
-    pub fn try_new(
-        plan: LogicalPlan,
-        alias: impl Into<String>,
-    ) -> datafusion_common::Result<Self> {
+    pub fn try_new(plan: LogicalPlan, alias: impl Into<String>) -> Result<Self> {
         let alias = alias.into();
         let table_ref = TableReference::bare(&alias);
         let schema: Schema = plan.schema().as_ref().clone().into();
@@ -1330,10 +1346,7 @@ pub struct Filter {
 
 impl Filter {
     /// Create a new filter operator.
-    pub fn try_new(
-        predicate: Expr,
-        input: Arc<LogicalPlan>,
-    ) -> datafusion_common::Result<Self> {
+    pub fn try_new(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
@@ -1358,7 +1371,7 @@ impl Filter {
         Ok(Self { predicate, input })
     }
 
-    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Filter> {
+    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Filter> {
         match plan {
             LogicalPlan::Filter(it) => Ok(it),
             _ => plan_err!("Could not coerce into Filter!"),
@@ -1492,6 +1505,8 @@ pub struct CreateExternalTable {
     pub if_not_exists: bool,
     /// SQL used to create the table, if available
     pub definition: Option<String>,
+    /// Order expressions supplied by user
+    pub order_exprs: Vec<Expr>,
     /// File compression type (GZIP, BZIP2, XZ, ZSTD)
     pub file_compression_type: CompressionTypeVariant,
     /// Table(provider) specific options
@@ -1512,6 +1527,7 @@ impl Hash for CreateExternalTable {
         self.if_not_exists.hash(state);
         self.definition.hash(state);
         self.file_compression_type.hash(state);
+        self.order_exprs.hash(state);
         self.options.len().hash(state); // HashMap is not hashable
     }
 }
@@ -1655,7 +1671,8 @@ impl Aggregate {
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
-    ) -> datafusion_common::Result<Self> {
+    ) -> Result<Self> {
+        let group_expr = enumerate_grouping_sets(group_expr)?;
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
         let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
         validate_unique_names("Aggregations", all_expr.clone())?;
@@ -1676,7 +1693,7 @@ impl Aggregate {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
         schema: DFSchemaRef,
-    ) -> datafusion_common::Result<Self> {
+    ) -> Result<Self> {
         if group_expr.is_empty() && aggr_expr.is_empty() {
             return Err(DataFusionError::Plan(
                 "Aggregate requires at least one grouping or aggregate expression"
@@ -1699,7 +1716,7 @@ impl Aggregate {
         })
     }
 
-    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Aggregate> {
+    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Aggregate> {
         match plan {
             LogicalPlan::Aggregate(it) => Ok(it),
             _ => plan_err!("Could not coerce into Aggregate!"),
@@ -1746,7 +1763,7 @@ impl Join {
         left: Arc<LogicalPlan>,
         right: Arc<LogicalPlan>,
         column_on: (Vec<Column>, Vec<Column>),
-    ) -> Result<Self, DataFusionError> {
+    ) -> Result<Self> {
         let original_join = match original {
             LogicalPlan::Join(join) => join,
             _ => return plan_err!("Could not create join with project input"),
@@ -1779,15 +1796,12 @@ impl Join {
 pub struct Subquery {
     /// The subquery
     pub subquery: Arc<LogicalPlan>,
+    /// The outer references used in the subquery
+    pub outer_ref_columns: Vec<Expr>,
 }
 
 impl Subquery {
-    pub fn new(plan: LogicalPlan) -> Self {
-        Subquery {
-            subquery: Arc::new(plan),
-        }
-    }
-    pub fn try_from_expr(plan: &Expr) -> datafusion_common::Result<&Subquery> {
+    pub fn try_from_expr(plan: &Expr) -> Result<&Subquery> {
         match plan {
             Expr::ScalarSubquery(it) => Ok(it),
             Expr::Cast(cast) => Subquery::try_from_expr(cast.expr.as_ref()),
@@ -1910,7 +1924,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::tree_node::TreeNodeVisitor;
     use datafusion_common::DFSchema;
-    use datafusion_common::Result;
     use std::collections::HashMap;
 
     fn employee_schema() -> Schema {

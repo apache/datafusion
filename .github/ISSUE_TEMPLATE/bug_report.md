@@ -1,28 +1,33 @@
----
 name: Bug report
 about: Create a report to help us improve
 title: ''
 labels: bug
 assignees: ''
+body:
 
----
+- type: textarea
+  attributes:
+  label: **Describe the bug**
+  description: Describe the bug.
+  placeholder: >
+  A clear and concise description of what the bug is.
+  validations:
+  required: true
 
-**Describe the bug**
-<!--
-A clear and concise description of what the bug is.
--->
+- type: textarea
+  attributes:
+  label: **To Reproduce**
+  placeholder: >
+  Steps to reproduce the behavior:
 
-**To Reproduce**
-<!--
-Steps to reproduce the behavior:
--->
+- type: textarea
+  attributes:
+  label: **Expected behavior**
+  placeholder: >
+  A clear and concise description of what you expected to happen.
 
-**Expected behavior**
-<!--
-A clear and concise description of what you expected to happen.
--->
-
-**Additional context**
-<!--
-Add any other context about the problem here.
--->
+- type: textarea
+  attributes:
+  label: **Additional context**
+  placeholder: >
+  Add any other context about the problem here.

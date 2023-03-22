@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod count_wildcard_rule;
+
+use crate::analyzer::count_wildcard_rule::CountWildcardRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{DataFusionError, Result};
@@ -49,7 +52,8 @@ impl Default for Analyzer {
 impl Analyzer {
     /// Create a new analyzer using the recommended list of rules
     pub fn new() -> Self {
-        let rules = vec![];
+        let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> =
+            vec![Arc::new(CountWildcardRule::new())];
         Self::with_rules(rules)
     }
 

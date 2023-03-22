@@ -53,7 +53,7 @@ impl DecorrelateWhereIn {
         &self,
         predicate: &Expr,
         config: &dyn OptimizerConfig,
-    ) -> datafusion_common::Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
+    ) -> Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
         let filters = split_conjunction(predicate); // TODO: disjunctions
 
         let mut subqueries = vec![];
@@ -65,11 +65,14 @@ impl DecorrelateWhereIn {
                     subquery,
                     negated,
                 } => {
-                    let subquery = self
+                    let subquery_plan = self
                         .try_optimize(&subquery.subquery, config)?
                         .map(Arc::new)
                         .unwrap_or_else(|| subquery.subquery.clone());
-                    let subquery = Subquery { subquery };
+                    let subquery = Subquery {
+                        subquery: subquery_plan,
+                        outer_ref_columns: subquery.outer_ref_columns.clone(),
+                    };
                     let subquery =
                         SubqueryInfo::new(subquery.clone(), (**expr).clone(), *negated);
                     subqueries.push(subquery);
@@ -149,6 +152,7 @@ fn optimize_where_in(
     let projection = Projection::try_from_plan(&query_info.query.subquery)
         .map_err(|e| context!("a projection is required", e))?;
     let subquery_input = projection.input.clone();
+    // TODO add the validate logic to Analyzer
     let subquery_expr = only_or_err(projection.expr.as_slice())
         .map_err(|e| context!("single expression projection required", e))?;
 

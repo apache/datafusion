@@ -39,7 +39,7 @@ use crate::prelude::{CsvReadOptions, SessionContext};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion_common::{DataFusionError, Statistics, TableReference};
+use datafusion_common::{Statistics, TableReference};
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
 use datafusion_physical_expr::PhysicalSortExpr;
 use futures::Stream;
@@ -216,7 +216,7 @@ pub fn scan_empty(
     name: Option<&str>,
     table_schema: &Schema,
     projection: Option<Vec<usize>>,
-) -> Result<LogicalPlanBuilder, DataFusionError> {
+) -> Result<LogicalPlanBuilder> {
     let table_schema = Arc::new(table_schema.clone());
     let provider = Arc::new(EmptyTable::new(table_schema));
     let name = TableReference::bare(name.unwrap_or(UNNAMED_TABLE).to_string());
@@ -229,7 +229,7 @@ pub fn scan_empty_with_partitions(
     table_schema: &Schema,
     projection: Option<Vec<usize>>,
     partitions: usize,
-) -> Result<LogicalPlanBuilder, DataFusionError> {
+) -> Result<LogicalPlanBuilder> {
     let table_schema = Arc::new(table_schema.clone());
     let provider = Arc::new(EmptyTable::new(table_schema).with_partitions(partitions));
     let name = TableReference::bare(name.unwrap_or(UNNAMED_TABLE).to_string());
@@ -296,7 +296,7 @@ impl TableProviderFactory for TestTableFactory {
         &self,
         _: &SessionState,
         cmd: &CreateExternalTable,
-    ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
+    ) -> Result<Arc<dyn TableProvider>> {
         Ok(Arc::new(TestTableProvider {
             url: cmd.location.to_string(),
             schema: Arc::new(cmd.schema.as_ref().into()),
@@ -334,7 +334,7 @@ impl TableProvider for TestTableProvider {
         _projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
-    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         unimplemented!("TestTableProvider is a stub for testing.")
     }
 }
@@ -516,7 +516,7 @@ pub async fn test_create_unbounded_sorted_file(
     ctx: &SessionContext,
     file_path: PathBuf,
     table_name: &str,
-) -> datafusion_common::Result<()> {
+) -> Result<()> {
     // Create schema:
     let schema = Arc::new(Schema::new(vec![
         Field::new("a1", DataType::UInt32, false),

@@ -58,6 +58,8 @@ impl TreeNode for Expr {
                 lists_of_exprs.clone().into_iter().flatten().collect()
             }
             Expr::Column(_)
+            // Treat OuterReferenceColumn as a leaf expression
+            | Expr::OuterReferenceColumn(_, _)
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_)
             | Expr::Exists { .. }
@@ -145,6 +147,7 @@ impl TreeNode for Expr {
                 Expr::Alias(transform_boxed(expr, &mut transform)?, name)
             }
             Expr::Column(_) => self,
+            Expr::OuterReferenceColumn(_, _) => self,
             Expr::Exists { .. } => self,
             Expr::InSubquery {
                 expr,

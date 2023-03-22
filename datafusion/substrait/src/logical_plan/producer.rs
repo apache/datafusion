@@ -18,6 +18,7 @@
 use std::{collections::HashMap, mem, sync::Arc};
 
 use datafusion::{
+    arrow::datatypes::DataType,
     error::{DataFusionError, Result},
     prelude::JoinType,
     scalar::ScalarValue,
@@ -26,7 +27,7 @@ use datafusion::{
 use datafusion::common::DFSchemaRef;
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
-use datafusion::logical_expr::expr::{BinaryExpr, Case, Sort};
+use datafusion::logical_expr::expr::{BinaryExpr, Case, Cast, Sort};
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::{binary_expr, Expr};
 use substrait::proto::{
@@ -577,6 +578,21 @@ pub fn to_substrait_rex(
                 rex_type: Some(RexType::IfThen(Box::new(IfThen { ifs, r#else }))),
             })
         }
+        Expr::Cast(Cast { expr, data_type }) => {
+            Ok(Expression {
+                rex_type: Some(RexType::Cast(Box::new(
+                    substrait::proto::expression::Cast {
+                        r#type: Some(to_substrait_type(data_type)?),
+                        input: Some(Box::new(to_substrait_rex(
+                            expr,
+                            schema,
+                            extension_info,
+                        )?)),
+                        failure_behavior: 0, // FAILURE_BEHAVIOR_UNSPECIFIED
+                    },
+                ))),
+            })
+        }
         Expr::Literal(value) => {
             let literal_type = match value {
                 ScalarValue::Int8(Some(n)) => Some(LiteralType::I8(*n as i32)),
@@ -622,6 +638,57 @@ pub fn to_substrait_rex(
         Expr::Alias(expr, _alias) => to_substrait_rex(expr, schema, extension_info),
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported expression: {expr:?}"
+        ))),
+    }
+}
+
+fn to_substrait_type(dt: &DataType) -> Result<substrait::proto::Type> {
+    let default_type_ref = 0;
+    let default_nullability = r#type::Nullability::Required as i32;
+    match dt {
+        DataType::Null => Err(DataFusionError::Internal(
+            "Null cast is not valid".to_string(),
+        )),
+        DataType::Boolean => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::Bool(r#type::Boolean {
+                type_variation_reference: default_type_ref,
+                nullability: default_nullability,
+            })),
+        }),
+        DataType::Int8 => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::I8(r#type::I8 {
+                type_variation_reference: default_type_ref,
+                nullability: default_nullability,
+            })),
+        }),
+        DataType::Int16 => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::I16(r#type::I16 {
+                type_variation_reference: default_type_ref,
+                nullability: default_nullability,
+            })),
+        }),
+        DataType::Int32 => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::I32(r#type::I32 {
+                type_variation_reference: default_type_ref,
+                nullability: default_nullability,
+            })),
+        }),
+        DataType::Int64 => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::I64(r#type::I64 {
+                type_variation_reference: default_type_ref,
+                nullability: default_nullability,
+            })),
+        }),
+        DataType::Decimal128(p, s) => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::Decimal(r#type::Decimal {
+                type_variation_reference: default_type_ref,
+                nullability: default_nullability,
+                scale: *s as i32,
+                precision: *p as i32,
+            })),
+        }),
+        _ => Err(DataFusionError::NotImplemented(format!(
+            "Unsupported cast type: {dt:?}"
         ))),
     }
 }

@@ -66,12 +66,9 @@ fn create_new_table(
     let sql_to_rel = SqlToRel::new_with_options(
         &LogicTestContextProvider {},
         ParserOptions {
-            parse_float_as_decimal: config
-                .config_options()
-                .sql_parser
-                .parse_float_as_decimal,
+            parse_float_as_decimal: config.options().sql_parser.parse_float_as_decimal,
             enable_ident_normalization: config
-                .config_options()
+                .options()
                 .sql_parser
                 .enable_ident_normalization,
         },

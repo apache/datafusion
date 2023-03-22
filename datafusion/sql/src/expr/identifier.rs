@@ -24,7 +24,12 @@ use datafusion_expr::{Case, Expr, GetIndexedField};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
-    pub(super) fn sql_identifier_to_expr(&self, id: Ident) -> Result<Expr> {
+    pub(super) fn sql_identifier_to_expr(
+        &self,
+        id: Ident,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
         if id.value.starts_with('@') {
             // TODO: figure out if ScalarVariables should be insensitive.
             let var_names = vec![id.value];
@@ -42,11 +47,42 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // interpret names with '.' as if they were
             // compound identifiers, but this is not a compound
             // identifier. (e.g. it is "foo.bar" not foo.bar)
-
-            Ok(Expr::Column(Column {
-                relation: None,
-                name: normalize_ident(id),
-            }))
+            let normalize_ident = normalize_ident(id);
+            match schema.field_with_unqualified_name(normalize_ident.as_str()) {
+                Ok(_) => {
+                    // found a match without a qualified name, this is a inner table column
+                    Ok(Expr::Column(Column {
+                        relation: None,
+                        name: normalize_ident,
+                    }))
+                }
+                Err(_) => {
+                    // check the outer_query_schema and try to find a match
+                    let outer_query_schema_opt =
+                        planner_context.outer_query_schema.as_ref();
+                    if let Some(outer) = outer_query_schema_opt {
+                        match outer.field_with_unqualified_name(normalize_ident.as_str())
+                        {
+                            Ok(field) => {
+                                // found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
+                                Ok(Expr::OuterReferenceColumn(
+                                    field.data_type().clone(),
+                                    field.qualified_column(),
+                                ))
+                            }
+                            Err(_) => Ok(Expr::Column(Column {
+                                relation: None,
+                                name: normalize_ident,
+                            })),
+                        }
+                    } else {
+                        Ok(Expr::Column(Column {
+                            relation: None,
+                            name: normalize_ident,
+                        }))
+                    }
+                }
+            }
         }
     }
 
@@ -54,6 +90,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         ids: Vec<Ident>,
         schema: &DFSchema,
+        planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         if ids.len() < 2 {
             return Err(DataFusionError::Internal(format!(
@@ -114,7 +151,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Some((field, _nested_names)) => {
                     Ok(Expr::Column(field.qualified_column()))
                 }
-                // found no matching field, will return a default
                 None => {
                     // return default where use all identifiers to not have a nested field
                     // this len check is because at 5 identifiers will have to have a nested field
@@ -123,11 +159,48 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             "Unsupported compound identifier: {ids:?}"
                         )))
                     } else {
-                        let s = &ids[0..ids.len()];
-                        // safe unwrap as s can never be empty or exceed the bounds
-                        let (relation, column_name) = form_identifier(s).unwrap();
-                        let relation = relation.map(|r| r.to_owned_reference());
-                        Ok(Expr::Column(Column::new(relation, column_name)))
+                        let outer_query_schema_opt =
+                            planner_context.outer_query_schema.as_ref();
+                        // check the outer_query_schema and try to find a match
+                        if let Some(outer) = outer_query_schema_opt {
+                            let search_result = search_dfschema(&ids, outer);
+                            match search_result {
+                                // found matching field with spare identifier(s) for nested field(s) in structure
+                                Some((field, nested_names))
+                                    if !nested_names.is_empty() =>
+                                {
+                                    // TODO: remove when can support nested identifiers for OuterReferenceColumn
+                                    Err(DataFusionError::Internal(format!(
+                                        "Nested identifiers are not yet supported for OuterReferenceColumn {}",
+                                        field.qualified_column().quoted_flat_name()
+                                    )))
+                                }
+                                // found matching field with no spare identifier(s)
+                                Some((field, _nested_names)) => {
+                                    // found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
+                                    Ok(Expr::OuterReferenceColumn(
+                                        field.data_type().clone(),
+                                        field.qualified_column(),
+                                    ))
+                                }
+                                // found no matching field, will return a default
+                                None => {
+                                    let s = &ids[0..ids.len()];
+                                    // safe unwrap as s can never be empty or exceed the bounds
+                                    let (relation, column_name) =
+                                        form_identifier(s).unwrap();
+                                    let relation =
+                                        relation.map(|r| r.to_owned_reference());
+                                    Ok(Expr::Column(Column::new(relation, column_name)))
+                                }
+                            }
+                        } else {
+                            let s = &ids[0..ids.len()];
+                            // safe unwrap as s can never be empty or exceed the bounds
+                            let (relation, column_name) = form_identifier(s).unwrap();
+                            let relation = relation.map(|r| r.to_owned_reference());
+                            Ok(Expr::Column(Column::new(relation, column_name)))
+                        }
                     }
                 }
             }

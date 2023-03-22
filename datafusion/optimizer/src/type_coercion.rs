@@ -127,14 +127,23 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         match expr {
-            Expr::ScalarSubquery(Subquery { subquery }) => {
+            Expr::ScalarSubquery(Subquery {
+                subquery,
+                outer_ref_columns,
+            }) => {
                 let new_plan = optimize_internal(&self.schema, &subquery)?;
-                Ok(Expr::ScalarSubquery(Subquery::new(new_plan)))
+                Ok(Expr::ScalarSubquery(Subquery {
+                    subquery: Arc::new(new_plan),
+                    outer_ref_columns,
+                }))
             }
             Expr::Exists { subquery, negated } => {
                 let new_plan = optimize_internal(&self.schema, &subquery.subquery)?;
                 Ok(Expr::Exists {
-                    subquery: Subquery::new(new_plan),
+                    subquery: Subquery {
+                        subquery: Arc::new(new_plan),
+                        outer_ref_columns: subquery.outer_ref_columns,
+                    },
                     negated,
                 })
             }
@@ -146,7 +155,10 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let new_plan = optimize_internal(&self.schema, &subquery.subquery)?;
                 Ok(Expr::InSubquery {
                     expr,
-                    subquery: Subquery::new(new_plan),
+                    subquery: Subquery {
+                        subquery: Arc::new(new_plan),
+                        outer_ref_columns: subquery.outer_ref_columns,
+                    },
                     negated,
                 })
             }

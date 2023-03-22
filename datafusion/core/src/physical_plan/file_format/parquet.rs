@@ -376,7 +376,7 @@ impl ExecutionPlan for ParquetExec {
                     })
             })?;
 
-        let config_options = ctx.session_config().config_options();
+        let config_options = ctx.session_config().options();
 
         let opener = ParquetOpener {
             partition_index,

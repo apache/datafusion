@@ -134,6 +134,19 @@ pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
     exprs.into_iter().map(unnormalize_col).collect()
 }
 
+/// Recursively remove all the ['OuterReferenceColumn'] and return the inside Column
+/// in the expression tree.
+pub fn strip_outer_reference(expr: Expr) -> Expr {
+    rewrite_expr(expr, |expr| {
+        if let Expr::OuterReferenceColumn(_, col) = expr {
+            Ok(Expr::Column(col))
+        } else {
+            Ok(expr)
+        }
+    })
+    .expect("strip_outer_reference is infallable")
+}
+
 /// Recursively rewrite an [`Expr`] via a function.
 ///
 /// Rewrites the expression bottom up by recursively calling `f(expr)`
