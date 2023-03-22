@@ -361,6 +361,7 @@ where
                 *nulls_first,
             ))),
             Expr::Column { .. }
+            | Expr::OuterReferenceColumn(_, _)
             | Expr::Literal(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Exists { .. }

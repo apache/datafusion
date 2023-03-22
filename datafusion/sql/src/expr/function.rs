@@ -48,7 +48,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // next, scalar built-in
         if let Ok(fun) = BuiltinScalarFunction::from_str(&name) {
-            let args = self.function_args_to_expr(function.args, schema)?;
+            let args =
+                self.function_args_to_expr(function.args, schema, planner_context)?;
             return Ok(Expr::ScalarFunction { fun, args });
         };
 
@@ -62,7 +63,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let order_by = window
                 .order_by
                 .into_iter()
-                .map(|e| self.order_by_to_sort_expr(e, schema))
+                .map(|e| self.order_by_to_sort_expr(e, schema, planner_context))
                 .collect::<Result<Vec<_>>>()?;
             let window_frame = window
                 .window_frame
@@ -80,8 +81,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let fun = self.find_window_func(&name)?;
             let expr = match fun {
                 WindowFunction::AggregateFunction(aggregate_fun) => {
-                    let (aggregate_fun, args) =
-                        self.aggregate_fn_to_expr(aggregate_fun, function.args, schema)?;
+                    let (aggregate_fun, args) = self.aggregate_fn_to_expr(
+                        aggregate_fun,
+                        function.args,
+                        schema,
+                        planner_context,
+                    )?;
 
                     Expr::WindowFunction(expr::WindowFunction::new(
                         WindowFunction::AggregateFunction(aggregate_fun),
@@ -93,7 +98,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 _ => Expr::WindowFunction(expr::WindowFunction::new(
                     fun,
-                    self.function_args_to_expr(function.args, schema)?,
+                    self.function_args_to_expr(function.args, schema, planner_context)?,
                     partition_by,
                     order_by,
                     window_frame,
@@ -105,7 +110,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // next, aggregate built-ins
         if let Ok(fun) = AggregateFunction::from_str(&name) {
             let distinct = function.distinct;
-            let (fun, args) = self.aggregate_fn_to_expr(fun, function.args, schema)?;
+            let (fun, args) =
+                self.aggregate_fn_to_expr(fun, function.args, schema, planner_context)?;
             return Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                 fun, args, distinct, None,
             )));
@@ -113,13 +119,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // finally, user-defined functions (UDF) and UDAF
         if let Some(fm) = self.schema_provider.get_function_meta(&name) {
-            let args = self.function_args_to_expr(function.args, schema)?;
+            let args =
+                self.function_args_to_expr(function.args, schema, planner_context)?;
             return Ok(Expr::ScalarUDF { fun: fm, args });
         }
 
         // User defined aggregate functions
         if let Some(fm) = self.schema_provider.get_aggregate_meta(&name) {
-            let args = self.function_args_to_expr(function.args, schema)?;
+            let args =
+                self.function_args_to_expr(function.args, schema, planner_context)?;
             return Ok(Expr::AggregateUDF {
                 fun: fm,
                 args,
@@ -129,7 +137,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Special case arrow_cast (as its type is dependent on its argument value)
         if name == ARROW_CAST_NAME {
-            let args = self.function_args_to_expr(function.args, schema)?;
+            let args =
+                self.function_args_to_expr(function.args, schema, planner_context)?;
             return super::arrow_cast::create_arrow_cast(args, schema);
         }
 
@@ -189,11 +198,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         args: Vec<FunctionArg>,
         schema: &DFSchema,
+        planner_context: &mut PlannerContext,
     ) -> Result<Vec<Expr>> {
         args.into_iter()
-            .map(|a| {
-                self.sql_fn_arg_to_logical_expr(a, schema, &mut PlannerContext::new())
-            })
+            .map(|a| self.sql_fn_arg_to_logical_expr(a, schema, planner_context))
             .collect::<Result<Vec<Expr>>>()
     }
 
@@ -202,6 +210,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         fun: AggregateFunction,
         args: Vec<FunctionArg>,
         schema: &DFSchema,
+        planner_context: &mut PlannerContext,
     ) -> Result<(AggregateFunction, Vec<Expr>)> {
         let args = match fun {
             // Special case rewrite COUNT(*) to COUNT(constant)
@@ -211,14 +220,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
                         Ok(Expr::Literal(COUNT_STAR_EXPANSION.clone()))
                     }
-                    _ => self.sql_fn_arg_to_logical_expr(
-                        a,
-                        schema,
-                        &mut PlannerContext::new(),
-                    ),
+                    _ => self.sql_fn_arg_to_logical_expr(a, schema, planner_context),
                 })
                 .collect::<Result<Vec<Expr>>>()?,
-            _ => self.function_args_to_expr(args, schema)?,
+            _ => self.function_args_to_expr(args, schema, planner_context)?,
         };
 
         Ok((fun, args))

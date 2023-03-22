@@ -29,7 +29,7 @@ use datafusion::physical_plan::file_format::{
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::{collect, Statistics};
 use datafusion::prelude::SessionContext;
-use datafusion_common::DataFusionError;
+use datafusion_common::Result;
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryFutureExt};
 use object_store::memory::InMemory;
@@ -119,7 +119,7 @@ impl ParquetFileReaderFactory for InMemoryParquetFileReaderFactory {
         file_meta: FileMeta,
         metadata_size_hint: Option<usize>,
         metrics: &ExecutionPlanMetricsSet,
-    ) -> Result<Box<dyn AsyncFileReader + Send>, DataFusionError> {
+    ) -> Result<Box<dyn AsyncFileReader + Send>> {
         let metadata = file_meta
             .extensions
             .as_ref()

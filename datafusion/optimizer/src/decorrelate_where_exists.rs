@@ -58,11 +58,14 @@ impl DecorrelateWhereExists {
         for it in filters.iter() {
             match it {
                 Expr::Exists { subquery, negated } => {
-                    let subquery = self
+                    let subquery_plan = self
                         .try_optimize(&subquery.subquery, config)?
                         .map(Arc::new)
                         .unwrap_or_else(|| subquery.subquery.clone());
-                    let subquery = Subquery { subquery };
+                    let subquery = Subquery {
+                        subquery: subquery_plan,
+                        outer_ref_columns: subquery.outer_ref_columns.clone(),
+                    };
                     let subquery = SubqueryInfo::new(subquery.clone(), *negated);
                     subqueries.push(subquery);
                 }

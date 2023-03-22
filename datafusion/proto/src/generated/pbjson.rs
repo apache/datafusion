@@ -3362,6 +3362,9 @@ impl serde::Serialize for CreateExternalTableNode {
         if !self.file_compression_type.is_empty() {
             len += 1;
         }
+        if !self.order_exprs.is_empty() {
+            len += 1;
+        }
         if !self.options.is_empty() {
             len += 1;
         }
@@ -3396,6 +3399,9 @@ impl serde::Serialize for CreateExternalTableNode {
         if !self.file_compression_type.is_empty() {
             struct_ser.serialize_field("fileCompressionType", &self.file_compression_type)?;
         }
+        if !self.order_exprs.is_empty() {
+            struct_ser.serialize_field("orderExprs", &self.order_exprs)?;
+        }
         if !self.options.is_empty() {
             struct_ser.serialize_field("options", &self.options)?;
         }
@@ -3424,6 +3430,8 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             "definition",
             "file_compression_type",
             "fileCompressionType",
+            "order_exprs",
+            "orderExprs",
             "options",
         ];
 
@@ -3439,6 +3447,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             Delimiter,
             Definition,
             FileCompressionType,
+            OrderExprs,
             Options,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -3471,6 +3480,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                             "delimiter" => Ok(GeneratedField::Delimiter),
                             "definition" => Ok(GeneratedField::Definition),
                             "fileCompressionType" | "file_compression_type" => Ok(GeneratedField::FileCompressionType),
+                            "orderExprs" | "order_exprs" => Ok(GeneratedField::OrderExprs),
                             "options" => Ok(GeneratedField::Options),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -3501,6 +3511,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                 let mut delimiter__ = None;
                 let mut definition__ = None;
                 let mut file_compression_type__ = None;
+                let mut order_exprs__ = None;
                 let mut options__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
@@ -3564,6 +3575,12 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                             }
                             file_compression_type__ = Some(map.next_value()?);
                         }
+                        GeneratedField::OrderExprs => {
+                            if order_exprs__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("orderExprs"));
+                            }
+                            order_exprs__ = Some(map.next_value()?);
+                        }
                         GeneratedField::Options => {
                             if options__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("options"));
@@ -3585,6 +3602,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                     delimiter: delimiter__.unwrap_or_default(),
                     definition: definition__.unwrap_or_default(),
                     file_compression_type: file_compression_type__.unwrap_or_default(),
+                    order_exprs: order_exprs__.unwrap_or_default(),
                     options: options__.unwrap_or_default(),
                 })
             }
