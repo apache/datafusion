@@ -29,9 +29,9 @@ CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as
 query TTT rowsort
 DESCRIBE aggregate_simple;
 ----
-c1 Float32 NO
-c2 Float64 NO
-c3 Boolean NO
+c1 Float32 YES
+c2 Float64 YES
+c3 Boolean YES
 
 statement ok
 DROP TABLE aggregate_simple;
@@ -49,9 +49,9 @@ CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as
 query TTT rowsort
 DESCRIBE aggregate_simple;
 ----
-c1 Float32 NO
-c2 Float64 NO
-c3 Boolean NO
+c1 Float32 YES
+c2 Float64 YES
+c3 Boolean YES
 
 statement ok
 DROP TABLE aggregate_simple;

@@ -501,8 +501,8 @@ datafusion public table_with_normalization NULL
 query TTT
 describe table_with_normalization
 ----
-field1 Int64 NO
-field2 Int64 NO
+field1 Int64 YES
+field2 Int64 YES
 
 # Disable ident normalization
 statement ok
@@ -553,3 +553,15 @@ set datafusion.sql_parser.parse_float_as_decimal = false;
 
 statement ok
 set datafusion.sql_parser.enable_ident_normalization = true;
+
+
+statement ok
+create table foo(x int);
+
+statement ok
+insert into foo values (null);
+
+query I
+select * from foo;
+----
+NULL
