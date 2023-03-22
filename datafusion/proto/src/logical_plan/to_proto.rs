@@ -37,11 +37,7 @@ use datafusion_common::{Column, DFField, DFSchemaRef, OwnedTableReference, Scala
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, Sort,
 };
-use datafusion_expr::{
-    logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
-    BuiltInWindowFunction, BuiltinScalarFunction, Expr, JoinConstraint, JoinType,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction,
-};
+use datafusion_expr::{logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction, BuiltInWindowFunction, BuiltinScalarFunction, Expr, JoinConstraint, JoinType, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction, TryCast};
 
 #[derive(Debug)]
 pub enum Error {
@@ -812,6 +808,15 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Cast(expr)),
                 }
             }
+            Expr::TryCast(TryCast { expr, data_type }) => {
+                let expr = Box::new(protobuf::TryCastNode {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                    arrow_type: Some(data_type.try_into()?),
+                });
+                Self {
+                    expr_type: Some(ExprType::TryCast(expr)),
+                }
+            }
             Expr::Sort(Sort{
                 expr,
                 asc,
@@ -913,8 +918,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 }
             },
 
-            Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } =>
-                return Err(Error::General("Proto serialization error: Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } not supported".to_string())),
+            Expr::QualifiedWildcard { .. } =>
+                return Err(Error::General("Proto serialization error: Expr::QualifiedWildcard { .. } not supported".to_string())),
         };
 
         Ok(expr_node)
