@@ -144,11 +144,9 @@ where
     T: ArrayAccessor,
     T::Item: PartialEq + HashValue,
 {
-    let data = array.data();
-
     let state = RandomState::new();
     let mut map: HashMap<usize, (), ()> =
-        HashMap::with_capacity_and_hasher(data.len(), ());
+        HashMap::with_capacity_and_hasher(array.len(), ());
 
     let insert_value = |idx| {
         let value = array.value(idx);
@@ -161,10 +159,12 @@ where
         }
     };
 
-    match data.null_buffer() {
-        Some(buffer) => BitIndexIterator::new(buffer.as_ref(), data.offset(), data.len())
-            .for_each(insert_value),
-        None => (0..data.len()).for_each(insert_value),
+    match array.nulls() {
+        Some(nulls) => {
+            BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
+                .for_each(insert_value)
+        }
+        None => (0..array.len()).for_each(insert_value),
     }
 
     ArrayHashSet { state, map }

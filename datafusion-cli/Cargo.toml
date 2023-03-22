@@ -29,7 +29,7 @@ rust-version = "1.62"
 readme = "README.md"
 
 [dependencies]
-arrow = "34.0.0"
+arrow = "35.0.0"
 async-trait = "0.1.41"
 clap = { version = "3", features = ["derive", "cargo"] }
 datafusion = { path = "../datafusion/core", version = "20.0.0" }
@@ -41,3 +41,9 @@ parking_lot = { version = "0.12" }
 rustyline = "10.0"
 tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
 url = "2.2"
+
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "a498a0342a15a7ddfa10c17752b0cc258bd80afd" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "a498a0342a15a7ddfa10c17752b0cc258bd80afd" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "a498a0342a15a7ddfa10c17752b0cc258bd80afd" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "a498a0342a15a7ddfa10c17752b0cc258bd80afd" }
