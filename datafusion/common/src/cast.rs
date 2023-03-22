@@ -26,7 +26,8 @@ use arrow::{
         Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
         DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array,
         Float64Array, GenericBinaryArray, GenericListArray, GenericStringArray,
-        Int32Array, Int64Array, LargeListArray, ListArray, MapArray, NullArray,
+        Int32Array, Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
+        IntervalYearMonthArray, LargeListArray, ListArray, MapArray, NullArray,
         OffsetSizeTrait, PrimitiveArray, StringArray, StructArray,
         TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
         TimestampSecondArray, UInt32Array, UInt64Array, UnionArray,
@@ -166,6 +167,27 @@ pub fn as_timestamp_microsecond_array(
 // Downcast ArrayRef to TimestampSecondArray
 pub fn as_timestamp_second_array(array: &dyn Array) -> Result<&TimestampSecondArray> {
     Ok(downcast_value!(array, TimestampSecondArray))
+}
+
+// Downcast ArrayRef to IntervalYearMonthArray
+pub fn as_interval_ym_array(
+    array: &dyn Array,
+) -> Result<&IntervalYearMonthArray, DataFusionError> {
+    Ok(downcast_value!(array, IntervalYearMonthArray))
+}
+
+// Downcast ArrayRef to IntervalDayTimeArray
+pub fn as_interval_dt_array(
+    array: &dyn Array,
+) -> Result<&IntervalDayTimeArray, DataFusionError> {
+    Ok(downcast_value!(array, IntervalDayTimeArray))
+}
+
+// Downcast ArrayRef to IntervalMonthDayNanoArray
+pub fn as_interval_mdn_array(
+    array: &dyn Array,
+) -> Result<&IntervalMonthDayNanoArray, DataFusionError> {
+    Ok(downcast_value!(array, IntervalMonthDayNanoArray))
 }
 
 // Downcast ArrayRef to BinaryArray
