@@ -31,7 +31,7 @@ use crate::physical_plan::{
 };
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 
 use super::expressions::PhysicalSortExpr;
 use super::{
@@ -462,7 +462,8 @@ impl LimitStream {
                 .iter()
                 .map(|col| col.slice(0, col.len().min(batch_rows)))
                 .collect();
-            Some(RecordBatch::try_new(batch.schema(), limited_columns).unwrap())
+            let options = RecordBatchOptions::new().with_row_count(Option::from(batch_rows));
+            Some(RecordBatch::try_new_with_options(batch.schema(), limited_columns, &options).unwrap())
         }
     }
 }
