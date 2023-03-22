@@ -52,6 +52,7 @@ use arrow::datatypes::*;
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
+use datafusion_expr::type_coercion::{is_timestamp, is_utf8_or_large_utf8};
 use kernels::{
     bitwise_and, bitwise_and_scalar, bitwise_or, bitwise_or_scalar, bitwise_shift_left,
     bitwise_shift_left_scalar, bitwise_shift_right, bitwise_shift_right_scalar,
@@ -1213,6 +1214,13 @@ pub fn binary(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let lhs_type = &lhs.data_type(input_schema)?;
     let rhs_type = &rhs.data_type(input_schema)?;
+    if (is_utf8_or_large_utf8(lhs_type) && is_timestamp(rhs_type))
+        || (is_timestamp(lhs_type) && is_utf8_or_large_utf8(rhs_type))
+    {
+        return Err(DataFusionError::Plan(format!(
+            "The type of {lhs_type} {op:?} {rhs_type} of binary physical should be same"
+        )));
+    }
     if !lhs_type.eq(rhs_type) {
         return Err(DataFusionError::Internal(format!(
             "The type of {lhs_type} {op:?} {rhs_type} of binary physical should be same"
