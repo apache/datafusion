@@ -84,11 +84,11 @@ impl RuntimeEnv {
     }
 
     /// Retrieves a `ObjectStore` instance for a url by consulting the
-    /// registry. See [`ObjectStoreRegistry::get_or_lazy_register_store`] for more
+    /// registry. See [`ObjectStoreRegistry::get_store`] for more
     /// details.
     pub fn object_store(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
         self.object_store_registry
-            .get_or_lazy_register_store(url.as_ref())
+            .get_store(url.as_ref())
             .map_err(DataFusionError::from)
     }
 }

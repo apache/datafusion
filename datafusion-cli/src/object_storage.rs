@@ -46,6 +46,7 @@ impl FromStr for ObjectStoreScheme {
     }
 }
 
+/// An [`ObjectStoreRegistry`] that can automatically create S3 and GCS stores for a given URL
 #[derive(Debug, Default)]
 pub struct DatafusionCliObjectStoreRegistry {
     inner: DefaultObjectStoreRegistry,
@@ -66,8 +67,8 @@ impl ObjectStoreRegistry for DatafusionCliObjectStoreRegistry {
         self.inner.register_store(url, store)
     }
 
-    fn get_or_lazy_register_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
-        self.inner.get_or_lazy_register_store(url).or_else(|_| {
+    fn get_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
+        self.inner.get_store(url).or_else(|_| {
             let store =
                 ObjectStoreScheme::from_str(url.scheme()).map(
                     |scheme| match scheme {
@@ -127,7 +128,7 @@ mod tests {
         let no_host_url = "s3:///";
         let registry = DatafusionCliObjectStoreRegistry::new();
         let err = registry
-            .get_or_lazy_register_store(&Url::from_str(no_host_url).unwrap())
+            .get_store(&Url::from_str(no_host_url).unwrap())
             .unwrap_err();
         assert!(err
             .to_string()
@@ -139,7 +140,7 @@ mod tests {
         let no_host_url = "gs:///";
         let registry = DatafusionCliObjectStoreRegistry::new();
         let err = registry
-            .get_or_lazy_register_store(&Url::from_str(no_host_url).unwrap())
+            .get_store(&Url::from_str(no_host_url).unwrap())
             .unwrap_err();
         assert!(err
             .to_string()
@@ -151,7 +152,7 @@ mod tests {
         let no_host_url = "gcs:///";
         let registry = DatafusionCliObjectStoreRegistry::new();
         let err = registry
-            .get_or_lazy_register_store(&Url::from_str(no_host_url).unwrap())
+            .get_store(&Url::from_str(no_host_url).unwrap())
             .unwrap_err();
         assert!(err
             .to_string()
@@ -163,7 +164,7 @@ mod tests {
         let unknown = "unknown://bucket_name/path";
         let registry = DatafusionCliObjectStoreRegistry::new();
         let err = registry
-            .get_or_lazy_register_store(&Url::from_str(unknown).unwrap())
+            .get_store(&Url::from_str(unknown).unwrap())
             .unwrap_err();
         assert!(err
             .to_string()
@@ -175,13 +176,13 @@ mod tests {
         let s3 = "s3://bucket_name/path";
         let registry = DatafusionCliObjectStoreRegistry::new();
         let err = registry
-            .get_or_lazy_register_store(&Url::from_str(s3).unwrap())
+            .get_store(&Url::from_str(s3).unwrap())
             .unwrap_err();
         assert!(err.to_string().contains("Generic S3 error: Missing region"));
 
         env::set_var("AWS_REGION", "us-east-1");
         let url = Url::from_str(s3).expect("Unable to parse s3 url");
-        let res = registry.get_or_lazy_register_store(&url);
+        let res = registry.get_store(&url);
         let msg = match res {
             Err(e) => format!("{e}"),
             Ok(_) => "".to_string(),

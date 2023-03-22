@@ -98,7 +98,7 @@ impl std::fmt::Display for ObjectStoreUrl {
 /// ```
 ///
 /// In this particular case, the url `s3://my_bucket/lineitem/` will be provided to
-/// [`ObjectStoreRegistry::get_or_lazy_register_store`] and one of three things will happen:
+/// [`ObjectStoreRegistry::get_store`] and one of three things will happen:
 ///
 /// - If an [`ObjectStore`] has been registered with [`ObjectStoreRegistry::register_store`] with
 /// `s3://my_bucket`, that [`ObjectStore`] will be returned
@@ -115,7 +115,7 @@ impl std::fmt::Display for ObjectStoreUrl {
 /// buckets using [`ObjectStoreRegistry::register_store`]
 ///
 /// 2. Systems relying on ad-hoc discovery, without corresponding DDL, can create [`ObjectStore`]
-/// lazily
+/// lazily by providing a custom implementation of [`ObjectStoreRegistry`]
 ///
 /// [`ListingTableUrl`]: crate::datasource::listing::ListingTableUrl
 pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
@@ -128,13 +128,14 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
 
     /// Get a suitable store for the provided URL. For example:
     ///
-    /// - URL with scheme `file:///` or no schema will return the default LocalFS store
+    /// - URL with scheme `file:///` or no scheme will return the default LocalFS store
     /// - URL with scheme `s3://bucket/` will return the S3 store
     /// - URL with scheme `hdfs://hostname:port/` will return the hdfs store
     ///
     /// If no [`ObjectStore`] found for the `url`, ad-hoc discovery may be executed depending on
-    /// the `url`. An [`ObjectStore`] may be lazily created and registered.
-    fn get_or_lazy_register_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>>;
+    /// the `url` and [`ObjectStoreRegistry`] implementation. An [`ObjectStore`] may be lazily
+    /// created and registered.
+    fn get_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>>;
 }
 
 /// The default [`ObjectStoreRegistry`]
@@ -168,13 +169,20 @@ impl DefaultObjectStoreRegistry {
     /// This will register [`LocalFileSystem`] to handle `file://` paths
     pub fn new() -> Self {
         let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
-        let url = Url::parse("file://").unwrap();
-        let key = get_url_key(&url);
-        object_stores.insert(key, Arc::new(LocalFileSystem::new()));
+        object_stores.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
         Self { object_stores }
     }
 }
 
+///
+/// Stores are registered based on the scheme, host and port of the provided URL
+/// with a [`LocalFileSystem::new`] automatically registered for `file://`
+///
+/// For example:
+///
+/// - `file:///my_path` will return the default LocalFS store
+/// - `s3://bucket/path` will return a store registered with `s3://bucket` if any
+/// - `hdfs://host:port/path` will return a store registered with `hdfs://host:port` if any
 impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     fn register_store(
         &self,
@@ -185,10 +193,7 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
         self.object_stores.insert(s, store)
     }
 
-    /// The [`DefaultObjectStoreRegistry`] will only depend on the inner object store cache
-    /// to decide whether it's able to find an [`ObjectStore`] for a url. No ad-hoc discovery
-    /// and lazy registration will be executed.
-    fn get_or_lazy_register_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
+    fn get_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
         let s = get_url_key(url);
         self.object_stores
             .get(&s)
@@ -204,15 +209,10 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
 /// Get the key of a url for object store registration.
 /// The credential info will be removed
 fn get_url_key(url: &Url) -> String {
-    let port_info = url
-        .port()
-        .map(|port| format!(":{port}"))
-        .unwrap_or(String::new());
     format!(
-        "{}://{}{}/",
-        &url[url::Position::BeforeScheme..url::Position::AfterScheme],
-        &url[url::Position::BeforeHost..url::Position::AfterHost],
-        port_info
+        "{}://{}",
+        url.scheme(),
+        &url[url::Position::BeforeHost..url::Position::AfterPort],
     )
 }
 
@@ -252,14 +252,14 @@ mod tests {
     fn test_get_url_key() {
         let file = ObjectStoreUrl::parse("file://").unwrap();
         let key = get_url_key(&file.url);
-        assert_eq!(key.as_str(), "file:///");
+        assert_eq!(key.as_str(), "file://");
 
         let url = ObjectStoreUrl::parse("s3://bucket").unwrap();
         let key = get_url_key(&url.url);
-        assert_eq!(key.as_str(), "s3://bucket/");
+        assert_eq!(key.as_str(), "s3://bucket");
 
         let url = ObjectStoreUrl::parse("s3://username:password@host:123").unwrap();
         let key = get_url_key(&url.url);
-        assert_eq!(key.as_str(), "s3://host:123/");
+        assert_eq!(key.as_str(), "s3://host:123");
     }
 }
