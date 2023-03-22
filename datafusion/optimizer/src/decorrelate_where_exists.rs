@@ -62,12 +62,8 @@ impl DecorrelateWhereExists {
                         .try_optimize(&subquery.subquery, config)?
                         .map(Arc::new)
                         .unwrap_or_else(|| subquery.subquery.clone());
-                    let subquery = Subquery {
-                        subquery: subquery_plan,
-                        outer_ref_columns: subquery.outer_ref_columns.clone(),
-                    };
-                    let subquery = SubqueryInfo::new(subquery.clone(), *negated);
-                    subqueries.push(subquery);
+                    let new_subquery = subquery.with_plan(subquery_plan);
+                    subqueries.push(SubqueryInfo::new(new_subquery, *negated));
                 }
                 _ => others.push((*it).clone()),
             }
