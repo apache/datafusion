@@ -53,7 +53,6 @@ To make changes to the docs, simply make a Pull Request with your
 proposed changes as normal. When the PR is merged the docs will be
 automatically updated.
 
-
 ## Release Process
 
 This documentation is hosted at https://arrow.apache.org/datafusion/
