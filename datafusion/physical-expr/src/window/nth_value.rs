@@ -160,6 +160,7 @@ impl PartitionEvaluator for NthValueEvaluator {
     fn update_state(
         &mut self,
         state: &WindowAggState,
+        _idx: usize,
         _range_columns: &[ArrayRef],
         _sort_partition_points: &[Range<usize>],
     ) -> Result<()> {

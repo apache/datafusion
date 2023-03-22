@@ -29,7 +29,7 @@ use arrow::datatypes::{
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
     ScalarValue,
 };
 use datafusion_expr::{
@@ -145,10 +145,7 @@ impl From<protobuf::Column> for Column {
     fn from(c: protobuf::Column) -> Self {
         let protobuf::Column { relation, name } = c;
 
-        Self {
-            relation: relation.map(|r| r.relation),
-            name,
-        }
+        Self::new(relation.map(|r| r.relation), name)
     }
 }
 
@@ -190,7 +187,7 @@ impl TryFrom<&protobuf::DfField> for DFField {
         let field = df_field.field.as_ref().required("field")?;
 
         Ok(match &df_field.qualifier {
-            Some(q) => DFField::from_qualified(&q.relation, field),
+            Some(q) => DFField::from_qualified(q.relation.clone(), field),
             None => DFField::from(field),
         })
     }
@@ -217,21 +214,17 @@ impl TryFrom<protobuf::OwnedTableReference> for OwnedTableReference {
 
         match table_reference_enum {
             TableReferenceEnum::Bare(protobuf::BareTableReference { table }) => {
-                Ok(OwnedTableReference::Bare { table })
+                Ok(OwnedTableReference::bare(table))
             }
             TableReferenceEnum::Partial(protobuf::PartialTableReference {
                 schema,
                 table,
-            }) => Ok(OwnedTableReference::Partial { schema, table }),
+            }) => Ok(OwnedTableReference::partial(schema, table)),
             TableReferenceEnum::Full(protobuf::FullTableReference {
                 catalog,
                 schema,
                 table,
-            }) => Ok(OwnedTableReference::Full {
-                catalog,
-                schema,
-                table,
-            }),
+            }) => Ok(OwnedTableReference::full(catalog, schema, table)),
         }
     }
 }
@@ -1389,7 +1382,7 @@ pub fn parse_expr(
 }
 
 /// Parse an optional escape_char for Like, ILike, SimilarTo
-fn parse_escape_char(s: &str) -> Result<Option<char>, DataFusionError> {
+fn parse_escape_char(s: &str) -> Result<Option<char>> {
     match s.len() {
         0 => Ok(None),
         1 => Ok(s.chars().next()),

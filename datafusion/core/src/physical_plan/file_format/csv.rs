@@ -326,7 +326,6 @@ mod tests {
     use super::*;
     use crate::datasource::file_format::file_type::FileType;
     use crate::physical_plan::file_format::chunked_store::ChunkedStore;
-    use crate::physical_plan::file_format::partition_type_wrap;
     use crate::prelude::*;
     use crate::test::{partitioned_csv_config, partitioned_file_groups};
     use crate::test_util::{aggr_test_schema_with_missing_col, arrow_test_data};
@@ -338,6 +337,7 @@ mod tests {
     use std::fs::File;
     use std::io::Write;
     use tempfile::TempDir;
+    use url::Url;
 
     #[rstest(
         file_compression_type,
@@ -580,8 +580,7 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
 
         // Add partition columns
-        config.table_partition_cols =
-            vec![("date".to_owned(), partition_type_wrap(DataType::Utf8))];
+        config.table_partition_cols = vec![("date".to_owned(), DataType::Utf8)];
         config.file_groups[0][0].partition_values =
             vec![ScalarValue::Utf8(Some("2021-10-26".to_owned()))];
 
@@ -658,8 +657,8 @@ mod tests {
         store: Arc<dyn ObjectStore>,
     ) {
         let ctx = SessionContext::new();
-        ctx.runtime_env()
-            .register_object_store("file", "", store.clone());
+        let url = Url::parse("file://").unwrap();
+        ctx.runtime_env().register_object_store(&url, store.clone());
 
         let task_ctx = ctx.task_ctx();
 
@@ -719,9 +718,10 @@ mod tests {
         let path = object_store::path::Path::from("a.csv");
         store.put(&path, data).await.unwrap();
 
+        let url = Url::parse("memory://").unwrap();
         session_ctx
             .runtime_env()
-            .register_object_store("memory", "", Arc::new(store));
+            .register_object_store(&url, Arc::new(store));
 
         let df = session_ctx
             .read_csv("memory:///", CsvReadOptions::new())

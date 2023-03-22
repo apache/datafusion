@@ -231,6 +231,82 @@ fn create_join_context(
     Ok(ctx)
 }
 
+fn create_sub_query_join_context(
+    column_outer: &str,
+    column_inner_left: &str,
+    column_inner_right: &str,
+    repartition_joins: bool,
+) -> Result<SessionContext> {
+    let ctx = SessionContext::with_config(
+        SessionConfig::new()
+            .with_repartition_joins(repartition_joins)
+            .with_target_partitions(2)
+            .with_batch_size(4096),
+    );
+
+    let t0_schema = Arc::new(Schema::new(vec![
+        Field::new(column_outer, DataType::UInt32, true),
+        Field::new("t0_name", DataType::Utf8, true),
+        Field::new("t0_int", DataType::UInt32, true),
+    ]));
+    let t0_data = RecordBatch::try_new(
+        t0_schema,
+        vec![
+            Arc::new(UInt32Array::from_slice([11, 22, 33, 44])),
+            Arc::new(StringArray::from(vec![
+                Some("a"),
+                Some("b"),
+                Some("c"),
+                Some("d"),
+            ])),
+            Arc::new(UInt32Array::from_slice([1, 2, 3, 4])),
+        ],
+    )?;
+    ctx.register_batch("t0", t0_data)?;
+
+    let t1_schema = Arc::new(Schema::new(vec![
+        Field::new(column_inner_left, DataType::UInt32, true),
+        Field::new("t1_name", DataType::Utf8, true),
+        Field::new("t1_int", DataType::UInt32, true),
+    ]));
+    let t1_data = RecordBatch::try_new(
+        t1_schema,
+        vec![
+            Arc::new(UInt32Array::from_slice([11, 22, 33, 44])),
+            Arc::new(StringArray::from(vec![
+                Some("a"),
+                Some("b"),
+                Some("c"),
+                Some("d"),
+            ])),
+            Arc::new(UInt32Array::from_slice([1, 2, 3, 4])),
+        ],
+    )?;
+    ctx.register_batch("t1", t1_data)?;
+
+    let t2_schema = Arc::new(Schema::new(vec![
+        Field::new(column_inner_right, DataType::UInt32, true),
+        Field::new("t2_name", DataType::Utf8, true),
+        Field::new("t2_int", DataType::UInt32, true),
+    ]));
+    let t2_data = RecordBatch::try_new(
+        t2_schema,
+        vec![
+            Arc::new(UInt32Array::from_slice([11, 22, 44, 55])),
+            Arc::new(StringArray::from(vec![
+                Some("z"),
+                Some("y"),
+                Some("x"),
+                Some("w"),
+            ])),
+            Arc::new(UInt32Array::from_slice([3, 1, 3, 3])),
+        ],
+    )?;
+    ctx.register_batch("t2", t2_data)?;
+
+    Ok(ctx)
+}
+
 fn create_left_semi_anti_join_context_with_null_ids(
     column_left: &str,
     column_right: &str,
@@ -1412,99 +1488,6 @@ pub fn make_timestamps() -> RecordBatch {
     let arr_micros = TimestampMicrosecondArray::from(ts_micros);
     let arr_millis = TimestampMillisecondArray::from(ts_millis);
     let arr_secs = TimestampSecondArray::from(ts_secs);
-
-    let names = names.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-    let arr_names = StringArray::from(names);
-
-    let schema = Schema::new(vec![
-        Field::new("nanos", arr_nanos.data_type().clone(), true),
-        Field::new("micros", arr_micros.data_type().clone(), true),
-        Field::new("millis", arr_millis.data_type().clone(), true),
-        Field::new("secs", arr_secs.data_type().clone(), true),
-        Field::new("name", arr_names.data_type().clone(), true),
-    ]);
-    let schema = Arc::new(schema);
-
-    RecordBatch::try_new(
-        schema,
-        vec![
-            Arc::new(arr_nanos),
-            Arc::new(arr_micros),
-            Arc::new(arr_millis),
-            Arc::new(arr_secs),
-            Arc::new(arr_names),
-        ],
-    )
-    .unwrap()
-}
-
-/// Return a new table provider containing all of the supported timestamp types
-pub fn table_with_times() -> Arc<dyn TableProvider> {
-    let batch = make_times();
-    let schema = batch.schema();
-    let partitions = vec![vec![batch]];
-    Arc::new(MemTable::try_new(schema, partitions).unwrap())
-}
-
-/// Return  record batch with all of the supported time types
-/// values
-///
-/// Columns are named:
-/// "nanos" --> Time64NanosecondArray
-/// "micros" --> Time64MicrosecondArray
-/// "millis" --> Time32MillisecondArray
-/// "secs" --> Time32SecondArray
-/// "names" --> StringArray
-pub fn make_times() -> RecordBatch {
-    let ts_strings = vec![
-        Some("18:06:30.243620451"),
-        Some("20:08:28.161121654"),
-        Some("19:11:04.156423842"),
-        Some("21:06:28.247821084"),
-    ];
-
-    let ts_nanos = ts_strings
-        .into_iter()
-        .map(|t| {
-            t.map(|t| {
-                let integer_sec = t
-                    .parse::<chrono::NaiveTime>()
-                    .unwrap()
-                    .num_seconds_from_midnight() as i64;
-                let extra_nano =
-                    t.parse::<chrono::NaiveTime>().unwrap().nanosecond() as i64;
-                // Total time in nanoseconds given by integer number of seconds multiplied by 10^9
-                // plus number of nanoseconds corresponding to the extra fraction of second
-                integer_sec * 1_000_000_000 + extra_nano
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let ts_micros = ts_nanos
-        .iter()
-        .map(|t| t.as_ref().map(|ts_nanos| ts_nanos / 1000))
-        .collect::<Vec<_>>();
-
-    let ts_millis = ts_nanos
-        .iter()
-        .map(|t| t.as_ref().map(|ts_nanos| { ts_nanos / 1000000 } as i32))
-        .collect::<Vec<_>>();
-
-    let ts_secs = ts_nanos
-        .iter()
-        .map(|t| t.as_ref().map(|ts_nanos| { ts_nanos / 1000000000 } as i32))
-        .collect::<Vec<_>>();
-
-    let names = ts_nanos
-        .iter()
-        .enumerate()
-        .map(|(i, _)| format!("Row {i}"))
-        .collect::<Vec<_>>();
-
-    let arr_nanos = Time64NanosecondArray::from(ts_nanos);
-    let arr_micros = Time64MicrosecondArray::from(ts_micros);
-    let arr_millis = Time32MillisecondArray::from(ts_millis);
-    let arr_secs = Time32SecondArray::from(ts_secs);
 
     let names = names.iter().map(|s| s.as_str()).collect::<Vec<_>>();
     let arr_names = StringArray::from(names);

@@ -17,6 +17,7 @@
 
 //! Query optimizer traits
 
+use crate::analyzer::Analyzer;
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_where_exists::DecorrelateWhereExists;
 use crate::decorrelate_where_in::DecorrelateWhereIn;
@@ -30,6 +31,7 @@ use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::inline_table_scan::InlineTableScan;
 use crate::merge_projection::MergeProjection;
+use crate::plan_signature::LogicalPlanSignature;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
@@ -46,7 +48,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use log::{debug, trace, warn};
-use std::borrow::Cow;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -266,9 +268,14 @@ impl Optimizer {
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
         let options = config.options();
+        // execute_and_check has it's own timer
+        let mut new_plan = Analyzer::default().execute_and_check(plan, options)?;
+
         let start_time = Instant::now();
-        let mut old_plan = Cow::Borrowed(plan);
-        let mut new_plan = plan.clone();
+
+        let mut previous_plans = HashSet::with_capacity(16);
+        previous_plans.insert(LogicalPlanSignature::new(&new_plan));
+
         let mut i = 0;
         while i < options.optimizer.max_passes {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
@@ -278,18 +285,7 @@ impl Optimizer {
 
                 match result {
                     Ok(Some(plan)) => {
-                        if !plan.schema().equivalent_names_and_types(new_plan.schema()) {
-                            let e = DataFusionError::Internal(format!(
-                                "Optimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
-                                rule.name(),
-                                new_plan.schema(),
-                                plan.schema()
-                            ));
-                            return Err(DataFusionError::Context(
-                                rule.name().to_string(),
-                                Box::new(e),
-                            ));
-                        }
+                        assert_schema_is_the_same(rule.name(), &new_plan, &plan)?;
                         new_plan = plan;
                         observer(&new_plan, rule.as_ref());
                         log_plan(rule.name(), &new_plan);
@@ -328,15 +324,14 @@ impl Optimizer {
             }
             log_plan(&format!("Optimized plan (pass {i})"), &new_plan);
 
-            // TODO this is an expensive way to see if the optimizer did anything and
-            // it would be better to change the OptimizerRule trait to return an Option
-            // instead
-            if old_plan.as_ref() == &new_plan {
+            // HashSet::insert returns, whether the value was newly inserted.
+            let plan_is_fresh =
+                previous_plans.insert(LogicalPlanSignature::new(&new_plan));
+            if !plan_is_fresh {
                 // plan did not change, so no need to continue trying to optimize
                 debug!("optimizer pass {} did not make changes", i);
                 break;
             }
-            old_plan = Cow::Owned(new_plan.clone());
             i += 1;
         }
         log_plan("Final optimized plan", &new_plan);
@@ -417,6 +412,34 @@ impl Optimizer {
     }
 }
 
+/// Returns an error if plans have different schemas.
+///
+/// It ignores metadata and nullability.
+fn assert_schema_is_the_same(
+    rule_name: &str,
+    prev_plan: &LogicalPlan,
+    new_plan: &LogicalPlan,
+) -> Result<()> {
+    let equivalent = new_plan
+        .schema()
+        .equivalent_names_and_types(prev_plan.schema());
+
+    if !equivalent {
+        let e = DataFusionError::Internal(format!(
+            "Optimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
+            rule_name,
+            prev_plan.schema(),
+            new_plan.schema()
+        ));
+        Err(DataFusionError::Context(
+            String::from(rule_name),
+            Box::new(e),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Log the plan in debug/tracing mode after some part of the optimizer runs
 fn log_plan(description: &str, plan: &LogicalPlan) {
     debug!("{description}:\n{}\n", plan.display_indent());
@@ -430,8 +453,10 @@ mod tests {
     use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, Result};
     use datafusion_expr::logical_plan::EmptyRelation;
-    use datafusion_expr::{col, LogicalPlan, LogicalPlanBuilder, Projection};
-    use std::sync::Arc;
+    use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, Projection};
+    use std::sync::{Arc, Mutex};
+
+    use super::ApplyOrder;
 
     #[test]
     fn skip_failing_rule() {
@@ -476,9 +501,9 @@ mod tests {
              Internal error: Optimizer rule 'get table_scan rule' failed, due to generate a different schema, \
              original schema: DFSchema { fields: [], metadata: {} }, \
              new schema: DFSchema { fields: [\
-             DFField { qualifier: Some(\"test\"), field: Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
-             DFField { qualifier: Some(\"test\"), field: Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
-             DFField { qualifier: Some(\"test\"), field: Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }], \
+             DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
+             DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
+             DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }], \
              metadata: {} }. \
              This was likely caused by a bug in DataFusion's code \
              and we would welcome that you file an bug report in our issue tracker",
@@ -510,6 +535,58 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn optimizer_detects_plan_equal_to_the_initial() -> Result<()> {
+        // Run a goofy optimizer, which rotates projection columns
+        // [1, 2, 3] -> [2, 3, 1] -> [3, 1, 2] -> [1, 2, 3]
+
+        let opt = Optimizer::with_rules(vec![Arc::new(RotateProjectionRule::new(false))]);
+        let config = OptimizerContext::new().with_max_passes(16);
+
+        let initial_plan = LogicalPlanBuilder::empty(false)
+            .project([lit(1), lit(2), lit(3)])?
+            .project([lit(100)])? // to not trigger changed schema error
+            .build()?;
+
+        let mut plans: Vec<LogicalPlan> = Vec::new();
+        let final_plan =
+            opt.optimize(&initial_plan, &config, |p, _| plans.push(p.clone()))?;
+
+        // initial_plan is not observed, so we have 3 plans
+        assert_eq!(3, plans.len());
+
+        // we got again the initial_plan with [1, 2, 3]
+        assert_eq!(initial_plan, final_plan);
+
+        Ok(())
+    }
+
+    #[test]
+    fn optimizer_detects_plan_equal_to_a_non_initial() -> Result<()> {
+        // Run a goofy optimizer, which reverses and rotates projection columns
+        // [1, 2, 3] -> [3, 2, 1] -> [2, 1, 3] -> [1, 3, 2] -> [3, 2, 1]
+
+        let opt = Optimizer::with_rules(vec![Arc::new(RotateProjectionRule::new(true))]);
+        let config = OptimizerContext::new().with_max_passes(16);
+
+        let initial_plan = LogicalPlanBuilder::empty(false)
+            .project([lit(1), lit(2), lit(3)])?
+            .project([lit(100)])? // to not trigger changed schema error
+            .build()?;
+
+        let mut plans: Vec<LogicalPlan> = Vec::new();
+        let final_plan =
+            opt.optimize(&initial_plan, &config, |p, _| plans.push(p.clone()))?;
+
+        // initial_plan is not observed, so we have 4 plans
+        assert_eq!(4, plans.len());
+
+        // we got again the plan with [3, 2, 1]
+        assert_eq!(plans[0], final_plan);
+
+        Ok(())
+    }
+
     fn add_metadata_to_fields(schema: &DFSchema) -> DFSchemaRef {
         let new_fields = schema
             .fields()
@@ -521,7 +598,7 @@ mod tests {
 
                 let new_arrow_field = f.field().clone().with_metadata(metadata);
                 if let Some(qualifier) = f.qualifier() {
-                    DFField::from_qualified(qualifier, new_arrow_field)
+                    DFField::from_qualified(qualifier.clone(), new_arrow_field)
                 } else {
                     DFField::from(new_arrow_field)
                 }
@@ -565,6 +642,58 @@ mod tests {
 
         fn name(&self) -> &str {
             "get table_scan rule"
+        }
+    }
+
+    /// A goofy rule doing rotation of columns in all projections.
+    ///
+    /// Useful to test cycle detection.
+    struct RotateProjectionRule {
+        // reverse exprs instead of rotating on the first pass
+        reverse_on_first_pass: Mutex<bool>,
+    }
+
+    impl RotateProjectionRule {
+        fn new(reverse_on_first_pass: bool) -> Self {
+            Self {
+                reverse_on_first_pass: Mutex::new(reverse_on_first_pass),
+            }
+        }
+    }
+
+    impl OptimizerRule for RotateProjectionRule {
+        fn try_optimize(
+            &self,
+            plan: &LogicalPlan,
+            _: &dyn OptimizerConfig,
+        ) -> Result<Option<LogicalPlan>> {
+            let projection = match plan {
+                LogicalPlan::Projection(p) if p.expr.len() >= 2 => p,
+                _ => return Ok(None),
+            };
+
+            let mut exprs = projection.expr.clone();
+
+            let mut reverse = self.reverse_on_first_pass.lock().unwrap();
+            if *reverse {
+                exprs.reverse();
+                *reverse = false;
+            } else {
+                exprs.rotate_left(1);
+            }
+
+            Ok(Some(LogicalPlan::Projection(Projection::try_new(
+                exprs,
+                projection.input.clone(),
+            )?)))
+        }
+
+        fn apply_order(&self) -> Option<ApplyOrder> {
+            Some(ApplyOrder::TopDown)
+        }
+
+        fn name(&self) -> &str {
+            "rotate_projection"
         }
     }
 }

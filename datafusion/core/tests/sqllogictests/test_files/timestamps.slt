@@ -88,6 +88,12 @@ SELECT DATE_BIN('15 minutes', '2022-08-03 14:38:50Z', '1970-01-01T00:00:00Z')
 ----
 2022-08-03T14:30:00
 
+# Call in two arguments (should be the same as the above query)
+query B
+SELECT DATE_BIN('15 minutes', '2022-08-03 14:38:50Z') = DATE_BIN('15 minutes', '2022-08-03 14:38:50Z', '1970-01-01T00:00:00Z')
+----
+true
+
 # Shift forward by 5 minutes
 query P
 SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:05:00Z')

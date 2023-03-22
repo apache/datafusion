@@ -19,15 +19,12 @@
 //! and various system level components that are used during physical plan execution.
 
 use crate::{
-    error::Result,
-    execution::disk_manager::{DiskManager, DiskManagerConfig},
+    disk_manager::{DiskManager, DiskManagerConfig},
+    memory_pool::{GreedyMemoryPool, MemoryPool, UnboundedMemoryPool},
+    object_store::{DefaultObjectStoreRegistry, ObjectStoreRegistry},
 };
 
-use datafusion_common::DataFusionError;
-use datafusion_execution::{
-    memory_pool::{GreedyMemoryPool, MemoryPool, UnboundedMemoryPool},
-    object_store::ObjectStoreRegistry,
-};
+use datafusion_common::{DataFusionError, Result};
 use object_store::ObjectStore;
 use std::fmt::{Debug, Formatter};
 use std::path::PathBuf;
@@ -42,7 +39,7 @@ pub struct RuntimeEnv {
     /// Manage temporary files during query execution
     pub disk_manager: Arc<DiskManager>,
     /// Object Store Registry
-    pub object_store_registry: Arc<ObjectStoreRegistry>,
+    pub object_store_registry: Arc<dyn ObjectStoreRegistry>,
 }
 
 impl Debug for RuntimeEnv {
@@ -70,10 +67,9 @@ impl RuntimeEnv {
         })
     }
 
-    /// Registers a custom `ObjectStore` to be used when accessing a
-    /// specific scheme and host. This allows DataFusion to create
-    /// external tables from urls that do not have built in support
-    /// such as `hdfs://...`.
+    /// Registers a custom `ObjectStore` to be used with a specific url.
+    /// This allows DataFusion to create external tables from urls that do not have
+    /// built in support such as `hdfs://namenode:port/...`.
     ///
     /// Returns the [`ObjectStore`] previously registered for this
     /// scheme, if any.
@@ -81,20 +77,18 @@ impl RuntimeEnv {
     /// See [`ObjectStoreRegistry`] for more details
     pub fn register_object_store(
         &self,
-        scheme: impl AsRef<str>,
-        host: impl AsRef<str>,
+        url: &Url,
         object_store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        self.object_store_registry
-            .register_store(scheme, host, object_store)
+        self.object_store_registry.register_store(url, object_store)
     }
 
     /// Retrieves a `ObjectStore` instance for a url by consulting the
-    /// registery. See [`ObjectStoreRegistry::get_by_url`] for more
+    /// registry. See [`ObjectStoreRegistry::get_store`] for more
     /// details.
     pub fn object_store(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
         self.object_store_registry
-            .get_by_url(url)
+            .get_store(url.as_ref())
             .map_err(DataFusionError::from)
     }
 }
@@ -105,7 +99,7 @@ impl Default for RuntimeEnv {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 /// Execution runtime configuration
 pub struct RuntimeConfig {
     /// DiskManager to manage temporary disk file usage
@@ -115,13 +109,23 @@ pub struct RuntimeConfig {
     /// Defaults to using an [`UnboundedMemoryPool`] if `None`
     pub memory_pool: Option<Arc<dyn MemoryPool>>,
     /// ObjectStoreRegistry to get object store based on url
-    pub object_store_registry: Arc<ObjectStoreRegistry>,
+    pub object_store_registry: Arc<dyn ObjectStoreRegistry>,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RuntimeConfig {
     /// New with default values
     pub fn new() -> Self {
-        Default::default()
+        Self {
+            disk_manager: Default::default(),
+            memory_pool: Default::default(),
+            object_store_registry: Arc::new(DefaultObjectStoreRegistry::default()),
+        }
     }
 
     /// Customize disk manager
@@ -139,7 +143,7 @@ impl RuntimeConfig {
     /// Customize object store registry
     pub fn with_object_store_registry(
         mut self,
-        object_store_registry: Arc<ObjectStoreRegistry>,
+        object_store_registry: Arc<dyn ObjectStoreRegistry>,
     ) -> Self {
         self.object_store_registry = object_store_registry;
         self

@@ -39,3 +39,7 @@ github:
     rebase: false    
   features:
     issues: true        
+
+publish:
+  whoami: asf-site
+  subdir: datafusion

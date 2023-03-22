@@ -115,7 +115,7 @@ env_logger = "0.10"
 half = "2.2.1"
 postgres-protocol = "0.6.4"
 postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
-rstest = "0.16.0"
+rstest = "0.17.0"
 rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
 sqllogictest = "0.13.0"
 test-utils = { path = "../../test-utils" }

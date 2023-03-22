@@ -121,6 +121,7 @@ impl ExprRewritable for Expr {
         let expr = match self {
             Expr::Alias(expr, name) => Expr::Alias(rewrite_boxed(expr, rewriter)?, name),
             Expr::Column(_) => self.clone(),
+            Expr::OuterReferenceColumn(_, _) => self.clone(),
             Expr::Exists { .. } => self.clone(),
             Expr::InSubquery {
                 expr,
@@ -446,6 +447,19 @@ pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
     exprs.into_iter().map(unnormalize_col).collect()
 }
 
+/// Recursively remove all the ['OuterReferenceColumn'] and return the inside Column
+/// in the expression tree.
+pub fn strip_outer_reference(expr: Expr) -> Expr {
+    rewrite_expr(expr, |expr| {
+        if let Expr::OuterReferenceColumn(_, col) = expr {
+            Ok(Expr::Column(col))
+        } else {
+            Ok(expr)
+        }
+    })
+    .expect("strip_outer_reference is infallable")
+}
+
 /// Implementation of [`ExprRewriter`] that calls a function, for use
 /// with [`rewrite_expr`]
 struct RewriterAdapter<F> {
@@ -664,7 +678,8 @@ mod test {
     fn normalize_cols_non_exist() {
         // test normalizing columns when the name doesn't exist
         let expr = col("a") + col("b");
-        let schema_a = make_schema_with_empty_metadata(vec![make_field("tableA", "a")]);
+        let schema_a =
+            make_schema_with_empty_metadata(vec![make_field("\"tableA\"", "a")]);
         let schemas = vec![schema_a];
         let schemas = schemas.iter().collect::<Vec<_>>();
 
@@ -674,7 +689,7 @@ mod test {
                 .to_string();
         assert_eq!(
             error,
-            "Schema error: No field named 'b'. Valid fields are 'tableA'.'a'."
+            r#"Schema error: No field named "b". Valid fields are "tableA"."a"."#
         );
     }
 
@@ -690,7 +705,7 @@ mod test {
     }
 
     fn make_field(relation: &str, column: &str) -> DFField {
-        DFField::new(Some(relation), column, DataType::Int8, false)
+        DFField::new(Some(relation.to_string()), column, DataType::Int8, false)
     }
 
     #[test]
