@@ -1,29 +1,33 @@
----
 name: Feature request
 about: Suggest an idea for this project
 title: ''
 labels: enhancement
 assignees: ''
+body:
 
----
+- type: textarea
+  attributes:
+  label: **Is your feature request related to a problem or challenge?**
+  description: Please describe what you are trying to do.
+  placeholder: >
+  A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+  (This section helps Arrow developers understand the context and *why* for this feature, in addition to the *what*)
 
-**Is your feature request related to a problem or challenge? Please describe what you are trying to do.**
-<!--
-A clear and concise description of what the problem is. Ex. I'm always frustrated when [...] 
-(This section helps Arrow developers understand the context and *why* for this feature, in addition to  the *what*)
--->
 
-**Describe the solution you'd like**
-<!--
-A clear and concise description of what you want to happen.
--->
+- type: textarea
+  attributes:
+  label: **Describe the solution you'd like**
+  placeholder: >
+  A clear and concise description of what you want to happen.
 
-**Describe alternatives you've considered**
-<!--
-A clear and concise description of any alternative solutions or features you've considered.
--->
+- type: textarea
+  attributes:
+  label: **Describe alternatives you've considered**
+  placeholder: >
+  A clear and concise description of any alternative solutions or features you've considered.
 
-**Additional context**
-<!--
-Add any other context or screenshots about the feature request here.
--->
+- type: textarea
+  attributes:
+  label: **Additional context**
+  placeholder: >
+  Add any other context or screenshots about the feature request here.
