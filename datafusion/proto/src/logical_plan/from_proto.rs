@@ -29,7 +29,7 @@ use arrow::datatypes::{
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
     ScalarValue,
 };
 use datafusion_expr::{
@@ -1383,7 +1383,7 @@ pub fn parse_expr(
 }
 
 /// Parse an optional escape_char for Like, ILike, SimilarTo
-fn parse_escape_char(s: &str) -> Result<Option<char>, DataFusionError> {
+fn parse_escape_char(s: &str) -> Result<Option<char>> {
     match s.len() {
         0 => Ok(None),
         1 => Ok(s.chars().next()),

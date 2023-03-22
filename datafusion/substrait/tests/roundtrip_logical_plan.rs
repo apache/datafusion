@@ -180,6 +180,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cast_decimal_to_int() -> Result<()> {
+        roundtrip("SELECT * FROM data WHERE a = CAST(2.5 AS int)").await
+    }
+
+    #[tokio::test]
+    async fn implicit_cast() -> Result<()> {
+        roundtrip("SELECT * FROM data WHERE a = b").await
+    }
+
+    #[tokio::test]
     async fn aggregate_case() -> Result<()> {
         assert_expected_plan(
             "SELECT SUM(CASE WHEN a > 0 THEN 1 ELSE NULL END) FROM data",

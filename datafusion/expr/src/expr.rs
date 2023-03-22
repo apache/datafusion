@@ -842,7 +842,7 @@ impl fmt::Debug for Expr {
         match self {
             Expr::Alias(expr, alias) => write!(f, "{expr:?} AS {alias}"),
             Expr::Column(c) => write!(f, "{c}"),
-            Expr::OuterReferenceColumn(_, c) => write!(f, "outer_ref({})", c),
+            Expr::OuterReferenceColumn(_, c) => write!(f, "outer_ref({c})"),
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v) => write!(f, "{v:?}"),
             Expr::Case(case) => {

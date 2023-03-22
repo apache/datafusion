@@ -18,9 +18,9 @@
 mod count_wildcard_rule;
 mod replace_grouping_func;
 
-use count_wildcard_rule::CountWildcardRule;
-use replace_grouping_func::ReplaceGroupingFunc;
 
+use crate::analyzer::count_wildcard_rule::CountWildcardRule;
+use crate::analyzer::replace_grouping_func::ReplaceGroupingFunc;
 use crate::rewrite::TreeNodeRewritable;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
