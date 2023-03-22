@@ -260,7 +260,10 @@ fn intersect(
 
 /// Extract join keys from a WHERE clause
 fn extract_possible_join_keys(expr: &Expr, accum: &mut Vec<(Expr, Expr)>) -> Result<()> {
-    if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = expr {
+    if let Expr::BinaryExpr(BinaryExpr {
+        left, op, right, ..
+    }) = expr
+    {
         match op {
             Operator::Eq => {
                 // Ensure that we don't add the same Join keys multiple times
@@ -298,7 +301,9 @@ fn remove_join_expressions(
     join_keys: &HashSet<(Expr, Expr)>,
 ) -> Result<Option<Expr>> {
     match expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
+        Expr::BinaryExpr(BinaryExpr {
+            left, op, right, ..
+        }) => match op {
             Operator::Eq => {
                 if join_keys.contains(&(*left.clone(), *right.clone()))
                     || join_keys.contains(&(*right.clone(), *left.clone()))

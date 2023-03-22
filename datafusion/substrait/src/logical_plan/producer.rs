@@ -584,7 +584,9 @@ pub fn to_substrait_rex(
             let index = schema.index_of_column(col)?;
             substrait_field_ref(index)
         }
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+        Expr::BinaryExpr(BinaryExpr {
+            left, op, right, ..
+        }) => {
             let l = to_substrait_rex(left, schema, extension_info)?;
             let r = to_substrait_rex(right, schema, extension_info)?;
 

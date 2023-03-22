@@ -161,7 +161,9 @@ enum Predicate {
 
 fn predicate(expr: &Expr) -> Result<Predicate> {
     match expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
+        Expr::BinaryExpr(BinaryExpr {
+            left, op, right, ..
+        }) => match op {
             Operator::And => {
                 let args = vec![predicate(left)?, predicate(right)?];
                 Ok(Predicate::And { args })

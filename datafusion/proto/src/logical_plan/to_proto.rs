@@ -464,7 +464,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Literal(pb_value)),
                 }
             }
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+            Expr::BinaryExpr(BinaryExpr { left, op, right, .. }) => {
                 // Try to linerize a nested binary expression tree of the same operator
                 // into a flat vector of expressions.
                 let mut exprs = vec![right.as_ref()];
@@ -473,6 +473,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     left,
                     op: current_op,
                     right,
+                    ..
                 }) = current_expr
                 {
                     if current_op == op {
@@ -945,8 +946,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 }
             }
 
-            Expr::QualifiedWildcard { .. } => return Err(Error::General(
-                "Proto serialization error: Expr::QualifiedWildcard { .. } not supported"
+            Expr::QualifiedWildcard { .. } | Expr::PromotePrecision { .. } => return Err(Error::General(
+                "Proto serialization error: Expr::QualifiedWildcard { .. }  | Expr::PromotePrecision { .. } not supported"
                     .to_string(),
             )),
         };

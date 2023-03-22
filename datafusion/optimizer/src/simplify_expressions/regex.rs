@@ -55,7 +55,7 @@ pub fn simplify_regex_expr(
     }
 
     // leave untouched if optimization didn't work
-    Ok(Expr::BinaryExpr(BinaryExpr { left, op, right }))
+    Ok(Expr::BinaryExpr(BinaryExpr::new(left, op, right)))
 }
 
 struct OperatorMode {

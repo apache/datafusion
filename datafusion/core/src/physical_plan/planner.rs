@@ -61,7 +61,7 @@ use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{
     self, AggregateFunction, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet,
-    Like, TryCast, WindowFunction,
+    Like, PromotePrecision, TryCast, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -111,7 +111,9 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::Alias(_, name) => Ok(name.clone()),
         Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
         Expr::Literal(value) => Ok(format!("{value:?}")),
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+        Expr::BinaryExpr(BinaryExpr {
+            left, op, right, ..
+        }) => {
             let left = create_physical_name(left, false)?;
             let right = create_physical_name(right, false)?;
             Ok(format!("{left} {op} {right}"))
@@ -132,6 +134,10 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         }
         Expr::Cast(Cast { expr, .. }) => {
             // CAST does not change the expression name
+            create_physical_name(expr, false)
+        }
+        Expr::PromotePrecision(PromotePrecision { expr }) => {
+            // PromotePrecision does not change the expression name
             create_physical_name(expr, false)
         }
         Expr::TryCast(TryCast { expr, .. }) => {
@@ -1895,7 +1901,7 @@ mod tests {
         // verify that the plan correctly casts u8 to i64
         // the cast from u8 to i64 for literal will be simplified, and get lit(int64(5))
         // the cast here is implicit so has CastOptions with safe=true
-        let expected = "BinaryExpr { left: Column { name: \"c7\", index: 2 }, op: Lt, right: Literal { value: Int64(5) } }";
+        let expected = "BinaryExpr { left: Column { name: \"c7\", index: 2 }, op: Lt, right: Literal { value: Int64(5) }, data_type: None }";
         assert!(format!("{exec_plan:?}").contains(expected));
         Ok(())
     }
@@ -2141,7 +2147,7 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8, and the const will be evaluated.
 
-        let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\") } }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\") } } }";
+        let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\") }, data_type: None }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\") }, data_type: None }, data_type: None }";
 
         let actual = format!("{execution_plan:?}");
         assert!(actual.contains(expected), "{}", actual);

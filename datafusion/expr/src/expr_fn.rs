@@ -74,6 +74,21 @@ pub fn binary_expr(left: Expr, op: Operator, right: Expr) -> Expr {
     Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
 }
 
+/// Return a new expression `left <op> right`
+pub fn binary_expr_with_data_type(
+    left: Expr,
+    op: Operator,
+    right: Expr,
+    data_type: Option<DataType>,
+) -> Expr {
+    Expr::BinaryExpr(BinaryExpr::new_with_data_type(
+        Box::new(left),
+        op,
+        Box::new(right),
+        data_type,
+    ))
+}
+
 /// Return a new expression with a logical AND
 pub fn and(left: Expr, right: Expr) -> Expr {
     Expr::BinaryExpr(BinaryExpr::new(

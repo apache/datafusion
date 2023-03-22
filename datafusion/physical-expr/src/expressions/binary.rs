@@ -89,6 +89,7 @@ pub struct BinaryExpr {
     left: Arc<dyn PhysicalExpr>,
     op: Operator,
     right: Arc<dyn PhysicalExpr>,
+    data_type: Option<DataType>,
 }
 
 impl BinaryExpr {
@@ -98,7 +99,27 @@ impl BinaryExpr {
         op: Operator,
         right: Arc<dyn PhysicalExpr>,
     ) -> Self {
-        Self { left, op, right }
+        Self {
+            left,
+            op,
+            right,
+            data_type: None,
+        }
+    }
+
+    /// Create new binary expression
+    pub fn new_with_data_type(
+        left: Arc<dyn PhysicalExpr>,
+        op: Operator,
+        right: Arc<dyn PhysicalExpr>,
+        data_type: Option<DataType>,
+    ) -> Self {
+        Self {
+            left,
+            op,
+            right,
+            data_type,
+        }
     }
 
     /// Get the left side of the binary expression
@@ -366,12 +387,14 @@ macro_rules! compute_primitive_op_dyn_scalar {
 /// LEFT is Decimal or Dictionary array of decimal values, RIGHT is scalar value
 /// OP_TYPE is the return type of scalar function
 macro_rules! compute_primitive_decimal_op_dyn_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr, $RET_TYPE:expr) => {{
         // generate the scalar function name, such as add_decimal_dyn_scalar,
         // from the $OP parameter (which could have a value of add) and the
         // suffix _decimal_dyn_scalar
         if let Some(value) = $RIGHT {
-            Ok(paste::expr! {[<$OP _decimal_dyn_scalar>]}($LEFT, value)?)
+            Ok(paste::expr! {[<$OP _decimal_dyn_scalar>]}(
+                $LEFT, value, $RET_TYPE,
+            )?)
         } else {
             // when the $RIGHT is a NULL, generate a NULL array of $OP_TYPE
             Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
@@ -419,15 +442,15 @@ macro_rules! binary_string_array_op {
 /// The binary_primitive_array_op macro only evaluates for primitive types
 /// like integers and floats.
 macro_rules! binary_primitive_array_op_dyn {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $RET_TYPE:expr) => {{
         match $LEFT.data_type() {
             DataType::Decimal128(_, _) => {
-                Ok(paste::expr! {[<$OP _decimal>]}(&$LEFT, &$RIGHT)?)
+                Ok(paste::expr! {[<$OP _decimal>]}(&$LEFT, &$RIGHT, $RET_TYPE)?)
             }
             DataType::Dictionary(_, value_type)
                 if matches!(value_type.as_ref(), &DataType::Decimal128(_, _)) =>
             {
-                Ok(paste::expr! {[<$OP _decimal>]}(&$LEFT, &$RIGHT)?)
+                Ok(paste::expr! {[<$OP _decimal>]}(&$LEFT, &$RIGHT, $RET_TYPE)?)
             }
             _ => Ok(Arc::new(
                 $OP(&$LEFT, &$RIGHT).map_err(|err| DataFusionError::ArrowError(err))?,
@@ -440,13 +463,13 @@ macro_rules! binary_primitive_array_op_dyn {
 /// The binary_primitive_array_op_dyn_scalar macro only evaluates for primitive
 /// types like integers and floats.
 macro_rules! binary_primitive_array_op_dyn_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $RET_TYPE:expr) => {{
         // unwrap underlying (non dictionary) value
         let right = unwrap_dict_value($RIGHT);
         let op_type = $LEFT.data_type();
 
         let result: Result<Arc<dyn Array>> = match right {
-            ScalarValue::Decimal128(v, _, _) => compute_primitive_decimal_op_dyn_scalar!($LEFT, v, $OP, op_type),
+            ScalarValue::Decimal128(v, _, _) => compute_primitive_decimal_op_dyn_scalar!($LEFT, v, $OP, op_type, $RET_TYPE),
             ScalarValue::Int8(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int8Type),
             ScalarValue::Int16(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int16Type),
             ScalarValue::Int32(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int32Type),
@@ -626,11 +649,15 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        binary_operator_data_type(
-            &self.left.data_type(input_schema)?,
-            &self.op,
-            &self.right.data_type(input_schema)?,
-        )
+        if self.data_type.is_some() {
+            Ok(self.data_type.as_ref().unwrap().clone())
+        } else {
+            binary_operator_data_type(
+                &self.left.data_type(input_schema)?,
+                &self.op,
+                &self.right.data_type(input_schema)?,
+            )
+        }
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
@@ -1012,6 +1039,7 @@ impl BinaryExpr {
         scalar: ScalarValue,
     ) -> Result<Option<Result<ArrayRef>>> {
         let bool_type = &DataType::Boolean;
+        let result_type = &self.data_type;
         let scalar_result = match &self.op {
             Operator::Lt => {
                 binary_array_op_dyn_scalar!(array, scalar, lt, bool_type)
@@ -1032,19 +1060,29 @@ impl BinaryExpr {
                 binary_array_op_dyn_scalar!(array, scalar, neq, bool_type)
             }
             Operator::Plus => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, add)
+                binary_primitive_array_op_dyn_scalar!(array, scalar, add, result_type)
             }
             Operator::Minus => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, subtract)
+                binary_primitive_array_op_dyn_scalar!(
+                    array,
+                    scalar,
+                    subtract,
+                    result_type
+                )
             }
             Operator::Multiply => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, multiply)
+                binary_primitive_array_op_dyn_scalar!(
+                    array,
+                    scalar,
+                    multiply,
+                    result_type
+                )
             }
             Operator::Divide => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, divide)
+                binary_primitive_array_op_dyn_scalar!(array, scalar, divide, result_type)
             }
             Operator::Modulo => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, modulus)
+                binary_primitive_array_op_dyn_scalar!(array, scalar, modulus, result_type)
             }
             Operator::RegexMatch => binary_string_array_flag_op_scalar!(
                 array,
@@ -1126,6 +1164,7 @@ impl BinaryExpr {
         right: Arc<dyn Array>,
         right_data_type: &DataType,
     ) -> Result<ArrayRef> {
+        let result_type = &self.data_type;
         match &self.op {
             Operator::Lt => lt_dyn(&left, &right),
             Operator::LtEq => lt_eq_dyn(&left, &right),
@@ -1146,16 +1185,20 @@ impl BinaryExpr {
             Operator::IsNotDistinctFrom => {
                 binary_array_op!(left, right, is_not_distinct_from)
             }
-            Operator::Plus => binary_primitive_array_op_dyn!(left, right, add_dyn),
-            Operator::Minus => binary_primitive_array_op_dyn!(left, right, subtract_dyn),
+            Operator::Plus => {
+                binary_primitive_array_op_dyn!(left, right, add_dyn, result_type)
+            }
+            Operator::Minus => {
+                binary_primitive_array_op_dyn!(left, right, subtract_dyn, result_type)
+            }
             Operator::Multiply => {
-                binary_primitive_array_op_dyn!(left, right, multiply_dyn)
+                binary_primitive_array_op_dyn!(left, right, multiply_dyn, result_type)
             }
             Operator::Divide => {
-                binary_primitive_array_op_dyn!(left, right, divide_dyn_opt)
+                binary_primitive_array_op_dyn!(left, right, divide_dyn_opt, result_type)
             }
             Operator::Modulo => {
-                binary_primitive_array_op_dyn!(left, right, modulus_dyn)
+                binary_primitive_array_op_dyn!(left, right, modulus_dyn, result_type)
             }
             Operator::And => {
                 if left_data_type == &DataType::Boolean {
@@ -1229,6 +1272,28 @@ pub fn binary(
     Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
 }
 
+/// Create a binary expression whose arguments are correctly coerced.
+/// This function errors if it is not possible to coerce the arguments
+/// to computational types supported by the operator.
+pub fn binary_with_data_type(
+    lhs: Arc<dyn PhysicalExpr>,
+    op: Operator,
+    rhs: Arc<dyn PhysicalExpr>,
+    input_schema: &Schema,
+    data_type: Option<DataType>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let lhs_type = &lhs.data_type(input_schema)?;
+    let rhs_type = &rhs.data_type(input_schema)?;
+    if !lhs_type.eq(rhs_type) {
+        return Err(DataFusionError::Internal(format!(
+            "The type of {lhs_type} {op:?} {rhs_type} of binary physical should be same"
+        )));
+    }
+    Ok(Arc::new(BinaryExpr::new_with_data_type(
+        lhs, op, rhs, data_type,
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1247,8 +1312,9 @@ mod tests {
         op: Operator,
         r: Arc<dyn PhysicalExpr>,
         input_schema: &Schema,
+        x: &DataType,
     ) -> Arc<dyn PhysicalExpr> {
-        binary(l, op, r, input_schema).unwrap()
+        binary_with_data_type(l, op, r, input_schema, Some(x.clone())).unwrap()
     }
 
     #[test]
@@ -1266,6 +1332,7 @@ mod tests {
             Operator::Lt,
             col("b", &schema)?,
             &schema,
+            &DataType::Boolean,
         );
         let batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])?;
@@ -1299,6 +1366,7 @@ mod tests {
                 Operator::Lt,
                 col("b", &schema)?,
                 &schema,
+                &DataType::Boolean,
             ),
             Operator::Or,
             binary_simple(
@@ -1306,8 +1374,10 @@ mod tests {
                 Operator::Eq,
                 col("b", &schema)?,
                 &schema,
+                &DataType::Boolean,
             ),
             &schema,
+            &DataType::Boolean,
         );
         let batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])?;
@@ -2763,8 +2833,13 @@ mod tests {
         op: Operator,
         expected: PrimitiveArray<T>,
     ) -> Result<()> {
-        let arithmetic_op =
-            binary_simple(col("a", &schema)?, op, col("b", &schema)?, &schema);
+        let arithmetic_op = binary_simple(
+            col("a", &schema)?,
+            op,
+            col("b", &schema)?,
+            &schema,
+            expected.data_type(),
+        );
         let batch = RecordBatch::try_new(schema, data)?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
 
@@ -2780,7 +2855,8 @@ mod tests {
         expected: ArrayRef,
     ) -> Result<()> {
         let lit = Arc::new(Literal::new(literal));
-        let arithmetic_op = binary_simple(col("a", &schema)?, op, lit, &schema);
+        let arithmetic_op =
+            binary_simple(col("a", &schema)?, op, lit, &schema, expected.data_type());
         let batch = RecordBatch::try_new(schema, data)?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
 
@@ -2801,7 +2877,8 @@ mod tests {
 
         let left_expr = try_cast(col("a", schema)?, schema, result_type.clone())?;
         let right_expr = try_cast(col("b", schema)?, schema, result_type)?;
-        let arithmetic_op = binary_simple(left_expr, op, right_expr, schema);
+        let arithmetic_op =
+            binary_simple(left_expr, op, right_expr, schema, &DataType::Boolean);
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
@@ -2831,7 +2908,8 @@ mod tests {
             try_cast(col("a", schema)?, schema, op_type)?
         };
 
-        let arithmetic_op = binary_simple(left_expr, op, right_expr, schema);
+        let arithmetic_op =
+            binary_simple(left_expr, op, right_expr, schema, &DataType::Boolean);
         let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(arr)])?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
         assert_eq!(result.as_ref(), expected);
@@ -2860,7 +2938,8 @@ mod tests {
             try_cast(col("a", schema)?, schema, op_type)?
         };
 
-        let arithmetic_op = binary_simple(left_expr, op, right_expr, schema);
+        let arithmetic_op =
+            binary_simple(left_expr, op, right_expr, schema, &DataType::Boolean);
         let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(arr)])?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
         assert_eq!(result.as_ref(), expected);
@@ -3428,7 +3507,7 @@ mod tests {
         let tree_depth: i32 = 100;
         let expr = (0..tree_depth)
             .map(|_| col("a", schema.as_ref()).unwrap())
-            .reduce(|l, r| binary_simple(l, Operator::Plus, r, &schema))
+            .reduce(|l, r| binary_simple(l, Operator::Plus, r, &schema, &DataType::Int32))
             .unwrap();
 
         let result = expr
@@ -3935,7 +4014,13 @@ mod tests {
                 schema.field(1).is_nullable(),
             ),
         ]);
-        let arithmetic_op = binary_simple(left_expr, op, right_expr, &coerced_schema);
+        let arithmetic_op = binary_simple(
+            left_expr,
+            op,
+            right_expr,
+            &coerced_schema,
+            expected.data_type(),
+        );
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
@@ -4597,6 +4682,7 @@ mod tests {
             Operator::GtEq,
             lit(ScalarValue::from(25)),
             &schema,
+            &DataType::Boolean,
         );
 
         let context = AnalysisContext::from_statistics(&schema, &statistics);
@@ -4626,6 +4712,7 @@ mod tests {
             Operator::GtEq,
             a.clone(),
             &schema,
+            &DataType::Boolean,
         );
 
         let context = AnalysisContext::from_statistics(&schema, &statistics);

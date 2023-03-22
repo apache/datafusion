@@ -285,6 +285,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::SimilarTo { .. }
             | Expr::Case(_)
             | Expr::Cast { .. }
+            | Expr::PromotePrecision { .. }
             | Expr::TryCast { .. }
             | Expr::InList { .. }
             | Expr::GetIndexedField { .. } => true,
@@ -363,6 +364,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: Eq,
                 right,
+                ..
             }) if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
                 match as_bool_lit(*left)? {
                     Some(true) => *right,
@@ -377,6 +379,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: Eq,
                 right,
+                ..
             }) if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
                 match as_bool_lit(*right)? {
                     Some(true) => *left,
@@ -453,6 +456,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: NotEq,
                 right,
+                ..
             }) if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
                 match as_bool_lit(*left)? {
                     Some(true) => Expr::Not(right),
@@ -467,6 +471,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: NotEq,
                 right,
+                ..
             }) if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
                 match as_bool_lit(*right)? {
                     Some(true) => Expr::Not(left),
@@ -484,30 +489,35 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: Or,
                 right: _,
+                ..
             }) if is_true(&left) => *left,
             // false OR A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
+                ..
             }) if is_false(&left) => *right,
             // A OR true --> true (even if A is null)
             Expr::BinaryExpr(BinaryExpr {
                 left: _,
                 op: Or,
                 right,
+                ..
             }) if is_true(&right) => *right,
             // A OR false --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
+                ..
             }) if is_false(&right) => *left,
             // A OR !A ---> true (if A not nullable)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
+                ..
             }) if is_not_of(&right, &left) && !info.nullable(&left)? => {
                 Expr::Literal(ScalarValue::Boolean(Some(true)))
             }
@@ -516,6 +526,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: Or,
                 right,
+                ..
             }) if is_not_of(&left, &right) && !info.nullable(&right)? => {
                 Expr::Literal(ScalarValue::Boolean(Some(true)))
             }
@@ -524,24 +535,28 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: Or,
                 right,
+                ..
             }) if expr_contains(&left, &right, Or) => *left,
             // A OR (..A..) --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
+                ..
             }) if expr_contains(&right, &left, Or) => *right,
             // A OR (A AND B) --> A (if B not null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
+                ..
             }) if !info.nullable(&right)? && is_op_with(And, &right, &left) => *left,
             // (A AND B) OR A --> A (if B not null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
+                ..
             }) if !info.nullable(&left)? && is_op_with(And, &left, &right) => *right,
 
             //
@@ -553,30 +568,35 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: And,
                 right,
+                ..
             }) if is_true(&left) => *right,
             // false AND A --> false (even if A is null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right: _,
+                ..
             }) if is_false(&left) => *left,
             // A AND true --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
+                ..
             }) if is_true(&right) => *left,
             // A AND false --> false (even if A is null)
             Expr::BinaryExpr(BinaryExpr {
                 left: _,
                 op: And,
                 right,
+                ..
             }) if is_false(&right) => *right,
             // A AND !A ---> false (if A not nullable)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
+                ..
             }) if is_not_of(&right, &left) && !info.nullable(&left)? => {
                 Expr::Literal(ScalarValue::Boolean(Some(false)))
             }
@@ -585,6 +605,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: And,
                 right,
+                ..
             }) if is_not_of(&left, &right) && !info.nullable(&right)? => {
                 Expr::Literal(ScalarValue::Boolean(Some(false)))
             }
@@ -593,24 +614,28 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: And,
                 right,
+                ..
             }) if expr_contains(&left, &right, And) => *left,
             // A AND (..A..) --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
+                ..
             }) if expr_contains(&right, &left, And) => *right,
             // A AND (A OR B) --> A (if B not null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
+                ..
             }) if !info.nullable(&right)? && is_op_with(Or, &right, &left) => *left,
             // (A OR B) AND A --> A (if B not null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
+                ..
             }) if !info.nullable(&left)? && is_op_with(Or, &left, &right) => *right,
 
             //
@@ -622,24 +647,28 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: Multiply,
                 right,
+                ..
             }) if is_one(&right) => *left,
             // 1 * A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
+                ..
             }) if is_one(&left) => *right,
             // A * null --> null
             Expr::BinaryExpr(BinaryExpr {
                 left: _,
                 op: Multiply,
                 right,
+                ..
             }) if is_null(&right) => *right,
             // null * A --> null
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right: _,
+                ..
             }) if is_null(&left) => *left,
 
             // A * 0 --> 0 (if A is not null)
@@ -647,12 +676,14 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: Multiply,
                 right,
+                ..
             }) if !info.nullable(&left)? && is_zero(&right) => *right,
             // 0 * A --> 0 (if A is not null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
+                ..
             }) if !info.nullable(&right)? && is_zero(&left) => *left,
 
             //
@@ -664,24 +695,28 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: Divide,
                 right,
+                ..
             }) if is_one(&right) => *left,
             // null / A --> null
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Divide,
                 right: _,
+                ..
             }) if is_null(&left) => *left,
             // A / null --> null
             Expr::BinaryExpr(BinaryExpr {
                 left: _,
                 op: Divide,
                 right,
+                ..
             }) if is_null(&right) => *right,
             // 0 / 0 -> null
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Divide,
                 right,
+                ..
             }) if is_zero(&left) && is_zero(&right) => {
                 Expr::Literal(ScalarValue::Int32(None))
             }
@@ -690,6 +725,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: Divide,
                 right,
+                ..
             }) if !info.nullable(&left)? && is_zero(&right) => {
                 return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
             }
@@ -703,24 +739,28 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left: _,
                 op: Modulo,
                 right,
+                ..
             }) if is_null(&right) => *right,
             // null % A --> null
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right: _,
+                ..
             }) if is_null(&left) => *left,
             // A % 1 --> 0
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right,
+                ..
             }) if !info.nullable(&left)? && is_one(&right) => lit(0),
             // A % 0 --> DivideByZero Error
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right,
+                ..
             }) if !info.nullable(&left)? && is_zero(&right) => {
                 return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
             }
@@ -734,6 +774,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left: _,
                 op: BitwiseAnd,
                 right,
+                ..
             }) if is_null(&right) => *right,
 
             // null & A -> null
@@ -741,6 +782,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseAnd,
                 right: _,
+                ..
             }) if is_null(&left) => *left,
 
             // A & 0 -> 0 (if A not nullable)
@@ -748,6 +790,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseAnd,
                 right,
+                ..
             }) if !info.nullable(&left)? && is_zero(&right) => *right,
 
             // 0 & A -> 0 (if A not nullable)
@@ -755,6 +798,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseAnd,
                 right,
+                ..
             }) if !info.nullable(&right)? && is_zero(&left) => *left,
 
             // !A & A -> 0 (if A not nullable)
@@ -762,6 +806,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseAnd,
                 right,
+                ..
             }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
                 Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&left)?)?)
             }
@@ -771,6 +816,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseAnd,
                 right,
+                ..
             }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
                 Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&left)?)?)
             }
@@ -780,6 +826,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseAnd,
                 right,
+                ..
             }) if expr_contains(&left, &right, BitwiseAnd) => *left,
 
             // A & (..A..) --> (..A..)
@@ -787,6 +834,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseAnd,
                 right,
+                ..
             }) if expr_contains(&right, &left, BitwiseAnd) => *right,
 
             // A & (A | B) --> A (if B not null)
@@ -794,6 +842,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseAnd,
                 right,
+                ..
             }) if !info.nullable(&right)? && is_op_with(BitwiseOr, &right, &left) => {
                 *left
             }
@@ -803,6 +852,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseAnd,
                 right,
+                ..
             }) if !info.nullable(&left)? && is_op_with(BitwiseOr, &left, &right) => {
                 *right
             }
@@ -816,6 +866,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left: _,
                 op: BitwiseOr,
                 right,
+                ..
             }) if is_null(&right) => *right,
 
             // null | A -> null
@@ -823,6 +874,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseOr,
                 right: _,
+                ..
             }) if is_null(&left) => *left,
 
             // A | 0 -> A (even if A is null)
@@ -830,6 +882,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseOr,
                 right,
+                ..
             }) if is_zero(&right) => *left,
 
             // 0 | A -> A (even if A is null)
@@ -837,6 +890,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseOr,
                 right,
+                ..
             }) if is_zero(&left) => *right,
 
             // !A | A -> -1 (if A not nullable)
@@ -844,6 +898,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseOr,
                 right,
+                ..
             }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
                 Expr::Literal(ScalarValue::new_negative_one(&info.get_data_type(&left)?)?)
             }
@@ -853,6 +908,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseOr,
                 right,
+                ..
             }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
                 Expr::Literal(ScalarValue::new_negative_one(&info.get_data_type(&left)?)?)
             }
@@ -862,6 +918,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseOr,
                 right,
+                ..
             }) if expr_contains(&left, &right, BitwiseOr) => *left,
 
             // A | (..A..) --> (..A..)
@@ -869,6 +926,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseOr,
                 right,
+                ..
             }) if expr_contains(&right, &left, BitwiseOr) => *right,
 
             // A | (A & B) --> A (if B not null)
@@ -876,6 +934,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseOr,
                 right,
+                ..
             }) if !info.nullable(&right)? && is_op_with(BitwiseAnd, &right, &left) => {
                 *left
             }
@@ -885,6 +944,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseOr,
                 right,
+                ..
             }) if !info.nullable(&left)? && is_op_with(BitwiseAnd, &left, &right) => {
                 *right
             }
@@ -898,6 +958,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left: _,
                 op: BitwiseXor,
                 right,
+                ..
             }) if is_null(&right) => *right,
 
             // null ^ A -> null
@@ -905,6 +966,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseXor,
                 right: _,
+                ..
             }) if is_null(&left) => *left,
 
             // A ^ 0 -> A (if A not nullable)
@@ -912,6 +974,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseXor,
                 right,
+                ..
             }) if !info.nullable(&left)? && is_zero(&right) => *left,
 
             // 0 ^ A -> A (if A not nullable)
@@ -919,6 +982,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseXor,
                 right,
+                ..
             }) if !info.nullable(&right)? && is_zero(&left) => *right,
 
             // !A ^ A -> -1 (if A not nullable)
@@ -926,6 +990,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseXor,
                 right,
+                ..
             }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
                 Expr::Literal(ScalarValue::new_negative_one(&info.get_data_type(&left)?)?)
             }
@@ -935,6 +1000,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseXor,
                 right,
+                ..
             }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
                 Expr::Literal(ScalarValue::new_negative_one(&info.get_data_type(&left)?)?)
             }
@@ -944,6 +1010,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseXor,
                 right,
+                ..
             }) if expr_contains(&left, &right, BitwiseXor) => {
                 let expr = delete_xor_in_complex_expr(&left, &right, false);
                 if expr == *right {
@@ -958,6 +1025,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseXor,
                 right,
+                ..
             }) if expr_contains(&right, &left, BitwiseXor) => {
                 let expr = delete_xor_in_complex_expr(&right, &left, true);
                 if expr == *left {
@@ -976,6 +1044,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left: _,
                 op: BitwiseShiftRight,
                 right,
+                ..
             }) if is_null(&right) => *right,
 
             // null >> A -> null
@@ -983,6 +1052,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseShiftRight,
                 right: _,
+                ..
             }) if is_null(&left) => *left,
 
             // A >> 0 -> A (even if A is null)
@@ -990,6 +1060,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseShiftRight,
                 right,
+                ..
             }) if is_zero(&right) => *left,
 
             //
@@ -1001,6 +1072,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left: _,
                 op: BitwiseShiftLeft,
                 right,
+                ..
             }) if is_null(&right) => *right,
 
             // null << A -> null
@@ -1008,6 +1080,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseShiftLeft,
                 right: _,
+                ..
             }) if is_null(&left) => *left,
 
             // A << 0 -> A (even if A is null)
@@ -1015,6 +1088,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseShiftLeft,
                 right,
+                ..
             }) if is_zero(&right) => *left,
 
             //
@@ -1116,6 +1190,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: op @ (RegexMatch | RegexNotMatch | RegexIMatch | RegexNotIMatch),
                 right,
+                ..
             }) => simplify_regex_expr(left, op, right)?,
 
             // no additional rewrites possible
@@ -2383,6 +2458,7 @@ mod tests {
             left: Box::new(left),
             op: Operator::RegexMatch,
             right: Box::new(right),
+            data_type: None,
         })
     }
 
@@ -2391,6 +2467,7 @@ mod tests {
             left: Box::new(left),
             op: Operator::RegexNotMatch,
             right: Box::new(right),
+            data_type: None,
         })
     }
 
@@ -2399,6 +2476,7 @@ mod tests {
             left: Box::new(left),
             op: Operator::RegexIMatch,
             right: Box::new(right),
+            data_type: None,
         })
     }
 
@@ -2407,6 +2485,7 @@ mod tests {
             left: Box::new(left),
             op: Operator::RegexNotIMatch,
             right: Box::new(right),
+            data_type: None,
         })
     }
 

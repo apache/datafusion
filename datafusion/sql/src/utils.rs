@@ -23,7 +23,7 @@ use sqlparser::ast::Ident;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{
     AggregateFunction, Between, BinaryExpr, Case, GetIndexedField, GroupingSet, Like,
-    WindowFunction,
+    PromotePrecision, WindowFunction,
 };
 use datafusion_expr::expr::{Cast, Sort};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
@@ -232,13 +232,17 @@ where
                     .collect::<Result<Vec<Expr>>>()?,
                 negated: *negated,
             }),
-            Expr::BinaryExpr(BinaryExpr { left, right, op }) => {
-                Ok(Expr::BinaryExpr(BinaryExpr::new(
-                    Box::new(clone_with_replacement(left, replacement_fn)?),
-                    *op,
-                    Box::new(clone_with_replacement(right, replacement_fn)?),
-                )))
-            }
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                right,
+                op,
+                data_type,
+            }) => Ok(Expr::BinaryExpr(BinaryExpr::new_with_data_type(
+                Box::new(clone_with_replacement(left, replacement_fn)?),
+                *op,
+                Box::new(clone_with_replacement(right, replacement_fn)?),
+                data_type.clone(),
+            ))),
             Expr::Like(Like {
                 negated,
                 expr,
@@ -344,6 +348,11 @@ where
                 Box::new(clone_with_replacement(expr, replacement_fn)?),
                 data_type.clone(),
             ))),
+            Expr::PromotePrecision(PromotePrecision { expr }) => {
+                Ok(Expr::PromotePrecision(PromotePrecision::new(Box::new(
+                    clone_with_replacement(expr, replacement_fn)?,
+                ))))
+            }
             Expr::TryCast(TryCast {
                 expr: nested_expr,
                 data_type,

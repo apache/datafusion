@@ -146,6 +146,8 @@ pub enum Expr {
     /// Casts the expression to a given type and will return a runtime error if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
     Cast(Cast),
+    /// Wraps the child expression when promoting the precision of DecimalType to avoid promote multiple times.
+    PromotePrecision(PromotePrecision),
     /// Casts the expression to a given type and will return a null value if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
     TryCast(TryCast),
@@ -234,12 +236,33 @@ pub struct BinaryExpr {
     pub op: Operator,
     /// Right-hand side of the expression
     pub right: Box<Expr>,
+    /// The data type of the expression, if known
+    pub data_type: Option<DataType>,
 }
 
 impl BinaryExpr {
     /// Create a new binary expression
     pub fn new(left: Box<Expr>, op: Operator, right: Box<Expr>) -> Self {
-        Self { left, op, right }
+        Self {
+            left,
+            op,
+            right,
+            data_type: None,
+        }
+    }
+
+    pub fn new_with_data_type(
+        left: Box<Expr>,
+        op: Operator,
+        right: Box<Expr>,
+        data_type: Option<DataType>,
+    ) -> Self {
+        Self {
+            left,
+            op,
+            right,
+            data_type,
+        }
     }
 }
 
@@ -382,6 +405,20 @@ impl Cast {
     /// Create a new Cast expression
     pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
         Self { expr, data_type }
+    }
+}
+
+/// Cast expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct PromotePrecision {
+    /// The expression being promoted
+    pub expr: Box<Expr>,
+}
+
+impl PromotePrecision {
+    /// Create a new PromotePrecision expression
+    pub fn new(expr: Box<Expr>) -> Self {
+        Self { expr }
     }
 }
 
@@ -569,6 +606,7 @@ impl Expr {
             Expr::BinaryExpr { .. } => "BinaryExpr",
             Expr::Case { .. } => "Case",
             Expr::Cast { .. } => "Cast",
+            Expr::PromotePrecision { .. } => "PromotePrecision",
             Expr::Column(..) => "Column",
             Expr::OuterReferenceColumn(_, _) => "Outer",
             Expr::Exists { .. } => "Exists",
@@ -857,6 +895,9 @@ impl fmt::Debug for Expr {
             }
             Expr::Cast(Cast { expr, data_type }) => {
                 write!(f, "CAST({expr:?} AS {data_type:?})")
+            }
+            Expr::PromotePrecision(PromotePrecision { expr }) => {
+                write!(f, "PROMOTE_PRECISION({expr:?})")
             }
             Expr::TryCast(TryCast { expr, data_type }) => {
                 write!(f, "TRY_CAST({expr:?} AS {data_type:?})")
@@ -1211,6 +1252,7 @@ fn create_name(e: &Expr) -> Result<String> {
             // CAST does not change the expression name
             create_name(expr)
         }
+        Expr::PromotePrecision(PromotePrecision { expr }) => create_name(expr),
         Expr::TryCast(TryCast { expr, .. }) => {
             // CAST does not change the expression name
             create_name(expr)

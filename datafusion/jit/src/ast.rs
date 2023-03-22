@@ -156,6 +156,7 @@ impl TryFrom<(datafusion_expr::Expr, DFSchemaRef)> for Expr {
                 left,
                 op,
                 right,
+                ..
             }) => {
                 let op = match op {
                     datafusion_expr::Operator::Eq => BinaryExpr::Eq,

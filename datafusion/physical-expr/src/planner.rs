@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::expressions::binary_with_data_type;
 use crate::var_provider::is_system_variables;
 use crate::{
     execution_props::ExecutionProps,
@@ -27,7 +28,7 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::Cast;
+use datafusion_expr::expr::{Cast, PromotePrecision};
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator, TryCast,
 };
@@ -169,7 +170,12 @@ pub fn create_physical_expr(
                 execution_props,
             )
         }
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+        Expr::BinaryExpr(BinaryExpr {
+            left,
+            op,
+            right,
+            data_type,
+        }) => {
             // Create physical expressions for left and right operands
             let lhs = create_physical_expr(
                 left,
@@ -239,7 +245,7 @@ pub fn create_physical_expr(
                     //
                     // There should be no coercion during physical
                     // planning.
-                    binary(lhs, *op, rhs, input_schema)
+                    binary_with_data_type(lhs, *op, rhs, input_schema, data_type.clone())
                 }
             }
         }
@@ -364,6 +370,14 @@ pub fn create_physical_expr(
             input_schema,
             data_type.clone(),
         ),
+        Expr::PromotePrecision(PromotePrecision { expr }) => {
+            expressions::promote_precision(create_physical_expr(
+                expr,
+                input_dfschema,
+                input_schema,
+                execution_props,
+            )?)
+        }
         Expr::TryCast(TryCast { expr, data_type }) => expressions::try_cast(
             create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,
             input_schema,

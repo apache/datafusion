@@ -69,7 +69,9 @@ pub static POWS_OF_TEN: [i128; 38] = [
 /// expressions. Such as: (A AND B) AND C
 pub fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
     match expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == search_op => {
+        Expr::BinaryExpr(BinaryExpr {
+            left, op, right, ..
+        }) if *op == search_op => {
             expr_contains(left, needle, search_op)
                 || expr_contains(right, needle, search_op)
         }
@@ -87,9 +89,9 @@ pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> 
         xor_counter: &mut i32,
     ) -> Expr {
         match expr {
-            Expr::BinaryExpr(BinaryExpr { left, op, right })
-                if *op == Operator::BitwiseXor =>
-            {
+            Expr::BinaryExpr(BinaryExpr {
+                left, op, right, ..
+            }) if *op == Operator::BitwiseXor => {
                 let left_expr = recursive_delete_xor_in_expr(left, needle, xor_counter);
                 let right_expr = recursive_delete_xor_in_expr(right, needle, xor_counter);
                 if left_expr == *needle {
@@ -206,7 +208,7 @@ pub fn is_false(expr: &Expr) -> bool {
 
 /// returns true if `haystack` looks like (needle OP X) or (X OP needle)
 pub fn is_op_with(target_op: Operator, haystack: &Expr, needle: &Expr) -> bool {
-    matches!(haystack, Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()))
+    matches!(haystack, Expr::BinaryExpr(BinaryExpr { left, op, right, .. }) if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()))
 }
 
 /// returns true if `not_expr` is !`expr` (not)
@@ -246,7 +248,9 @@ pub fn as_bool_lit(expr: Expr) -> Result<Option<bool>> {
 /// For others, use Not clause
 pub fn negate_clause(expr: Expr) -> Expr {
     match expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+        Expr::BinaryExpr(BinaryExpr {
+            left, op, right, ..
+        }) => {
             if let Some(negated_op) = op.negate() {
                 return Expr::BinaryExpr(BinaryExpr::new(left, negated_op, right));
             }
@@ -321,7 +325,9 @@ pub fn negate_clause(expr: Expr) -> Expr {
 /// For others, use Negative clause
 pub fn distribute_negation(expr: Expr) -> Expr {
     match expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+        Expr::BinaryExpr(BinaryExpr {
+            left, op, right, ..
+        }) => {
             match op {
                 // ~(A & B) ===> ~A | ~B
                 Operator::BitwiseAnd => {

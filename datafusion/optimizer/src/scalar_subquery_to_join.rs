@@ -59,7 +59,9 @@ impl ScalarSubqueryToJoin {
         let mut others = vec![];
         for it in filters.iter() {
             match it {
-                Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                Expr::BinaryExpr(BinaryExpr {
+                    left, op, right, ..
+                }) => {
                     let l_query = Subquery::try_from_expr(left);
                     let r_query = Subquery::try_from_expr(right);
                     if l_query.is_err() && r_query.is_err() {

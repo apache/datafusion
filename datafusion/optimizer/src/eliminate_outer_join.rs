@@ -178,7 +178,9 @@ fn extract_non_nullable_columns(
             non_nullable_cols.push(col.clone());
             Ok(())
         }
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
+        Expr::BinaryExpr(BinaryExpr {
+            left, op, right, ..
+        }) => match op {
             // If one of the inputs are null for these operators, the results should be false.
             Operator::Eq
             | Operator::NotEq

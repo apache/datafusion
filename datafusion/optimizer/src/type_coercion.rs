@@ -28,7 +28,7 @@ use datafusion_common::{
 use datafusion_expr::expr::{self, Between, BinaryExpr, Case, Like, WindowFunction};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
-    coerce_types, comparison_coercion, like_coercion,
+    binary_operator_data_type, coerce_types, comparison_coercion, like_coercion,
 };
 use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::type_coercion::other::{
@@ -237,6 +237,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 ref left,
                 op,
                 ref right,
+                ..
             }) => {
                 let left_type = left.get_type(&self.schema)?;
                 let right_type = right.get_type(&self.schema)?;
@@ -247,6 +248,33 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     ) => {
                         // this is a workaround for https://github.com/apache/arrow-datafusion/issues/3419
                         Ok(expr.clone())
+                    }
+                    (DataType::Decimal128(_, _), _) | (_, DataType::Decimal128(_, _)) => {
+                        if !matches!(left.as_ref(), &Expr::PromotePrecision(_))
+                            && !matches!(left.as_ref(), &Expr::PromotePrecision(_))
+                        {
+                            // Promote decimal types if they are not already promoted
+                            let coerced_type =
+                                coerce_types(&left_type, &op, &right_type)?;
+                            let result_type =
+                                binary_operator_data_type(&left_type, &op, &right_type)?;
+                            let expr = Expr::BinaryExpr(BinaryExpr::new_with_data_type(
+                                Box::new(
+                                    left.clone()
+                                        .promote_to(&coerced_type, &self.schema)?,
+                                ),
+                                op,
+                                Box::new(
+                                    right
+                                        .clone()
+                                        .promote_to(&coerced_type, &self.schema)?,
+                                ),
+                                Some(result_type),
+                            ));
+                            Ok(expr)
+                        } else {
+                            Ok(expr.clone())
+                        }
                     }
                     _ => {
                         let coerced_type = coerce_types(&left_type, &op, &right_type)?;

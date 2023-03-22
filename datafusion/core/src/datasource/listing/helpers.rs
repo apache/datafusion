@@ -81,6 +81,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::IsNotUnknown(_)
             | Expr::Negative(_)
             | Expr::Cast { .. }
+            | Expr::PromotePrecision { .. }
             | Expr::TryCast { .. }
             | Expr::BinaryExpr { .. }
             | Expr::Between { .. }

@@ -25,10 +25,11 @@ use arrow::compute::{
 };
 use arrow::datatypes::Decimal128Type;
 use arrow::{array::*, datatypes::ArrowNumericType, downcast_dictionary_array};
-use arrow_schema::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE};
+use arrow_schema::DataType;
 use datafusion_common::cast::as_decimal128_array;
 use datafusion_common::{DataFusionError, Result};
-use std::cmp::min;
+use datafusion_expr::type_coercion::binary::binary_operator_data_type;
+use datafusion_expr::Operator;
 use std::sync::Arc;
 
 // Simple (low performance) kernels until optimized kernels are added to arrow
@@ -258,14 +259,22 @@ pub(crate) fn is_not_distinct_from_decimal(
         .collect())
 }
 
-pub(crate) fn add_dyn_decimal(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
-    let (precision, scale) = get_precision_scale(left)?;
+pub(crate) fn add_dyn_decimal(
+    left: &dyn Array,
+    right: &dyn Array,
+    result_type: &Option<DataType>,
+) -> Result<ArrayRef> {
+    let (precision, scale) = get_precision_scale(&result_type.clone().unwrap())?;
     let array = add_dyn(left, right)?;
     decimal_array_with_precision_scale(array, precision, scale)
 }
 
-pub(crate) fn add_decimal_dyn_scalar(left: &dyn Array, right: i128) -> Result<ArrayRef> {
-    let (precision, scale) = get_precision_scale(left)?;
+pub(crate) fn add_decimal_dyn_scalar(
+    left: &dyn Array,
+    right: i128,
+    result_type: &Option<DataType>,
+) -> Result<ArrayRef> {
+    let (precision, scale) = get_precision_scale(&result_type.clone().unwrap())?;
 
     let array = add_scalar_dyn::<Decimal128Type>(left, right)?;
     decimal_array_with_precision_scale(array, precision, scale)
@@ -274,25 +283,28 @@ pub(crate) fn add_decimal_dyn_scalar(left: &dyn Array, right: i128) -> Result<Ar
 pub(crate) fn subtract_decimal_dyn_scalar(
     left: &dyn Array,
     right: i128,
+    result_type: &Option<DataType>,
 ) -> Result<ArrayRef> {
-    let (precision, scale) = get_precision_scale(left)?;
+    let (precision, scale) = get_precision_scale(&result_type.clone().unwrap())?;
 
     let array = subtract_scalar_dyn::<Decimal128Type>(left, right)?;
     decimal_array_with_precision_scale(array, precision, scale)
 }
 
-fn get_precision_scale(left: &dyn Array) -> Result<(u8, i8)> {
-    match left.data_type() {
+fn get_precision_scale(data_type: &DataType) -> Result<(u8, i8)> {
+    match data_type {
         DataType::Decimal128(precision, scale) => Ok((*precision, *scale)),
         DataType::Dictionary(_, value_type) => match value_type.as_ref() {
             DataType::Decimal128(precision, scale) => Ok((*precision, *scale)),
-            _ => Err(DataFusionError::Internal(
-                "Unexpected data type".to_string(),
-            )),
+            _ => Err(DataFusionError::Internal(format!(
+                "Unexpected data type: {}",
+                data_type
+            ))),
         },
-        _ => Err(DataFusionError::Internal(
-            "Unexpected data type".to_string(),
-        )),
+        _ => Err(DataFusionError::Internal(format!(
+            "Unexpected data type: {}",
+            data_type
+        ))),
     }
 }
 
@@ -334,23 +346,21 @@ fn decimal_array_with_precision_scale(
 pub(crate) fn multiply_decimal_dyn_scalar(
     left: &dyn Array,
     right: i128,
+    result_type: &Option<DataType>,
 ) -> Result<ArrayRef> {
-    let (precision, scale) = get_precision_scale(left)?;
-
+    let (precision, scale) = get_precision_scale(&result_type.clone().unwrap())?;
     let array = multiply_scalar_dyn::<Decimal128Type>(left, right)?;
-
     let divide = 10_i128.pow(scale as u32);
     let array = divide_scalar_dyn::<Decimal128Type>(&array, divide)?;
-
     decimal_array_with_precision_scale(array, precision, scale)
 }
 
 pub(crate) fn divide_decimal_dyn_scalar(
     left: &dyn Array,
     right: i128,
+    result_type: &Option<DataType>,
 ) -> Result<ArrayRef> {
-    let (precision, scale) = get_precision_scale(left)?;
-
+    let (precision, scale) = get_precision_scale(&result_type.clone().unwrap())?;
     let mul = 10_i128.pow(scale as u32);
     let array = multiply_scalar_dyn::<Decimal128Type>(left, mul)?;
 
@@ -361,8 +371,9 @@ pub(crate) fn divide_decimal_dyn_scalar(
 pub(crate) fn subtract_dyn_decimal(
     left: &dyn Array,
     right: &dyn Array,
+    result_type: &Option<DataType>,
 ) -> Result<ArrayRef> {
-    let (precision, scale) = get_precision_scale(left)?;
+    let (precision, scale) = get_precision_scale(&result_type.clone().unwrap())?;
     let array = subtract_dyn(left, right)?;
     decimal_array_with_precision_scale(array, precision, scale)
 }
@@ -370,36 +381,50 @@ pub(crate) fn subtract_dyn_decimal(
 pub(crate) fn multiply_dyn_decimal(
     left: &dyn Array,
     right: &dyn Array,
+    result_type: &Option<DataType>,
 ) -> Result<ArrayRef> {
-    let (left_precision, left_scale) = get_precision_scale(left)?;
-    let (right_precision, right_scale) = get_precision_scale(right)?;
-    let product_precision = min(
-        left_precision + right_precision + 1,
-        DECIMAL128_MAX_PRECISION,
-    );
-    let product_scale = min(left_scale + right_scale, DECIMAL128_MAX_SCALE);
+    let (precision, scale) = get_precision_scale(&result_type.clone().unwrap())?;
+
+    let op_type = binary_operator_data_type(
+        left.data_type(),
+        &Operator::Multiply,
+        right.data_type(),
+    )?;
+    let (_, op_scale) = get_precision_scale(&op_type)?;
+
     let array = multiply_dyn(left, right)?;
-    decimal_array_with_precision_scale(array, product_precision, product_scale)
+
+    if op_scale > scale {
+        let div = 10_i128.pow((op_scale - scale) as u32);
+        let array = divide_scalar_dyn::<Decimal128Type>(&array, div)?;
+        decimal_array_with_precision_scale(array, precision, scale)
+    } else {
+        decimal_array_with_precision_scale(array, precision, scale)
+    }
 }
 
 pub(crate) fn divide_dyn_opt_decimal(
     left: &dyn Array,
     right: &dyn Array,
+    result_type: &Option<DataType>,
 ) -> Result<ArrayRef> {
-    let (precision, scale) = get_precision_scale(left)?;
+    let (precision, scale) = get_precision_scale(&result_type.clone().unwrap())?;
 
     let mul = 10_i128.pow(scale as u32);
+
     let array = multiply_scalar_dyn::<Decimal128Type>(left, mul)?;
     let array = decimal_array_with_precision_scale(array, precision, scale)?;
     let array = divide_dyn_opt(&array, right)?;
+
     decimal_array_with_precision_scale(array, precision, scale)
 }
 
 pub(crate) fn modulus_dyn_decimal(
     left: &dyn Array,
     right: &dyn Array,
+    result_type: &Option<DataType>,
 ) -> Result<ArrayRef> {
-    let (precision, scale) = get_precision_scale(left)?;
+    let (precision, scale) = get_precision_scale(&result_type.clone().unwrap())?;
     let array = modulus_dyn(left, right)?;
     decimal_array_with_precision_scale(array, precision, scale)
 }
@@ -407,9 +432,9 @@ pub(crate) fn modulus_dyn_decimal(
 pub(crate) fn modulus_decimal_dyn_scalar(
     left: &dyn Array,
     right: i128,
+    result_type: &Option<DataType>,
 ) -> Result<ArrayRef> {
-    let (precision, scale) = get_precision_scale(left)?;
-
+    let (precision, scale) = get_precision_scale(&result_type.clone().unwrap())?;
     let array = modulus_scalar_dyn::<Decimal128Type>(left, right)?;
     decimal_array_with_precision_scale(array, precision, scale)
 }
@@ -507,33 +532,66 @@ mod tests {
             3,
         );
         // add
-        let result = add_dyn_decimal(&left_decimal_array, &right_decimal_array)?;
+        let result_type = Some(
+            binary_operator_data_type(
+                left_decimal_array.data_type(),
+                &Operator::Plus,
+                right_decimal_array.data_type(),
+            )
+            .unwrap(),
+        );
+        let result =
+            add_dyn_decimal(&left_decimal_array, &right_decimal_array, &result_type)?;
         let result = as_decimal128_array(&result)?;
         let expect =
             create_decimal_array(&[Some(246), None, Some(245), Some(247)], 25, 3);
         assert_eq!(&expect, result);
-        let result = add_decimal_dyn_scalar(&left_decimal_array, 10)?;
+        let result = add_decimal_dyn_scalar(&left_decimal_array, 10, &result_type)?;
         let result = as_decimal128_array(&result)?;
         let expect =
             create_decimal_array(&[Some(133), None, Some(132), Some(134)], 25, 3);
         assert_eq!(&expect, result);
         // subtract
-        let result = subtract_dyn_decimal(&left_decimal_array, &right_decimal_array)?;
+        let result_type = Some(
+            binary_operator_data_type(
+                left_decimal_array.data_type(),
+                &Operator::Minus,
+                right_decimal_array.data_type(),
+            )
+            .unwrap(),
+        );
+        let result = subtract_dyn_decimal(
+            &left_decimal_array,
+            &right_decimal_array,
+            &result_type,
+        )?;
         let result = as_decimal128_array(&result)?;
         let expect = create_decimal_array(&[Some(0), None, Some(-1), Some(1)], 25, 3);
         assert_eq!(&expect, result);
-        let result = subtract_decimal_dyn_scalar(&left_decimal_array, 10)?;
+        let result = subtract_decimal_dyn_scalar(&left_decimal_array, 10, &result_type)?;
         let result = as_decimal128_array(&result)?;
         let expect =
             create_decimal_array(&[Some(113), None, Some(112), Some(114)], 25, 3);
         assert_eq!(&expect, result);
         // multiply
-        let result = multiply_dyn_decimal(&left_decimal_array, &right_decimal_array)?;
+        let result_type = Some(
+            binary_operator_data_type(
+                left_decimal_array.data_type(),
+                &Operator::Multiply,
+                right_decimal_array.data_type(),
+            )
+            .unwrap(),
+        );
+        let result = multiply_dyn_decimal(
+            &left_decimal_array,
+            &right_decimal_array,
+            &result_type,
+        )?;
         let result = as_decimal128_array(&result)?;
         let expect =
             create_decimal_array(&[Some(15129), None, Some(15006), Some(15252)], 38, 6);
         assert_eq!(&expect, result);
-        let result = multiply_decimal_dyn_scalar(&left_decimal_array, 10)?;
+        let result = multiply_decimal_dyn_scalar(&left_decimal_array, 10, &result_type)?;
         let result = as_decimal128_array(&result)?;
         let expect = create_decimal_array(&[Some(1), None, Some(1), Some(1)], 25, 3);
         assert_eq!(&expect, result);
@@ -554,7 +612,19 @@ mod tests {
             25,
             3,
         );
-        let result = divide_dyn_opt_decimal(&left_decimal_array, &right_decimal_array)?;
+        let result_type = Some(
+            binary_operator_data_type(
+                left_decimal_array.data_type(),
+                &Operator::Divide,
+                right_decimal_array.data_type(),
+            )
+            .unwrap(),
+        );
+        let result = divide_dyn_opt_decimal(
+            &left_decimal_array,
+            &right_decimal_array,
+            &result_type,
+        )?;
         let result = as_decimal128_array(&result)?;
         let expect = create_decimal_array(
             &[Some(123456700), None, Some(22446672), Some(-10037130), None],
@@ -562,7 +632,7 @@ mod tests {
             3,
         );
         assert_eq!(&expect, result);
-        let result = divide_decimal_dyn_scalar(&left_decimal_array, 10)?;
+        let result = divide_decimal_dyn_scalar(&left_decimal_array, 10, &result_type)?;
         let result = as_decimal128_array(&result)?;
         let expect = create_decimal_array(
             &[
@@ -576,12 +646,22 @@ mod tests {
             3,
         );
         assert_eq!(&expect, result);
-        let result = modulus_dyn_decimal(&left_decimal_array, &right_decimal_array)?;
+        // modulus
+        let result_type = Some(
+            binary_operator_data_type(
+                left_decimal_array.data_type(),
+                &Operator::Modulo,
+                right_decimal_array.data_type(),
+            )
+            .unwrap(),
+        );
+        let result =
+            modulus_dyn_decimal(&left_decimal_array, &right_decimal_array, &result_type)?;
         let result = as_decimal128_array(&result)?;
         let expect =
             create_decimal_array(&[Some(7), None, Some(37), Some(16), None], 25, 3);
         assert_eq!(&expect, result);
-        let result = modulus_decimal_dyn_scalar(&left_decimal_array, 10)?;
+        let result = modulus_decimal_dyn_scalar(&left_decimal_array, 10, &result_type)?;
         let result = as_decimal128_array(&result)?;
         let expect =
             create_decimal_array(&[Some(7), None, Some(7), Some(7), Some(7)], 25, 3);
@@ -595,12 +675,31 @@ mod tests {
         let left_decimal_array = create_decimal_array(&[Some(101)], 10, 1);
         let right_decimal_array = create_decimal_array(&[Some(0)], 1, 1);
 
-        let err = divide_decimal_dyn_scalar(&left_decimal_array, 0).unwrap_err();
+        let result_type = Some(
+            binary_operator_data_type(
+                left_decimal_array.data_type(),
+                &Operator::Divide,
+                right_decimal_array.data_type(),
+            )
+            .unwrap(),
+        );
+        let err =
+            divide_decimal_dyn_scalar(&left_decimal_array, 0, &result_type).unwrap_err();
+        assert_eq!("Arrow error: Divide by zero error", err.to_string());
+        let result_type = Some(
+            binary_operator_data_type(
+                left_decimal_array.data_type(),
+                &Operator::Modulo,
+                right_decimal_array.data_type(),
+            )
+            .unwrap(),
+        );
+        let err =
+            modulus_dyn_decimal(&left_decimal_array, &right_decimal_array, &result_type)
+                .unwrap_err();
         assert_eq!("Arrow error: Divide by zero error", err.to_string());
         let err =
-            modulus_dyn_decimal(&left_decimal_array, &right_decimal_array).unwrap_err();
-        assert_eq!("Arrow error: Divide by zero error", err.to_string());
-        let err = modulus_decimal_dyn_scalar(&left_decimal_array, 0).unwrap_err();
+            modulus_decimal_dyn_scalar(&left_decimal_array, 0, &result_type).unwrap_err();
         assert_eq!("Arrow error: Divide by zero error", err.to_string());
     }
 

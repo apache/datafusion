@@ -17,7 +17,8 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, BinaryExpr, Cast, GetIndexedField, Sort, TryCast, WindowFunction,
+    AggregateFunction, BinaryExpr, Cast, GetIndexedField, PromotePrecision, Sort,
+    TryCast, WindowFunction,
 };
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::binary_operator_data_type;
@@ -39,6 +40,13 @@ pub trait ExprSchemable {
 
     /// cast to a type with respect to a schema
     fn cast_to<S: ExprSchema>(self, cast_to_type: &DataType, schema: &S) -> Result<Expr>;
+
+    /// promote to a type with respect to a schema
+    fn promote_to<S: ExprSchema>(
+        self,
+        promote_to_type: &DataType,
+        schema: &S,
+    ) -> Result<Expr>;
 }
 
 impl ExprSchemable for Expr {
@@ -71,6 +79,7 @@ impl ExprSchemable for Expr {
             Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
             Expr::Cast(Cast { data_type, .. })
             | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
+            Expr::PromotePrecision(PromotePrecision { expr }) => expr.get_type(schema),
             Expr::ScalarUDF { fun, args } => {
                 let data_types = args
                     .iter()
@@ -126,11 +135,18 @@ impl ExprSchemable for Expr {
                 ref left,
                 ref right,
                 ref op,
-            }) => binary_operator_data_type(
-                &left.get_type(schema)?,
-                op,
-                &right.get_type(schema)?,
-            ),
+                ref data_type,
+            }) => {
+                if let Some(dt) = data_type {
+                    Ok(dt.clone())
+                } else {
+                    binary_operator_data_type(
+                        &left.get_type(schema)?,
+                        op,
+                        &right.get_type(schema)?,
+                    )
+                }
+            }
             Expr::Like { .. } | Expr::ILike { .. } | Expr::SimilarTo { .. } => {
                 Ok(DataType::Boolean)
             }
@@ -195,6 +211,9 @@ impl ExprSchemable for Expr {
                 }
             }
             Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
+            Expr::PromotePrecision(PromotePrecision { expr }) => {
+                expr.nullable(input_schema)
+            }
             Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }
             | Expr::ScalarFunction { .. }
@@ -283,6 +302,23 @@ impl ExprSchemable for Expr {
                 "Cannot automatically convert {this_type:?} to {cast_to_type:?}"
             )))
         }
+    }
+
+    /// Wraps this expression in a promote precision to a target [arrow::datatypes::DataType].
+    ///
+    /// # Errors
+    ///
+    /// This function errors when it is impossible to cast the
+    /// expression to the target [arrow::datatypes::DataType].
+    fn promote_to<S: ExprSchema>(
+        self,
+        promote_to_type: &DataType,
+        schema: &S,
+    ) -> Result<Expr> {
+        let casted = self.cast_to(promote_to_type, schema)?;
+        Ok(Expr::PromotePrecision(PromotePrecision::new(Box::new(
+            casted,
+        ))))
     }
 }
 

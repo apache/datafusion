@@ -310,22 +310,22 @@ pub async fn from_substrait_rel(
             let join_exprs: Vec<(Column, Column, bool)> = predicates
                 .iter()
                 .map(|p| match p {
-                    Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                        match (left.as_ref(), right.as_ref()) {
-                            (Expr::Column(l), Expr::Column(r)) => match op {
-                                Operator::Eq => Ok((l.clone(), r.clone(), false)),
-                                Operator::IsNotDistinctFrom => {
-                                    Ok((l.clone(), r.clone(), true))
-                                }
-                                _ => Err(DataFusionError::Internal(
-                                    "invalid join condition op".to_string(),
-                                )),
-                            },
+                    Expr::BinaryExpr(BinaryExpr {
+                        left, op, right, ..
+                    }) => match (left.as_ref(), right.as_ref()) {
+                        (Expr::Column(l), Expr::Column(r)) => match op {
+                            Operator::Eq => Ok((l.clone(), r.clone(), false)),
+                            Operator::IsNotDistinctFrom => {
+                                Ok((l.clone(), r.clone(), true))
+                            }
                             _ => Err(DataFusionError::Internal(
-                                "invalid join condition expresssion".to_string(),
+                                "invalid join condition op".to_string(),
                             )),
-                        }
-                    }
+                        },
+                        _ => Err(DataFusionError::Internal(
+                            "invalid join condition expresssion".to_string(),
+                        )),
+                    },
                     _ => Err(DataFusionError::Internal(
                         "Non-binary expression is not supported in join condition"
                             .to_string(),
@@ -674,6 +674,7 @@ pub async fn from_substrait_rex(
                                 .as_ref()
                                 .clone(),
                         ),
+                        data_type: None,
                     })))
                 }
                 (l, r) => Err(DataFusionError::NotImplemented(format!(

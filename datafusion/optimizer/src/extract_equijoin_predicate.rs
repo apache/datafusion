@@ -114,6 +114,7 @@ fn split_eq_and_noneq_join_predicate(
                 left,
                 op: Operator::Eq,
                 right,
+                ..
             }) => {
                 let left = left.as_ref();
                 let right = right.as_ref();

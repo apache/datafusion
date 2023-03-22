@@ -35,9 +35,52 @@ pub fn binary_operator_data_type(
     op: &Operator,
     rhs_type: &DataType,
 ) -> Result<DataType> {
+    let coerced_type = coerce_types(lhs_type, op, rhs_type)?;
     // validate that it is possible to perform the operation on incoming types.
     // (or the return datatype cannot be inferred)
-    let result_type = coerce_types(lhs_type, op, rhs_type)?;
+    let result_type = if !matches!(coerced_type, DataType::Decimal128(_, _)) {
+        coerced_type
+    } else {
+        let lhs_type = match lhs_type {
+            DataType::Decimal128(_, _) | DataType::Null => lhs_type.clone(),
+            DataType::Dictionary(_, value_type)
+                if matches!(**value_type, DataType::Decimal128(_, _)) =>
+            {
+                lhs_type.clone()
+            }
+            _ => coerce_numeric_type_to_decimal(lhs_type).ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "Could not coerce numeric type to decimal: {:?}",
+                    lhs_type
+                ))
+            })?,
+        };
+
+        let rhs_type = match rhs_type {
+            DataType::Decimal128(_, _) | DataType::Null => rhs_type.clone(),
+            DataType::Dictionary(_, value_type)
+                if matches!(**value_type, DataType::Decimal128(_, _)) =>
+            {
+                rhs_type.clone()
+            }
+            _ => coerce_numeric_type_to_decimal(rhs_type).ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "Could not coerce numeric type to decimal: {:?}",
+                    rhs_type
+                ))
+            })?,
+        };
+
+        match op {
+            // For Plus and Minus, the result type is the same as the input type which is already promoted
+            Operator::Plus | Operator::Minus => coerced_type,
+            Operator::Divide | Operator::Multiply | Operator::Modulo => {
+                decimal_op_mathematics_type(op, &lhs_type, &rhs_type)
+                    .unwrap_or(coerced_type)
+            }
+            _ => coerced_type,
+        }
+    };
 
     match op {
         // operators that return a boolean
@@ -447,6 +490,8 @@ fn mathematics_numerical_coercion(
     if lhs_type == rhs_type
         && !(matches!(lhs_type, DataType::Dictionary(_, _))
             || matches!(rhs_type, DataType::Dictionary(_, _)))
+        // For decimal, we always need to coerce/promote the decimal types.
+        && !matches!(lhs_type, DataType::Decimal128(_, _))
     {
         return Some(lhs_type.clone());
     }
@@ -517,7 +562,36 @@ fn create_decimal_type(precision: u8, scale: i8) -> DataType {
     )
 }
 
+/// Returns the promotion type of applying mathematics operations on decimal types.
+/// Two sides of the mathematics operation will be promoted to the same type.
 fn coercion_decimal_mathematics_type(
+    mathematics_op: &Operator,
+    left_decimal_type: &DataType,
+    right_decimal_type: &DataType,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (left_decimal_type, right_decimal_type) {
+        // The promotion rule from spark
+        // https://github.com/apache/spark/blob/c20af535803a7250fef047c2bf0fe30be242369d/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/DecimalPrecision.scala#L35
+        (Decimal128(_, _), Decimal128(_, _)) => match mathematics_op {
+            Operator::Plus | Operator::Minus => decimal_op_mathematics_type(
+                mathematics_op,
+                left_decimal_type,
+                right_decimal_type,
+            ),
+            Operator::Multiply | Operator::Divide | Operator::Modulo => {
+                get_wider_decimal_type(left_decimal_type, right_decimal_type)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Returns the output type of applying mathematics operations on decimal types.
+/// The rule is from spark. Note that this is different to the promoted type applied
+/// to two sides of the arithmetic operation.
+fn decimal_op_mathematics_type(
     mathematics_op: &Operator,
     left_decimal_type: &DataType,
     right_decimal_type: &DataType,

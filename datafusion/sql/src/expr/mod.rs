@@ -523,7 +523,10 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
 fn infer_placeholder_types(expr: Expr, schema: &DFSchema) -> Result<Expr> {
     expr.transform(&|mut expr| {
         // Default to assuming the arguments are the same type
-        if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = &mut expr {
+        if let Expr::BinaryExpr(BinaryExpr {
+            left, op: _, right, ..
+        }) = &mut expr
+        {
             rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
             rewrite_placeholder(right.as_mut(), left.as_ref(), schema)?;
         };

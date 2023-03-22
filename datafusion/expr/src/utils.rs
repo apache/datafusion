@@ -294,6 +294,7 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::Between { .. }
             | Expr::Case { .. }
             | Expr::Cast { .. }
+            | Expr::PromotePrecision { .. }
             | Expr::TryCast { .. }
             | Expr::Sort { .. }
             | Expr::ScalarFunction { .. }
@@ -786,7 +787,7 @@ pub fn from_plan(
             let new_on:Vec<(Expr,Expr)> = expr.iter().take(equi_expr_count).map(|equi_expr| {
                     // SimplifyExpression rule may add alias to the equi_expr.
                     let unalias_expr = equi_expr.clone().unalias();
-                    if let Expr::BinaryExpr(BinaryExpr { left, op:Operator::Eq, right }) = unalias_expr {
+                    if let Expr::BinaryExpr(BinaryExpr { left, op:Operator::Eq, right , .. }) = unalias_expr {
                         Ok((*left, *right))
                     } else {
                         Err(DataFusionError::Internal(format!(

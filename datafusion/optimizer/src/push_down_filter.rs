@@ -209,6 +209,7 @@ fn extract_or_clauses_for_join(
             left,
             op: Operator::Or,
             right,
+            ..
         }) = expr
         {
             let left_expr = extract_or_clause(left.as_ref(), &schema_columns);
@@ -244,6 +245,7 @@ fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Ex
             left: l_expr,
             op: Operator::Or,
             right: r_expr,
+            ..
         }) => {
             let l_expr = extract_or_clause(l_expr, schema_columns);
             let r_expr = extract_or_clause(r_expr, schema_columns);
@@ -256,6 +258,7 @@ fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Ex
             left: l_expr,
             op: Operator::And,
             right: r_expr,
+            ..
         }) => {
             let l_expr = extract_or_clause(l_expr, schema_columns);
             let r_expr = extract_or_clause(r_expr, schema_columns);
