@@ -2620,7 +2620,7 @@ mod tests {
     fn task_context_extensions() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let task_props = HashMap::from([("test.value".to_string(), "24".to_string())]);
-        let mut extensions = Extensions::default();
+        let mut extensions = Extensions::new();
         extensions.insert(TestExtension::default());
 
         let task_context = TaskContext::try_new(
