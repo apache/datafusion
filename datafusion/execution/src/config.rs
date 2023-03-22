@@ -186,6 +186,12 @@ impl SessionConfig {
         self
     }
 
+    /// Enables or disables the allowing unordered symmetric hash join
+    pub fn with_allow_unsorted_symmetric_joins(mut self, enabled: bool) -> Self {
+        self.options.optimizer.allow_unsorted_symmetric_joins = enabled;
+        self
+    }
+
     /// Enables or disables the use of repartitioning for file scans
     pub fn with_repartition_file_scans(mut self, enabled: bool) -> Self {
         self.options.optimizer.repartition_file_scans = enabled;

@@ -280,6 +280,10 @@ config_namespace! {
         /// using the provided `target_partitions` level
         pub repartition_joins: bool, default = true
 
+        /// Should DataFusion allow symmetric hash join for unbounded data sources, even if
+        /// there is no order present in its children
+        pub allow_unsorted_symmetric_joins: bool, default = true
+
         /// When set to true, file groups will be repartitioned to achieve maximum parallelism.
         /// Currently supported only for Parquet format in which case
         /// multiple row groups from the same file may be read concurrently. If false then each

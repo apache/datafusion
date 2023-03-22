@@ -25,9 +25,7 @@
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::join_selection::swap_hash_join;
-use crate::physical_optimizer::pipeline_checker::{
-    check_finiteness_requirements, PipelineStatePropagator,
-};
+use crate::physical_optimizer::pipeline_checker::PipelineStatePropagator;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::joins::{HashJoinExec, PartitionMode, SymmetricHashJoinExec};
 use crate::physical_plan::tree_node::TreeNodeRewritable;
@@ -272,8 +270,15 @@ fn apply_subrules_and_check_finiteness_requirements(
             input = value;
         }
     }
-    // TODO: Accept config here in next PR.
-    check_finiteness_requirements(input, true)
+    let plan = input.plan;
+    let children = input.children_unbounded;
+    plan.unbounded_output(&children).map(|value| {
+        Some(PipelineStatePropagator {
+            plan,
+            unbounded: value,
+            children_unbounded: children,
+        })
+    })
 }
 
 #[cfg(test)]

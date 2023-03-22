@@ -25,6 +25,7 @@ use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::joins::SymmetricHashJoinExec;
 use crate::physical_plan::tree_node::TreeNodeRewritable;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion_common::config::OptimizerOptions;
 use datafusion_common::DataFusionError;
 use std::sync::Arc;
 
@@ -44,11 +45,11 @@ impl PhysicalOptimizerRule for PipelineChecker {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let pipeline = PipelineStatePropagator::new(plan);
-        // TODO: Add config to smhj_can_run_unsorted_filter.
-        let state = pipeline.transform_up(&|p| check_finiteness_requirements(p, true))?;
+        let state = pipeline
+            .transform_up(&|p| check_finiteness_requirements(p, &config.optimizer))?;
         Ok(state.plan)
     }
 
@@ -114,17 +115,16 @@ impl TreeNodeRewritable for PipelineStatePropagator {
 
 /// This function propagates finiteness information and rejects any plan with
 /// pipeline-breaking operators acting on infinite inputs.
-// TODO: Accept config here in next PR.
 pub fn check_finiteness_requirements(
     input: PipelineStatePropagator,
-    smhj_can_run_unsorted_filter: bool,
+    optimizer_options: &OptimizerOptions,
 ) -> Result<Option<PipelineStatePropagator>> {
     let plan = input.plan;
     if let Some(smhj) = plan.as_any().downcast_ref::<SymmetricHashJoinExec>() {
         if smhj.sorted_filter_exprs().iter().any(|s| s.is_none())
-            && !smhj_can_run_unsorted_filter
+            && !optimizer_options.allow_unsorted_symmetric_joins
         {
-            return Err(DataFusionError::Plan("Join operation cannot operate on stream without changing the configuration".to_owned()));
+            return Err(DataFusionError::Plan("Join operation cannot operate on stream without changing the 'allow_unsorted_symmetric_joins' configuration".to_owned()));
         }
     }
     let children = input.children_unbounded;

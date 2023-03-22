@@ -2166,6 +2166,41 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn join_change_in_planner_without_sort_not_allowed() -> Result<()> {
+        let config = SessionConfig::new().with_allow_unsorted_symmetric_joins(false);
+        let ctx = SessionContext::with_config(config);
+        let tmp_dir = TempDir::new().unwrap();
+        let left_file_path = tmp_dir.path().join("left.csv");
+        File::create(left_file_path.clone()).unwrap();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a1", DataType::UInt32, false),
+            Field::new("a2", DataType::UInt32, false),
+        ]));
+        ctx.register_csv(
+            "left",
+            left_file_path.as_os_str().to_str().unwrap(),
+            CsvReadOptions::new().schema(&schema).mark_infinite(true),
+        )
+        .await?;
+        let right_file_path = tmp_dir.path().join("right.csv");
+        File::create(right_file_path.clone()).unwrap();
+        ctx.register_csv(
+            "right",
+            right_file_path.as_os_str().to_str().unwrap(),
+            CsvReadOptions::new().schema(&schema).mark_infinite(true),
+        )
+        .await?;
+        let df = ctx.sql("SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10").await?;
+        match df.create_physical_plan().await {
+            Ok(_) => panic!("Expecting error."),
+            Err(e) => {
+                assert_eq!(e.to_string(), "PipelineChecker\ncaused by\nError during planning: Join operation cannot operate on stream without changing the 'allow_unsorted_symmetric_joins' configuration")
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn build_null_columns_first() -> Result<()> {
         let join_type = JoinType::Full;
         let cardinality = (10, 11);
