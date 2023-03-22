@@ -1,0 +1,404 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.19: https://docutils.sourceforge.io/" />
+
+    <title>SQL Reference &#8212; Arrow DataFusion  documentation</title>
+    
+    <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+  
+    
+    <link rel="stylesheet"
+      href="../../_static/vendor/fontawesome/5.13.0/css/all.min.css">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
+  
+    
+      
+  
+    
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/pydata-sphinx-theme.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/theme_overrides.css" />
+    
+    <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
+  
+    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+    <script src="../../_static/doctools.js"></script>
+    <script src="../../_static/sphinx_highlight.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Data Types" href="data_types.html" />
+    <link rel="prev" title="Expressions" href="../expressions.html" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="docsearch:language" content="en">
+    
+
+    <!-- Google Analytics -->
+    
+  </head>
+  <body data-spy="scroll" data-target="#bd-toc-nav" data-offset="80">
+    
+    <div class="container-fluid" id="banner"></div>
+
+    
+
+
+    <div class="container-xl">
+      <div class="row">
+          
+            
+            <!-- Only show if we have sidebars configured, else just a small margin  -->
+            <div class="col-12 col-md-3 bd-sidebar">
+              <div class="sidebar-start-items">
+
+<form class="bd-search d-flex align-items-center" action="../../search.html" method="get">
+  <i class="icon fas fa-search"></i>
+  <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
+</form>
+
+<nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  User Guide
+ </span>
+</p>
+<ul class="current nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../introduction.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../example-usage.html">
+   Example Usage
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library.html">
+   Using DataFusion as a library
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../cli.html">
+   DataFusion Command-line SQL Utility
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../dataframe.html">
+   DataFrame API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../expressions.html">
+   Expressions
+  </a>
+ </li>
+ <li class="toctree-l1 current active has-children">
+  <a class="current reference internal" href="#">
+   SQL Reference
+  </a>
+  <input checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
+  <label for="toctree-checkbox-1">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="data_types.html">
+     Data Types
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="select.html">
+     SELECT syntax
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="subqueries.html">
+     Subqueries
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="ddl.html">
+     DDL
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="explain.html">
+     EXPLAIN
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="information_schema.html">
+     Information Schema
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="aggregate_functions.html">
+     Aggregate Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="scalar_functions.html">
+     Scalar Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql_status.html">
+     Status
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../configs.html">
+   Configuration Settings
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../faq.html">
+   Frequently Asked Questions
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://docs.rs/crate/datafusion/">
+   Rust Crate Documentation
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Contributor Guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/index.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/communication.html">
+   Communication
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/roadmap.html">
+   Roadmap
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/quarterly_roadmap.html">
+   Quarterly Roadmap
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../contributor-guide/specification/index.html">
+   Specifications
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+  <label for="toctree-checkbox-2">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../contributor-guide/specification/invariants.html">
+     Invariants
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../contributor-guide/specification/output-field-name-semantic.html">
+     Output field name semantics
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues">
+   Issue tracker
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/CODE_OF_CONDUCT.md">
+   Code of conduct
+  </a>
+ </li>
+</ul>
+
+    
+  </div>
+</nav>
+              </div>
+              <div class="sidebar-end-items">
+              </div>
+            </div>
+            
+          
+
+          
+          <div class="d-none d-xl-block col-xl-2 bd-toc">
+            
+              
+              <div class="toc-item">
+                
+
+<nav id="bd-toc-nav">
+    
+</nav>
+              </div>
+              
+              <div class="toc-item">
+                
+
+<div class="tocsection editthispage">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/sql/index.rst">
+        <i class="fas fa-pencil-alt"></i> Edit this page
+    </a>
+</div>
+
+              </div>
+              
+            
+          </div>
+          
+
+          
+          
+            
+          
+          <main class="col-12 col-md-9 col-xl-7 py-md-5 pl-md-5 pr-md-4 bd-content" role="main">
+              
+              <div>
+                
+  <section id="sql-reference">
+<h1>SQL Reference<a class="headerlink" href="#sql-reference" title="Permalink to this heading">¶</a></h1>
+<div class="toctree-wrapper compound">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="data_types.html">Data Types</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="data_types.html#character-types">Character Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="data_types.html#numeric-types">Numeric Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="data_types.html#date-time-types">Date/Time Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="data_types.html#boolean-types">Boolean Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="data_types.html#binary-types">Binary Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="data_types.html#unsupported-sql-types">Unsupported SQL Types</a></li>
+<li class="toctree-l2"><a class="reference internal" href="data_types.html#supported-arrow-types">Supported Arrow Types</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="select.html">SELECT syntax</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="select.html#with-clause">WITH clause</a></li>
+<li class="toctree-l2"><a class="reference internal" href="select.html#select-clause">SELECT clause</a></li>
+<li class="toctree-l2"><a class="reference internal" href="select.html#from-clause">FROM clause</a></li>
+<li class="toctree-l2"><a class="reference internal" href="select.html#where-clause">WHERE clause</a></li>
+<li class="toctree-l2"><a class="reference internal" href="select.html#join-clause">JOIN clause</a></li>
+<li class="toctree-l2"><a class="reference internal" href="select.html#group-by-clause">GROUP BY clause</a></li>
+<li class="toctree-l2"><a class="reference internal" href="select.html#having-clause">HAVING clause</a></li>
+<li class="toctree-l2"><a class="reference internal" href="select.html#union-clause">UNION clause</a></li>
+<li class="toctree-l2"><a class="reference internal" href="select.html#order-by-clause">ORDER BY clause</a></li>
+<li class="toctree-l2"><a class="reference internal" href="select.html#limit-clause">LIMIT clause</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="subqueries.html">Subqueries</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="subqueries.html#exists">EXISTS</a></li>
+<li class="toctree-l2"><a class="reference internal" href="subqueries.html#not-exists">NOT EXISTS</a></li>
+<li class="toctree-l2"><a class="reference internal" href="subqueries.html#in">IN</a></li>
+<li class="toctree-l2"><a class="reference internal" href="subqueries.html#not-in">NOT IN</a></li>
+<li class="toctree-l2"><a class="reference internal" href="subqueries.html#scalar-subquery">Scalar Subquery</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="ddl.html">DDL</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="ddl.html#create-external-table">CREATE EXTERNAL TABLE</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ddl.html#create-table">CREATE TABLE</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ddl.html#drop-table">DROP TABLE</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ddl.html#create-view">CREATE VIEW</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ddl.html#drop-view">DROP VIEW</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="explain.html">EXPLAIN</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="explain.html#id1">EXPLAIN</a></li>
+<li class="toctree-l2"><a class="reference internal" href="explain.html#explain-analyze">EXPLAIN ANALYZE</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="information_schema.html">Information Schema</a></li>
+<li class="toctree-l1"><a class="reference internal" href="aggregate_functions.html">Aggregate Functions</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="aggregate_functions.html#general">General</a></li>
+<li class="toctree-l2"><a class="reference internal" href="aggregate_functions.html#statistical">Statistical</a></li>
+<li class="toctree-l2"><a class="reference internal" href="aggregate_functions.html#approximate">Approximate</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="scalar_functions.html">Scalar Functions</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="scalar_functions.html#math-functions">Math Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="scalar_functions.html#conditional-functions">Conditional Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="scalar_functions.html#string-functions">String Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="scalar_functions.html#regular-expression-functions">Regular Expression Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="scalar_functions.html#temporal-functions">Temporal Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="scalar_functions.html#other-functions">Other Functions</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="sql_status.html">Status</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="sql_status.html#general">General</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql_status.html#sql-support">SQL Support</a></li>
+<li class="toctree-l2"><a class="reference internal" href="sql_status.html#data-sources">Data Sources</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</section>
+
+
+              </div>
+              
+              
+              <!-- Previous / next buttons -->
+<div class='prev-next-area'>
+    <a class='left-prev' id="prev-link" href="../expressions.html" title="previous page">
+        <i class="fas fa-angle-left"></i>
+        <div class="prev-next-info">
+            <p class="prev-next-subtitle">previous</p>
+            <p class="prev-next-title">Expressions</p>
+        </div>
+    </a>
+    <a class='right-next' id="next-link" href="data_types.html" title="next page">
+    <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Data Types</p>
+    </div>
+    <i class="fas fa-angle-right"></i>
+    </a>
+</div>
+              
+          </main>
+          
+
+      </div>
+    </div>
+  
+    <script src="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
+  <footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p class="copyright">
+    &copy; Copyright 2022, Apache Software Foundation.<br>
+</p>
+    </div>
+    
+    <div class="footer-item">
+      <p class="sphinx-version">
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 6.1.3.<br>
+</p>
+    </div>
+    
+  </div>
+</footer>
+  </body>
+</html>

@@ -1,0 +1,950 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.19: https://docutils.sourceforge.io/" />
+
+    <title>Expressions &#8212; Arrow DataFusion  documentation</title>
+    
+    <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+  
+    
+    <link rel="stylesheet"
+      href="../_static/vendor/fontawesome/5.13.0/css/all.min.css">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
+  
+    
+      
+  
+    
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/pydata-sphinx-theme.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/theme_overrides.css" />
+    
+    <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
+  
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="SQL Reference" href="sql/index.html" />
+    <link rel="prev" title="DataFrame API" href="dataframe.html" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="docsearch:language" content="en">
+    
+
+    <!-- Google Analytics -->
+    
+  </head>
+  <body data-spy="scroll" data-target="#bd-toc-nav" data-offset="80">
+    
+    <div class="container-fluid" id="banner"></div>
+
+    
+
+
+    <div class="container-xl">
+      <div class="row">
+          
+            
+            <!-- Only show if we have sidebars configured, else just a small margin  -->
+            <div class="col-12 col-md-3 bd-sidebar">
+              <div class="sidebar-start-items">
+
+<form class="bd-search d-flex align-items-center" action="../search.html" method="get">
+  <i class="icon fas fa-search"></i>
+  <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
+</form>
+
+<nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  User Guide
+ </span>
+</p>
+<ul class="current nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="introduction.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="example-usage.html">
+   Example Usage
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="library.html">
+   Using DataFusion as a library
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="cli.html">
+   DataFusion Command-line SQL Utility
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="dataframe.html">
+   DataFrame API
+  </a>
+ </li>
+ <li class="toctree-l1 current active">
+  <a class="current reference internal" href="#">
+   Expressions
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="sql/index.html">
+   SQL Reference
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
+  <label for="toctree-checkbox-1">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/data_types.html">
+     Data Types
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/select.html">
+     SELECT syntax
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/subqueries.html">
+     Subqueries
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/ddl.html">
+     DDL
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/explain.html">
+     EXPLAIN
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/information_schema.html">
+     Information Schema
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/aggregate_functions.html">
+     Aggregate Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/scalar_functions.html">
+     Scalar Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/sql_status.html">
+     Status
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="configs.html">
+   Configuration Settings
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="faq.html">
+   Frequently Asked Questions
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://docs.rs/crate/datafusion/">
+   Rust Crate Documentation
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Contributor Guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/index.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/communication.html">
+   Communication
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/roadmap.html">
+   Roadmap
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/quarterly_roadmap.html">
+   Quarterly Roadmap
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../contributor-guide/specification/index.html">
+   Specifications
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+  <label for="toctree-checkbox-2">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../contributor-guide/specification/invariants.html">
+     Invariants
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../contributor-guide/specification/output-field-name-semantic.html">
+     Output field name semantics
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues">
+   Issue tracker
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/CODE_OF_CONDUCT.md">
+   Code of conduct
+  </a>
+ </li>
+</ul>
+
+    
+  </div>
+</nav>
+              </div>
+              <div class="sidebar-end-items">
+              </div>
+            </div>
+            
+          
+
+          
+          <div class="d-none d-xl-block col-xl-2 bd-toc">
+            
+              
+              <div class="toc-item">
+                
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
+
+<nav id="bd-toc-nav">
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#identifiers">
+   Identifiers
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#literal-values">
+   Literal Values
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#boolean-expressions">
+   Boolean Expressions
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#comparison-expressions">
+   Comparison Expressions
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#math-functions">
+   Math Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#math-functions-usage-notes">
+     Math functions usage notes:
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#bitwise-operators">
+   Bitwise Operators
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#conditional-expressions">
+   Conditional Expressions
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#string-expressions">
+   String Expressions
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#regular-expressions">
+   Regular Expressions
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#temporal-expressions">
+   Temporal Expressions
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#other-expressions">
+   Other Expressions
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#aggregate-functions">
+   Aggregate Functions
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#subquery-expressions">
+   Subquery Expressions
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#user-defined-function-expressions">
+   User-Defined Function Expressions
+  </a>
+ </li>
+</ul>
+
+</nav>
+              </div>
+              
+              <div class="toc-item">
+                
+
+<div class="tocsection editthispage">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/expressions.md">
+        <i class="fas fa-pencil-alt"></i> Edit this page
+    </a>
+</div>
+
+              </div>
+              
+            
+          </div>
+          
+
+          
+          
+            
+          
+          <main class="col-12 col-md-9 col-xl-7 py-md-5 pl-md-5 pr-md-4 bd-content" role="main">
+              
+              <div>
+                
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="expressions">
+<h1>Expressions<a class="headerlink" href="#expressions" title="Permalink to this heading">¶</a></h1>
+<p>DataFrame methods such as <code class="docutils literal notranslate"><span class="pre">select</span></code> and <code class="docutils literal notranslate"><span class="pre">filter</span></code> accept one or more logical expressions and there are many functions
+available for creating logical expressions. These are documented below.</p>
+<p>Expressions can be chained together using a fluent-style API:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// create the expression `(a &gt; 6) AND (b &lt; 7)`</span>
+<span class="n">col</span><span class="p">(</span><span class="s">&quot;a&quot;</span><span class="p">).</span><span class="n">gt</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">6</span><span class="p">)).</span><span class="n">and</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;b&quot;</span><span class="p">).</span><span class="n">lt</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">7</span><span class="p">)))</span>
+</pre></div>
+</div>
+<section id="identifiers">
+<h2>Identifiers<a class="headerlink" href="#identifiers" title="Permalink to this heading">¶</a></h2>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Function</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>col</p></td>
+<td><p>Reference a column in a dataframe <code class="docutils literal notranslate"><span class="pre">col(&quot;a&quot;)</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="literal-values">
+<h2>Literal Values<a class="headerlink" href="#literal-values" title="Permalink to this heading">¶</a></h2>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Function</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>lit</p></td>
+<td><p>Literal value such as <code class="docutils literal notranslate"><span class="pre">lit(123)</span></code> or <code class="docutils literal notranslate"><span class="pre">lit(&quot;hello&quot;)</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="boolean-expressions">
+<h2>Boolean Expressions<a class="headerlink" href="#boolean-expressions" title="Permalink to this heading">¶</a></h2>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Function</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>and</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">and(expr1,</span> <span class="pre">expr2)</span></code> or <code class="docutils literal notranslate"><span class="pre">expr1.and(expr2)</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>or</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">or(expr1,</span> <span class="pre">expr2)</span></code> or <code class="docutils literal notranslate"><span class="pre">expr1.or(expr2)</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>not</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">not(expr)</span></code> or <code class="docutils literal notranslate"><span class="pre">expr.not()</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="comparison-expressions">
+<h2>Comparison Expressions<a class="headerlink" href="#comparison-expressions" title="Permalink to this heading">¶</a></h2>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Function</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>eq</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">expr1.eq(expr2)</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>gt</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">expr1.gt(expr2)</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>gt_eq</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">expr1.gt_eq(expr2)</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>lt</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">expr1.lt(expr2)</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>lt_eq</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">expr1.lt_eq(expr2)</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>not_eq</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">expr1.not_eq(expr2)</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="math-functions">
+<h2>Math Functions<a class="headerlink" href="#math-functions" title="Permalink to this heading">¶</a></h2>
+<p>In addition to the math functions listed here, some Rust operators are implemented for expressions, allowing
+expressions such as <code class="docutils literal notranslate"><span class="pre">col(&quot;a&quot;)</span> <span class="pre">+</span> <span class="pre">col(&quot;b&quot;)</span></code> to be used.</p>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Function</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>abs(x)</p></td>
+<td><p>absolute value</p></td>
+</tr>
+<tr class="row-odd"><td><p>acos(x)</p></td>
+<td><p>inverse cosine</p></td>
+</tr>
+<tr class="row-even"><td><p>asin(x)</p></td>
+<td><p>inverse sine</p></td>
+</tr>
+<tr class="row-odd"><td><p>atan(x)</p></td>
+<td><p>inverse tangent</p></td>
+</tr>
+<tr class="row-even"><td><p>atan2(y, x)</p></td>
+<td><p>inverse tangent of y / x</p></td>
+</tr>
+<tr class="row-odd"><td><p>ceil(x)</p></td>
+<td><p>nearest integer greater than or equal to argument</p></td>
+</tr>
+<tr class="row-even"><td><p>cos(x)</p></td>
+<td><p>cosine</p></td>
+</tr>
+<tr class="row-odd"><td><p>exp(x)</p></td>
+<td><p>exponential</p></td>
+</tr>
+<tr class="row-even"><td><p>floor(x)</p></td>
+<td><p>nearest integer less than or equal to argument</p></td>
+</tr>
+<tr class="row-odd"><td><p>ln(x)</p></td>
+<td><p>natural logarithm</p></td>
+</tr>
+<tr class="row-even"><td><p>log(base, x)</p></td>
+<td><p>logarithm of x for a particular base</p></td>
+</tr>
+<tr class="row-odd"><td><p>log10(x)</p></td>
+<td><p>base 10 logarithm</p></td>
+</tr>
+<tr class="row-even"><td><p>log2(x)</p></td>
+<td><p>base 2 logarithm</p></td>
+</tr>
+<tr class="row-odd"><td><p>power(base, exponent)</p></td>
+<td><p>base raised to the power of exponent</p></td>
+</tr>
+<tr class="row-even"><td><p>round(x)</p></td>
+<td><p>round to nearest integer</p></td>
+</tr>
+<tr class="row-odd"><td><p>signum(x)</p></td>
+<td><p>sign of the argument (-1, 0, +1)</p></td>
+</tr>
+<tr class="row-even"><td><p>sin(x)</p></td>
+<td><p>sine</p></td>
+</tr>
+<tr class="row-odd"><td><p>sqrt(x)</p></td>
+<td><p>square root</p></td>
+</tr>
+<tr class="row-even"><td><p>tan(x)</p></td>
+<td><p>tangent</p></td>
+</tr>
+<tr class="row-odd"><td><p>trunc(x)</p></td>
+<td><p>truncate toward zero</p></td>
+</tr>
+</tbody>
+</table>
+<section id="math-functions-usage-notes">
+<h3>Math functions usage notes:<a class="headerlink" href="#math-functions-usage-notes" title="Permalink to this heading">¶</a></h3>
+<p>Unlike to some databases the math functions in Datafusion works the same way as Rust math functions, avoiding failing on corner cases e.g</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select log(-1), log(0), sqrt(-1);
++----------------+---------------+-----------------+
+| log(Int64(-1)) | log(Int64(0)) | sqrt(Int64(-1)) |
++----------------+---------------+-----------------+
+| NaN            | -inf          | NaN             |
++----------------+---------------+-----------------+
+</pre></div>
+</div>
+</section>
+</section>
+<section id="bitwise-operators">
+<h2>Bitwise Operators<a class="headerlink" href="#bitwise-operators" title="Permalink to this heading">¶</a></h2>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Operator</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>&amp;</p></td>
+<td><p>Bitwise AND =&gt; <code class="docutils literal notranslate"><span class="pre">(expr1</span> <span class="pre">&amp;</span> <span class="pre">expr2)</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>|</p></td>
+<td><p>Bitwise OR =&gt; <code>(expr1 | expr2)</code></p></td>
+</tr>
+<tr class="row-even"><td><p>#</p></td>
+<td><p>Bitwise XOR =&gt; <code class="docutils literal notranslate"><span class="pre">(expr1</span> <span class="pre">#</span> <span class="pre">expr2)</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>&lt;&lt;</p></td>
+<td><p>Bitwise left shift =&gt; <code class="docutils literal notranslate"><span class="pre">(expr1</span> <span class="pre">&lt;&lt;</span> <span class="pre">expr2)</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>&gt;&gt;</p></td>
+<td><p>Bitwise right shift =&gt; <code class="docutils literal notranslate"><span class="pre">(expr1</span> <span class="pre">&lt;&lt;</span> <span class="pre">expr2)</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="conditional-expressions">
+<h2>Conditional Expressions<a class="headerlink" href="#conditional-expressions" title="Permalink to this heading">¶</a></h2>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Function</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>coalesce</p></td>
+<td><p>Returns the first of its arguments that is not null. Null is returned only if all arguments are null. It is often used to substitute a default value for null values when data is retrieved for display.</p></td>
+</tr>
+<tr class="row-odd"><td><p>case</p></td>
+<td><p>CASE expression. Example: <code class="docutils literal notranslate"><span class="pre">case(expr).when(expr,</span> <span class="pre">expr).when(expr,</span> <span class="pre">expr).otherwise(expr).end()</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p>nullif</p></td>
+<td><p>Returns a null value if <code class="docutils literal notranslate"><span class="pre">value1</span></code> equals <code class="docutils literal notranslate"><span class="pre">value2</span></code>; otherwise it returns <code class="docutils literal notranslate"><span class="pre">value1</span></code>. This can be used to perform the inverse operation of the <code class="docutils literal notranslate"><span class="pre">coalesce</span></code> expression.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="string-expressions">
+<h2>String Expressions<a class="headerlink" href="#string-expressions" title="Permalink to this heading">¶</a></h2>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Function</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>ascii</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>bit_length</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>btrim</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>char_length</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>character_length</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>concat</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>concat_ws</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>chr</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>initcap</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>left</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>length</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>lower</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>lpad</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>ltrim</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>md5</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>octet_length</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>repeat</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>replace</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>reverse</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>right</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>rpad</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>rtrim</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>digest</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>split_part</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>starts_with</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>strpos</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>substr</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>translate</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>trim</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>upper</p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="regular-expressions">
+<h2>Regular Expressions<a class="headerlink" href="#regular-expressions" title="Permalink to this heading">¶</a></h2>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Function</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>regexp_match</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>regexp_replace</p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="temporal-expressions">
+<h2>Temporal Expressions<a class="headerlink" href="#temporal-expressions" title="Permalink to this heading">¶</a></h2>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Function</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>date_part</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>date_trunc</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>from_unixtime</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>to_timestamp</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>to_timestamp_millis</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>to_timestamp_micros</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>to_timestamp_seconds</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>now()</p></td>
+<td><p>current time</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="other-expressions">
+<h2>Other Expressions<a class="headerlink" href="#other-expressions" title="Permalink to this heading">¶</a></h2>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Function</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>array</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>in_list</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>random</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>sha224</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>sha256</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>sha384</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>sha512</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>struct</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>to_hex</p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="aggregate-functions">
+<h2>Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Permalink to this heading">¶</a></h2>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Function</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>avg</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>approx_distinct</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>approx_median</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>approx_percentile_cont</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>approx_percentile_cont_with_weight</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>count</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>count_distinct</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>cube</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>grouping_set</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>max</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>median</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>min</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>rollup</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>sum</p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="subquery-expressions">
+<h2>Subquery Expressions<a class="headerlink" href="#subquery-expressions" title="Permalink to this heading">¶</a></h2>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Function</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>exists</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>in_subquery</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">df1.filter(in_subquery(col(&quot;foo&quot;),</span> <span class="pre">df2))?</span></code> is the equivalent of the SQL <code class="docutils literal notranslate"><span class="pre">WHERE</span> <span class="pre">foo</span> <span class="pre">IN</span> <span class="pre">&lt;df2&gt;</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>not_exists</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>not_in_subquery</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p>scalar_subquery</p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="user-defined-function-expressions">
+<h2>User-Defined Function Expressions<a class="headerlink" href="#user-defined-function-expressions" title="Permalink to this heading">¶</a></h2>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Function</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>create_udf</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p>create_udaf</p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+
+
+              </div>
+              
+              
+              <!-- Previous / next buttons -->
+<div class='prev-next-area'>
+    <a class='left-prev' id="prev-link" href="dataframe.html" title="previous page">
+        <i class="fas fa-angle-left"></i>
+        <div class="prev-next-info">
+            <p class="prev-next-subtitle">previous</p>
+            <p class="prev-next-title">DataFrame API</p>
+        </div>
+    </a>
+    <a class='right-next' id="next-link" href="sql/index.html" title="next page">
+    <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">SQL Reference</p>
+    </div>
+    <i class="fas fa-angle-right"></i>
+    </a>
+</div>
+              
+          </main>
+          
+
+      </div>
+    </div>
+  
+    <script src="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
+  <footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p class="copyright">
+    &copy; Copyright 2022, Apache Software Foundation.<br>
+</p>
+    </div>
+    
+    <div class="footer-item">
+      <p class="sphinx-version">
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 6.1.3.<br>
+</p>
+    </div>
+    
+  </div>
+</footer>
+  </body>
+</html>

@@ -4,9 +4,8 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.19: https://docutils.sourceforge.io/" />
-
-    <title>Apache Arrow DataFusion &#8212; Arrow DataFusion  documentation</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Search &#8212; Arrow DataFusion  documentation</title>
     
     <link href="_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -29,18 +28,23 @@
     
     <link rel="preload" as="script" href="_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
+    
     <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
     <script src="_static/doctools.js"></script>
     <script src="_static/sphinx_highlight.js"></script>
+    <script src="_static/searchtools.js"></script>
+    <script src="_static/language_data.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
-    <link rel="search" title="Search" href="search.html" />
-    <link rel="next" title="Introduction" href="user-guide/introduction.html" />
+    <link rel="search" title="Search" href="#" />
+  <script src="searchindex.js" defer></script>
+  
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
 
     <!-- Google Analytics -->
     
+
   </head>
   <body data-spy="scroll" data-target="#bd-toc-nav" data-offset="80">
     
@@ -57,7 +61,7 @@
             <div class="col-12 col-md-3 bd-sidebar">
               <div class="sidebar-start-items">
 
-<form class="bd-search d-flex align-items-center" action="search.html" method="get">
+<form class="bd-search d-flex align-items-center" action="#" method="get">
   <i class="icon fas fa-search"></i>
   <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
 </form>
@@ -247,39 +251,6 @@
           
           <div class="d-none d-xl-block col-xl-2 bd-toc">
             
-              
-              <div class="toc-item">
-                
-<div class="tocsection onthispage pt-5 pb-3">
-    <i class="fas fa-list"></i> On this page
-</div>
-
-<nav id="bd-toc-nav">
-    <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#table-of-contents">
-   Table of Contents
-  </a>
-  <ul class="nav section-nav flex-column">
-  </ul>
- </li>
-</ul>
-
-</nav>
-              </div>
-              
-              <div class="toc-item">
-                
-
-<div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/index.rst">
-        <i class="fas fa-pencil-alt"></i> Edit this page
-    </a>
-</div>
-
-              </div>
-              
-            
           </div>
           
 
@@ -291,85 +262,42 @@
               
               <div>
                 
-  <section id="apache-arrow-datafusion">
-<h1>Apache Arrow DataFusion<a class="headerlink" href="#apache-arrow-datafusion" title="Permalink to this heading">¶</a></h1>
-<section id="table-of-contents">
-<h2>Table of Contents<a class="headerlink" href="#table-of-contents" title="Permalink to this heading">¶</a></h2>
-<div class="toctree-wrapper compound" id="toc-guide">
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">User Guide</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="user-guide/introduction.html">Introduction</a></li>
-<li class="toctree-l1"><a class="reference internal" href="user-guide/example-usage.html">Example Usage</a></li>
-<li class="toctree-l1"><a class="reference internal" href="user-guide/example-usage.html#identifiers-and-capitalization">Identifiers and Capitalization</a></li>
-<li class="toctree-l1"><a class="reference internal" href="user-guide/library.html">Using DataFusion as a library</a></li>
-<li class="toctree-l1"><a class="reference internal" href="user-guide/cli.html">DataFusion Command-line SQL Utility</a></li>
-<li class="toctree-l1"><a class="reference internal" href="user-guide/dataframe.html">DataFrame API</a></li>
-<li class="toctree-l1"><a class="reference internal" href="user-guide/expressions.html">Expressions</a></li>
-<li class="toctree-l1"><a class="reference internal" href="user-guide/sql/index.html">SQL Reference</a></li>
-<li class="toctree-l1"><a class="reference internal" href="user-guide/configs.html">Configuration Settings</a></li>
-<li class="toctree-l1"><a class="reference internal" href="user-guide/faq.html">Frequently Asked Questions</a></li>
-<li class="toctree-l1"><a class="reference external" href="https://docs.rs/crate/datafusion/">Rust Crate Documentation</a></li>
-</ul>
-</div>
-<div class="toctree-wrapper compound" id="toc-contributor-guide">
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Contributor Guide</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="contributor-guide/index.html">Introduction</a></li>
-<li class="toctree-l1"><a class="reference internal" href="contributor-guide/index.html#pull-requests">Pull Requests</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#merging-prs">Merging PRs</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="contributor-guide/index.html#developer-s-guide">Developer’s guide</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#windows-setup">Windows setup</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#protoc-installation">Protoc Installation</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#bootstrap-environment">Bootstrap environment</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#test-organization">Test Organization</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#benchmarks">Benchmarks</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#how-to-add-a-new-scalar-function">How to add a new scalar function</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#how-to-add-a-new-aggregate-function">How to add a new aggregate function</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#how-to-display-plans-graphically">How to display plans graphically</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#specifications">Specifications</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#how-to-format-md-document">How to format <code class="docutils literal notranslate"><span class="pre">.md</span></code> document</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="contributor-guide/communication.html">Communication</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/communication.html#questions">Questions?</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="contributor-guide/roadmap.html">Roadmap</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/roadmap.html#datafusion">DataFusion</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/roadmap.html#ballista">Ballista</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="contributor-guide/quarterly_roadmap.html">Quarterly Roadmap</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/quarterly_roadmap.html#q2">2022 Q2</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="contributor-guide/specification/index.html">Specifications</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/specification/invariants.html">Invariants</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/specification/output-field-name-semantic.html">Output field name semantics</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/arrow-datafusion/issues">Issue tracker</a></li>
-<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li>
-</ul>
-</div>
-</section>
-</section>
-
+  <h1 id="search-documentation">Search</h1>
+  
+  <noscript>
+  <div class="admonition warning">
+  <p>
+    Please activate JavaScript to enable the search
+    functionality.
+  </p>
+  </div>
+  </noscript>
+  
+  
+  <p>
+    Searching for multiple words only shows matches that contain
+    all words.
+  </p>
+  
+  
+  <form action="" method="get">
+    <input type="text" name="q" aria-labelledby="search-documentation" value="" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+    <input type="submit" value="search" />
+    <span id="search-progress" style="padding-left: 10px"></span>
+  </form>
+  
+  
+  
+  <div id="search-results">
+  
+  </div>
+  
 
               </div>
               
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='right-next' id="next-link" href="user-guide/introduction.html" title="next page">
-    <div class="prev-next-info">
-        <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Introduction</p>
-    </div>
-    <i class="fas fa-angle-right"></i>
-    </a>
 </div>
               
           </main>

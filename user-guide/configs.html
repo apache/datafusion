@@ -1,0 +1,515 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.19: https://docutils.sourceforge.io/" />
+
+    <title>Configuration Settings &#8212; Arrow DataFusion  documentation</title>
+    
+    <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+  
+    
+    <link rel="stylesheet"
+      href="../_static/vendor/fontawesome/5.13.0/css/all.min.css">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
+  
+    
+      
+  
+    
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/pydata-sphinx-theme.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/theme_overrides.css" />
+    
+    <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
+  
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Frequently Asked Questions" href="faq.html" />
+    <link rel="prev" title="Status" href="sql/sql_status.html" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="docsearch:language" content="en">
+    
+
+    <!-- Google Analytics -->
+    
+  </head>
+  <body data-spy="scroll" data-target="#bd-toc-nav" data-offset="80">
+    
+    <div class="container-fluid" id="banner"></div>
+
+    
+
+
+    <div class="container-xl">
+      <div class="row">
+          
+            
+            <!-- Only show if we have sidebars configured, else just a small margin  -->
+            <div class="col-12 col-md-3 bd-sidebar">
+              <div class="sidebar-start-items">
+
+<form class="bd-search d-flex align-items-center" action="../search.html" method="get">
+  <i class="icon fas fa-search"></i>
+  <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
+</form>
+
+<nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  User Guide
+ </span>
+</p>
+<ul class="current nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="introduction.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="example-usage.html">
+   Example Usage
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="library.html">
+   Using DataFusion as a library
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="cli.html">
+   DataFusion Command-line SQL Utility
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="dataframe.html">
+   DataFrame API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="expressions.html">
+   Expressions
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="sql/index.html">
+   SQL Reference
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
+  <label for="toctree-checkbox-1">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/data_types.html">
+     Data Types
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/select.html">
+     SELECT syntax
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/subqueries.html">
+     Subqueries
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/ddl.html">
+     DDL
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/explain.html">
+     EXPLAIN
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/information_schema.html">
+     Information Schema
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/aggregate_functions.html">
+     Aggregate Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/scalar_functions.html">
+     Scalar Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/sql_status.html">
+     Status
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1 current active">
+  <a class="current reference internal" href="#">
+   Configuration Settings
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="faq.html">
+   Frequently Asked Questions
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://docs.rs/crate/datafusion/">
+   Rust Crate Documentation
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Contributor Guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/index.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/communication.html">
+   Communication
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/roadmap.html">
+   Roadmap
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/quarterly_roadmap.html">
+   Quarterly Roadmap
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../contributor-guide/specification/index.html">
+   Specifications
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+  <label for="toctree-checkbox-2">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../contributor-guide/specification/invariants.html">
+     Invariants
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../contributor-guide/specification/output-field-name-semantic.html">
+     Output field name semantics
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues">
+   Issue tracker
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/CODE_OF_CONDUCT.md">
+   Code of conduct
+  </a>
+ </li>
+</ul>
+
+    
+  </div>
+</nav>
+              </div>
+              <div class="sidebar-end-items">
+              </div>
+            </div>
+            
+          
+
+          
+          <div class="d-none d-xl-block col-xl-2 bd-toc">
+            
+              
+              <div class="toc-item">
+                
+
+<nav id="bd-toc-nav">
+    
+</nav>
+              </div>
+              
+              <div class="toc-item">
+                
+
+<div class="tocsection editthispage">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/configs.md">
+        <i class="fas fa-pencil-alt"></i> Edit this page
+    </a>
+</div>
+
+              </div>
+              
+            
+          </div>
+          
+
+          
+          
+            
+          
+          <main class="col-12 col-md-9 col-xl-7 py-md-5 pl-md-5 pr-md-4 bd-content" role="main">
+              
+              <div>
+                
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<!---
+This file was generated by the dev/update_config_docs.sh script.
+Do not edit it manually as changes will be overwritten.
+Instead, edit dev/update_config_docs.sh or the docstrings in datafusion/core/src/config.rs.
+-->
+<section id="configuration-settings">
+<h1>Configuration Settings<a class="headerlink" href="#configuration-settings" title="Permalink to this heading">¶</a></h1>
+<p>The following configuration options can be passed to <code class="docutils literal notranslate"><span class="pre">SessionConfig</span></code> to control various aspects of query execution.</p>
+<p>For applications which do not expose <code class="docutils literal notranslate"><span class="pre">SessionConfig</span></code>, like <code class="docutils literal notranslate"><span class="pre">datafusion-cli</span></code>, these options may also be set via environment variables.
+To construct a session with options from the environment, use <code class="docutils literal notranslate"><span class="pre">SessionConfig::from_env</span></code>.
+The name of the environment variable is the option’s key, transformed to uppercase and with periods replaced with underscores.
+For example, to configure <code class="docutils literal notranslate"><span class="pre">datafusion.execution.batch_size</span></code> you would set the <code class="docutils literal notranslate"><span class="pre">DATAFUSION_EXECUTION_BATCH_SIZE</span></code> environment variable.
+Values are parsed according to the <a class="reference external" href="https://docs.rs/arrow/latest/arrow/compute/kernels/cast/fn.cast.html">same rules used in casts from Utf8</a>.
+If the value in the environment variable cannot be cast to the type of the configuration option, the default value will be used instead and a warning emitted.
+Environment variables are read during <code class="docutils literal notranslate"><span class="pre">SessionConfig</span></code> initialisation so they must be set beforehand and will not affect running sessions.</p>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>key</p></th>
+<th class="head"><p>default</p></th>
+<th class="head"><p>description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>datafusion.catalog.create_default_catalog_and_schema</p></td>
+<td><p>true</p></td>
+<td><p>Whether the default catalog and schema should be created automatically.</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.catalog.default_catalog</p></td>
+<td><p>datafusion</p></td>
+<td><p>The default catalog name - this impacts what SQL queries use if not specified</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.catalog.default_schema</p></td>
+<td><p>public</p></td>
+<td><p>The default schema name - this impacts what SQL queries use if not specified</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.catalog.information_schema</p></td>
+<td><p>false</p></td>
+<td><p>Should DataFusion provide access to <code class="docutils literal notranslate"><span class="pre">information_schema</span></code> virtual tables for displaying schema information</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.catalog.location</p></td>
+<td><p>NULL</p></td>
+<td><p>Location scanned to load tables for <code class="docutils literal notranslate"><span class="pre">default</span></code> schema</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.catalog.format</p></td>
+<td><p>NULL</p></td>
+<td><p>Type of <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> to use when loading <code class="docutils literal notranslate"><span class="pre">default</span></code> schema</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.catalog.has_header</p></td>
+<td><p>false</p></td>
+<td><p>If the file has a header</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.execution.batch_size</p></td>
+<td><p>8192</p></td>
+<td><p>Default batch size while creating new batches, it’s especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.execution.coalesce_batches</p></td>
+<td><p>true</p></td>
+<td><p>When set to true, record batches will be examined between each operator and small batches will be coalesced into larger batches. This is helpful when there are highly selective filters or joins that could produce tiny output batches. The target batch size is determined by the configuration setting</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.execution.collect_statistics</p></td>
+<td><p>false</p></td>
+<td><p>Should DataFusion collect statistics after listing files</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.execution.target_partitions</p></td>
+<td><p>0</p></td>
+<td><p>Number of partitions for query execution. Increasing partitions can increase concurrency. Defaults to the number of CPU cores on the system</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.execution.time_zone</p></td>
+<td><p>+00:00</p></td>
+<td><p>The default time zone Some functions, e.g. <code class="docutils literal notranslate"><span class="pre">EXTRACT(HOUR</span> <span class="pre">from</span> <span class="pre">SOME_TIME)</span></code>, shift the underlying datetime according to this time zone, and then extract the hour</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.execution.parquet.enable_page_index</p></td>
+<td><p>false</p></td>
+<td><p>If true, uses parquet data page level metadata (Page Index) statistics to reduce the number of rows decoded.</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.execution.parquet.pruning</p></td>
+<td><p>true</p></td>
+<td><p>If true, the parquet reader attempts to skip entire row groups based on the predicate in the query and the metadata (min/max values) stored in the parquet file</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.execution.parquet.skip_metadata</p></td>
+<td><p>true</p></td>
+<td><p>If true, the parquet reader skip the optional embedded metadata that may be in the file Schema. This setting can help avoid schema conflicts when querying multiple parquet files with schemas containing compatible types but different metadata</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.execution.parquet.metadata_size_hint</p></td>
+<td><p>NULL</p></td>
+<td><p>If specified, the parquet reader will try and fetch the last <code class="docutils literal notranslate"><span class="pre">size_hint</span></code> bytes of the parquet file optimistically. If not specified, two reads are required: One read to fetch the 8-byte parquet footer and another to fetch the metadata length encoded in the footer</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.execution.parquet.pushdown_filters</p></td>
+<td><p>false</p></td>
+<td><p>If true, filter expressions are be applied during the parquet decoding operation to reduce the number of rows decoded</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.execution.parquet.reorder_filters</p></td>
+<td><p>false</p></td>
+<td><p>If true, filter expressions evaluated during the parquet decoding operation will be reordered heuristically to minimize the cost of evaluation. If false, the filters are applied in the same order as written in the query</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.optimizer.enable_round_robin_repartition</p></td>
+<td><p>true</p></td>
+<td><p>When set to true, the physical plan optimizer will try to add round robin repartitioning to increase parallelism to leverage more CPU cores</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.optimizer.filter_null_join_keys</p></td>
+<td><p>false</p></td>
+<td><p>When set to true, the optimizer will insert filters before a join between a nullable and non-nullable column to filter out nulls on the nullable side. This filter can add additional overhead when the file format does not fully support predicate push down.</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.optimizer.repartition_aggregations</p></td>
+<td><p>true</p></td>
+<td><p>Should DataFusion repartition data using the aggregate keys to execute aggregates in parallel using the provided <code class="docutils literal notranslate"><span class="pre">target_partitions</span></code> level</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.optimizer.repartition_file_min_size</p></td>
+<td><p>10485760</p></td>
+<td><p>Minimum total files size in bytes to perform file scan repartitioning.</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.optimizer.repartition_joins</p></td>
+<td><p>true</p></td>
+<td><p>Should DataFusion repartition data using the join keys to execute joins in parallel using the provided <code class="docutils literal notranslate"><span class="pre">target_partitions</span></code> level</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.optimizer.repartition_file_scans</p></td>
+<td><p>true</p></td>
+<td><p>When set to true, file groups will be repartitioned to achieve maximum parallelism. Currently supported only for Parquet format in which case multiple row groups from the same file may be read concurrently. If false then each row group is read serially, though different files may be read in parallel.</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.optimizer.repartition_windows</p></td>
+<td><p>true</p></td>
+<td><p>Should DataFusion repartition data using the partitions keys to execute window functions in parallel using the provided <code class="docutils literal notranslate"><span class="pre">target_partitions</span></code> level</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.optimizer.repartition_sorts</p></td>
+<td><p>true</p></td>
+<td><p>Should DataFusion execute sorts in a per-partition fashion and merge afterwards instead of coalescing first and sorting globally. With this flag is enabled, plans in the form below “SortExec: [a&#64;0 ASC]”, “ CoalescePartitionsExec”, “ RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1”, would turn into the plan below which performs better in multithreaded environments “SortPreservingMergeExec: [a&#64;0 ASC]”, “ SortExec: [a&#64;0 ASC]”, “ RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1”,</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.optimizer.skip_failed_rules</p></td>
+<td><p>true</p></td>
+<td><p>When set to true, the logical plan optimizer will produce warning messages if any optimization rules produce errors and then proceed to the next rule. When set to false, any rules that produce errors will cause the query to fail</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.optimizer.max_passes</p></td>
+<td><p>3</p></td>
+<td><p>Number of times that the optimizer will attempt to optimize the plan</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.optimizer.top_down_join_key_reordering</p></td>
+<td><p>true</p></td>
+<td><p>When set to true, the physical plan optimizer will run a top down process to reorder the join keys</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.optimizer.prefer_hash_join</p></td>
+<td><p>true</p></td>
+<td><p>When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin. HashJoin can work more efficiently than SortMergeJoin but consumes more memory</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.optimizer.hash_join_single_partition_threshold</p></td>
+<td><p>1048576</p></td>
+<td><p>The maximum estimated size in bytes for one input side of a HashJoin will be collected into a single partition</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.explain.logical_plan_only</p></td>
+<td><p>false</p></td>
+<td><p>When set to true, the explain statement will only print logical plans</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.explain.physical_plan_only</p></td>
+<td><p>false</p></td>
+<td><p>When set to true, the explain statement will only print physical plans</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.sql_parser.parse_float_as_decimal</p></td>
+<td><p>false</p></td>
+<td><p>When set to true, SQL parser will parse float as decimal type</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.sql_parser.enable_ident_normalization</p></td>
+<td><p>true</p></td>
+<td><p>When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+
+
+              </div>
+              
+              
+              <!-- Previous / next buttons -->
+<div class='prev-next-area'>
+    <a class='left-prev' id="prev-link" href="sql/sql_status.html" title="previous page">
+        <i class="fas fa-angle-left"></i>
+        <div class="prev-next-info">
+            <p class="prev-next-subtitle">previous</p>
+            <p class="prev-next-title">Status</p>
+        </div>
+    </a>
+    <a class='right-next' id="next-link" href="faq.html" title="next page">
+    <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Frequently Asked Questions</p>
+    </div>
+    <i class="fas fa-angle-right"></i>
+    </a>
+</div>
+              
+          </main>
+          
+
+      </div>
+    </div>
+  
+    <script src="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
+  <footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p class="copyright">
+    &copy; Copyright 2022, Apache Software Foundation.<br>
+</p>
+    </div>
+    
+    <div class="footer-item">
+      <p class="sphinx-version">
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 6.1.3.<br>
+</p>
+    </div>
+    
+  </div>
+</footer>
+  </body>
+</html>
