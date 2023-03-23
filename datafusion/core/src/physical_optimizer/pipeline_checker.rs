@@ -289,7 +289,6 @@ mod sql_tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_window_agg_hash_partition() -> Result<()> {
         let test1 = UnaryTestCase {
             source_type: SourceType::Bounded,
@@ -314,7 +313,6 @@ mod sql_tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_window_agg_single_partition() -> Result<()> {
         let test1 = UnaryTestCase {
             source_type: SourceType::Bounded,

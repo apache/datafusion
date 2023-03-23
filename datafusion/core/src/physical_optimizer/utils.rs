@@ -91,17 +91,6 @@ pub(crate) fn find_match_indices<T: PartialEq>(
     Ok(result)
 }
 
-// // Compares the equality of two vectors independent of the ordering and duplicates
-// // See https://stackoverflow.com/a/42748484/10554257
-// pub(crate) fn compare_set_equality<T>(a: &[T], b: &[T]) -> bool
-// where
-//     T: Eq + Hash,
-// {
-//     let a: HashSet<_> = a.iter().collect();
-//     let b: HashSet<_> = b.iter().collect();
-//     a == b
-// }
-
 /// Create a new vector from the elements at the `indices` of `searched` vector
 pub(crate) fn get_at_indices<T: Clone>(
     searched: &[T],
@@ -236,11 +225,4 @@ mod tests {
         assert_eq!(find_match_indices(&[0, 4, 3], &[0, 3, 4])?, vec![0, 2, 1]);
         Ok(())
     }
-
-    // #[tokio::test]
-    // async fn test_compare_set_equality() -> Result<()> {
-    //     assert!(compare_set_equality(&[4, 3, 2], &[3, 2, 4]));
-    //     assert!(!compare_set_equality(&[4, 3, 2, 1], &[3, 2, 4]));
-    //     Ok(())
-    // }
 }
