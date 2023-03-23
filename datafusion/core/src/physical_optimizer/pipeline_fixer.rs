@@ -107,7 +107,7 @@ fn check_support(expr: &Arc<dyn PhysicalExpr>) -> bool {
 /// [`PhysicalExpr`]s, [`Operator`]s and data types need to be supported,
 /// and order information must cover every column in the filter expression.
 fn is_suitable_for_symmetric_hash_join(hash_join: &HashJoinExec) -> bool {
-    hash_join.filter().map_or(false, |filter| {
+    hash_join.filter().map_or(true, |filter| {
         check_support(filter.expression())
             && filter
                 .schema()
@@ -140,7 +140,7 @@ fn hash_join_convert_symmetric_subrule(
                     .iter()
                     .map(|(l, r)| (l.clone(), r.clone()))
                     .collect(),
-                hash_join.filter().unwrap().clone(),
+                hash_join.filter().cloned(),
                 hash_join.join_type(),
                 hash_join.null_equals_null(),
             )

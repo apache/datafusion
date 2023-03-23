@@ -121,10 +121,10 @@ pub fn check_finiteness_requirements(
 ) -> Result<Option<PipelineStatePropagator>> {
     let plan = input.plan;
     if let Some(exec) = plan.as_any().downcast_ref::<SymmetricHashJoinExec>() {
-        if !optimizer_options.allow_unsorted_symmetric_joins
-            && exec.sorted_filter_exprs().iter().any(|s| s.is_none())
+        if !(optimizer_options.allow_unpruning_symmetric_joins
+            || exec.check_if_order_information_available()?)
         {
-            let msg = "Join operation cannot operate on stream without enabling the 'allow_unsorted_symmetric_joins' configuration flag";
+            let msg = "Join operation cannot operate on stream without enabling the 'allow_unpruning_symmetric_joins' configuration flag";
             return Err(DataFusionError::Plan(msg.to_owned()));
         }
     }
@@ -151,27 +151,19 @@ mod sql_tests {
             source_types: (SourceType::Unbounded, SourceType::Bounded),
             expect_fail: false,
         };
+
         let test2 = BinaryTestCase {
-            source_types: (SourceType::Unbounded, SourceType::Unbounded),
-            expect_fail: true,
-        };
-        let test3 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Unbounded),
             expect_fail: true,
         };
-        let test4 = BinaryTestCase {
+        let test3 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Bounded),
             expect_fail: false,
         };
         let case = QueryCase {
             sql: "SELECT t2.c1 FROM left as t1 LEFT JOIN right as t2 ON t1.c1 = t2.c1"
                 .to_string(),
-            cases: vec![
-                Arc::new(test1),
-                Arc::new(test2),
-                Arc::new(test3),
-                Arc::new(test4),
-            ],
+            cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
             error_operator: "Join Error".to_string(),
         };
 
@@ -186,26 +178,17 @@ mod sql_tests {
             expect_fail: true,
         };
         let test2 = BinaryTestCase {
-            source_types: (SourceType::Unbounded, SourceType::Unbounded),
-            expect_fail: true,
-        };
-        let test3 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Unbounded),
             expect_fail: false,
         };
-        let test4 = BinaryTestCase {
+        let test3 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Bounded),
             expect_fail: false,
         };
         let case = QueryCase {
             sql: "SELECT t2.c1 FROM left as t1 RIGHT JOIN right as t2 ON t1.c1 = t2.c1"
                 .to_string(),
-            cases: vec![
-                Arc::new(test1),
-                Arc::new(test2),
-                Arc::new(test3),
-                Arc::new(test4),
-            ],
+            cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
             error_operator: "Join Error".to_string(),
         };
 
@@ -220,26 +203,17 @@ mod sql_tests {
             expect_fail: false,
         };
         let test2 = BinaryTestCase {
-            source_types: (SourceType::Unbounded, SourceType::Unbounded),
-            expect_fail: true,
-        };
-        let test3 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Unbounded),
             expect_fail: false,
         };
-        let test4 = BinaryTestCase {
+        let test3 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Bounded),
             expect_fail: false,
         };
         let case = QueryCase {
             sql: "SELECT t2.c1 FROM left as t1 JOIN right as t2 ON t1.c1 = t2.c1"
                 .to_string(),
-            cases: vec![
-                Arc::new(test1),
-                Arc::new(test2),
-                Arc::new(test3),
-                Arc::new(test4),
-            ],
+            cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
             error_operator: "Join Error".to_string(),
         };
 
@@ -254,26 +228,17 @@ mod sql_tests {
             expect_fail: true,
         };
         let test2 = BinaryTestCase {
-            source_types: (SourceType::Unbounded, SourceType::Unbounded),
-            expect_fail: true,
-        };
-        let test3 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Unbounded),
             expect_fail: true,
         };
-        let test4 = BinaryTestCase {
+        let test3 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Bounded),
             expect_fail: false,
         };
         let case = QueryCase {
             sql: "SELECT t2.c1 FROM left as t1 FULL JOIN right as t2 ON t1.c1 = t2.c1"
                 .to_string(),
-            cases: vec![
-                Arc::new(test1),
-                Arc::new(test2),
-                Arc::new(test3),
-                Arc::new(test4),
-            ],
+            cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
             error_operator: "Join Error".to_string(),
         };
 

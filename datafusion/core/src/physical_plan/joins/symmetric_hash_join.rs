@@ -43,6 +43,7 @@ use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use futures::{Stream, StreamExt};
 use hashbrown::{raw::RawTable, HashSet};
+use parking_lot::Mutex;
 
 use datafusion_common::{utils::bisect, ScalarValue};
 use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval};
@@ -50,6 +51,7 @@ use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::logical_expr::JoinType;
+use crate::physical_plan::joins::hash_join_utils::convert_sort_expr_with_filter_schema;
 use crate::physical_plan::{
     expressions::Column,
     expressions::PhysicalSortExpr,
@@ -152,6 +154,7 @@ use crate::physical_plan::{
 /// making the smallest value in 'left_sorted' 1231 and any rows below (since ascending)
 /// than that can be dropped from the inner buffer.
 /// ```
+#[derive(Debug)]
 pub struct SymmetricHashJoinExec {
     /// Left side stream
     pub(crate) left: Arc<dyn ExecutionPlan>,
@@ -160,13 +163,11 @@ pub struct SymmetricHashJoinExec {
     /// Set of common columns used to join on
     pub(crate) on: Vec<(Column, Column)>,
     /// Filters applied when finding matching rows
-    pub(crate) filter: JoinFilter,
+    pub(crate) filter: Option<JoinFilter>,
     /// How the join is performed
     pub(crate) join_type: JoinType,
-    /// Order information of filter expressions
-    sorted_filter_exprs: Vec<Option<SortedFilterExpr>>,
-    /// Expression graph for interval calculations
-    physical_expr_graph: ExprIntervalGraph,
+    /// Expression graph and SortedFilterExprs for interval calculations
+    filter_order_state: Option<Arc<Mutex<IntervalCalculatorInnerState>>>,
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Shares the `RandomState` for the hashing algorithm
@@ -177,6 +178,19 @@ pub struct SymmetricHashJoinExec {
     column_indices: Vec<ColumnIndex>,
     /// If null_equals_null is true, null == null else null != null
     pub(crate) null_equals_null: bool,
+}
+
+struct IntervalCalculatorInnerState {
+    /// Expression graph for interval calculations
+    physical_expr_graph: Option<ExprIntervalGraph>,
+    sorted_filter_exprs: Vec<Option<SortedFilterExpr>>,
+    calculated: bool,
+}
+
+impl Debug for IntervalCalculatorInnerState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "Exprs({:?})", self.sorted_filter_exprs)
+    }
 }
 
 #[derive(Debug)]
@@ -243,7 +257,7 @@ impl SymmetricHashJoinExec {
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
-        filter: JoinFilter,
+        filter: Option<JoinFilter>,
         join_type: &JoinType,
         null_equals_null: bool,
     ) -> Result<Self> {
@@ -267,67 +281,16 @@ impl SymmetricHashJoinExec {
         // Initialize the random state for the join operation:
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
-        // Create an expression DAG for the join filter:
-        let mut physical_expr_graph =
-            ExprIntervalGraph::try_new(filter.expression().clone())?;
-
-        // Interval calculations require each column to exhibit monotonicity
-        // independently. However, a `PhysicalSortExpr` object defines a
-        // lexicographical ordering, so we can only use their first elements.
-        // when deducing column monotonicities.
-        // TODO: Extend the `PhysicalSortExpr` mechanism to express independent
-        //       (i.e. simultaneous) ordering properties of columns.
-
-        let mut sorted_filter_exprs = vec![
-            // Build sorted filter expressions for the left join side:
-            left.output_ordering()
-                .and_then(|orders| orders.first())
-                .and_then(|order| {
-                    build_filter_input_order(
-                        JoinSide::Left,
-                        &filter,
-                        &left.schema(),
-                        order,
-                    )
-                    .transpose()
-                })
-                .transpose()?,
-            // Build sorted filter expressions for the right join side:
-            right
-                .output_ordering()
-                .and_then(|orders| orders.first())
-                .and_then(|order| {
-                    build_filter_input_order(
-                        JoinSide::Right,
-                        &filter,
-                        &right.schema(),
-                        order,
-                    )
-                    .transpose()
-                })
-                .transpose()?,
-        ];
-
-        // Gather node indices of converted filter expressions in `SortedFilterExpr`
-        // using the filter columns vector:
-        let child_node_indices = physical_expr_graph.gather_node_indices(
-            &sorted_filter_exprs
-                .iter()
-                .filter_map(|sorted_expr| {
-                    sorted_expr.as_ref().map(|expr| expr.filter_expr().clone())
-                })
-                .collect::<Vec<_>>(),
-        );
-
-        // Update SortedFilterExpr instances with the corresponding node indices:
-        for (sorted_expr, (_, index)) in sorted_filter_exprs
-            .iter_mut()
-            .zip(child_node_indices.iter())
-        {
-            if let Some(expr) = sorted_expr.as_mut() {
-                expr.set_node_index(*index)
-            }
-        }
+        let filter_order_state = if filter.is_some() {
+            let inner_state = IntervalCalculatorInnerState {
+                physical_expr_graph: None,
+                sorted_filter_exprs: vec![],
+                calculated: false,
+            };
+            Some(Arc::new(Mutex::new(inner_state)))
+        } else {
+            None
+        };
 
         Ok(SymmetricHashJoinExec {
             left,
@@ -335,8 +298,7 @@ impl SymmetricHashJoinExec {
             on,
             filter,
             join_type: *join_type,
-            sorted_filter_exprs,
-            physical_expr_graph,
+            filter_order_state,
             schema: Arc::new(schema),
             random_state,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -361,8 +323,8 @@ impl SymmetricHashJoinExec {
     }
 
     /// Filters applied before join output
-    pub fn filter(&self) -> &JoinFilter {
-        &self.filter
+    pub fn filter(&self) -> Option<&JoinFilter> {
+        self.filter.as_ref()
     }
 
     /// How the join is performed
@@ -375,15 +337,32 @@ impl SymmetricHashJoinExec {
         self.null_equals_null
     }
 
-    /// Get sorted_filter_exprs
-    pub fn sorted_filter_exprs(&self) -> &Vec<Option<SortedFilterExpr>> {
-        &self.sorted_filter_exprs
-    }
-}
-
-impl Debug for SymmetricHashJoinExec {
-    fn fmt(&self, _f: &mut Formatter<'_>) -> fmt::Result {
-        todo!()
+    /// Check if order information covers every column in the filter expression.
+    pub fn check_if_order_information_available(&self) -> Result<bool> {
+        if let Some(filter) = self.filter() {
+            let left = self.left();
+            if let Some(left_ordering) = left.output_ordering() {
+                let right = self.right();
+                if let Some(right_ordering) = right.output_ordering() {
+                    let left_convertible = convert_sort_expr_with_filter_schema(
+                        &JoinSide::Left,
+                        filter,
+                        &left.schema(),
+                        &left_ordering[0],
+                    )?
+                    .is_some();
+                    let right_convertible = convert_sort_expr_with_filter_schema(
+                        &JoinSide::Right,
+                        filter,
+                        &right.schema(),
+                        &right_ordering[0],
+                    )?
+                    .is_some();
+                    return Ok(left_convertible && right_convertible);
+                }
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -469,7 +448,10 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                let display_filter = format!(", filter={:?}", self.filter.expression());
+                let display_filter = self.filter.as_ref().map_or_else(
+                    || "".to_string(),
+                    |f| format!(", filter={:?}", f.expression()),
+                );
                 write!(
                     f,
                     "SymmetricHashJoinExec: join_type={:?}, on={:?}{}",
@@ -495,18 +477,103 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     ) -> Result<SendableRecordBatchStream> {
         let on_left = self.on.iter().map(|on| on.0.clone()).collect::<Vec<_>>();
         let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
-        let left_side_joiner = OneSideHashJoiner::new(
-            JoinSide::Left,
-            self.sorted_filter_exprs[0].clone(),
-            on_left,
-            self.left.schema(),
-        );
-        let right_side_joiner = OneSideHashJoiner::new(
-            JoinSide::Right,
-            self.sorted_filter_exprs[1].clone(),
-            on_right,
-            self.right.schema(),
-        );
+        let (left_sorted_filter_expr, right_sorted_filter_expr, physical_expr_graph) =
+            match (&self.filter_order_state, &self.filter) {
+                (Some(interval_state), Some(filter)) => {
+                    // lock mutexes
+                    let mut filter_order_state = interval_state.lock();
+                    // if this is the first partition to be invoked then we need to set up initial state
+                    if !filter_order_state.calculated {
+                        // Interval calculations require each column to exhibit monotonicity
+                        // independently. However, a `PhysicalSortExpr` object defines a
+                        // lexicographical ordering, so we can only use their first elements.
+                        // when deducing column monotonicities.
+                        // TODO: Extend the `PhysicalSortExpr` mechanism to express independent
+                        //       (i.e. simultaneous) ordering properties of columns.
+                        // Build sorted filter expressions for the left join side:
+                        filter_order_state.sorted_filter_exprs.push(
+                            self.left
+                                .output_ordering()
+                                .and_then(|orders| orders.first())
+                                .and_then(|order| {
+                                    build_filter_input_order(
+                                        JoinSide::Left,
+                                        filter,
+                                        &self.left.schema(),
+                                        order,
+                                    )
+                                    .transpose()
+                                })
+                                .transpose()?,
+                        );
+
+                        // Build sorted filter expressions for the right join side:
+                        filter_order_state.sorted_filter_exprs.push(
+                            self.right
+                                .output_ordering()
+                                .and_then(|orders| orders.first())
+                                .and_then(|order| {
+                                    build_filter_input_order(
+                                        JoinSide::Right,
+                                        filter,
+                                        &self.right.schema(),
+                                        order,
+                                    )
+                                    .transpose()
+                                })
+                                .transpose()?,
+                        );
+                        // Gather filter expressions
+                        let filter_exprs = filter_order_state
+                            .sorted_filter_exprs
+                            .iter()
+                            .filter_map(|sorted_expr| {
+                                sorted_expr
+                                    .as_ref()
+                                    .map(|expr| expr.filter_expr().clone())
+                            })
+                            .collect::<Vec<_>>();
+
+                        // Create the graph if it is convenient
+                        let physical_expr_graph = if filter_exprs.len() == 2 {
+                            let mut physical_expr_graph =
+                                ExprIntervalGraph::try_new(filter.expression().clone())?;
+                            // Gather node indices of converted filter expressions in `SortedFilterExpr`
+                            // using the filter columns vector:
+                            let child_node_indices =
+                                physical_expr_graph.gather_node_indices(&filter_exprs);
+
+                            // Update SortedFilterExpr instances with the corresponding node indices:
+                            for (sorted_expr, (_, index)) in filter_order_state
+                                .sorted_filter_exprs
+                                .iter_mut()
+                                .zip(child_node_indices.iter())
+                            {
+                                if let Some(expr) = sorted_expr.as_mut() {
+                                    expr.set_node_index(*index)
+                                }
+                            }
+                            Some(physical_expr_graph)
+                        } else {
+                            None
+                        };
+                        filter_order_state.physical_expr_graph = physical_expr_graph;
+                        filter_order_state.calculated = true;
+                    }
+                    (
+                        filter_order_state.sorted_filter_exprs[0].clone(),
+                        filter_order_state.sorted_filter_exprs[1].clone(),
+                        filter_order_state.physical_expr_graph.as_ref().cloned(),
+                    )
+                }
+                (_, _) => (None, None, None),
+            };
+
+        let left_side_joiner =
+            OneSideHashJoiner::new(JoinSide::Left, on_left, self.left.schema());
+        let right_side_joiner =
+            OneSideHashJoiner::new(JoinSide::Right, on_right, self.right.schema());
+
         let left_stream = self.left.execute(partition, context.clone())?;
         let right_stream = self.right.execute(partition, context)?;
 
@@ -521,7 +588,9 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             right: right_side_joiner,
             column_indices: self.column_indices.clone(),
             metrics: SymmetricHashJoinMetrics::new(partition, &self.metrics),
-            physical_expr_graph: self.physical_expr_graph.clone(),
+            physical_expr_graph,
+            left_sorted_filter_expr,
+            right_sorted_filter_expr,
             null_equals_null: self.null_equals_null,
             final_result: false,
             probe_side: JoinSide::Left,
@@ -538,7 +607,7 @@ struct SymmetricHashJoinStream {
     /// Input schema
     schema: Arc<Schema>,
     /// join filter
-    filter: JoinFilter,
+    filter: Option<JoinFilter>,
     /// type of the join
     join_type: JoinType,
     // left hash joiner
@@ -548,7 +617,11 @@ struct SymmetricHashJoinStream {
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     // Range pruner.
-    physical_expr_graph: ExprIntervalGraph,
+    physical_expr_graph: Option<ExprIntervalGraph>,
+    // Left globally sorted filter expr
+    left_sorted_filter_expr: Option<SortedFilterExpr>,
+    // Right globally sorted filter expr
+    right_sorted_filter_expr: Option<SortedFilterExpr>,
     /// Random state used for hashing initialization
     random_state: RandomState,
     /// If null_equals_null is true, null == null else null != null
@@ -674,27 +747,24 @@ fn prune_hash_values(
 /// ```
 fn calculate_filter_expr_intervals(
     build_input_buffer: &RecordBatch,
-    build_sorted_filter_expr: Option<&mut SortedFilterExpr>,
+    build_sorted_filter_expr: &mut SortedFilterExpr,
     probe_batch: &RecordBatch,
-    probe_sorted_filter_expr: Option<&mut SortedFilterExpr>,
+    probe_sorted_filter_expr: &mut SortedFilterExpr,
 ) -> Result<()> {
     // If either build or probe side has no data, return early:
     if build_input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
         return Ok(());
     }
     // Calculate the interval for the build side filter expression (if present):
-    if let Some(expr) = build_sorted_filter_expr {
-        // Note that we use the oldest entry from the build side.
-        update_filter_expr_interval(&build_input_buffer.slice(0, 1), expr)?;
-    }
+    update_filter_expr_interval(
+        &build_input_buffer.slice(0, 1),
+        build_sorted_filter_expr,
+    )?;
     // Calculate the interval for the probe side filter expression (if present):
-    if let Some(expr) = probe_sorted_filter_expr {
-        // Note that we use the newest entry from the probe side.
-        update_filter_expr_interval(
-            &probe_batch.slice(probe_batch.num_rows() - 1, 1),
-            expr,
-        )?;
-    }
+    update_filter_expr_interval(
+        &probe_batch.slice(probe_batch.num_rows() - 1, 1),
+        probe_sorted_filter_expr,
+    )?;
     Ok(())
 }
 
@@ -946,8 +1016,6 @@ where
 struct OneSideHashJoiner {
     /// Build side
     build_side: JoinSide,
-    /// Build side filter sort information
-    sorted_filter_expr: Option<SortedFilterExpr>,
     /// Input record batch buffer
     input_buffer: RecordBatch,
     /// Columns from the side
@@ -969,12 +1037,7 @@ struct OneSideHashJoiner {
 }
 
 impl OneSideHashJoiner {
-    pub fn new(
-        build_side: JoinSide,
-        sorted_filter_expr: Option<SortedFilterExpr>,
-        on: Vec<Column>,
-        schema: SchemaRef,
-    ) -> Self {
+    pub fn new(build_side: JoinSide, on: Vec<Column>, schema: SchemaRef) -> Self {
         Self {
             build_side,
             input_buffer: RecordBatch::new_empty(schema),
@@ -982,7 +1045,6 @@ impl OneSideHashJoiner {
             hashmap: JoinHashMap(RawTable::with_capacity(10_000)),
             row_hash_values: VecDeque::new(),
             hashes_buffer: vec![],
-            sorted_filter_expr,
             visited_rows: HashSet::new(),
             offset: 0,
             deleted_offset: 0,
@@ -1048,7 +1110,7 @@ impl OneSideHashJoiner {
         schema: &SchemaRef,
         join_type: JoinType,
         on_probe: &[Column],
-        filter: &JoinFilter,
+        filter: Option<&JoinFilter>,
         probe_batch: &RecordBatch,
         probe_visited: &mut HashSet<usize>,
         probe_offset: usize,
@@ -1057,7 +1119,7 @@ impl OneSideHashJoiner {
         null_equals_null: bool,
     ) -> Result<Option<RecordBatch>> {
         if self.input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
-            return Ok(Some(RecordBatch::new_empty(schema.clone())));
+            return Ok(None);
         }
         let (build_indices, probe_indices) = build_join_indices(
             probe_batch,
@@ -1065,7 +1127,7 @@ impl OneSideHashJoiner {
             &self.input_buffer,
             &self.on,
             on_probe,
-            Some(filter),
+            filter,
             random_state,
             null_equals_null,
             &mut self.hashes_buffer,
@@ -1100,7 +1162,7 @@ impl OneSideHashJoiner {
                 column_indices,
                 self.build_side,
             )
-            .map(Some)
+            .map(|batch| (batch.num_rows() > 0).then_some(batch))
         }
     }
 
@@ -1152,7 +1214,7 @@ impl OneSideHashJoiner {
                 column_indices,
                 self.build_side,
             )
-            .map(Some)
+            .map(|batch| (batch.num_rows() > 0).then_some(batch))
         } else {
             // If we don't need to produce a result, return None
             Ok(None)
@@ -1180,73 +1242,73 @@ impl OneSideHashJoiner {
     ///
     /// If there are rows to prune, returns the pruned build side record batch wrapped in an `Ok` variant.
     /// Otherwise, returns `Ok(None)`.
-    fn prune_with_probe_batch(
+    fn calculate_prune_length_with_probe_batch(
         &mut self,
-        schema: &SchemaRef,
-        probe_batch: &RecordBatch,
-        probe_side_sorted_filter_expr: Option<&mut SortedFilterExpr>,
-        join_type: JoinType,
-        column_indices: &[ColumnIndex],
+        build_side_sorted_filter_expr: &mut SortedFilterExpr,
+        probe_side_sorted_filter_expr: &mut SortedFilterExpr,
         physical_expr_graph: &mut ExprIntervalGraph,
-    ) -> Result<Option<RecordBatch>> {
+    ) -> Result<usize> {
         // Return early if the input buffer is empty:
         if self.input_buffer.num_rows() == 0 {
-            return Ok(None);
+            return Ok(0);
         }
         // Process the build and probe side sorted filter expressions if both are present:
-        if let (Some(sorted_filter_expr), Some(probe_side_sorted_filter_expr)) = (
-            self.sorted_filter_expr.as_mut(),
-            probe_side_sorted_filter_expr,
-        ) {
-            // Collect the sorted filter expressions into a vector of (node_index, interval) tuples:
-            let mut filter_intervals = vec![];
-            for expr in [&sorted_filter_expr, &probe_side_sorted_filter_expr] {
-                filter_intervals.push((expr.node_index(), expr.interval().clone()))
-            }
-            // Update the physical expression graph using the join filter intervals:
-            physical_expr_graph.update_ranges(&mut filter_intervals)?;
-            // Extract the new join filter interval for the build side:
-            let calculated_build_side_interval = filter_intervals.remove(0).1;
-            // If the intervals have not changed, return early without pruning:
-            if calculated_build_side_interval.eq(sorted_filter_expr.interval()) {
-                return Ok(None);
-            }
-            // Update the build side interval and determine the pruning length:
-            sorted_filter_expr.set_interval(calculated_build_side_interval);
-            let prune_length =
-                determine_prune_length(&self.input_buffer, sorted_filter_expr)?;
-            // If no rows can be pruned, return early without pruning:
-            if prune_length == 0 {
-                return Ok(None);
-            }
-            // Compute the result and perform pruning if there are rows to prune:
-            let result = self.build_side_determined_results(
-                schema,
-                prune_length,
-                probe_batch.schema(),
-                join_type,
-                column_indices,
-            );
-            // Prune the hash values:
-            prune_hash_values(
-                prune_length,
-                &mut self.hashmap,
-                &mut self.row_hash_values,
-                self.deleted_offset as u64,
-            )?;
-            // Remove pruned rows from the visited rows set:
-            for row in self.deleted_offset..(self.deleted_offset + prune_length) {
-                self.visited_rows.remove(&row);
-            }
-            // Update the input buffer after pruning:
-            self.input_buffer = self
-                .input_buffer
-                .slice(prune_length, self.input_buffer.num_rows() - prune_length);
-            // Increment the deleted offset:
-            self.deleted_offset += prune_length;
-            return result;
+        // Collect the sorted filter expressions into a vector of (node_index, interval) tuples:
+        let mut filter_intervals = vec![];
+        for expr in [
+            &build_side_sorted_filter_expr,
+            &probe_side_sorted_filter_expr,
+        ] {
+            filter_intervals.push((expr.node_index(), expr.interval().clone()))
         }
-        Ok(None)
+        // Update the physical expression graph using the join filter intervals:
+        physical_expr_graph.update_ranges(&mut filter_intervals)?;
+        // Extract the new join filter interval for the build side:
+        let calculated_build_side_interval = filter_intervals.remove(0).1;
+        // If the intervals have not changed, return early without pruning:
+        if calculated_build_side_interval.eq(build_side_sorted_filter_expr.interval()) {
+            return Ok(0);
+        }
+        // Update the build side interval and determine the pruning length:
+        build_side_sorted_filter_expr.set_interval(calculated_build_side_interval);
+
+        determine_prune_length(&self.input_buffer, build_side_sorted_filter_expr)
+    }
+
+    fn prune_internal_state_and_build_anti_result(
+        &mut self,
+        prune_length: usize,
+        schema: &SchemaRef,
+        probe_batch: &RecordBatch,
+        join_type: JoinType,
+        column_indices: &[ColumnIndex],
+    ) -> Result<Option<RecordBatch>> {
+        // Compute the result and perform pruning if there are rows to prune:
+        let result = self.build_side_determined_results(
+            schema,
+            prune_length,
+            probe_batch.schema(),
+            join_type,
+            column_indices,
+        );
+        // Prune the hash values:
+        prune_hash_values(
+            prune_length,
+            &mut self.hashmap,
+            &mut self.row_hash_values,
+            self.deleted_offset as u64,
+        )?;
+        // Remove pruned rows from the visited rows set:
+        for row in self.deleted_offset..(self.deleted_offset + prune_length) {
+            self.visited_rows.remove(&row);
+        }
+        // Update the input buffer after pruning:
+        self.input_buffer = self
+            .input_buffer
+            .slice(prune_length, self.input_buffer.num_rows() - prune_length);
+        // Increment the deleted offset:
+        self.deleted_offset += prune_length;
+        result
     }
 }
 
@@ -1327,6 +1389,8 @@ impl SymmetricHashJoinStream {
                 input_stream,
                 probe_hash_joiner,
                 build_hash_joiner,
+                probe_side_sorted_filter_expr,
+                build_side_sorted_filter_expr,
                 build_join_side,
                 probe_side_metrics,
             ) = if self.probe_side.eq(&JoinSide::Left) {
@@ -1334,6 +1398,8 @@ impl SymmetricHashJoinStream {
                     &mut self.left_stream,
                     &mut self.left,
                     &mut self.right,
+                    &mut self.left_sorted_filter_expr,
+                    &mut self.right_sorted_filter_expr,
                     JoinSide::Right,
                     &mut self.metrics.left,
                 )
@@ -1342,6 +1408,8 @@ impl SymmetricHashJoinStream {
                     &mut self.right_stream,
                     &mut self.right,
                     &mut self.left,
+                    &mut self.right_sorted_filter_expr,
+                    &mut self.left_sorted_filter_expr,
                     JoinSide::Left,
                     &mut self.metrics.right,
                 )
@@ -1356,19 +1424,12 @@ impl SymmetricHashJoinStream {
                     // Update the internal state of the hash joiner for the build side:
                     probe_hash_joiner
                         .update_internal_state(&probe_batch, &self.random_state)?;
-                    // Calculate filter intervals:
-                    calculate_filter_expr_intervals(
-                        &build_hash_joiner.input_buffer,
-                        build_hash_joiner.sorted_filter_expr.as_mut(),
-                        &probe_batch,
-                        probe_hash_joiner.sorted_filter_expr.as_mut(),
-                    )?;
                     // Join the two sides:
                     let equal_result = build_hash_joiner.join_with_probe_batch(
                         &self.schema,
                         self.join_type,
                         &probe_hash_joiner.on,
-                        &self.filter,
+                        self.filter.as_ref(),
                         &probe_batch,
                         &mut probe_hash_joiner.visited_rows,
                         probe_hash_joiner.offset,
@@ -1378,16 +1439,45 @@ impl SymmetricHashJoinStream {
                     )?;
                     // Increment the offset for the probe hash joiner:
                     probe_hash_joiner.offset += probe_batch.num_rows();
-                    // Prune the build side input buffer using the expression
-                    // DAG and filter intervals:
-                    let anti_result = build_hash_joiner.prune_with_probe_batch(
-                        &self.schema,
-                        &probe_batch,
-                        probe_hash_joiner.sorted_filter_expr.as_mut(),
-                        self.join_type,
-                        &self.column_indices,
-                        &mut self.physical_expr_graph,
-                    )?;
+
+                    let anti_result = if let (
+                        Some(build_side_sorted_filter_expr),
+                        Some(probe_side_sorted_filter_expr),
+                        Some(physical_expr_graph),
+                    ) = (
+                        build_side_sorted_filter_expr.as_mut(),
+                        probe_side_sorted_filter_expr.as_mut(),
+                        self.physical_expr_graph.as_mut(),
+                    ) {
+                        // Calculate filter intervals:
+                        calculate_filter_expr_intervals(
+                            &build_hash_joiner.input_buffer,
+                            build_side_sorted_filter_expr,
+                            &probe_batch,
+                            probe_side_sorted_filter_expr,
+                        )?;
+                        let prune_length = build_hash_joiner
+                            .calculate_prune_length_with_probe_batch(
+                                build_side_sorted_filter_expr,
+                                probe_side_sorted_filter_expr,
+                                physical_expr_graph,
+                            )?;
+
+                        if prune_length > 0 {
+                            build_hash_joiner.prune_internal_state_and_build_anti_result(
+                                prune_length,
+                                &self.schema,
+                                &probe_batch,
+                                self.join_type,
+                                &self.column_indices,
+                            )?
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
                     // Combine results:
                     let result =
                         combine_two_batches(&self.schema, equal_result, anti_result)?;
@@ -1478,7 +1568,7 @@ mod tests {
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
-        filter: JoinFilter,
+        filter: Option<JoinFilter>,
         join_type: &JoinType,
         null_equals_null: bool,
         context: Arc<TaskContext>,
@@ -1529,7 +1619,7 @@ mod tests {
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
-        filter: JoinFilter,
+        filter: Option<JoinFilter>,
         join_type: &JoinType,
         null_equals_null: bool,
         context: Arc<TaskContext>,
@@ -1551,7 +1641,7 @@ mod tests {
                 Partitioning::Hash(right_expr, partition_count),
             )?),
             on,
-            Some(filter),
+            filter,
             join_type,
             PartitionMode::Partitioned,
             null_equals_null,
@@ -1765,7 +1855,7 @@ mod tests {
     async fn experiment(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
-        filter: JoinFilter,
+        filter: Option<JoinFilter>,
         join_type: JoinType,
         on: JoinOn,
         task_ctx: Arc<TaskContext>,
@@ -1811,8 +1901,7 @@ mod tests {
         cardinality: (i32, i32),
     ) -> Result<()> {
         // a + b > c + 10 AND a + b < c + 100
-        let config = SessionConfig::new().with_repartition_joins(false);
-        let session_ctx = SessionContext::with_config(config);
+        let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
@@ -1866,7 +1955,7 @@ mod tests {
         ];
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
-        experiment(left, right, filter, join_type, on, task_ctx).await?;
+        experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
     }
 
@@ -1893,8 +1982,7 @@ mod tests {
         cardinality: (i32, i32),
         #[values(0, 1, 2, 3, 4)] case_expr: usize,
     ) -> Result<()> {
-        let config = SessionConfig::new().with_repartition_joins(false);
-        let session_ctx = SessionContext::with_config(config);
+        let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
@@ -1942,7 +2030,7 @@ mod tests {
         ];
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
-        experiment(left, right, filter, join_type, on, task_ctx).await?;
+        experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
     }
 
@@ -1969,8 +2057,7 @@ mod tests {
         cardinality: (i32, i32),
         #[values(0, 1, 2, 3, 4)] case_expr: usize,
     ) -> Result<()> {
-        let config = SessionConfig::new();
-        let session_ctx = SessionContext::with_config(config);
+        let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
@@ -2004,7 +2091,37 @@ mod tests {
         ];
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
-        experiment(left, right, filter, join_type, on, task_ctx).await?;
+        experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn join_without_filter(
+        #[values(
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::RightSemi,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::RightAnti,
+            JoinType::Full
+        )]
+        join_type: JoinType,
+    ) -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let (left_batch, right_batch) = build_sides_record_batches(TABLE_SIZE, (11, 21))?;
+        let left_schema = &left_batch.schema();
+        let right_schema = &right_batch.schema();
+        let (left, right) = create_memory_table(left_batch, right_batch, None, None, 13)?;
+
+        let on = vec![(
+            Column::new_with_schema("lc1", left_schema)?,
+            Column::new_with_schema("rc1", right_schema)?,
+        )];
+        experiment(left, right, None, join_type, on, task_ctx).await?;
         Ok(())
     }
 
@@ -2031,8 +2148,7 @@ mod tests {
         cardinality: (i32, i32),
         #[values(0, 1, 2, 3, 4)] case_expr: usize,
     ) -> Result<()> {
-        let config = SessionConfig::new().with_repartition_joins(false);
-        let session_ctx = SessionContext::with_config(config);
+        let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
@@ -2086,7 +2202,7 @@ mod tests {
         ];
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
-        experiment(left, right, filter, join_type, on, task_ctx).await?;
+        experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
     }
 
@@ -2162,7 +2278,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn join_change_in_planner_without_sort_not_allowed() -> Result<()> {
-        let config = SessionConfig::new().with_allow_unsorted_symmetric_joins(false);
+        let config = SessionConfig::new().with_allow_unpruning_symmetric_joins(false);
         let ctx = SessionContext::with_config(config);
         let tmp_dir = TempDir::new()?;
         let left_file_path = tmp_dir.path().join("left.csv");
@@ -2189,7 +2305,7 @@ mod tests {
         match df.create_physical_plan().await {
             Ok(_) => panic!("Expecting error."),
             Err(e) => {
-                assert_eq!(e.to_string(), "PipelineChecker\ncaused by\nError during planning: Join operation cannot operate on stream without enabling the 'allow_unsorted_symmetric_joins' configuration flag")
+                assert_eq!(e.to_string(), "PipelineChecker\ncaused by\nError during planning: Join operation cannot operate on stream without enabling the 'allow_unpruning_symmetric_joins' configuration flag")
             }
         }
         Ok(())
@@ -2254,7 +2370,7 @@ mod tests {
             },
         ];
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
-        experiment(left, right, filter, join_type, on, task_ctx).await?;
+        experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
     }
 
@@ -2318,7 +2434,7 @@ mod tests {
         ];
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
-        experiment(left, right, filter, join_type, on, task_ctx).await?;
+        experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
     }
 
@@ -2382,7 +2498,7 @@ mod tests {
         ];
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
-        experiment(left, right, filter, join_type, on, task_ctx).await?;
+        experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
     }
 
@@ -2443,7 +2559,7 @@ mod tests {
         ];
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
-        experiment(left, right, filter, join_type, on, task_ctx).await?;
+        experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
     }
 
@@ -2527,30 +2643,14 @@ mod tests {
         ];
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
-        let left_sorted_filter_expr = Some(SortedFilterExpr::new(
-            PhysicalSortExpr {
-                expr: col("la1", &left_schema)?,
-                options: SortOptions::default(),
-            },
-            Arc::new(Column::new("0", 0)),
-        ));
         let mut left_side_joiner = OneSideHashJoiner::new(
             JoinSide::Left,
-            left_sorted_filter_expr,
             vec![Column::new_with_schema("lc1", &left_schema)?],
             left_schema,
         );
 
-        let right_sorted_filter_expr = Some(SortedFilterExpr::new(
-            PhysicalSortExpr {
-                expr: col("ra1", &right_schema)?,
-                options: SortOptions::default(),
-            },
-            Arc::new(Column::new("1", 0)),
-        ));
         let mut right_side_joiner = OneSideHashJoiner::new(
             JoinSide::Right,
-            right_sorted_filter_expr,
             vec![Column::new_with_schema("rc1", &right_schema)?],
             right_schema,
         );
@@ -2576,7 +2676,7 @@ mod tests {
             &join_schema,
             join_type,
             &right_side_joiner.on,
-            &filter,
+            Some(&filter),
             &initial_right_batch,
             &mut right_side_joiner.visited_rows,
             right_side_joiner.offset,

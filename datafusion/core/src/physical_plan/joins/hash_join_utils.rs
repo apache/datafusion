@@ -98,7 +98,7 @@ pub fn map_origin_col_to_filter_col(
 /// 2. If the expression "d@" is sorted, it will not be accepted since the "d@" column is not part of the filter.
 /// 3. If the expression "a@ + b@ + c@" is sorted, all columns are represented in the filter expression. However,
 ///    there is no exact match, so this expression does not indicate pruning.
-fn convert_sort_expr_with_filter_schema(
+pub fn convert_sort_expr_with_filter_schema(
     side: &JoinSide,
     filter: &JoinFilter,
     schema: &SchemaRef,
