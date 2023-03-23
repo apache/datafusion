@@ -20,12 +20,9 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_physical_expr::expressions::{Column, Literal};
-use datafusion_physical_expr::tree_node::{
-    RewriteRecursion as PhysicalExprRewriteRecursion, TreeNode as PhysicalExprTreeNode,
-    TreeNodeRewriter as PhysicalExprTreeNodeRewriter,
-};
 use datafusion_physical_expr::utils::reassign_predicate_columns;
 use std::collections::BTreeSet;
 
@@ -211,30 +208,27 @@ impl<'a> FilterCandidateBuilder<'a> {
     }
 }
 
-impl<'a> PhysicalExprTreeNodeRewriter for FilterCandidateBuilder<'a> {
+impl<'a> TreeNodeRewriter for FilterCandidateBuilder<'a> {
     type N = Arc<dyn PhysicalExpr>;
 
-    fn pre_visit(
-        &mut self,
-        node: &Arc<dyn PhysicalExpr>,
-    ) -> Result<PhysicalExprRewriteRecursion> {
+    fn pre_visit(&mut self, node: &Arc<dyn PhysicalExpr>) -> Result<RewriteRecursion> {
         if let Some(column) = node.as_any().downcast_ref::<Column>() {
             if let Ok(idx) = self.file_schema.index_of(column.name()) {
                 self.required_column_indices.insert(idx);
 
                 if DataType::is_nested(self.file_schema.field(idx).data_type()) {
                     self.non_primitive_columns = true;
-                    return Ok(PhysicalExprRewriteRecursion::Stop);
+                    return Ok(RewriteRecursion::Stop);
                 }
             } else if self.table_schema.index_of(column.name()).is_err() {
                 // If the column does not exist in the (un-projected) table schema then
                 // it must be a projected column.
                 self.projected_columns = true;
-                return Ok(PhysicalExprRewriteRecursion::Stop);
+                return Ok(RewriteRecursion::Stop);
             }
         }
 
-        Ok(PhysicalExprRewriteRecursion::Continue)
+        Ok(RewriteRecursion::Continue)
     }
 
     fn mutate(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {

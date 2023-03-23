@@ -45,8 +45,8 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{downcast_value, ScalarValue};
-use datafusion_physical_expr::tree_node::TreeNode as PhysicalExprTreeNode;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
 use log::trace;

@@ -17,6 +17,8 @@
 
 //! This module provides common traits for visiting or rewriting tree nodes easily.
 
+use std::sync::Arc;
+
 use crate::Result;
 
 /// Trait for tree node. It can be [`ExecutionPlan`], [`PhysicalExpr`], [`LogicalPlan`], [`Expr`], etc.
@@ -267,4 +269,51 @@ pub enum VisitRecursion {
     Skip,
     /// Stop the visit to this node tree.
     Stop,
+}
+
+/// Helper trait for implementing [`TreeNode`] that have children stored as Arc's
+pub trait ArcWithChildren {
+    /// Returns all children of the specified TreeNode
+    fn arc_children(&self) -> Vec<Arc<Self>>;
+
+    /// construct a new self with the specified children
+    fn with_new_arc_children(
+        &self,
+        arc_self: Arc<Self>,
+        new_children: Vec<Arc<Self>>,
+    ) -> Result<Arc<Self>>;
+}
+
+/// Blanket implementation for Arc for any tye that implements
+/// [`ArcTreeNodeChildren`] (such as Arc<dyn Physicalexpr>)
+impl<T: ArcWithChildren + ?Sized> TreeNode for Arc<T> {
+    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    where
+        F: FnMut(&Self) -> Result<VisitRecursion>,
+    {
+        for child in self.arc_children() {
+            match op(&child)? {
+                VisitRecursion::Continue => {}
+                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+            }
+        }
+
+        Ok(VisitRecursion::Continue)
+    }
+
+    fn map_children<F>(self, transform: F) -> Result<Self>
+    where
+        F: FnMut(Self) -> Result<Self>,
+    {
+        let children = self.arc_children();
+        if !children.is_empty() {
+            let new_children: Result<Vec<_>> =
+                children.into_iter().map(transform).collect();
+            let arc_self = Arc::clone(&self);
+            self.with_new_arc_children(arc_self, new_children?)
+        } else {
+            Ok(self)
+        }
+    }
 }
