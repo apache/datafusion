@@ -2393,6 +2393,12 @@ mod roundtrip_tests {
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
+
+        let test_expr =
+            Expr::TryCast(TryCast::new(Box::new(lit("not a bool")), DataType::Boolean));
+
+        let ctx = SessionContext::new();
+        roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
