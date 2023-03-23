@@ -19,9 +19,9 @@
 
 # Introduction
 
-DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
-[Rust](http://rustlang.org), using the [Apache Arrow](https://arrow.apache.org)
-in-memory format.
+DataFusion is a very fast, extensible query engine for building
+high-quality data-centric systems in [Rust](http://rustlang.org),
+using the [Apache Arrow](https://arrow.apache.org) in-memory format.
 
 DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and a great community.
 
