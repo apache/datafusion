@@ -104,19 +104,16 @@ fn check_support(expr: &Arc<dyn PhysicalExpr>) -> bool {
 
 /// This function returns whether a given hash join is replaceable by a
 /// symmetric hash join. Basically, the requirement is that involved
-/// [PhysicalExpr]s, [Operator]s and data types need to be supported,
+/// [`PhysicalExpr`]s, [`Operator`]s and data types need to be supported,
 /// and order information must cover every column in the filter expression.
-fn is_suitable_for_symmetric_hash_join(hash_join: &HashJoinExec) -> Result<bool> {
-    Ok(if let Some(filter) = hash_join.filter() {
-        let expr_supported = check_support(filter.expression());
-        let fields_supported = filter
-            .schema()
-            .fields()
-            .iter()
-            .all(|f| is_datatype_supported(f.data_type()));
-        expr_supported && fields_supported
-    } else {
-        false
+fn is_suitable_for_symmetric_hash_join(hash_join: &HashJoinExec) -> bool {
+    hash_join.filter().map_or(false, |filter| {
+        check_support(filter.expression())
+            && filter
+                .schema()
+                .fields()
+                .iter()
+                .all(|f| is_datatype_supported(f.data_type()))
     })
 }
 
@@ -131,24 +128,23 @@ fn hash_join_convert_symmetric_subrule(
     if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
         let ub_flags = input.children_unbounded;
         let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
-        let new_plan = if left_unbounded && right_unbounded {
-            match is_suitable_for_symmetric_hash_join(hash_join) {
-                Ok(true) => SymmetricHashJoinExec::try_new(
-                    hash_join.left().clone(),
-                    hash_join.right().clone(),
-                    hash_join
-                        .on()
-                        .iter()
-                        .map(|(l, r)| (l.clone(), r.clone()))
-                        .collect(),
-                    hash_join.filter().unwrap().clone(),
-                    hash_join.join_type(),
-                    hash_join.null_equals_null(),
-                )
-                .map(|e| Arc::new(e) as _),
-                Ok(false) => Ok(plan),
-                Err(e) => return Some(Err(e)),
-            }
+        let new_plan = if left_unbounded
+            && right_unbounded
+            && is_suitable_for_symmetric_hash_join(hash_join)
+        {
+            SymmetricHashJoinExec::try_new(
+                hash_join.left().clone(),
+                hash_join.right().clone(),
+                hash_join
+                    .on()
+                    .iter()
+                    .map(|(l, r)| (l.clone(), r.clone()))
+                    .collect(),
+                hash_join.filter().unwrap().clone(),
+                hash_join.join_type(),
+                hash_join.null_equals_null(),
+            )
+            .map(|e| Arc::new(e) as _)
         } else {
             Ok(plan)
         };
