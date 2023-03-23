@@ -45,7 +45,6 @@ use crate::datasource::{
     listing::{FileRange, PartitionedFile},
     object_store::ObjectStoreUrl,
 };
-use crate::physical_plan::tree_node::{TreeNode, VisitRecursion};
 use crate::physical_plan::ExecutionPlan;
 use crate::{
     error::{DataFusionError, Result},
@@ -53,6 +52,7 @@ use crate::{
 };
 use arrow::array::new_null_array;
 use arrow::record_batch::RecordBatchOptions;
+use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use log::{debug, info, warn};
 use object_store::path::Path;
 use object_store::ObjectMeta;

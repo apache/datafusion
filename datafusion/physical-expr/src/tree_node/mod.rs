@@ -16,9 +16,6 @@
 // under the License.
 
 //! This module provides common traits for visiting or rewriting tree nodes easily.
-//!
-//! It's a duplication of the one in the crate `datafusion-common`.
-//! In the future, if the Orphan rule is relaxed for Arc<dyn T>, these duplicated codes can be removed.
 use crate::physical_expr::with_new_children_if_necessary;
 use crate::PhysicalExpr;
 use datafusion_common::tree_node::ArcWithChildren;

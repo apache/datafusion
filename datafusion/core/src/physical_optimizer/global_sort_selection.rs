@@ -24,8 +24,8 @@ use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use crate::physical_plan::tree_node::TreeNode;
 use crate::physical_plan::ExecutionPlan;
+use datafusion_common::tree_node::TreeNode;
 
 /// Currently for a sort operator, if
 /// - there are more than one input partitions
