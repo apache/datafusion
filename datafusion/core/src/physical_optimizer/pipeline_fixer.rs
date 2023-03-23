@@ -270,15 +270,13 @@ fn apply_subrules_and_check_finiteness_requirements(
             input = value;
         }
     }
-    let plan = input.plan;
-    let children = input.children_unbounded;
-    plan.unbounded_output(&children).map(|value| {
-        Some(PipelineStatePropagator {
-            plan,
-            unbounded: value,
-            children_unbounded: children,
+    input
+        .plan
+        .unbounded_output(&input.children_unbounded)
+        .map(|value| {
+            input.unbounded = value;
+            Some(input)
         })
-    })
 }
 
 #[cfg(test)]

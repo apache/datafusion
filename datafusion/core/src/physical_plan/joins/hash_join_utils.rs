@@ -76,19 +76,21 @@ pub fn map_origin_col_to_filter_col(
     Ok(col_to_col_map)
 }
 
-/// This function analyzes [PhysicalSortExpr] graphs with respect to monotonicity
+/// This function analyzes [`PhysicalSortExpr`] graphs with respect to monotonicity
 /// (sorting) properties. This is necessary since monotonically increasing and/or
 /// decreasing expressions are required when using join filter expressions for
 /// data pruning purposes.
 ///
 /// The method works as follows:
-/// 1. Maps the original columns to the filter columns using the `map_origin_col_to_filter_col` function.
-/// 2. Collects all columns in the sort expression using the `PhysicalExprColumnCollector` visitor.
-/// 3. Checks if all columns are included in the `column_mapping_information` map.
-/// 4. If all columns are included, the sort expression is converted into a filter expression using the `transform_up` and `convert_filter_columns` functions.
-/// 5. Searches the converted filter expression in the filter expression using the `check_filter_expr_contains_sort_information`.
-/// 6. If an exact match is encountered, returns the converted filter expression as `Some(Arc<dyn PhysicalExpr>)`.
-/// 7. If all columns are not included or the exact match is not encountered, returns `None`.
+/// 1. Maps the original columns to the filter columns using the [`map_origin_col_to_filter_col`] function.
+/// 2. Collects all columns in the sort expression using the [`collect_columns`] function.
+/// 3. Checks if all columns are included in the map we obtain in the first step.
+/// 4. If all columns are included, the sort expression is converted into a filter expression using
+///    the [`convert_filter_columns`] function.
+/// 5. Searches for the converted filter expression in the filter expression using the
+///    [`check_filter_expr_contains_sort_information`] function.
+/// 6. If an exact match is found, returns the converted filter expression as [`Some(Arc<dyn PhysicalExpr>)`].
+/// 7. If all columns are not included or an exact match is not found, returns [`None`].
 ///
 /// Examples:
 /// Consider the filter expression "a + b > c + 10 AND a + b < c + 100".
@@ -96,7 +98,7 @@ pub fn map_origin_col_to_filter_col(
 /// 2. If the expression "d@" is sorted, it will not be accepted since the "d@" column is not part of the filter.
 /// 3. If the expression "a@ + b@ + c@" is sorted, all columns are represented in the filter expression. However,
 ///    there is no exact match, so this expression does not indicate pruning.
-pub fn convert_sort_expr_with_filter_schema(
+fn convert_sort_expr_with_filter_schema(
     side: &JoinSide,
     filter: &JoinFilter,
     schema: &SchemaRef,
@@ -128,12 +130,12 @@ pub fn convert_sort_expr_with_filter_schema(
 
 /// This function is used to build the filter expression based on the sort order of input columns.
 ///
-/// It first calls the [convert_sort_expr_with_filter_schema] method to determine if the sort
-/// order of columns can be used in the filter expression. If it returns a [Some] value, the
-/// method wraps the result in a [SortedFilterExpr] instance with the original sort expression and
+/// It first calls the [`convert_sort_expr_with_filter_schema`] method to determine if the sort
+/// order of columns can be used in the filter expression. If it returns a [`Some`] value, the
+/// method wraps the result in a [`SortedFilterExpr`] instance with the original sort expression and
 /// the converted filter expression. Otherwise, this function returns an error.
 ///
-/// The [SortedFilterExpr] instance contains information about the sort order of columns that can
+/// The `SortedFilterExpr` instance contains information about the sort order of columns that can
 /// be used in the filter expression, which can be used to optimize the query execution process.
 pub fn build_filter_input_order(
     side: JoinSide,
@@ -141,13 +143,8 @@ pub fn build_filter_input_order(
     schema: &SchemaRef,
     order: &PhysicalSortExpr,
 ) -> Result<Option<SortedFilterExpr>> {
-    if let Some(expr) =
-        convert_sort_expr_with_filter_schema(&side, filter, schema, order)?
-    {
-        Ok(Some(SortedFilterExpr::new(order.clone(), expr)))
-    } else {
-        Ok(None)
-    }
+    let opt_expr = convert_sort_expr_with_filter_schema(&side, filter, schema, order)?;
+    Ok(opt_expr.map(|filter_expr| SortedFilterExpr::new(order.clone(), filter_expr)))
 }
 
 /// Convert a physical expression into a filter expression using the given

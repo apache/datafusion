@@ -120,11 +120,12 @@ pub fn check_finiteness_requirements(
     optimizer_options: &OptimizerOptions,
 ) -> Result<Option<PipelineStatePropagator>> {
     let plan = input.plan;
-    if let Some(smhj) = plan.as_any().downcast_ref::<SymmetricHashJoinExec>() {
-        if smhj.sorted_filter_exprs().iter().any(|s| s.is_none())
-            && !optimizer_options.allow_unsorted_symmetric_joins
+    if let Some(exec) = plan.as_any().downcast_ref::<SymmetricHashJoinExec>() {
+        if !optimizer_options.allow_unsorted_symmetric_joins
+            && exec.sorted_filter_exprs().iter().any(|s| s.is_none())
         {
-            return Err(DataFusionError::Plan("Join operation cannot operate on stream without changing the 'allow_unsorted_symmetric_joins' configuration".to_owned()));
+            let msg = "Join operation cannot operate on stream without enabling the 'allow_unsorted_symmetric_joins' configuration flag";
+            return Err(DataFusionError::Plan(msg.to_owned()));
         }
     }
     let children = input.children_unbounded;
