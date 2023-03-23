@@ -462,8 +462,16 @@ impl LimitStream {
                 .iter()
                 .map(|col| col.slice(0, col.len().min(batch_rows)))
                 .collect();
-            let options = RecordBatchOptions::new().with_row_count(Option::from(batch_rows));
-            Some(RecordBatch::try_new_with_options(batch.schema(), limited_columns, &options).unwrap())
+            let options =
+                RecordBatchOptions::new().with_row_count(Option::from(batch_rows));
+            Some(
+                RecordBatch::try_new_with_options(
+                    batch.schema(),
+                    limited_columns,
+                    &options,
+                )
+                .unwrap(),
+            )
         }
     }
 }
