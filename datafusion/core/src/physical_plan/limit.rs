@@ -602,6 +602,36 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn limit_no_column() -> Result<()> {
+        let batches = vec![
+            test::make_batch_no_column(6),
+            test::make_batch_no_column(6),
+            test::make_batch_no_column(6),
+        ];
+        let input = test::exec::TestStream::new(batches);
+
+        let index = input.index();
+        assert_eq!(index.value(), 0);
+
+        // limit of six needs to consume the entire first record batch
+        // (6 rows) and stop immediately
+        let baseline_metrics = BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let limit_stream =
+            LimitStream::new(Box::pin(input), 0, Some(6), baseline_metrics);
+        assert_eq!(index.value(), 0);
+
+        let results = collect(Box::pin(limit_stream)).await.unwrap();
+        let num_rows: usize = results.into_iter().map(|b| b.num_rows()).sum();
+        // Only 6 rows should have been produced
+        assert_eq!(num_rows, 6);
+
+        // Only the first batch should be consumed
+        assert_eq!(index.value(), 1);
+
+        Ok(())
+    }
+
     // test cases for "skip"
     async fn skip_and_fetch(skip: usize, fetch: Option<usize>) -> Result<usize> {
         let session_ctx = SessionContext::new();

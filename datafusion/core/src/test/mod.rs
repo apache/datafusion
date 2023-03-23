@@ -33,7 +33,7 @@ use crate::test_util::{aggr_test_schema, arrow_test_data};
 use array::ArrayRef;
 use arrow::array::{self, Array, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 #[cfg(feature = "compression")]
 use bzip2::write::BzEncoder;
 #[cfg(feature = "compression")]
@@ -273,6 +273,14 @@ pub fn make_partition(sz: i32) -> RecordBatch {
     let arr = arr as ArrayRef;
 
     RecordBatch::try_new(schema, vec![arr]).unwrap()
+}
+
+/// Return a RecordBatch with a single array with row_count sz
+pub fn make_batch_no_column(sz: usize) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![]));
+
+    let options = RecordBatchOptions::new().with_row_count(Option::from(sz));
+    RecordBatch::try_new_with_options(schema, vec![], &options).unwrap()
 }
 
 /// Return a new table which provide this decimal column
