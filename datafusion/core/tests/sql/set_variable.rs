@@ -414,7 +414,7 @@ async fn set_time_zone_bad_time_zone_format() {
             .await
             .unwrap();
     let err = pretty_format_batches(&result).err().unwrap().to_string();
-    assert_eq!(err, "Parser error: Invalid timezone \"+08:00:00\": Expected format [+-]XX:XX, [+-]XX, or [+-]XXXX");
+    assert_eq!(err, "Parser error: Invalid timezone \"+08:00:00\": '+08:00:00' is not a valid timezone");
 
     plan_and_collect(&ctx, "SET TIME ZONE = '08:00'")
         .await
@@ -427,7 +427,10 @@ async fn set_time_zone_bad_time_zone_format() {
             .unwrap();
 
     let err = pretty_format_batches(&result).err().unwrap().to_string();
-    assert_eq!(err, "Parser error: Invalid timezone \"08:00\": only offset based timezones supported without chrono-tz feature");
+    assert_eq!(
+        err,
+        "Parser error: Invalid timezone \"08:00\": '08:00' is not a valid timezone"
+    );
 
     plan_and_collect(&ctx, "SET TIME ZONE = '08'")
         .await
@@ -440,7 +443,10 @@ async fn set_time_zone_bad_time_zone_format() {
             .unwrap();
 
     let err = pretty_format_batches(&result).err().unwrap().to_string();
-    assert_eq!(err, "Parser error: Invalid timezone \"08\": only offset based timezones supported without chrono-tz feature");
+    assert_eq!(
+        err,
+        "Parser error: Invalid timezone \"08\": '08' is not a valid timezone"
+    );
 
     // we dont support named time zone yet
     plan_and_collect(&ctx, "SET TIME ZONE = 'Asia/Taipei'")
@@ -453,8 +459,14 @@ async fn set_time_zone_bad_time_zone_format() {
             .await
             .unwrap();
 
-    let err = pretty_format_batches(&result).err().unwrap().to_string();
-    assert_eq!(err, "Parser error: Invalid timezone \"Asia/Taipei\": only offset based timezones supported without chrono-tz feature");
+    let expected = vec![
+        "+-----------------------------+",
+        "| Utf8(\"2000-01-01T00:00:00\") |",
+        "+-----------------------------+",
+        "| 2000-01-01T08:00:00+08:00   |",
+        "+-----------------------------+",
+    ];
+    assert_batches_eq!(expected, &result);
 
     // this is invalid even after we support named time zone
     plan_and_collect(&ctx, "SET TIME ZONE = 'Asia/Taipei2'")
@@ -467,5 +479,5 @@ async fn set_time_zone_bad_time_zone_format() {
             .await
             .unwrap();
     let err = pretty_format_batches(&result).err().unwrap().to_string();
-    assert_eq!(err, "Parser error: Invalid timezone \"Asia/Taipei2\": only offset based timezones supported without chrono-tz feature");
+    assert_eq!(err, "Parser error: Invalid timezone \"Asia/Taipei2\": 'Asia/Taipei2' is not a valid timezone");
 }
