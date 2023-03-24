@@ -414,7 +414,7 @@ async fn set_time_zone_bad_time_zone_format() {
             .await
             .unwrap();
     let err = pretty_format_batches(&result).err().unwrap().to_string();
-    assert_eq!(err, "Parser error: Invalid timezone \"+08:00:00\": '+08:00:00' is not a valid timezone");
+    assert_eq!(err, "Parser error: Invalid timezone \"+08:00:00\": Expected format [+-]XX:XX, [+-]XX, or [+-]XXXX");
 
     plan_and_collect(&ctx, "SET TIME ZONE = '08:00'")
         .await
