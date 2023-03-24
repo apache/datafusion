@@ -121,10 +121,10 @@ pub fn check_finiteness_requirements(
 ) -> Result<Option<PipelineStatePropagator>> {
     let plan = input.plan;
     if let Some(exec) = plan.as_any().downcast_ref::<SymmetricHashJoinExec>() {
-        if !(optimizer_options.allow_unpruning_symmetric_joins
+        if !(optimizer_options.allow_symmetric_joins_without_pruning
             || exec.check_if_order_information_available()?)
         {
-            let msg = "Join operation cannot operate on stream without enabling the 'allow_unpruning_symmetric_joins' configuration flag";
+            let msg = "Join operation cannot operate on stream without enabling the 'allow_symmetric_joins_without_pruning' configuration flag";
             return Err(DataFusionError::Plan(msg.to_owned()));
         }
     }

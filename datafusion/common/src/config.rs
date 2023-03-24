@@ -282,7 +282,7 @@ config_namespace! {
 
         /// Should DataFusion allow symmetric hash joins for unbounded data sources even when
         /// its inputs do not have any ordering or filtering
-        pub allow_unpruning_symmetric_joins: bool, default = true
+        pub allow_symmetric_joins_without_pruning: bool, default = true
 
         /// When set to true, file groups will be repartitioned to achieve maximum parallelism.
         /// Currently supported only for Parquet format in which case

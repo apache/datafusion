@@ -104,8 +104,7 @@ fn check_support(expr: &Arc<dyn PhysicalExpr>) -> bool {
 
 /// This function returns whether a given hash join is replaceable by a
 /// symmetric hash join. Basically, the requirement is that involved
-/// [`PhysicalExpr`]s, [`Operator`]s and data types need to be supported,
-/// and order information must cover every column in the filter expression.
+/// [`PhysicalExpr`]s, [`Operator`]s and data types need to be supported
 fn is_suitable_for_symmetric_hash_join(hash_join: &HashJoinExec) -> bool {
     hash_join.filter().map_or(true, |filter| {
         check_support(filter.expression())
