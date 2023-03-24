@@ -113,11 +113,11 @@ pub(crate) fn get_ordered_merged_indices(in1: &[usize], in2: &[usize]) -> Vec<us
 
 // Checks if the vector in the form 1,2,3,..n (Consecutive) not necessarily starting from zero
 // Assumes input has ascending order
-pub(crate) fn is_consecutive(in1: &[usize]) -> bool {
+pub(crate) fn is_ascending_ordered(in1: &[usize]) -> bool {
     if !in1.is_empty() {
         in1.iter()
-            .zip(in1[0]..in1[0] + in1.len())
-            .all(|(lhs, rhs)| *lhs == rhs)
+            .zip(in1.iter().skip(1))
+            .all(|(prev, cur)| cur >= prev)
     } else {
         true
     }
@@ -191,13 +191,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_is_consecutive() -> Result<()> {
-        assert!(!is_consecutive(&[0, 3, 4]));
-        assert!(is_consecutive(&[0, 1, 2]));
-        assert!(!is_consecutive(&[0, 1, 4]));
-        assert!(is_consecutive(&[]));
-        assert!(is_consecutive(&[1, 2]));
-        assert!(!is_consecutive(&[3, 2]));
+    async fn test_is_ascending_ordered() -> Result<()> {
+        assert!(is_ascending_ordered(&[0, 3, 4]));
+        assert!(is_ascending_ordered(&[0, 1, 2]));
+        assert!(is_ascending_ordered(&[0, 1, 4]));
+        assert!(is_ascending_ordered(&[]));
+        assert!(is_ascending_ordered(&[1, 2]));
+        assert!(!is_ascending_ordered(&[3, 2]));
         Ok(())
     }
 

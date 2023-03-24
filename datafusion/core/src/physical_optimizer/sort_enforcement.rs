@@ -37,8 +37,8 @@ use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::utils::{
     add_sort_above, calc_ordering_range, find_match_indices, get_at_indices,
-    get_ordered_merged_indices, get_set_diff_indices, is_consecutive, is_limit, is_sort,
-    is_sort_preserving_merge, is_window,
+    get_ordered_merged_indices, get_set_diff_indices, is_ascending_ordered, is_limit,
+    is_sort, is_sort_preserving_merge, is_window,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -691,8 +691,8 @@ fn can_skip_sort(
     // Indices of order by columns that doesn't seen in partition by
     // Equivalently (Order by columns) ∖ (Partition by columns) where `∖` represents set difference.
     let unique_ob_indices = get_set_diff_indices(&ob_indices, &pb_indices);
-    if !is_consecutive(&unique_ob_indices) {
-        // ORDER BY indices should be consecutive
+    if !is_ascending_ordered(&unique_ob_indices) {
+        // ORDER BY indices should be ascending ordered
         return Ok(None);
     }
     let first_n = calc_ordering_range(&ordered_merged_indices);
@@ -1112,8 +1112,8 @@ mod tests {
             (vec!["b"], vec!["c"], None),
             (vec!["b"], vec!["a", "b"], Some(Linear)),
             (vec!["b"], vec!["b", "c"], None),
-            (vec!["b"], vec!["a", "c"], None),
-            (vec!["b"], vec!["a", "b", "c"], None),
+            (vec!["b"], vec!["a", "c"], Some(Linear)),
+            (vec!["b"], vec!["a", "b", "c"], Some(Linear)),
             (vec!["c"], vec!["a"], Some(Linear)),
             (vec!["c"], vec!["b"], None),
             (vec!["c"], vec!["c"], None),

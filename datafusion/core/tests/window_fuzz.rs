@@ -85,6 +85,8 @@ mod tests {
             (vec!["a"], vec!["a", "b", "c"], Sorted),
             (vec!["b"], vec!["a"], Linear),
             (vec!["b"], vec!["a", "b"], Linear),
+            (vec!["b"], vec!["a", "c"], Linear),
+            (vec!["b"], vec!["a", "b", "c"], Linear),
             (vec!["c"], vec!["a"], Linear),
             (vec!["c"], vec!["a", "b"], Linear),
             (vec!["c"], vec!["a", "c"], Linear),
