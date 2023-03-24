@@ -639,23 +639,21 @@ macro_rules! impl_op {
                         "Overflow while converting seconds to milliseconds".to_string(),
                     )
                 };
-                ts_sub_to_interval(
+                ts_sub_to_interval::<MILLISECOND_MODE>(
                     ts_lhs.checked_mul(1_000).ok_or_else(err)?,
                     ts_rhs.checked_mul(1_000).ok_or_else(err)?,
                     &tz_lhs,
                     &tz_rhs,
-                    IntervalMode::Milli,
                 )
             },
             (
                 ScalarValue::TimestampMillisecond(Some(ts_lhs), tz_lhs),
                 ScalarValue::TimestampMillisecond(Some(ts_rhs), tz_rhs),
-            ) => ts_sub_to_interval(
+            ) => ts_sub_to_interval::<MILLISECOND_MODE>(
                 *ts_lhs,
                 *ts_rhs,
                 tz_lhs,
                 tz_rhs,
-                IntervalMode::Milli,
             ),
             (
                 ScalarValue::TimestampMicrosecond(Some(ts_lhs), tz_lhs),
@@ -666,23 +664,21 @@ macro_rules! impl_op {
                         "Overflow while converting microseconds to nanoseconds".to_string(),
                     )
                 };
-                ts_sub_to_interval(
+                ts_sub_to_interval::<NANOSECOND_MODE>(
                     ts_lhs.checked_mul(1_000).ok_or_else(err)?,
                     ts_rhs.checked_mul(1_000).ok_or_else(err)?,
                     tz_lhs,
                     tz_rhs,
-                    IntervalMode::Nano,
                 )
             },
             (
                 ScalarValue::TimestampNanosecond(Some(ts_lhs), tz_lhs),
                 ScalarValue::TimestampNanosecond(Some(ts_rhs), tz_rhs),
-            ) => ts_sub_to_interval(
+            ) => ts_sub_to_interval::<NANOSECOND_MODE>(
                 *ts_lhs,
                 *ts_rhs,
                 tz_lhs,
                 tz_rhs,
-                IntervalMode::Nano,
             ),
             _ => impl_op_arithmetic!($LHS, $RHS, -)
         }
@@ -971,34 +967,36 @@ pub enum IntervalMode {
     Nano,
 }
 
+pub const MILLISECOND_MODE: bool = false;
+pub const NANOSECOND_MODE: bool = true;
+
 /// This function computes subtracts `rhs_ts` from `lhs_ts`, taking timezones
 /// into account when given. Units of the resulting interval is specified by
-/// the argument `mode`.
+/// the constant `INTERVAL_MODE`.
 /// The default behavior of Datafusion is the following:
 /// - When subtracting timestamps at seconds/milliseconds precision, the output
 ///   interval will have the type [`IntervalDayTimeType`].
 /// - When subtracting timestamps at microseconds/nanoseconds precision, the
 ///   output interval will have the type [`IntervalMonthDayNanoType`].
-fn ts_sub_to_interval(
+fn ts_sub_to_interval<const INTERVAL_MODE: bool>(
     lhs_ts: i64,
     rhs_ts: i64,
     lhs_tz: &Option<String>,
     rhs_tz: &Option<String>,
-    mode: IntervalMode,
 ) -> Result<ScalarValue> {
-    let lhs_dt = with_timezone_to_naive_datetime(lhs_ts, lhs_tz, mode)?;
-    let rhs_dt = with_timezone_to_naive_datetime(rhs_ts, rhs_tz, mode)?;
+    let lhs_dt = with_timezone_to_naive_datetime::<INTERVAL_MODE>(lhs_ts, lhs_tz)?;
+    let rhs_dt = with_timezone_to_naive_datetime::<INTERVAL_MODE>(rhs_ts, rhs_tz)?;
     let delta_secs = lhs_dt.signed_duration_since(rhs_dt);
 
-    match mode {
-        IntervalMode::Milli => {
+    match INTERVAL_MODE {
+        MILLISECOND_MODE => {
             let as_millisecs = delta_secs.num_milliseconds();
             Ok(ScalarValue::new_interval_dt(
                 (as_millisecs / MILLISECS_IN_ONE_DAY) as i32,
                 (as_millisecs % MILLISECS_IN_ONE_DAY) as i32,
             ))
         }
-        IntervalMode::Nano => {
+        NANOSECOND_MODE => {
             let as_nanosecs = delta_secs.num_nanoseconds().ok_or_else(|| {
                 DataFusionError::Execution(String::from(
                     "Can not compute timestamp differences with nanosecond precision",
@@ -1016,12 +1014,11 @@ fn ts_sub_to_interval(
 /// This function creates the [`NaiveDateTime`] object corresponding to the
 /// given timestamp using the units (tick size) implied by argument `mode`.
 #[inline]
-pub fn with_timezone_to_naive_datetime(
+pub fn with_timezone_to_naive_datetime<const INTERVAL_MODE: bool>(
     ts: i64,
     tz: &Option<String>,
-    mode: IntervalMode,
 ) -> Result<NaiveDateTime> {
-    let datetime = if let IntervalMode::Milli = mode {
+    let datetime = if INTERVAL_MODE == MILLISECOND_MODE {
         ticks_to_naive_datetime::<1_000_000>(ts)
     } else {
         ticks_to_naive_datetime::<1>(ts)
