@@ -644,7 +644,7 @@ macro_rules! impl_op {
                     ts_rhs.checked_mul(1_000).ok_or_else(err)?,
                     &tz_lhs,
                     &tz_rhs,
-                    IntervalMode::Milli,
+                    TimestampMode::Milli,
                 )
             },
             (
@@ -655,7 +655,7 @@ macro_rules! impl_op {
                 *ts_rhs,
                 tz_lhs,
                 tz_rhs,
-                IntervalMode::Milli,
+                TimestampMode::Milli,
             ),
             (
                 ScalarValue::TimestampMicrosecond(Some(ts_lhs), tz_lhs),
@@ -671,7 +671,7 @@ macro_rules! impl_op {
                     ts_rhs.checked_mul(1_000).ok_or_else(err)?,
                     tz_lhs,
                     tz_rhs,
-                    IntervalMode::Nano,
+                    TimestampMode::Nano,
                 )
             },
             (
@@ -682,7 +682,7 @@ macro_rules! impl_op {
                 *ts_rhs,
                 tz_lhs,
                 tz_rhs,
-                IntervalMode::Nano,
+                TimestampMode::Nano,
             ),
             _ => impl_op_arithmetic!($LHS, $RHS, -)
         }
@@ -966,9 +966,16 @@ macro_rules! get_sign {
 }
 
 #[derive(Clone, Copy)]
-pub enum IntervalMode {
+pub enum TimestampMode {
     Milli,
     Nano,
+}
+
+#[derive(Clone, Copy)]
+pub enum IntervalMode {
+    YM,
+    DT,
+    MDN,
 }
 
 /// This function computes subtracts `rhs_ts` from `lhs_ts`, taking timezones
@@ -984,21 +991,21 @@ fn ts_sub_to_interval(
     rhs_ts: i64,
     lhs_tz: &Option<String>,
     rhs_tz: &Option<String>,
-    mode: IntervalMode,
+    mode: TimestampMode,
 ) -> Result<ScalarValue> {
     let lhs_dt = with_timezone_to_naive_datetime(lhs_ts, lhs_tz, mode)?;
     let rhs_dt = with_timezone_to_naive_datetime(rhs_ts, rhs_tz, mode)?;
     let delta_secs = lhs_dt.signed_duration_since(rhs_dt);
 
     match mode {
-        IntervalMode::Milli => {
+        TimestampMode::Milli => {
             let as_millisecs = delta_secs.num_milliseconds();
             Ok(ScalarValue::new_interval_dt(
                 (as_millisecs / MILLISECS_IN_ONE_DAY) as i32,
                 (as_millisecs % MILLISECS_IN_ONE_DAY) as i32,
             ))
         }
-        IntervalMode::Nano => {
+        TimestampMode::Nano => {
             let as_nanosecs = delta_secs.num_nanoseconds().ok_or_else(|| {
                 DataFusionError::Execution(String::from(
                     "Can not compute timestamp differences with nanosecond precision",
@@ -1019,9 +1026,9 @@ fn ts_sub_to_interval(
 pub fn with_timezone_to_naive_datetime(
     ts: i64,
     tz: &Option<String>,
-    mode: IntervalMode,
+    mode: TimestampMode,
 ) -> Result<NaiveDateTime> {
-    let datetime = if let IntervalMode::Milli = mode {
+    let datetime = if let TimestampMode::Milli = mode {
         ticks_to_naive_datetime::<1_000_000>(ts)
     } else {
         ticks_to_naive_datetime::<1>(ts)
@@ -1079,10 +1086,34 @@ pub fn seconds_add(ts_s: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
 }
 
 #[inline]
+pub fn seconds_add_array(
+    ts_s: i64,
+    interval: i128,
+    sign: i32,
+    interval_mode: IntervalMode,
+) -> Result<i64> {
+    do_date_time_math_array(ts_s, 0, interval, sign, interval_mode)
+        .map(|dt| dt.timestamp())
+}
+
+#[inline]
 pub fn milliseconds_add(ts_ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
     let secs = ts_ms / 1000;
     let nsecs = ((ts_ms % 1000) * 1_000_000) as u32;
     do_date_time_math(secs, nsecs, scalar, sign).map(|dt| dt.timestamp_millis())
+}
+
+#[inline]
+pub fn milliseconds_add_array(
+    ts_ms: i64,
+    interval: i128,
+    sign: i32,
+    interval_mode: IntervalMode,
+) -> Result<i64> {
+    let secs = ts_ms / 1000;
+    let nsecs = ((ts_ms % 1000) * 1_000_000) as u32;
+    do_date_time_math_array(secs, nsecs, interval, sign, interval_mode)
+        .map(|dt| dt.timestamp_millis())
 }
 
 #[inline]
@@ -1093,10 +1124,36 @@ pub fn microseconds_add(ts_us: i64, scalar: &ScalarValue, sign: i32) -> Result<i
 }
 
 #[inline]
+pub fn microseconds_add_array(
+    ts_us: i64,
+    interval: i128,
+    sign: i32,
+    interval_mode: IntervalMode,
+) -> Result<i64> {
+    let secs = ts_us / 1_000_000;
+    let nsecs = ((ts_us % 1_000_000) * 1000) as u32;
+    do_date_time_math_array(secs, nsecs, interval, sign, interval_mode)
+        .map(|dt| dt.timestamp_nanos() / 1000)
+}
+
+#[inline]
 pub fn nanoseconds_add(ts_ns: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
     let secs = ts_ns / 1_000_000_000;
     let nsecs = (ts_ns % 1_000_000_000) as u32;
     do_date_time_math(secs, nsecs, scalar, sign).map(|dt| dt.timestamp_nanos())
+}
+
+#[inline]
+pub fn nanoseconds_add_array(
+    ts_ns: i64,
+    interval: i128,
+    sign: i32,
+    interval_mode: IntervalMode,
+) -> Result<i64> {
+    let secs = ts_ns / 1_000_000_000;
+    let nsecs = (ts_ns % 1_000_000_000) as u32;
+    do_date_time_math_array(secs, nsecs, interval, sign, interval_mode)
+        .map(|dt| dt.timestamp_nanos())
 }
 
 #[inline]
@@ -1143,6 +1200,22 @@ fn do_date_time_math(
     do_date_math(prior, scalar, sign)
 }
 
+#[inline]
+fn do_date_time_math_array(
+    secs: i64,
+    nsecs: u32,
+    interval: i128,
+    sign: i32,
+    interval_mode: IntervalMode,
+) -> Result<NaiveDateTime> {
+    let prior = NaiveDateTime::from_timestamp_opt(secs, nsecs).ok_or_else(|| {
+        DataFusionError::Internal(format!(
+            "Could not conert to NaiveDateTime: secs {secs} nsecs {nsecs}"
+        ))
+    })?;
+    do_date_math_array(prior, interval, sign, interval_mode)
+}
+
 fn do_date_math<D>(prior: D, scalar: &ScalarValue, sign: i32) -> Result<D>
 where
     D: Datelike + Add<Duration, Output = D>,
@@ -1154,6 +1227,22 @@ where
         other => Err(DataFusionError::Execution(format!(
             "DateIntervalExpr does not support non-interval type {other:?}"
         )))?,
+    })
+}
+
+fn do_date_math_array<D>(
+    prior: D,
+    interval: i128,
+    sign: i32,
+    interval_mode: IntervalMode,
+) -> Result<D>
+where
+    D: Datelike + Add<Duration, Output = D>,
+{
+    Ok(match interval_mode {
+        IntervalMode::DT => add_day_time(prior, interval as i64, sign),
+        IntervalMode::YM => shift_months(prior, interval as i32 * sign),
+        IntervalMode::MDN => add_m_d_nano(prior, interval, sign),
     })
 }
 
