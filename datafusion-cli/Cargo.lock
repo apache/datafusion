@@ -68,16 +68,16 @@ checksum = "8da52d66c7071e2e3fa2a1e5c6d088fec47b593032b254f5e980de8ea54454d6"
 
 [[package]]
 name = "arrow"
-version = "35.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd#a498a0342a15a7ddfa10c17752b0cc258bd80afd"
+version = "36.0.0"
+source = "git+https://github.com/apache/arrow-rs.git?rev=a61453ea1ba63d09310e5ea7484067509958c73e#a61453ea1ba63d09310e5ea7484067509958c73e"
 dependencies = [
  "ahash",
  "arrow-arith",
- "arrow-array 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-array",
  "arrow-buffer",
  "arrow-cast",
  "arrow-csv",
- "arrow-data 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-data",
  "arrow-ipc",
  "arrow-json",
  "arrow-ord",
@@ -89,12 +89,12 @@ dependencies = [
 
 [[package]]
 name = "arrow-arith"
-version = "35.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd#a498a0342a15a7ddfa10c17752b0cc258bd80afd"
+version = "36.0.0"
+source = "git+https://github.com/apache/arrow-rs.git?rev=a61453ea1ba63d09310e5ea7484067509958c73e#a61453ea1ba63d09310e5ea7484067509958c73e"
 dependencies = [
- "arrow-array 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-array",
  "arrow-buffer",
- "arrow-data 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-data",
  "arrow-schema",
  "chrono",
  "half",
@@ -103,13 +103,12 @@ dependencies = [
 
 [[package]]
 name = "arrow-array"
-version = "35.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43489bbff475545b78b0e20bde1d22abd6c99e54499839f9e815a2fa5134a51b"
+version = "36.0.0"
+source = "git+https://github.com/apache/arrow-rs.git?rev=a61453ea1ba63d09310e5ea7484067509958c73e#a61453ea1ba63d09310e5ea7484067509958c73e"
 dependencies = [
  "ahash",
  "arrow-buffer",
- "arrow-data 35.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "arrow-data",
  "arrow-schema",
  "chrono",
  "chrono-tz",
@@ -119,24 +118,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "arrow-array"
-version = "35.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd#a498a0342a15a7ddfa10c17752b0cc258bd80afd"
-dependencies = [
- "ahash",
- "arrow-buffer",
- "arrow-data 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
- "arrow-schema",
- "chrono",
- "half",
- "hashbrown 0.13.2",
- "num",
-]
-
-[[package]]
 name = "arrow-buffer"
-version = "35.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd#a498a0342a15a7ddfa10c17752b0cc258bd80afd"
+version = "36.0.0"
+source = "git+https://github.com/apache/arrow-rs.git?rev=a61453ea1ba63d09310e5ea7484067509958c73e#a61453ea1ba63d09310e5ea7484067509958c73e"
 dependencies = [
  "half",
  "num",
@@ -144,12 +128,12 @@ dependencies = [
 
 [[package]]
 name = "arrow-cast"
-version = "35.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd#a498a0342a15a7ddfa10c17752b0cc258bd80afd"
+version = "36.0.0"
+source = "git+https://github.com/apache/arrow-rs.git?rev=a61453ea1ba63d09310e5ea7484067509958c73e#a61453ea1ba63d09310e5ea7484067509958c73e"
 dependencies = [
- "arrow-array 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-array",
  "arrow-buffer",
- "arrow-data 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-data",
  "arrow-schema",
  "arrow-select",
  "chrono",
@@ -160,13 +144,13 @@ dependencies = [
 
 [[package]]
 name = "arrow-csv"
-version = "35.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd#a498a0342a15a7ddfa10c17752b0cc258bd80afd"
+version = "36.0.0"
+source = "git+https://github.com/apache/arrow-rs.git?rev=a61453ea1ba63d09310e5ea7484067509958c73e#a61453ea1ba63d09310e5ea7484067509958c73e"
 dependencies = [
- "arrow-array 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-array",
  "arrow-buffer",
  "arrow-cast",
- "arrow-data 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-data",
  "arrow-schema",
  "chrono",
  "csv",
@@ -178,20 +162,8 @@ dependencies = [
 
 [[package]]
 name = "arrow-data"
-version = "35.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19c7787c6cdbf9539b1ffb860bfc18c5848926ec3d62cbd52dc3b1ea35c874fd"
-dependencies = [
- "arrow-buffer",
- "arrow-schema",
- "half",
- "num",
-]
-
-[[package]]
-name = "arrow-data"
-version = "35.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd#a498a0342a15a7ddfa10c17752b0cc258bd80afd"
+version = "36.0.0"
+source = "git+https://github.com/apache/arrow-rs.git?rev=a61453ea1ba63d09310e5ea7484067509958c73e#a61453ea1ba63d09310e5ea7484067509958c73e"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -201,26 +173,26 @@ dependencies = [
 
 [[package]]
 name = "arrow-ipc"
-version = "35.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd#a498a0342a15a7ddfa10c17752b0cc258bd80afd"
+version = "36.0.0"
+source = "git+https://github.com/apache/arrow-rs.git?rev=a61453ea1ba63d09310e5ea7484067509958c73e#a61453ea1ba63d09310e5ea7484067509958c73e"
 dependencies = [
- "arrow-array 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-array",
  "arrow-buffer",
  "arrow-cast",
- "arrow-data 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-data",
  "arrow-schema",
  "flatbuffers",
 ]
 
 [[package]]
 name = "arrow-json"
-version = "35.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd#a498a0342a15a7ddfa10c17752b0cc258bd80afd"
+version = "36.0.0"
+source = "git+https://github.com/apache/arrow-rs.git?rev=a61453ea1ba63d09310e5ea7484067509958c73e#a61453ea1ba63d09310e5ea7484067509958c73e"
 dependencies = [
- "arrow-array 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-array",
  "arrow-buffer",
  "arrow-cast",
- "arrow-data 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-data",
  "arrow-schema",
  "chrono",
  "half",
@@ -232,26 +204,27 @@ dependencies = [
 
 [[package]]
 name = "arrow-ord"
-version = "35.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd#a498a0342a15a7ddfa10c17752b0cc258bd80afd"
+version = "36.0.0"
+source = "git+https://github.com/apache/arrow-rs.git?rev=a61453ea1ba63d09310e5ea7484067509958c73e#a61453ea1ba63d09310e5ea7484067509958c73e"
 dependencies = [
- "arrow-array 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-array",
  "arrow-buffer",
- "arrow-data 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-data",
  "arrow-schema",
  "arrow-select",
+ "half",
  "num",
 ]
 
 [[package]]
 name = "arrow-row"
-version = "35.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd#a498a0342a15a7ddfa10c17752b0cc258bd80afd"
+version = "36.0.0"
+source = "git+https://github.com/apache/arrow-rs.git?rev=a61453ea1ba63d09310e5ea7484067509958c73e#a61453ea1ba63d09310e5ea7484067509958c73e"
 dependencies = [
  "ahash",
- "arrow-array 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-array",
  "arrow-buffer",
- "arrow-data 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-data",
  "arrow-schema",
  "half",
  "hashbrown 0.13.2",
@@ -259,29 +232,29 @@ dependencies = [
 
 [[package]]
 name = "arrow-schema"
-version = "35.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd#a498a0342a15a7ddfa10c17752b0cc258bd80afd"
+version = "36.0.0"
+source = "git+https://github.com/apache/arrow-rs.git?rev=a61453ea1ba63d09310e5ea7484067509958c73e#a61453ea1ba63d09310e5ea7484067509958c73e"
 
 [[package]]
 name = "arrow-select"
-version = "35.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd#a498a0342a15a7ddfa10c17752b0cc258bd80afd"
+version = "36.0.0"
+source = "git+https://github.com/apache/arrow-rs.git?rev=a61453ea1ba63d09310e5ea7484067509958c73e#a61453ea1ba63d09310e5ea7484067509958c73e"
 dependencies = [
- "arrow-array 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-array",
  "arrow-buffer",
- "arrow-data 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-data",
  "arrow-schema",
  "num",
 ]
 
 [[package]]
 name = "arrow-string"
-version = "35.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd#a498a0342a15a7ddfa10c17752b0cc258bd80afd"
+version = "36.0.0"
+source = "git+https://github.com/apache/arrow-rs.git?rev=a61453ea1ba63d09310e5ea7484067509958c73e#a61453ea1ba63d09310e5ea7484067509958c73e"
 dependencies = [
- "arrow-array 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-array",
  "arrow-buffer",
- "arrow-data 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-data",
  "arrow-schema",
  "arrow-select",
  "regex",
@@ -774,7 +747,7 @@ name = "datafusion-common"
 version = "21.0.0"
 dependencies = [
  "arrow",
- "arrow-array 35.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "arrow-array",
  "chrono",
  "num_cpus",
  "object_store",
@@ -1824,14 +1797,14 @@ dependencies = [
 
 [[package]]
 name = "parquet"
-version = "35.0.0"
-source = "git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd#a498a0342a15a7ddfa10c17752b0cc258bd80afd"
+version = "36.0.0"
+source = "git+https://github.com/apache/arrow-rs.git?rev=a61453ea1ba63d09310e5ea7484067509958c73e#a61453ea1ba63d09310e5ea7484067509958c73e"
 dependencies = [
  "ahash",
- "arrow-array 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-array",
  "arrow-buffer",
  "arrow-cast",
- "arrow-data 35.0.0 (git+https://github.com/apache/arrow-rs.git?rev=a498a0342a15a7ddfa10c17752b0cc258bd80afd)",
+ "arrow-data",
  "arrow-ipc",
  "arrow-schema",
  "arrow-select",

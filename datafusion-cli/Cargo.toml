@@ -29,7 +29,7 @@ rust-version = "1.62"
 readme = "README.md"
 
 [dependencies]
-arrow = "35.0.0"
+arrow = "36.0.0"
 async-trait = "0.1.41"
 clap = { version = "3", features = ["derive", "cargo"] }
 datafusion = { path = "../datafusion/core", version = "21.0.0" }
@@ -43,7 +43,8 @@ tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync
 url = "2.2"
 
 [patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "a498a0342a15a7ddfa10c17752b0cc258bd80afd" }
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "a498a0342a15a7ddfa10c17752b0cc258bd80afd" }
-arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "a498a0342a15a7ddfa10c17752b0cc258bd80afd" }
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "a498a0342a15a7ddfa10c17752b0cc258bd80afd" }
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "a61453ea1ba63d09310e5ea7484067509958c73e" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "a61453ea1ba63d09310e5ea7484067509958c73e" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "a61453ea1ba63d09310e5ea7484067509958c73e" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "a61453ea1ba63d09310e5ea7484067509958c73e" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "a61453ea1ba63d09310e5ea7484067509958c73e" }
