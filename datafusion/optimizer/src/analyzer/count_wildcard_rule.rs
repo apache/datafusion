@@ -28,17 +28,12 @@ use crate::rewrite::TreeNodeRewritable;
 /// Resolve issue: https://github.com/apache/arrow-datafusion/issues/5473.
 pub struct CountWildcardRule {}
 
-impl Default for CountWildcardRule {
-    fn default() -> Self {
-        CountWildcardRule::new()
-    }
-}
-
 impl CountWildcardRule {
     pub fn new() -> Self {
         CountWildcardRule {}
     }
 }
+
 impl AnalyzerRule for CountWildcardRule {
     fn analyze(&self, plan: &LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
         plan.clone().transform_down(&analyze_internal)

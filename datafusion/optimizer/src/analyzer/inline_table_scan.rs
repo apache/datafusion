@@ -15,73 +15,113 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to replace TableScan references
-//! such as DataFrames and Views and inlines the LogicalPlan
-//! to support further optimization
-use crate::optimizer::ApplyOrder;
-use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::Result;
-use datafusion_expr::{logical_plan::LogicalPlan, Expr, LogicalPlanBuilder, TableScan};
+//! Analyzed rule to replace TableScan references
+//! such as DataFrames and Views and inlines the LogicalPlan.
+use std::sync::Arc;
 
-/// Optimization rule that inlines TableScan that provide a [LogicalPlan]
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::Result;
+use datafusion_expr::expr_rewriter::rewrite_expr;
+use datafusion_expr::{
+    logical_plan::LogicalPlan, Expr, Filter, LogicalPlanBuilder, TableScan,
+};
+
+use crate::analyzer::AnalyzerRule;
+use crate::rewrite::TreeNodeRewritable;
+
+/// Analyzed rule that inlines TableScan that provide a [LogicalPlan]
 /// (DataFrame / ViewTable)
 #[derive(Default)]
 pub struct InlineTableScan;
 
 impl InlineTableScan {
-    #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl OptimizerRule for InlineTableScan {
-    fn try_optimize(
-        &self,
-        plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        match plan {
-            // Match only on scans without filter / projection / fetch
-            // Views and DataFrames won't have those added
-            // during the early stage of planning
-            LogicalPlan::TableScan(TableScan {
-                source,
-                table_name,
-                filters,
-                projection,
-                ..
-            }) if filters.is_empty() => {
-                if let Some(sub_plan) = source.get_logical_plan() {
-                    let projection_exprs =
-                        generate_projection_expr(projection, sub_plan)?;
-                    let plan = LogicalPlanBuilder::from(sub_plan.clone())
-                        .project(projection_exprs)?
-                        // Since this This is creating a subquery like:
-                        //```sql
-                        // ...
-                        // FROM <view definition> as "table_name"
-                        // ```
-                        //
-                        // it doesn't make sense to have a qualified
-                        // reference (e.g. "foo"."bar") -- this convert to
-                        // string
-                        .alias(table_name.to_string())?;
-                    Ok(Some(plan.build()?))
-                } else {
-                    Ok(None)
-                }
-            }
-            _ => Ok(None),
-        }
+impl AnalyzerRule for InlineTableScan {
+    fn analyze(&self, plan: &LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
+        plan.clone().transform_up(&analyze_internal)
     }
 
     fn name(&self) -> &str {
         "inline_table_scan"
     }
+}
 
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::BottomUp)
+fn analyze_internal(plan: LogicalPlan) -> Result<Option<LogicalPlan>> {
+    match plan {
+        // Match only on scans without filter / projection / fetch
+        // Views and DataFrames won't have those added
+        // during the early stage of planning
+        LogicalPlan::TableScan(TableScan {
+            source,
+            table_name,
+            filters,
+            projection,
+            ..
+        }) if filters.is_empty() => {
+            if let Some(sub_plan) = source.get_logical_plan() {
+                let projection_exprs = generate_projection_expr(&projection, sub_plan)?;
+                let plan = LogicalPlanBuilder::from(sub_plan.clone())
+                    .project(projection_exprs)?
+                    // Since this This is creating a subquery like:
+                    //```sql
+                    // ...
+                    // FROM <view definition> as "table_name"
+                    // ```
+                    //
+                    // it doesn't make sense to have a qualified
+                    // reference (e.g. "foo"."bar") -- this convert to
+                    // string
+                    .alias(table_name.to_string())?
+                    .build()?;
+                Ok(Some(plan))
+            } else {
+                Ok(None)
+            }
+        }
+        LogicalPlan::Filter(filter) => {
+            let new_expr = rewrite_expr(filter.predicate.clone(), rewrite_subquery)?;
+            Ok(Some(LogicalPlan::Filter(Filter::try_new(
+                new_expr,
+                filter.input,
+            )?)))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn rewrite_subquery(expr: Expr) -> Result<Expr> {
+    match expr {
+        Expr::Exists { subquery, negated } => {
+            let plan = subquery.subquery.as_ref().clone();
+            let new_plan = plan.transform_up(&analyze_internal)?;
+            let subquery = subquery.with_plan(Arc::new(new_plan));
+            Ok(Expr::Exists { subquery, negated })
+        }
+        Expr::InSubquery {
+            expr,
+            subquery,
+            negated,
+        } => {
+            let plan = subquery.subquery.as_ref().clone();
+            let new_plan = plan.transform_up(&analyze_internal)?;
+            let subquery = subquery.with_plan(Arc::new(new_plan));
+            Ok(Expr::InSubquery {
+                expr,
+                subquery,
+                negated,
+            })
+        }
+        Expr::ScalarSubquery(subquery) => {
+            let plan = subquery.subquery.as_ref().clone();
+            let new_plan = plan.transform_up(&analyze_internal)?;
+            let subquery = subquery.with_plan(Arc::new(new_plan));
+            Ok(Expr::ScalarSubquery(subquery))
+        }
+        _ => Ok(expr),
     }
 }
 
@@ -107,10 +147,11 @@ mod tests {
     use std::{sync::Arc, vec};
 
     use arrow::datatypes::{DataType, Field, Schema};
+
     use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, TableSource};
 
-    use crate::inline_table_scan::InlineTableScan;
-    use crate::test::assert_optimized_plan_eq;
+    use crate::analyzer::inline_table_scan::InlineTableScan;
+    use crate::test::assert_analyzed_plan_eq;
 
     pub struct RawTableSource {}
 
@@ -185,7 +226,7 @@ mod tests {
         \n    Projection: y.a, y.b\
         \n      TableScan: y";
 
-        assert_optimized_plan_eq(Arc::new(InlineTableScan::new()), &plan, expected)
+        assert_analyzed_plan_eq(Arc::new(InlineTableScan::new()), &plan, expected)
     }
 
     #[test]
@@ -201,6 +242,6 @@ mod tests {
         \n  Projection: y.a\
         \n    TableScan: y";
 
-        assert_optimized_plan_eq(Arc::new(InlineTableScan::new()), &plan, expected)
+        assert_analyzed_plan_eq(Arc::new(InlineTableScan::new()), &plan, expected)
     }
 }
