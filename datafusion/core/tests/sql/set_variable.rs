@@ -448,7 +448,7 @@ async fn set_time_zone_bad_time_zone_format() {
         "Parser error: Invalid timezone \"08\": '08' is not a valid timezone"
     );
 
-    // we dont support named time zone yet
+    // we support named timezones
     plan_and_collect(&ctx, "SET TIME ZONE = 'Asia/Taipei'")
         .await
         .unwrap();
