@@ -46,4 +46,4 @@ sqlparser = "0.32"
 [dev-dependencies]
 ctor = "0.1.22"
 env_logger = "0.10"
-rstest = "0.16"
+rstest = "0.17"

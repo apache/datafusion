@@ -47,7 +47,7 @@ use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
-use datafusion_common::DataFusionError;
+use datafusion_common::{DataFusionError, Result};
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -66,7 +66,7 @@ pub mod from_proto;
 pub mod to_proto;
 
 impl AsExecutionPlan for PhysicalPlanNode {
-    fn try_decode(buf: &[u8]) -> Result<Self, DataFusionError>
+    fn try_decode(buf: &[u8]) -> Result<Self>
     where
         Self: Sized,
     {
@@ -75,7 +75,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
         })
     }
 
-    fn try_encode<B>(&self, buf: &mut B) -> Result<(), DataFusionError>
+    fn try_encode<B>(&self, buf: &mut B) -> Result<()>
     where
         B: BufMut,
         Self: Sized,
@@ -91,7 +91,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
         registry: &dyn FunctionRegistry,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
-    ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         let plan = self.physical_plan_type.as_ref().ok_or_else(|| {
             proto_error(format!(
                 "physical_plan::from_proto() Unsupported physical plan '{self:?}'"
@@ -118,9 +118,13 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .expr
                     .iter()
                     .zip(projection.expr_name.iter())
-                    .map(|(expr, name)| Ok((parse_physical_expr(expr,registry, input.schema().as_ref())?, name.to_string())))
-                    .collect::<Result<Vec<(Arc<dyn PhysicalExpr>, String)>, DataFusionError>>(
-                    )?;
+                    .map(|(expr, name)| {
+                        Ok((
+                            parse_physical_expr(expr, registry, input.schema().as_ref())?,
+                            name.to_string(),
+                        ))
+                    })
+                    .collect::<Result<Vec<(Arc<dyn PhysicalExpr>, String)>>>()?;
                 Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
             }
             PhysicalPlanType::Filter(filter) => {
@@ -472,7 +476,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         let right = into_required!(col.right)?;
                         Ok((left, right))
                     })
-                    .collect::<Result<_, DataFusionError>>()?;
+                    .collect::<Result<_>>()?;
                 let join_type = protobuf::JoinType::from_i32(hashjoin.join_type)
                     .ok_or_else(|| {
                         proto_error(format!(
@@ -510,11 +514,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                     side: side.into(),
                                 })
                             })
-                            .collect::<Result<Vec<_>, DataFusionError>>()?;
+                            .collect::<Result<Vec<_>>>()?;
 
                         Ok(JoinFilter::new(expression, column_indices, schema))
                     })
-                    .map_or(Ok(None), |v: Result<JoinFilter, DataFusionError>| v.map(Some))?;
+                    .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
 
                 let partition_mode =
                     protobuf::PartitionMode::from_i32(hashjoin.partition_mode)
@@ -660,7 +664,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .inputs
                     .iter()
                     .map(|i| i.try_into_physical_plan(registry, runtime, extension_codec))
-                    .collect::<Result<_, DataFusionError>>()?;
+                    .collect::<Result<_>>()?;
 
                 let extension_node = extension_codec.try_decode(
                     extension.node.as_slice(),
@@ -676,7 +680,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
     fn try_from_physical_plan(
         plan: Arc<dyn ExecutionPlan>,
         extension_codec: &dyn PhysicalExtensionCodec,
-    ) -> Result<Self, DataFusionError>
+    ) -> Result<Self>
     where
         Self: Sized,
     {
@@ -706,7 +710,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 .expr()
                 .iter()
                 .map(|expr| expr.0.clone().try_into())
-                .collect::<Result<Vec<_>, DataFusionError>>()?;
+                .collect::<Result<Vec<_>>>()?;
             let expr_name = exec.expr().iter().map(|expr| expr.1.clone()).collect();
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::Projection(Box::new(
@@ -808,10 +812,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         schema: Some(schema),
                     })
                 })
-                .map_or(
-                    Ok(None),
-                    |v: Result<protobuf::JoinFilter, DataFusionError>| v.map(Some),
-                )?;
+                .map_or(Ok(None), |v: Result<protobuf::JoinFilter>| v.map(Some))?;
 
             let partition_mode = match exec.partition_mode() {
                 PartitionMode::CollectLeft => protobuf::PartitionMode::CollectLeft,
@@ -869,7 +870,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 .aggr_expr()
                 .iter()
                 .map(|expr| expr.to_owned().try_into())
-                .collect::<Result<Vec<_>, DataFusionError>>()?;
+                .collect::<Result<Vec<_>>>()?;
             let agg_names = exec
                 .aggr_expr()
                 .iter()
@@ -877,7 +878,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     Ok(field) => Ok(field.name().clone()),
                     Err(e) => Err(e),
                 })
-                .collect::<Result<_, DataFusionError>>()?;
+                .collect::<Result<_>>()?;
 
             let agg_mode = match exec.mode() {
                 AggregateMode::Partial => protobuf::AggregateMode::Partial,
@@ -897,14 +898,14 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 .null_expr()
                 .iter()
                 .map(|expr| expr.0.to_owned().try_into())
-                .collect::<Result<Vec<_>, DataFusionError>>()?;
+                .collect::<Result<Vec<_>>>()?;
 
             let group_expr = exec
                 .group_expr()
                 .expr()
                 .iter()
                 .map(|expr| expr.0.to_owned().try_into())
-                .collect::<Result<Vec<_>, DataFusionError>>()?;
+                .collect::<Result<Vec<_>>>()?;
 
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::Aggregate(Box::new(
@@ -1000,7 +1001,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         hash_expr: exprs
                             .iter()
                             .map(|expr| expr.clone().try_into())
-                            .collect::<Result<Vec<_>, DataFusionError>>()?,
+                            .collect::<Result<Vec<_>>>()?,
                         partition_count: *partition_count as u64,
                     })
                 }
@@ -1040,7 +1041,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         )),
                     })
                 })
-                .collect::<Result<Vec<_>, DataFusionError>>()?;
+                .collect::<Result<Vec<_>>>()?;
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::Sort(Box::new(
                     protobuf::SortExecNode {
@@ -1087,7 +1088,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         )),
                     })
                 })
-                .collect::<Result<Vec<_>, DataFusionError>>()?;
+                .collect::<Result<Vec<_>>>()?;
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::SortPreservingMerge(
                     Box::new(protobuf::SortPreservingMergeExecNode {
@@ -1109,7 +1110,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 extension_codec,
                             )
                         })
-                        .collect::<Result<_, DataFusionError>>()?;
+                        .collect::<Result<_>>()?;
 
                     Ok(protobuf::PhysicalPlanNode {
                         physical_plan_type: Some(PhysicalPlanType::Extension(
@@ -1126,11 +1127,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
 }
 
 pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
-    fn try_decode(buf: &[u8]) -> Result<Self, DataFusionError>
+    fn try_decode(buf: &[u8]) -> Result<Self>
     where
         Self: Sized;
 
-    fn try_encode<B>(&self, buf: &mut B) -> Result<(), DataFusionError>
+    fn try_encode<B>(&self, buf: &mut B) -> Result<()>
     where
         B: BufMut,
         Self: Sized;
@@ -1140,12 +1141,12 @@ pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
         registry: &dyn FunctionRegistry,
         runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
-    ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError>;
+    ) -> Result<Arc<dyn ExecutionPlan>>;
 
     fn try_from_physical_plan(
         plan: Arc<dyn ExecutionPlan>,
         extension_codec: &dyn PhysicalExtensionCodec,
-    ) -> Result<Self, DataFusionError>
+    ) -> Result<Self>
     where
         Self: Sized;
 }
@@ -1156,13 +1157,9 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
         registry: &dyn FunctionRegistry,
-    ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError>;
+    ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    fn try_encode(
-        &self,
-        node: Arc<dyn ExecutionPlan>,
-        buf: &mut Vec<u8>,
-    ) -> Result<(), DataFusionError>;
+    fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()>;
 }
 
 #[derive(Debug)]
@@ -1174,7 +1171,7 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         _buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
         _registry: &dyn FunctionRegistry,
-    ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         Err(DataFusionError::NotImplemented(
             "PhysicalExtensionCodec is not provided".to_string(),
         ))
@@ -1184,7 +1181,7 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         &self,
         _node: Arc<dyn ExecutionPlan>,
         _buf: &mut Vec<u8>,
-    ) -> Result<(), DataFusionError> {
+    ) -> Result<()> {
         Err(DataFusionError::NotImplemented(
             "PhysicalExtensionCodec is not provided".to_string(),
         ))

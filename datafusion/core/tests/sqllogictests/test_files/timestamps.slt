@@ -76,6 +76,28 @@ SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTA
 ----
 2022-08-03T14:30:00
 
+# Supports Month-Day-Nano nanosecond interval
+query P
+SELECT DATE_BIN(INTERVAL '10 nanoseconds', TIMESTAMP '2022-08-03 14:38:50.000000016Z', TIMESTAMP '1970-01-01T00:00:00Z')
+----
+2022-08-03T14:38:50.000000010
+
+# Supports Month-Day-Nano nanosecond interval via fractions
+query P
+SELECT DATE_BIN(INTERVAL '0.000000010 seconds', TIMESTAMP '2022-08-03 14:38:50.000000016Z', TIMESTAMP '1970-01-01T00:00:00Z')
+----
+2022-08-03T14:38:50.000000010
+
+# Supports Month-Day-Nano microsecond interval
+query P
+SELECT DATE_BIN(INTERVAL '5 microseconds', TIMESTAMP '2022-08-03 14:38:50.000006Z', TIMESTAMP '1970-01-01T00:00:00Z')
+----
+2022-08-03T14:38:50.000005
+
+# Does not support months for Month-Day-Nano interval
+statement error This feature is not implemented: DATE_BIN stride does not support month intervals
+SELECT DATE_BIN(INTERVAL '1 month 5 nanoseconds', TIMESTAMP '2022-08-03 14:38:50.000000006Z', TIMESTAMP '1970-01-01T00:00:00Z')
+
 # Can coerce string interval arguments
 query P
 SELECT DATE_BIN('15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:00:00Z')
@@ -87,6 +109,12 @@ query P
 SELECT DATE_BIN('15 minutes', '2022-08-03 14:38:50Z', '1970-01-01T00:00:00Z')
 ----
 2022-08-03T14:30:00
+
+# Call in two arguments (should be the same as the above query)
+query B
+SELECT DATE_BIN('15 minutes', '2022-08-03 14:38:50Z') = DATE_BIN('15 minutes', '2022-08-03 14:38:50Z', '1970-01-01T00:00:00Z')
+----
+true
 
 # Shift forward by 5 minutes
 query P

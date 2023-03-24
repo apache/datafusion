@@ -65,6 +65,7 @@ impl ExprSchemable for Expr {
             },
             Expr::Sort(Sort { expr, .. }) | Expr::Negative(expr) => expr.get_type(schema),
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
+            Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l) => Ok(l.get_datatype()),
             Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
@@ -136,9 +137,10 @@ impl ExprSchemable for Expr {
             Expr::Placeholder { data_type, .. } => data_type.clone().ok_or_else(|| {
                 DataFusionError::Plan("Placeholder type could not be resolved".to_owned())
             }),
-            Expr::Wildcard => Err(DataFusionError::Internal(
-                "Wildcard expressions are not valid in a logical query plan".to_owned(),
-            )),
+            Expr::Wildcard => {
+                // Wildcard do not really have a type and do not appear in projections
+                Ok(DataType::Null)
+            }
             Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
                 "QualifiedWildcard expressions are not valid in a logical query plan"
                     .to_owned(),
@@ -173,6 +175,7 @@ impl ExprSchemable for Expr {
             | Expr::InList { expr, .. } => expr.nullable(input_schema),
             Expr::Between(Between { expr, .. }) => expr.nullable(input_schema),
             Expr::Column(c) => input_schema.nullable(c),
+            Expr::OuterReferenceColumn(_, _) => Ok(true),
             Expr::Literal(value) => Ok(value.is_null()),
             Expr::Case(case) => {
                 // this expression is nullable if any of the input expressions are nullable

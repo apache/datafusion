@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema};
+use arrow::util::pretty::pretty_format_batches;
 use arrow::{
     array::{
         ArrayRef, Int32Array, Int32Builder, ListBuilder, StringArray, StringBuilder,
@@ -36,15 +37,72 @@ use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::{avg, col, count, lit, max, sum, Expr, ExprSchemable};
 
 #[tokio::test]
-async fn describe() -> Result<()> {
+async fn count_wildcard() -> Result<()> {
     let ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();
 
+    ctx.register_parquet(
+        "alltypes_tiny_pages",
+        &format!("{testdata}/alltypes_tiny_pages.parquet"),
+        ParquetReadOptions::default(),
+    )
+    .await?;
+
+    let sql_results = ctx
+        .sql("select count(*) from alltypes_tiny_pages")
+        .await?
+        .select(vec![count(Expr::Wildcard)])?
+        .explain(false, false)?
+        .collect()
+        .await?;
+
+    // add `.select(vec![count(Expr::Wildcard)])?` to make sure we can analyze all node instead of just top node.
+    let df_results = ctx
+        .table("alltypes_tiny_pages")
+        .await?
+        .aggregate(vec![], vec![count(Expr::Wildcard)])?
+        .select(vec![count(Expr::Wildcard)])?
+        .explain(false, false)?
+        .collect()
+        .await?;
+
+    //make sure sql plan same with df plan
+    assert_eq!(
+        pretty_format_batches(&sql_results)?.to_string(),
+        pretty_format_batches(&df_results)?.to_string()
+    );
+
+    let results = ctx
+        .table("alltypes_tiny_pages")
+        .await?
+        .aggregate(vec![], vec![count(Expr::Wildcard)])?
+        .collect()
+        .await?;
+
+    let expected = vec![
+        "+-----------------+",
+        "| COUNT(UInt8(1)) |",
+        "+-----------------+",
+        "| 7300            |",
+        "+-----------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+#[tokio::test]
+async fn describe() -> Result<()> {
+    let ctx = SessionContext::new();
+    let testdata = datafusion::test_util::parquet_test_data();
+    ctx.register_parquet(
+        "alltypes_tiny_pages",
+        &format!("{testdata}/alltypes_tiny_pages.parquet"),
+        ParquetReadOptions::default(),
+    )
+    .await?;
+
     let describe_record_batch = ctx
-        .read_parquet(
-            &format!("{testdata}/alltypes_tiny_pages.parquet"),
-            ParquetReadOptions::default(),
-        )
+        .table("alltypes_tiny_pages")
         .await?
         .describe()
         .await?
@@ -66,6 +124,30 @@ async fn describe() -> Result<()> {
         "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
     ];
     assert_batches_eq!(expected, &describe_record_batch);
+
+    //add test case for only boolean boolean/binary column
+    let result = ctx
+        .sql("select 'a' as a,true as b")
+        .await?
+        .describe()
+        .await?
+        .collect()
+        .await?;
+    #[rustfmt::skip]
+        let expected = vec![
+        "+------------+------+------+",
+        "| describe   | a    | b    |",
+        "+------------+------+------+",
+        "| count      | 1    | 1    |",
+        "| null_count | 1    | 1    |",
+        "| mean       | null | null |",
+        "| std        | null | null |",
+        "| min        | a    | null |",
+        "| max        | a    | null |",
+        "| median     | null | null |",
+        "+------------+------+------+",
+    ];
+    assert_batches_eq!(expected, &result);
 
     Ok(())
 }

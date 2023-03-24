@@ -40,6 +40,7 @@ use datafusion::{
 };
 use datafusion_common::{
     context, parsers::CompressionTypeVariant, DataFusionError, OwnedTableReference,
+    Result,
 };
 use datafusion_expr::{
     logical_plan::{
@@ -72,11 +73,11 @@ impl From<to_proto::Error> for DataFusionError {
 }
 
 pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
-    fn try_decode(buf: &[u8]) -> Result<Self, DataFusionError>
+    fn try_decode(buf: &[u8]) -> Result<Self>
     where
         Self: Sized;
 
-    fn try_encode<B>(&self, buf: &mut B) -> Result<(), DataFusionError>
+    fn try_encode<B>(&self, buf: &mut B) -> Result<()>
     where
         B: BufMut,
         Self: Sized;
@@ -85,12 +86,12 @@ pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
         &self,
         ctx: &SessionContext,
         extension_codec: &dyn LogicalExtensionCodec,
-    ) -> Result<LogicalPlan, DataFusionError>;
+    ) -> Result<LogicalPlan>;
 
     fn try_from_logical_plan(
         plan: &LogicalPlan,
         extension_codec: &dyn LogicalExtensionCodec,
-    ) -> Result<Self, DataFusionError>
+    ) -> Result<Self>
     where
         Self: Sized;
 }
@@ -101,26 +102,22 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
         buf: &[u8],
         inputs: &[LogicalPlan],
         ctx: &SessionContext,
-    ) -> Result<Extension, DataFusionError>;
+    ) -> Result<Extension>;
 
-    fn try_encode(
-        &self,
-        node: &Extension,
-        buf: &mut Vec<u8>,
-    ) -> Result<(), DataFusionError>;
+    fn try_encode(&self, node: &Extension, buf: &mut Vec<u8>) -> Result<()>;
 
     fn try_decode_table_provider(
         &self,
         buf: &[u8],
         schema: SchemaRef,
         ctx: &SessionContext,
-    ) -> Result<Arc<dyn TableProvider>, DataFusionError>;
+    ) -> Result<Arc<dyn TableProvider>>;
 
     fn try_encode_table_provider(
         &self,
         node: Arc<dyn TableProvider>,
         buf: &mut Vec<u8>,
-    ) -> Result<(), DataFusionError>;
+    ) -> Result<()>;
 }
 
 #[derive(Debug, Clone)]
@@ -132,17 +129,13 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         _buf: &[u8],
         _inputs: &[LogicalPlan],
         _ctx: &SessionContext,
-    ) -> Result<Extension, DataFusionError> {
+    ) -> Result<Extension> {
         Err(DataFusionError::NotImplemented(
             "LogicalExtensionCodec is not provided".to_string(),
         ))
     }
 
-    fn try_encode(
-        &self,
-        _node: &Extension,
-        _buf: &mut Vec<u8>,
-    ) -> Result<(), DataFusionError> {
+    fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<()> {
         Err(DataFusionError::NotImplemented(
             "LogicalExtensionCodec is not provided".to_string(),
         ))
@@ -153,7 +146,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         _buf: &[u8],
         _schema: SchemaRef,
         _ctx: &SessionContext,
-    ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
+    ) -> Result<Arc<dyn TableProvider>> {
         Err(DataFusionError::NotImplemented(
             "LogicalExtensionCodec is not provided".to_string(),
         ))
@@ -163,7 +156,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         &self,
         _node: Arc<dyn TableProvider>,
         _buf: &mut Vec<u8>,
-    ) -> Result<(), DataFusionError> {
+    ) -> Result<()> {
         Err(DataFusionError::NotImplemented(
             "LogicalExtensionCodec is not provided".to_string(),
         ))
@@ -184,7 +177,7 @@ macro_rules! into_logical_plan {
 fn from_owned_table_reference(
     table_ref: Option<&protobuf::OwnedTableReference>,
     error_context: &str,
-) -> Result<OwnedTableReference, DataFusionError> {
+) -> Result<OwnedTableReference> {
     let table_ref = table_ref.ok_or_else(|| {
         DataFusionError::Internal(format!(
             "Protobuf deserialization error, {error_context} was missing required field name."
@@ -195,7 +188,7 @@ fn from_owned_table_reference(
 }
 
 impl AsLogicalPlan for LogicalPlanNode {
-    fn try_decode(buf: &[u8]) -> Result<Self, DataFusionError>
+    fn try_decode(buf: &[u8]) -> Result<Self>
     where
         Self: Sized,
     {
@@ -204,7 +197,7 @@ impl AsLogicalPlan for LogicalPlanNode {
         })
     }
 
-    fn try_encode<B>(&self, buf: &mut B) -> Result<(), DataFusionError>
+    fn try_encode<B>(&self, buf: &mut B) -> Result<()>
     where
         B: BufMut,
         Self: Sized,
@@ -218,7 +211,7 @@ impl AsLogicalPlan for LogicalPlanNode {
         &self,
         ctx: &SessionContext,
         extension_codec: &dyn LogicalExtensionCodec,
-    ) -> Result<LogicalPlan, DataFusionError> {
+    ) -> Result<LogicalPlan> {
         let plan = self.logical_plan_type.as_ref().ok_or_else(|| {
             proto_error(format!(
                 "logical_plan::from_proto() Unsupported logical plan '{self:?}'"
@@ -398,8 +391,13 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let provider = ListingTable::try_new(config)?;
 
+                let table_name = from_owned_table_reference(
+                    scan.table_name.as_ref(),
+                    "ListingTableScan",
+                )?;
+
                 LogicalPlanBuilder::scan_with_filters(
-                    &scan.table_name,
+                    table_name,
                     provider_as_source(Arc::new(provider)),
                     projection,
                     filters,
@@ -430,8 +428,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ctx,
                 )?;
 
+                let table_name =
+                    from_owned_table_reference(scan.table_name.as_ref(), "CustomScan")?;
+
                 LogicalPlanBuilder::scan_with_filters(
-                    &scan.table_name,
+                    table_name,
                     provider_as_source(provider),
                     projection,
                     filters,
@@ -502,6 +503,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )))?
                 }
 
+                let order_exprs = create_extern_table
+                    .order_exprs
+                    .iter()
+                    .map(|expr| from_proto::parse_expr(expr, ctx))
+                    .collect::<Result<Vec<Expr>, _>>()?;
+
                 Ok(LogicalPlan::CreateExternalTable(CreateExternalTable {
                     schema: pb_schema.try_into()?,
                     name: from_owned_table_reference(create_extern_table.name.as_ref(), "CreateExternalTable")?,
@@ -514,6 +521,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     table_partition_cols: create_extern_table
                         .table_partition_cols
                         .clone(),
+                    order_exprs,
                     if_not_exists: create_extern_table.if_not_exists,
                     file_compression_type: CompressionTypeVariant::from_str(&create_extern_table.file_compression_type).map_err(|_| DataFusionError::NotImplemented(format!("Unsupported file compression type {}", create_extern_table.file_compression_type)))?,
                     definition,
@@ -668,7 +676,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .inputs
                     .iter()
                     .map(|i| i.try_into_logical_plan(ctx, extension_codec))
-                    .collect::<Result<_, DataFusionError>>()?;
+                    .collect::<Result<_>>()?;
 
                 if input_plans.len() < 2 {
                     return  Err( DataFusionError::Internal(String::from(
@@ -695,7 +703,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let input_plans: Vec<LogicalPlan> = inputs
                     .iter()
                     .map(|i| i.try_into_logical_plan(ctx, extension_codec))
-                    .collect::<Result<_, DataFusionError>>()?;
+                    .collect::<Result<_>>()?;
 
                 let extension_node =
                     extension_codec.try_decode(node, &input_plans, ctx)?;
@@ -730,8 +738,11 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let provider = ViewTable::try_new(input, definition)?;
 
+                let table_name =
+                    from_owned_table_reference(scan.table_name.as_ref(), "ViewScan")?;
+
                 LogicalPlanBuilder::scan(
-                    &scan.table_name,
+                    table_name,
                     provider_as_source(Arc::new(provider)),
                     projection,
                 )?
@@ -755,7 +766,7 @@ impl AsLogicalPlan for LogicalPlanNode {
     fn try_from_logical_plan(
         plan: &LogicalPlan,
         extension_codec: &dyn LogicalExtensionCodec,
-    ) -> Result<Self, DataFusionError>
+    ) -> Result<Self>
     where
         Self: Sized,
     {
@@ -843,7 +854,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ListingScan(
                             protobuf::ListingTableScanNode {
                                 file_format_type: Some(file_format_type),
-                                table_name: table_name.to_owned(),
+                                table_name: Some(table_name.clone().into()),
                                 collect_stat: options.collect_stat,
                                 file_extension: options.file_extension.clone(),
                                 table_partition_cols: options
@@ -868,7 +879,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Ok(protobuf::LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ViewScan(Box::new(
                             protobuf::ViewTableScanNode {
-                                table_name: table_name.to_owned(),
+                                table_name: Some(table_name.clone().into()),
                                 input: Some(Box::new(
                                     protobuf::LogicalPlanNode::try_from_logical_plan(
                                         view_table.logical_plan(),
@@ -890,7 +901,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .try_encode_table_provider(provider, &mut bytes)
                         .map_err(|e| context!("Error serializing custom table", e))?;
                     let scan = CustomScan(CustomTableScanNode {
-                        table_name: table_name.clone(),
+                        table_name: Some(table_name.clone().into()),
                         projection,
                         schema: Some(schema),
                         filters,
@@ -1163,6 +1174,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 if_not_exists,
                 definition,
                 file_compression_type,
+                order_exprs,
                 options,
             }) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
@@ -1175,6 +1187,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                         table_partition_cols: table_partition_cols.clone(),
                         if_not_exists: *if_not_exists,
                         delimiter: String::from(*delimiter),
+                        order_exprs: order_exprs
+                            .iter()
+                            .map(|expr| expr.try_into())
+                            .collect::<Result<Vec<_>, to_proto::Error>>()?,
                         definition: definition.clone().unwrap_or_default(),
                         file_compression_type: file_compression_type.to_string(),
                         options: options.clone(),
@@ -1263,7 +1279,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             extension_codec,
                         )
                     })
-                    .collect::<Result<_, DataFusionError>>()?;
+                    .collect::<Result<_>>()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Union(
                         protobuf::UnionNode { inputs },
@@ -1302,7 +1318,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             extension_codec,
                         )
                     })
-                    .collect::<Result<_, DataFusionError>>()?;
+                    .collect::<Result<_>>()?;
 
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Extension(
@@ -1383,7 +1399,7 @@ mod roundtrip_tests {
         create_udf, CsvReadOptions, SessionConfig, SessionContext,
     };
     use datafusion::test_util::{TestTableFactory, TestTableProvider};
-    use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
+    use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
     use datafusion_expr::expr::{
         self, Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort,
     };
@@ -1391,7 +1407,7 @@ mod roundtrip_tests {
     use datafusion_expr::{
         col, lit, Accumulator, AggregateFunction,
         BuiltinScalarFunction::{Sqrt, Substr},
-        Expr, LogicalPlan, Operator, Volatility,
+        Expr, LogicalPlan, Operator, TryCast, Volatility,
     };
     use datafusion_expr::{
         create_udaf, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction,
@@ -1433,7 +1449,7 @@ mod roundtrip_tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_logical_plan() -> Result<(), DataFusionError> {
+    async fn roundtrip_logical_plan() -> Result<()> {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
@@ -1466,17 +1482,13 @@ mod roundtrip_tests {
             _buf: &[u8],
             _inputs: &[LogicalPlan],
             _ctx: &SessionContext,
-        ) -> Result<Extension, DataFusionError> {
+        ) -> Result<Extension> {
             Err(DataFusionError::NotImplemented(
                 "No extension codec provided".to_string(),
             ))
         }
 
-        fn try_encode(
-            &self,
-            _node: &Extension,
-            _buf: &mut Vec<u8>,
-        ) -> Result<(), DataFusionError> {
+        fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<()> {
             Err(DataFusionError::NotImplemented(
                 "No extension codec provided".to_string(),
             ))
@@ -1487,7 +1499,7 @@ mod roundtrip_tests {
             buf: &[u8],
             schema: SchemaRef,
             _ctx: &SessionContext,
-        ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
+        ) -> Result<Arc<dyn TableProvider>> {
             let msg = TestTableProto::decode(buf).map_err(|_| {
                 DataFusionError::Internal("Error decoding test table".to_string())
             })?;
@@ -1502,7 +1514,7 @@ mod roundtrip_tests {
             &self,
             node: Arc<dyn TableProvider>,
             buf: &mut Vec<u8>,
-        ) -> Result<(), DataFusionError> {
+        ) -> Result<()> {
             let table = node
                 .as_ref()
                 .as_any()
@@ -1518,7 +1530,7 @@ mod roundtrip_tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_custom_tables() -> Result<(), DataFusionError> {
+    async fn roundtrip_custom_tables() -> Result<()> {
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
             HashMap::new();
         table_factories.insert("TESTTABLE".to_string(), Arc::new(TestTableFactory {}));
@@ -1543,7 +1555,7 @@ mod roundtrip_tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_logical_plan_aggregation() -> Result<(), DataFusionError> {
+    async fn roundtrip_logical_plan_aggregation() -> Result<()> {
         let ctx = SessionContext::new();
 
         let schema = Schema::new(vec![
@@ -1570,7 +1582,7 @@ mod roundtrip_tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_single_count_distinct() -> Result<(), DataFusionError> {
+    async fn roundtrip_single_count_distinct() -> Result<()> {
         let ctx = SessionContext::new();
 
         let schema = Schema::new(vec![
@@ -1596,7 +1608,7 @@ mod roundtrip_tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_logical_plan_with_extension() -> Result<(), DataFusionError> {
+    async fn roundtrip_logical_plan_with_extension() -> Result<()> {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
@@ -1608,7 +1620,7 @@ mod roundtrip_tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_logical_plan_with_view_scan() -> Result<(), DataFusionError> {
+    async fn roundtrip_logical_plan_with_view_scan() -> Result<()> {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
@@ -1705,7 +1717,7 @@ mod roundtrip_tests {
             buf: &[u8],
             inputs: &[LogicalPlan],
             ctx: &SessionContext,
-        ) -> Result<Extension, DataFusionError> {
+        ) -> Result<Extension> {
             if let Some((input, _)) = inputs.split_first() {
                 let proto = proto::TopKPlanProto::decode(buf).map_err(|e| {
                     DataFusionError::Internal(format!(
@@ -1735,11 +1747,7 @@ mod roundtrip_tests {
             }
         }
 
-        fn try_encode(
-            &self,
-            node: &Extension,
-            buf: &mut Vec<u8>,
-        ) -> Result<(), DataFusionError> {
+        fn try_encode(&self, node: &Extension, buf: &mut Vec<u8>) -> Result<()> {
             if let Some(exec) = node.node.as_any().downcast_ref::<TopKPlanNode>() {
                 let proto = proto::TopKPlanProto {
                     k: exec.k as u64,
@@ -1765,7 +1773,7 @@ mod roundtrip_tests {
             _buf: &[u8],
             _schema: SchemaRef,
             _ctx: &SessionContext,
-        ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
+        ) -> Result<Arc<dyn TableProvider>> {
             Err(DataFusionError::Internal(
                 "unsupported plan type".to_string(),
             ))
@@ -1775,7 +1783,7 @@ mod roundtrip_tests {
             &self,
             _node: Arc<dyn TableProvider>,
             _buf: &mut Vec<u8>,
-        ) -> Result<(), DataFusionError> {
+        ) -> Result<()> {
             Err(DataFusionError::Internal(
                 "unsupported plan type".to_string(),
             ))
@@ -2373,6 +2381,21 @@ mod roundtrip_tests {
     #[test]
     fn roundtrip_cast() {
         let test_expr = Expr::Cast(Cast::new(Box::new(lit(1.0_f32)), DataType::Boolean));
+
+        let ctx = SessionContext::new();
+        roundtrip_expr_test(test_expr, ctx);
+    }
+
+    #[test]
+    fn roundtrip_try_cast() {
+        let test_expr =
+            Expr::TryCast(TryCast::new(Box::new(lit(1.0_f32)), DataType::Boolean));
+
+        let ctx = SessionContext::new();
+        roundtrip_expr_test(test_expr, ctx);
+
+        let test_expr =
+            Expr::TryCast(TryCast::new(Box::new(lit("not a bool")), DataType::Boolean));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);

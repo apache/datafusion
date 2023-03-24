@@ -121,6 +121,7 @@ impl ExprRewritable for Expr {
         let expr = match self {
             Expr::Alias(expr, name) => Expr::Alias(rewrite_boxed(expr, rewriter)?, name),
             Expr::Column(_) => self.clone(),
+            Expr::OuterReferenceColumn(_, _) => self.clone(),
             Expr::Exists { .. } => self.clone(),
             Expr::InSubquery {
                 expr,
@@ -444,6 +445,19 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
 #[inline]
 pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
     exprs.into_iter().map(unnormalize_col).collect()
+}
+
+/// Recursively remove all the ['OuterReferenceColumn'] and return the inside Column
+/// in the expression tree.
+pub fn strip_outer_reference(expr: Expr) -> Expr {
+    rewrite_expr(expr, |expr| {
+        if let Expr::OuterReferenceColumn(_, col) = expr {
+            Ok(Expr::Column(col))
+        } else {
+            Ok(expr)
+        }
+    })
+    .expect("strip_outer_reference is infallable")
 }
 
 /// Implementation of [`ExprRewriter`] that calls a function, for use

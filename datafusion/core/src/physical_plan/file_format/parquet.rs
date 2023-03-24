@@ -376,7 +376,7 @@ impl ExecutionPlan for ParquetExec {
                     })
             })?;
 
-        let config_options = ctx.session_config().config_options();
+        let config_options = ctx.session_config().options();
 
         let opener = ParquetOpener {
             partition_index,
@@ -814,7 +814,6 @@ mod tests {
     use crate::execution::context::SessionState;
     use crate::execution::options::CsvReadOptions;
     use crate::physical_plan::displayable;
-    use crate::physical_plan::file_format::partition_type_wrap;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
     use crate::{
@@ -1660,12 +1659,30 @@ mod tests {
             object_meta: meta,
             partition_values: vec![
                 ScalarValue::Utf8(Some("2021".to_owned())),
-                ScalarValue::Utf8(Some("10".to_owned())),
-                ScalarValue::Utf8(Some("26".to_owned())),
+                ScalarValue::UInt8(Some(10)),
+                ScalarValue::Dictionary(
+                    Box::new(DataType::UInt16),
+                    Box::new(ScalarValue::Utf8(Some("26".to_owned()))),
+                ),
             ],
             range: None,
             extensions: None,
         };
+
+        let expected_schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("bool_col", DataType::Boolean, true),
+            Field::new("tinyint_col", DataType::Int32, true),
+            Field::new("month", DataType::UInt8, false),
+            Field::new(
+                "day",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt16),
+                    Box::new(DataType::Utf8),
+                ),
+                false,
+            ),
+        ]);
 
         let parquet_exec = ParquetExec::new(
             FileScanConfig {
@@ -1673,13 +1690,19 @@ mod tests {
                 file_groups: vec![vec![partitioned_file]],
                 file_schema: schema,
                 statistics: Statistics::default(),
-                // file has 10 cols so index 12 should be month
-                projection: Some(vec![0, 1, 2, 12]),
+                // file has 10 cols so index 12 should be month and 13 should be day
+                projection: Some(vec![0, 1, 2, 12, 13]),
                 limit: None,
                 table_partition_cols: vec![
-                    ("year".to_owned(), partition_type_wrap(DataType::Utf8)),
-                    ("month".to_owned(), partition_type_wrap(DataType::Utf8)),
-                    ("day".to_owned(), partition_type_wrap(DataType::Utf8)),
+                    ("year".to_owned(), DataType::Utf8),
+                    ("month".to_owned(), DataType::UInt8),
+                    (
+                        "day".to_owned(),
+                        DataType::Dictionary(
+                            Box::new(DataType::UInt16),
+                            Box::new(DataType::Utf8),
+                        ),
+                    ),
                 ],
                 output_ordering: None,
                 infinite_source: false,
@@ -1688,22 +1711,24 @@ mod tests {
             None,
         );
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
+        assert_eq!(parquet_exec.schema().as_ref(), &expected_schema);
 
         let mut results = parquet_exec.execute(0, task_ctx)?;
         let batch = results.next().await.unwrap()?;
+        assert_eq!(batch.schema().as_ref(), &expected_schema);
         let expected = vec![
-            "+----+----------+-------------+-------+",
-            "| id | bool_col | tinyint_col | month |",
-            "+----+----------+-------------+-------+",
-            "| 4  | true     | 0           | 10    |",
-            "| 5  | false    | 1           | 10    |",
-            "| 6  | true     | 0           | 10    |",
-            "| 7  | false    | 1           | 10    |",
-            "| 2  | true     | 0           | 10    |",
-            "| 3  | false    | 1           | 10    |",
-            "| 0  | true     | 0           | 10    |",
-            "| 1  | false    | 1           | 10    |",
-            "+----+----------+-------------+-------+",
+            "+----+----------+-------------+-------+-----+",
+            "| id | bool_col | tinyint_col | month | day |",
+            "+----+----------+-------------+-------+-----+",
+            "| 4  | true     | 0           | 10    | 26  |",
+            "| 5  | false    | 1           | 10    | 26  |",
+            "| 6  | true     | 0           | 10    | 26  |",
+            "| 7  | false    | 1           | 10    | 26  |",
+            "| 2  | true     | 0           | 10    | 26  |",
+            "| 3  | false    | 1           | 10    | 26  |",
+            "| 0  | true     | 0           | 10    | 26  |",
+            "| 1  | false    | 1           | 10    | 26  |",
+            "+----+----------+-------------+-------+-----+",
         ];
         crate::assert_batches_eq!(expected, &[batch]);
 

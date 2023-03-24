@@ -508,7 +508,7 @@ fn create_schema(
     aggr_expr: &[Arc<dyn AggregateExpr>],
     contains_null_expr: bool,
     mode: AggregateMode,
-) -> datafusion_common::Result<Schema> {
+) -> Result<Schema> {
     let mut fields = Vec::with_capacity(group_expr.len() + aggr_expr.len());
     for (expr, name) in group_expr {
         fields.push(Field::new(
@@ -552,7 +552,7 @@ fn aggregate_expressions(
     aggr_expr: &[Arc<dyn AggregateExpr>],
     mode: &AggregateMode,
     col_idx_base: usize,
-) -> datafusion_common::Result<Vec<Vec<Arc<dyn PhysicalExpr>>>> {
+) -> Result<Vec<Vec<Arc<dyn PhysicalExpr>>>> {
     match mode {
         AggregateMode::Partial => {
             Ok(aggr_expr.iter().map(|agg| agg.expressions()).collect())
@@ -567,7 +567,7 @@ fn aggregate_expressions(
                     col_idx_base += exprs.len();
                     Ok(exprs)
                 })
-                .collect::<datafusion_common::Result<Vec<_>>>()?)
+                .collect::<Result<Vec<_>>>()?)
         }
     }
 }
@@ -595,16 +595,16 @@ pub(crate) type RowAccumulatorItem = Box<dyn RowAccumulator>;
 
 fn create_accumulators(
     aggr_expr: &[Arc<dyn AggregateExpr>],
-) -> datafusion_common::Result<Vec<AccumulatorItem>> {
+) -> Result<Vec<AccumulatorItem>> {
     aggr_expr
         .iter()
         .map(|expr| expr.create_accumulator())
-        .collect::<datafusion_common::Result<Vec<_>>>()
+        .collect::<Result<Vec<_>>>()
 }
 
 fn create_row_accumulators(
     aggr_expr: &[Arc<dyn AggregateExpr>],
-) -> datafusion_common::Result<Vec<RowAccumulatorItem>> {
+) -> Result<Vec<RowAccumulatorItem>> {
     let mut state_index = 0;
     aggr_expr
         .iter()
@@ -613,7 +613,7 @@ fn create_row_accumulators(
             state_index += expr.state_fields().unwrap().len();
             result
         })
-        .collect::<datafusion_common::Result<Vec<_>>>()
+        .collect::<Result<Vec<_>>>()
 }
 
 /// returns a vector of ArrayRefs, where each entry corresponds to either the
@@ -621,7 +621,7 @@ fn create_row_accumulators(
 fn finalize_aggregation(
     accumulators: &[AccumulatorItem],
     mode: &AggregateMode,
-) -> datafusion_common::Result<Vec<ArrayRef>> {
+) -> Result<Vec<ArrayRef>> {
     match mode {
         AggregateMode::Partial => {
             // build the vector of states
@@ -633,7 +633,7 @@ fn finalize_aggregation(
                         e.iter().map(|v| v.to_array()).collect::<Vec<ArrayRef>>()
                     })
                 })
-                .collect::<datafusion_common::Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()?;
             Ok(a.iter().flatten().cloned().collect::<Vec<_>>())
         }
         AggregateMode::Final | AggregateMode::FinalPartitioned => {
@@ -641,7 +641,7 @@ fn finalize_aggregation(
             accumulators
                 .iter()
                 .map(|accumulator| accumulator.evaluate().map(|v| v.to_array()))
-                .collect::<datafusion_common::Result<Vec<ArrayRef>>>()
+                .collect::<Result<Vec<ArrayRef>>>()
         }
     }
 }

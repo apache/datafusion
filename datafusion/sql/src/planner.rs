@@ -70,13 +70,18 @@ impl Default for ParserOptions {
 }
 
 #[derive(Debug, Clone)]
-/// Struct to store Common Table Expression (CTE) provided with WITH clause and
-/// Parameter Data Types provided with PREPARE statement
+/// Struct to store the states used by the Planner. The Planner will leverage the states to resolve
+/// CTEs, Views, subqueries and PREPARE statements. The states include
+/// Common Table Expression (CTE) provided with WITH clause and
+/// Parameter Data Types provided with PREPARE statement and the query schema of the
+/// outer query plan
 pub struct PlannerContext {
     /// Data type provided with prepare statement
     pub prepare_param_data_types: Vec<DataType>,
     /// Map of CTE name to logical plan of the WITH clause
     pub ctes: HashMap<String, LogicalPlan>,
+    /// The query schema of the outer query plan, used to resolve the columns in subquery
+    pub outer_query_schema: Option<DFSchema>,
 }
 
 impl Default for PlannerContext {
@@ -91,6 +96,7 @@ impl PlannerContext {
         Self {
             prepare_param_data_types: vec![],
             ctes: HashMap::new(),
+            outer_query_schema: None,
         }
     }
 
@@ -101,6 +107,7 @@ impl PlannerContext {
         Self {
             prepare_param_data_types,
             ctes: HashMap::new(),
+            outer_query_schema: None,
         }
     }
 }
@@ -130,14 +137,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         for column in columns {
             let data_type = self.convert_simple_data_type(&column.data_type)?;
-            let allow_null = column
+            let not_nullable = column
                 .options
                 .iter()
-                .any(|x| x.option == ColumnOption::Null);
+                .any(|x| x.option == ColumnOption::NotNull);
             fields.push(Field::new(
                 normalize_ident(column.name, self.options.enable_ident_normalization),
                 data_type,
-                allow_null,
+                !not_nullable,
             ));
         }
 
