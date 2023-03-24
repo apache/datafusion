@@ -20,6 +20,7 @@ use std::{collections::HashMap, mem, sync::Arc};
 use datafusion::{
     arrow::datatypes::DataType,
     error::{DataFusionError, Result},
+    logical_expr::{WindowFrame, WindowFrameBound},
     prelude::JoinType,
     scalar::ScalarValue,
 };
@@ -27,7 +28,7 @@ use datafusion::{
 use datafusion::common::DFSchemaRef;
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
-use datafusion::logical_expr::expr::{BinaryExpr, Case, Cast, Sort};
+use datafusion::logical_expr::expr::{BinaryExpr, Case, Cast, Sort, WindowFunction};
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::{binary_expr, Expr};
 use substrait::proto::{
@@ -38,8 +39,12 @@ use substrait::proto::{
         if_then::IfClause,
         literal::{Decimal, LiteralType},
         mask_expression::{StructItem, StructSelect},
-        reference_segment, FieldReference, IfThen, Literal, MaskExpression,
-        ReferenceSegment, RexType, ScalarFunction,
+        reference_segment,
+        window_function::bound as SubstraitBound,
+        window_function::bound::Kind as BoundKind,
+        window_function::Bound,
+        FieldReference, IfThen, Literal, MaskExpression, ReferenceSegment, RexType,
+        ScalarFunction, WindowFunction as SubstraitWindowFunction,
     },
     extensions::{
         self,
@@ -300,6 +305,42 @@ pub fn to_substrait_rel(
             // Do nothing if encounters SubqueryAlias
             // since there is no corresponding relation type in Substrait
             to_substrait_rel(alias.input.as_ref(), extension_info)
+        }
+        LogicalPlan::Window(window) => {
+            let input = to_substrait_rel(window.input.as_ref(), extension_info)?;
+            // If the input is a Project relation, we can just append the WindowFunction expressions
+            // before returning
+            // Otherwise, wrap the input in a Project relation before appending the WindowFunction
+            // expressions
+            let mut project_rel: Box<ProjectRel> = match &input.as_ref().rel_type {
+                Some(RelType::Project(p)) => Box::new(*p.clone()),
+                _ => {
+                    // Create Projection with field referencing all output fields in the input relation
+                    let expressions = (0..window.input.schema().fields().len())
+                        .map(substrait_field_ref)
+                        .collect::<Result<Vec<_>>>()?;
+                    Box::new(ProjectRel {
+                        common: None,
+                        input: Some(input),
+                        expressions,
+                        advanced_extension: None,
+                    })
+                }
+            };
+            // Parse WindowFunction expression
+            let mut window_exprs = vec![];
+            for expr in &window.window_expr {
+                window_exprs.push(to_substrait_rex(
+                    expr,
+                    window.input.schema(),
+                    extension_info,
+                )?);
+            }
+            // Append parsed WindowFunction expressions
+            project_rel.expressions.extend(window_exprs);
+            Ok(Box::new(Rel {
+                rel_type: Some(RelType::Project(project_rel)),
+            }))
         }
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported operator: {plan:?}"
@@ -636,6 +677,47 @@ pub fn to_substrait_rex(
             })
         }
         Expr::Alias(expr, _alias) => to_substrait_rex(expr, schema, extension_info),
+        Expr::WindowFunction(WindowFunction {
+            fun,
+            args,
+            partition_by,
+            order_by,
+            window_frame,
+        }) => {
+            // function reference
+            let function_name = fun.to_string().to_lowercase();
+            let function_anchor = _register_function(function_name, extension_info);
+            // arguments
+            let mut arguments: Vec<FunctionArgument> = vec![];
+            for arg in args {
+                arguments.push(FunctionArgument {
+                    arg_type: Some(ArgType::Value(to_substrait_rex(
+                        arg,
+                        schema,
+                        extension_info,
+                    )?)),
+                });
+            }
+            // partition by expressions
+            let partition_by = partition_by
+                .iter()
+                .map(|e| to_substrait_rex(e, schema, extension_info))
+                .collect::<Result<Vec<_>>>()?;
+            // order by expressions
+            let order_by = order_by
+                .iter()
+                .map(|e| substrait_sort_field(e, schema, extension_info))
+                .collect::<Result<Vec<_>>>()?;
+            // window frame
+            let bounds = to_substrait_bounds(window_frame)?;
+            Ok(make_substrait_window_function(
+                function_anchor,
+                arguments,
+                partition_by,
+                order_by,
+                bounds,
+            ))
+        }
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported expression: {expr:?}"
         ))),
@@ -691,6 +773,136 @@ fn to_substrait_type(dt: &DataType) -> Result<substrait::proto::Type> {
             "Unsupported cast type: {dt:?}"
         ))),
     }
+}
+
+#[allow(deprecated)]
+fn make_substrait_window_function(
+    function_reference: u32,
+    arguments: Vec<FunctionArgument>,
+    partitions: Vec<Expression>,
+    sorts: Vec<SortField>,
+    bounds: (Bound, Bound),
+) -> Expression {
+    Expression {
+        rex_type: Some(RexType::WindowFunction(SubstraitWindowFunction {
+            function_reference,
+            arguments,
+            partitions,
+            sorts,
+            options: vec![],
+            output_type: None,
+            phase: 0,      // default to AGGREGATION_PHASE_UNSPECIFIED
+            invocation: 0, // TODO: fix
+            lower_bound: Some(bounds.0),
+            upper_bound: Some(bounds.1),
+            args: vec![],
+        })),
+    }
+}
+
+fn to_substrait_bound(bound: &WindowFrameBound) -> Bound {
+    match bound {
+        WindowFrameBound::CurrentRow => Bound {
+            kind: Some(BoundKind::CurrentRow(SubstraitBound::CurrentRow {})),
+        },
+        WindowFrameBound::Preceding(s) => match s {
+            ScalarValue::UInt8(Some(v)) => Bound {
+                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
+                    offset: *v as i64,
+                })),
+            },
+            ScalarValue::UInt16(Some(v)) => Bound {
+                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
+                    offset: *v as i64,
+                })),
+            },
+            ScalarValue::UInt32(Some(v)) => Bound {
+                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
+                    offset: *v as i64,
+                })),
+            },
+            ScalarValue::UInt64(Some(v)) => Bound {
+                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
+                    offset: *v as i64,
+                })),
+            },
+            ScalarValue::Int8(Some(v)) => Bound {
+                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
+                    offset: *v as i64,
+                })),
+            },
+            ScalarValue::Int16(Some(v)) => Bound {
+                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
+                    offset: *v as i64,
+                })),
+            },
+            ScalarValue::Int32(Some(v)) => Bound {
+                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
+                    offset: *v as i64,
+                })),
+            },
+            ScalarValue::Int64(Some(v)) => Bound {
+                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
+                    offset: *v,
+                })),
+            },
+            _ => Bound {
+                kind: Some(BoundKind::Unbounded(SubstraitBound::Unbounded {})),
+            },
+        },
+        WindowFrameBound::Following(s) => match s {
+            ScalarValue::UInt8(Some(v)) => Bound {
+                kind: Some(BoundKind::Following(SubstraitBound::Following {
+                    offset: *v as i64,
+                })),
+            },
+            ScalarValue::UInt16(Some(v)) => Bound {
+                kind: Some(BoundKind::Following(SubstraitBound::Following {
+                    offset: *v as i64,
+                })),
+            },
+            ScalarValue::UInt32(Some(v)) => Bound {
+                kind: Some(BoundKind::Following(SubstraitBound::Following {
+                    offset: *v as i64,
+                })),
+            },
+            ScalarValue::UInt64(Some(v)) => Bound {
+                kind: Some(BoundKind::Following(SubstraitBound::Following {
+                    offset: *v as i64,
+                })),
+            },
+            ScalarValue::Int8(Some(v)) => Bound {
+                kind: Some(BoundKind::Following(SubstraitBound::Following {
+                    offset: *v as i64,
+                })),
+            },
+            ScalarValue::Int16(Some(v)) => Bound {
+                kind: Some(BoundKind::Following(SubstraitBound::Following {
+                    offset: *v as i64,
+                })),
+            },
+            ScalarValue::Int32(Some(v)) => Bound {
+                kind: Some(BoundKind::Following(SubstraitBound::Following {
+                    offset: *v as i64,
+                })),
+            },
+            ScalarValue::Int64(Some(v)) => Bound {
+                kind: Some(BoundKind::Following(SubstraitBound::Following {
+                    offset: *v,
+                })),
+            },
+            _ => Bound {
+                kind: Some(BoundKind::Unbounded(SubstraitBound::Unbounded {})),
+            },
+        },
+    }
+}
+
+fn to_substrait_bounds(window_frame: &WindowFrame) -> Result<(Bound, Bound)> {
+    Ok((
+        to_substrait_bound(&window_frame.start_bound),
+        to_substrait_bound(&window_frame.end_bound),
+    ))
 }
 
 fn try_to_substrait_null(v: &ScalarValue) -> Result<LiteralType> {

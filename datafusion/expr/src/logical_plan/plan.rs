@@ -1809,6 +1809,13 @@ impl Subquery {
             _ => plan_err!("Could not coerce into ScalarSubquery!"),
         }
     }
+
+    pub fn with_plan(&self, plan: Arc<LogicalPlan>) -> Subquery {
+        Subquery {
+            subquery: plan,
+            outer_ref_columns: self.outer_ref_columns.clone(),
+        }
+    }
 }
 
 impl Debug for Subquery {
