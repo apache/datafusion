@@ -35,8 +35,8 @@ impl CountWildcardRule {
 }
 
 impl AnalyzerRule for CountWildcardRule {
-    fn analyze(&self, plan: &LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
-        plan.clone().transform_down(&analyze_internal)
+    fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
+        plan.transform_down(&analyze_internal)
     }
 
     fn name(&self) -> &str {
