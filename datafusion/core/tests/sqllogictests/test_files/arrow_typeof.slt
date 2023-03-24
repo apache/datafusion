@@ -279,7 +279,7 @@ query error Cannot automatically convert Interval\(DayTime\) to Interval\(MonthD
 ---
 select arrow_cast(interval '30 minutes', 'Interval(MonthDayNano)');
 
-query error DataFusion error: This feature is not implemented: Can't create a scalar from array of type "Interval(MonthDayNano)"
+query error DataFusion error: This feature is not implemented: Can't create a scalar from array of type "Interval\(MonthDayNano\)"
 select arrow_cast('30 minutes', 'Interval(MonthDayNano)');
 
 
