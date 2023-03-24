@@ -153,7 +153,7 @@ impl PhysicalExpr for DateTimeIntervalExpr {
             }
 
             (ColumnarValue::Array(array_lhs), ColumnarValue::Array(array_rhs)) => {
-                evaluate_temporal_arrays(&array_lhs, sign, &array_rhs)
+                evaluate_arrays(&array_lhs, sign, &array_rhs)
             }
             (_, _) => {
                 let msg = "If RHS of the operation is an array, then LHS also must be";
@@ -257,15 +257,17 @@ macro_rules! ts_sub_op {
             prim_array_rhs,
             |ts1, ts2| {
                 $op(
-                    with_timezone_to_naive_datetime::<$mode>(
+                    with_timezone_to_naive_datetime(
                         ts1.mul_wrapping($coef),
                         &$lhs_tz,
+                        $mode,
                     )
                     .expect("{ts1} timestamp cannot build a DateTime object")
                     .timestamp(),
-                    with_timezone_to_naive_datetime::<$mode>(
+                    with_timezone_to_naive_datetime(
                         ts2.mul_wrapping($coef),
                         &$rhs_tz,
+                        $mode,
                     )
                     .expect("{ts2} timestamp cannot build a DateTime object")
                     .timestamp(),
@@ -318,11 +320,7 @@ macro_rules! ts_interval_op {
         ret
     }};
 }
-// This function evaluates temporal array operations, such as timestamp - timestamp, interval + interval,
-// timestamp + interval, and interval + timestamp. It takes two arrays as input and an integer sign representing
-// the operation (+1 for addition and -1 for subtraction). It returns a ColumnarValue as output, which can hold
-// either a scalar or an array.
-pub fn evaluate_temporal_arrays(
+pub fn evaluate_arrays(
     array_lhs: &ArrayRef,
     sign: i32,
     array_rhs: &ArrayRef,
@@ -367,7 +365,7 @@ fn ts_array_op(array_lhs: &ArrayRef, array_rhs: &ArrayRef) -> Result<ArrayRef> {
             1000i64,
             as_timestamp_second_array,
             seconds_sub,
-            MILLISECOND_MODE,
+            IntervalMode::Milli,
             TimestampSecondType,
             IntervalDayTimeType
         )),
@@ -382,7 +380,7 @@ fn ts_array_op(array_lhs: &ArrayRef, array_rhs: &ArrayRef) -> Result<ArrayRef> {
             1i64,
             as_timestamp_millisecond_array,
             milliseconds_sub,
-            MILLISECOND_MODE,
+            IntervalMode::Milli,
             TimestampMillisecondType,
             IntervalDayTimeType
         )),
@@ -397,7 +395,7 @@ fn ts_array_op(array_lhs: &ArrayRef, array_rhs: &ArrayRef) -> Result<ArrayRef> {
             1000i64,
             as_timestamp_microsecond_array,
             microseconds_sub,
-            NANOSECOND_MODE,
+            IntervalMode::Nano,
             TimestampMicrosecondType,
             IntervalMonthDayNanoType
         )),
@@ -412,7 +410,7 @@ fn ts_array_op(array_lhs: &ArrayRef, array_rhs: &ArrayRef) -> Result<ArrayRef> {
             1i64,
             as_timestamp_nanosecond_array,
             nanoseconds_sub,
-            NANOSECOND_MODE,
+            IntervalMode::Nano,
             TimestampNanosecondType,
             IntervalMonthDayNanoType
         )),
