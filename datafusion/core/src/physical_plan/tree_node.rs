@@ -18,11 +18,11 @@
 //! This module provides common traits for visiting or rewriting tree nodes easily.
 
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
-use datafusion_common::tree_node::{ArcWithChildren, Transformed};
+use datafusion_common::tree_node::{DynTreeNode, Transformed};
 use datafusion_common::Result;
 use std::sync::Arc;
 
-impl ArcWithChildren for dyn ExecutionPlan {
+impl DynTreeNode for dyn ExecutionPlan {
     fn arc_children(&self) -> Vec<Arc<Self>> {
         self.children()
     }

@@ -18,11 +18,11 @@
 //! This module provides common traits for visiting or rewriting tree nodes easily.
 use crate::physical_expr::with_new_children_if_necessary;
 use crate::PhysicalExpr;
-use datafusion_common::tree_node::ArcWithChildren;
+use datafusion_common::tree_node::DynTreeNode;
 use datafusion_common::Result;
 use std::sync::Arc;
 
-impl ArcWithChildren for dyn PhysicalExpr {
+impl DynTreeNode for dyn PhysicalExpr {
     fn arc_children(&self) -> Vec<Arc<Self>> {
         self.children()
     }
