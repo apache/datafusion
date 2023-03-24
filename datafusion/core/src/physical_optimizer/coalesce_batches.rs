@@ -24,9 +24,10 @@ use crate::{
     physical_optimizer::PhysicalOptimizerRule,
     physical_plan::{
         coalesce_batches::CoalesceBatchesExec, filter::FilterExec, joins::HashJoinExec,
-        repartition::RepartitionExec, tree_node::TreeNode, Partitioning,
+        repartition::RepartitionExec, Partitioning,
     },
 };
+use datafusion_common::tree_node::TreeNode;
 use std::sync::Arc;
 
 /// Optimizer rule that introduces CoalesceBatchesExec to avoid overhead with small batches that

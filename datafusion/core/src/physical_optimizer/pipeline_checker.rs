@@ -22,8 +22,8 @@
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::tree_node::{TreeNode, VisitRecursion};
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use std::sync::Arc;
 
 /// The PipelineChecker rule rejects non-runnable query plans that use

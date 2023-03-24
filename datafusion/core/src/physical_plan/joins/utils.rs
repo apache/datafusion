@@ -38,7 +38,7 @@ use std::usize;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{ScalarValue, SharedResult};
 
-use datafusion_physical_expr::tree_node::TreeNode as PhysicalExprTreeNode;
+use datafusion_common::tree_node::TreeNode;
 use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
 
 use crate::error::{DataFusionError, Result};

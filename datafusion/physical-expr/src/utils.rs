@@ -22,7 +22,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
 use datafusion_expr::Operator;
 
-use crate::tree_node::{TreeNode, TreeNodeRewriter, VisitRecursion};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter, VisitRecursion};
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 use std::collections::HashMap;
