@@ -511,7 +511,7 @@ async fn prune_periods_in_column_names() {
         Scenario::PeriodsInColumnNames,
         "SELECT \"name\", \"service.name\" FROM t WHERE \"service.name\" = 'frontend' AND \"name\" != 'HTTP GET / DISPATCH'",
         Some(0),
-        Some(2), // prune out  middle and last row group
+        Some(2), // prune out middle and last row group
         2,
     )
     .await;
