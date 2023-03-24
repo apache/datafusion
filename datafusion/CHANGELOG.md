@@ -29,6 +29,28 @@
 - Use TableReference for TableScan [#5615](https://github.com/apache/arrow-datafusion/pull/5615) (alamb)
 - Update the type of `param_values` to `&[ScalarValue]` in function `replace_params_with_values` [#5640](https://github.com/apache/arrow-datafusion/pull/5640) (HaoYang670)
 
+**Implemented enhancements:**
+
+- feat: extract (epoch from col) [#5555](https://github.com/apache/arrow-datafusion/pull/5555) (Weijun-H)
+- INSERT INTO support for MemTable [#5520](https://github.com/apache/arrow-datafusion/pull/5520) (metesynnada)
+- Memory limited nested-loop join [#5564](https://github.com/apache/arrow-datafusion/pull/5564) (korowa)
+- Timestamp subtraction and interval operations for `ScalarValue` [#5603](https://github.com/apache/arrow-datafusion/pull/5603) (berkaysynnada)
+- Substrait: Add cast expression with bool, integers and decimal128 support [#5137](https://github.com/apache/arrow-datafusion/pull/5137) (nseekhao)
+- Support `date_bin` with 2 arguments [#5643](https://github.com/apache/arrow-datafusion/pull/5643) (Weijun-H)
+- improve: support combining multiple grouping expressions [#5559](https://github.com/apache/arrow-datafusion/pull/5559) (yukkit)
+- Substrait: Add support for WindowFunction [#5653](https://github.com/apache/arrow-datafusion/pull/5653) (nseekhao)
+- feat: `date_bin` supports MonthDayNano, microsecond and nanosecond units [#5698](https://github.com/apache/arrow-datafusion/pull/5698) (stuartcarnie)
+- Handle serialization of TryCast [#5692](https://github.com/apache/arrow-datafusion/pull/5692) (thinkharderdev)
+
+**Fixed bugs:**
+
+- fix: failed to execute sql with subquery [#5542](https://github.com/apache/arrow-datafusion/pull/5542) (MichaelScofield)
+- fix: cast literal to timestamp [#5517](https://github.com/apache/arrow-datafusion/pull/5517) (Weijun-H)
+- fix dataframe only boolean/binary column got error on describe [#5585](https://github.com/apache/arrow-datafusion/pull/5585) (jiangzhx)
+- Median returns null on empty input instead of error [#5624](https://github.com/apache/arrow-datafusion/pull/5624) (toppyy)
+- add CountWildcardRule to fix  error on Count(Expr:Wildcard) with DataFrame API [#5627](https://github.com/apache/arrow-datafusion/pull/5627) (jiangzhx)
+- fix: correct CountWildcardRule and move analyzer into a new directory. [#5671](https://github.com/apache/arrow-datafusion/pull/5671) (jackwener)
+
 **Documentation updates:**
 
 - Minor: improve docstrings for `ObjectStoreRegistry` and `ObjectStoreProvider` [#5577](https://github.com/apache/arrow-datafusion/pull/5577) (alamb)
@@ -111,10 +133,12 @@
 - feat: `date_bin` supports MonthDayNano, microsecond and nanosecond units [#5698](https://github.com/apache/arrow-datafusion/pull/5698) (stuartcarnie)
 - Return plan error when adding utf8 and timestamp [#5696](https://github.com/apache/arrow-datafusion/pull/5696) (Weijun-H)
 - Handle serialization of TryCast [#5692](https://github.com/apache/arrow-datafusion/pull/5692) (thinkharderdev)
+- analyzer: move InlineTableScan into Analyzer. [#5683](https://github.com/apache/arrow-datafusion/pull/5683) (jackwener)
+- minor: Add doc comments to clarify what Analyzer is for [#5705](https://github.com/apache/arrow-datafusion/pull/5705) (alamb)
 
 ## [20.0.0](https://github.com/apache/arrow-datafusion/tree/20.0.0) (2023-03-10)
 
-[Full Changelog](https://github.com/apache/arrow-datafusion/compare/19.0.0...20.0.0-rc1)
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/19.0.0...20.0.0
 
 **Breaking changes:**
 
