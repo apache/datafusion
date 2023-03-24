@@ -16,8 +16,10 @@
 // under the License.
 
 mod count_wildcard_rule;
+mod inline_table_scan;
 
 use crate::analyzer::count_wildcard_rule::CountWildcardRule;
+use crate::analyzer::inline_table_scan::InlineTableScan;
 use crate::rewrite::TreeNodeRewritable;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
@@ -27,8 +29,16 @@ use log::{debug, trace};
 use std::sync::Arc;
 use std::time::Instant;
 
-/// `AnalyzerRule` transforms the unresolved ['LogicalPlan']s and unresolved ['Expr']s into
-/// the resolved form.
+/// [`AnalyzerRule`]s transform [`LogicalPlan`]s in some way to make
+/// the plan valid prior to the rest of the DataFusion optimization process.
+///
+/// For example, it may resolve [`Expr]s into more specific forms such
+/// as a subquery reference, to do type coercion to ensure the types
+/// of operands are correct.
+///
+/// This is different than an [`OptimizerRule`](crate::OptimizerRule)
+/// which should preserve the semantics of the LogicalPlan but compute
+/// it the same result in some more optimal way.
 pub trait AnalyzerRule {
     /// Rewrite `plan`
     fn analyze(&self, plan: &LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan>;
@@ -52,8 +62,10 @@ impl Default for Analyzer {
 impl Analyzer {
     /// Create a new analyzer using the recommended list of rules
     pub fn new() -> Self {
-        let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> =
-            vec![Arc::new(CountWildcardRule::new())];
+        let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
+            Arc::new(CountWildcardRule::new()),
+            Arc::new(InlineTableScan::new()),
+        ];
         Self::with_rules(rules)
     }
 

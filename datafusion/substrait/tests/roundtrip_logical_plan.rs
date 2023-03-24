@@ -250,6 +250,11 @@ mod tests {
         .await
     }
 
+    #[tokio::test]
+    async fn simple_window_function() -> Result<()> {
+        roundtrip("SELECT RANK() OVER (PARTITION BY a ORDER BY b), d, SUM(b) OVER (PARTITION BY a) FROM data;").await
+    }
+
     async fn assert_expected_plan(sql: &str, expected_plan_str: &str) -> Result<()> {
         let mut ctx = create_context().await?;
         let df = ctx.sql(sql).await?;

@@ -77,19 +77,22 @@ impl CompressionTypeVariant {
     }
 }
 
+#[rustfmt::skip]
 #[derive(Clone, Copy)]
 #[repr(u16)]
 enum IntervalType {
-    Century = 0b_00_0000_0001,
-    Decade = 0b_00_0000_0010,
-    Year = 0b_00_0000_0100,
-    Month = 0b_00_0000_1000,
-    Week = 0b_00_0001_0000,
-    Day = 0b_00_0010_0000,
-    Hour = 0b_00_0100_0000,
-    Minute = 0b_00_1000_0000,
-    Second = 0b_01_0000_0000,
-    Millisecond = 0b_10_0000_0000,
+    Century     = 0b_0000_0000_0001,
+    Decade      = 0b_0000_0000_0010,
+    Year        = 0b_0000_0000_0100,
+    Month       = 0b_0000_0000_1000,
+    Week        = 0b_0000_0001_0000,
+    Day         = 0b_0000_0010_0000,
+    Hour        = 0b_0000_0100_0000,
+    Minute      = 0b_0000_1000_0000,
+    Second      = 0b_0001_0000_0000,
+    Millisecond = 0b_0010_0000_0000,
+    Microsecond = 0b_0100_0000_0000,
+    Nanosecond  = 0b_1000_0000_0000,
 }
 
 impl FromStr for IntervalType {
@@ -107,6 +110,8 @@ impl FromStr for IntervalType {
             "minute" | "minutes" => Ok(Self::Minute),
             "second" | "seconds" => Ok(Self::Second),
             "millisecond" | "milliseconds" => Ok(Self::Millisecond),
+            "microsecond" | "microseconds" => Ok(Self::Microsecond),
+            "nanosecond" | "nanoseconds" => Ok(Self::Nanosecond),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unknown interval type: {s}"
             ))),
@@ -194,6 +199,8 @@ pub fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarValue> {
             }
             IntervalType::Second => Ok((0, 0, interval_period * NANOS_PER_SECOND)),
             IntervalType::Millisecond => Ok((0, 0, interval_period * 1_000_000f64)),
+            IntervalType::Microsecond => Ok((0, 0, interval_period * 1_000f64)),
+            IntervalType::Nanosecond => Ok((0, 0, interval_period)),
         }
     };
 
@@ -370,6 +377,16 @@ mod test {
         assert_eq!(
             parse_interval("months", "1 year 1 day 0.1 milliseconds").unwrap(),
             ScalarValue::new_interval_mdn(12, 1, 1_00 * 1_000)
+        );
+
+        assert_eq!(
+            parse_interval("months", "1 year 1 day 1 microsecond").unwrap(),
+            ScalarValue::new_interval_mdn(12, 1, 1_000)
+        );
+
+        assert_eq!(
+            parse_interval("months", "1 year 1 day 5 nanoseconds").unwrap(),
+            ScalarValue::new_interval_mdn(12, 1, 5)
         );
 
         assert_eq!(
