@@ -21,6 +21,7 @@ use datafusion::{
     error::{DataFusionError, Result},
     prelude::JoinType,
     scalar::ScalarValue,
+    sql::TableReference,
 };
 
 use datafusion::common::DFSchemaRef;
@@ -103,6 +104,18 @@ pub fn to_substrait_rel(
             });
 
             if let Some(struct_items) = projection {
+                let table_reference = TableReference::parse_str(&scan.table_name);
+                let names = match table_reference {
+                    TableReference::Bare { table } => vec![table.to_string()],
+                    TableReference::Partial { schema, table } => {
+                        vec![schema.to_string(), table.to_string()]
+                    }
+                    TableReference::Full {
+                        catalog,
+                        schema,
+                        table,
+                    } => vec![catalog.to_string(), schema.to_string(), table.to_string()],
+                };
                 Ok(Box::new(Rel {
                     rel_type: Some(RelType::Read(Box::new(ReadRel {
                         common: None,
@@ -124,7 +137,7 @@ pub fn to_substrait_rel(
                         }),
                         advanced_extension: None,
                         read_type: Some(ReadType::NamedTable(NamedTable {
-                            names: vec![scan.table_name.clone()],
+                            names,
                             advanced_extension: None,
                         })),
                     }))),
