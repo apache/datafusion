@@ -722,12 +722,9 @@ fn can_skip_sort(
     let first_n = calc_ordering_range(&ordered_pb_indices);
     let mode = if first_n == partitionby_exprs.len() {
         // All of the partition by columns defines a consecutive range from zero.
-        let first_n = calc_ordering_range(&ordered_pb_indices);
-        assert_eq!(first_n, partitionby_exprs.len());
         PartitionSearchMode::Sorted
     } else if first_n > 0 {
         // All of the partition by columns defines a consecutive range from zero.
-        assert!(first_n < partitionby_exprs.len());
         let ordered_range = &ordered_pb_indices[0..first_n];
         let input_pb_exprs = get_at_indices(&physical_ordering_exprs, ordered_range)?;
         let partially_ordered_indices = get_indices_of_matching_exprs(
@@ -960,6 +957,9 @@ mod tests {
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::union::UnionExec;
     use crate::physical_plan::windows::create_window_expr;
+    use crate::physical_plan::windows::PartitionSearchMode::{
+        Linear, PartiallySorted, Sorted,
+    };
     use crate::physical_plan::{displayable, Partitioning};
     use crate::prelude::SessionContext;
     use arrow::compute::SortOptions;
@@ -1075,6 +1075,127 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_can_skip_ordering_exhaustive() -> Result<()> {
+        let test_schema = create_test_schema2()?;
+        // Columns a,c are nullable whereas b,d are not nullable.
+        // Source is sorted by a ASC NULLS FIRST, b ASC NULLS FIRST, c ASC NULLS FIRST, d ASC NULLS FIRST
+        // Column e is not ordered.
+        let sort_exprs = vec![
+            sort_expr("a", &test_schema),
+            sort_expr("b", &test_schema),
+            sort_expr("c", &test_schema),
+            sort_expr("d", &test_schema),
+        ];
+        let exec_unbounded = csv_exec_sorted(&test_schema, sort_exprs, true);
+
+        // test cases consists of vector of tuples. Where each tuple represents a single test case.
+        // First field in the tuple is Vec<str> where each element in the vector represents PARTITION BY columns
+        // For instance `vec!["a", "b"]` corresponds to PARTITION BY a, b
+        // Second field in the tuple is Vec<str> where each element in the vector represents ORDER BY columns
+        // For instance, vec!["c"], corresponds to ORDER BY c ASC NULLS FIRST, (ordering is default ordering. We do not check
+        // for reversibility in this test).
+        // Third field in the tuple is Option<PartitionSearchMode>, which corresponds to expected algorithm mode.
+        // None represents that existing ordering is not sufficient to run executor with any one of the algorithms
+        // (We need to add SortExec to be able to run it).
+        // Some(PartitionSearchMode) represents, we can run algorithm with existing ordering; and algorithm should work in
+        // PartitionSearchMode.
+        let test_cases = vec![
+            (vec!["a"], vec!["a"], Some(Sorted)),
+            (vec!["a"], vec!["b"], Some(Sorted)),
+            (vec!["a"], vec!["c"], None),
+            (vec!["a"], vec!["a", "b"], Some(Sorted)),
+            (vec!["a"], vec!["b", "c"], Some(Sorted)),
+            (vec!["a"], vec!["a", "c"], None),
+            (vec!["a"], vec!["a", "b", "c"], Some(Sorted)),
+            (vec!["b"], vec!["a"], Some(Linear)),
+            (vec!["b"], vec!["b"], None),
+            (vec!["b"], vec!["c"], None),
+            (vec!["b"], vec!["a", "b"], Some(Linear)),
+            (vec!["b"], vec!["b", "c"], None),
+            (vec!["b"], vec!["a", "c"], None),
+            (vec!["b"], vec!["a", "b", "c"], None),
+            (vec!["c"], vec!["a"], Some(Linear)),
+            (vec!["c"], vec!["b"], None),
+            (vec!["c"], vec!["c"], None),
+            (vec!["c"], vec!["a", "b"], Some(Linear)),
+            (vec!["c"], vec!["b", "c"], None),
+            (vec!["c"], vec!["a", "c"], Some(Linear)),
+            (vec!["c"], vec!["a", "b", "c"], Some(Linear)),
+            (vec!["b", "a"], vec!["a"], Some(Sorted)),
+            (vec!["b", "a"], vec!["b"], Some(Sorted)),
+            (vec!["b", "a"], vec!["c"], Some(Sorted)),
+            (vec!["b", "a"], vec!["a", "b"], Some(Sorted)),
+            (vec!["b", "a"], vec!["b", "c"], Some(Sorted)),
+            (vec!["b", "a"], vec!["a", "c"], Some(Sorted)),
+            (vec!["b", "a"], vec!["a", "b", "c"], Some(Sorted)),
+            (vec!["c", "b"], vec!["a"], Some(Linear)),
+            (vec!["c", "b"], vec!["b"], None),
+            (vec!["c", "b"], vec!["c"], None),
+            (vec!["c", "b"], vec!["a", "b"], Some(Linear)),
+            (vec!["c", "b"], vec!["b", "c"], None),
+            (vec!["c", "b"], vec!["a", "c"], Some(Linear)),
+            (vec!["c", "b"], vec!["a", "b", "c"], Some(Linear)),
+            (vec!["c", "a"], vec!["a"], Some(PartiallySorted(vec![1]))),
+            (vec!["c", "a"], vec!["b"], Some(PartiallySorted(vec![1]))),
+            (vec!["c", "a"], vec!["c"], Some(PartiallySorted(vec![1]))),
+            (
+                vec!["c", "a"],
+                vec!["a", "b"],
+                Some(PartiallySorted(vec![1])),
+            ),
+            (
+                vec!["c", "a"],
+                vec!["b", "c"],
+                Some(PartiallySorted(vec![1])),
+            ),
+            (
+                vec!["c", "a"],
+                vec!["a", "c"],
+                Some(PartiallySorted(vec![1])),
+            ),
+            (
+                vec!["c", "a"],
+                vec!["a", "b", "c"],
+                Some(PartiallySorted(vec![1])),
+            ),
+            (vec!["c", "b", "a"], vec!["a"], Some(Sorted)),
+            (vec!["c", "b", "a"], vec!["b"], Some(Sorted)),
+            (vec!["c", "b", "a"], vec!["c"], Some(Sorted)),
+            (vec!["c", "b", "a"], vec!["a", "b"], Some(Sorted)),
+            (vec!["c", "b", "a"], vec!["b", "c"], Some(Sorted)),
+            (vec!["c", "b", "a"], vec!["a", "c"], Some(Sorted)),
+            (vec!["c", "b", "a"], vec!["a", "b", "c"], Some(Sorted)),
+        ];
+        for (case_idx, test_case) in test_cases.iter().enumerate() {
+            let (partition_by_columns, order_by_params, expected) = &test_case;
+            let mut partition_by_exprs = vec![];
+            for col_name in partition_by_columns {
+                partition_by_exprs.push(col(col_name, &test_schema)?);
+            }
+
+            let mut order_by_exprs = vec![];
+            for col_name in order_by_params {
+                let expr = col(col_name, &test_schema)?;
+                // Give default ordering, this is same with input ordering direction
+                // In this test we do check for reversibility.
+                let options = SortOptions::default();
+                order_by_exprs.push(PhysicalSortExpr { expr, options });
+            }
+            let res =
+                can_skip_sort(&partition_by_exprs, &order_by_exprs, &exec_unbounded)?;
+            // Since reversibility is not important in this test. Convert Option<(bool, PartitionSearchMode)> to Option<PartitionSearchMode>
+            let res = res.map(|(_, mode)| mode);
+            assert_eq!(
+                res, *expected,
+                "Unexpected result for in unbounded test case#: {:?}, case: {:?}",
+                case_idx, test_case
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_can_skip_ordering() -> Result<()> {
         let test_schema = create_test_schema2()?;
         // Columns a,c are nullable whereas b,d are not nullable.
@@ -1117,130 +1238,98 @@ mod tests {
                 None,
             ),
             // PARTITION BY a, ORDER BY b ASC NULLS FIRST
-            (
-                vec!["a"],
-                vec![("b", false, true)],
-                Some((false, PartitionSearchMode::Sorted)),
-            ),
+            (vec!["a"], vec![("b", false, true)], Some((false, Sorted))),
             // PARTITION BY a, ORDER BY a ASC NULLS FIRST
-            (
-                vec!["a"],
-                vec![("a", false, true)],
-                Some((false, PartitionSearchMode::Sorted)),
-            ),
+            (vec!["a"], vec![("a", false, true)], Some((false, Sorted))),
             // PARTITION BY a, ORDER BY a ASC NULLS LAST
-            (
-                vec!["a"],
-                vec![("a", false, false)],
-                Some((false, PartitionSearchMode::Sorted)),
-            ),
+            (vec!["a"], vec![("a", false, false)], Some((false, Sorted))),
             // PARTITION BY a, ORDER BY a DESC NULLS FIRST
-            (
-                vec!["a"],
-                vec![("a", true, true)],
-                Some((false, PartitionSearchMode::Sorted)),
-            ),
+            (vec!["a"], vec![("a", true, true)], Some((false, Sorted))),
             // PARTITION BY a, ORDER BY a DESC NULLS LAST
-            (
-                vec!["a"],
-                vec![("a", true, false)],
-                Some((false, PartitionSearchMode::Sorted)),
-            ),
+            (vec!["a"], vec![("a", true, false)], Some((false, Sorted))),
             // PARTITION BY a, ORDER BY b ASC NULLS LAST
-            (
-                vec!["a"],
-                vec![("b", false, false)],
-                Some((false, PartitionSearchMode::Sorted)),
-            ),
+            (vec!["a"], vec![("b", false, false)], Some((false, Sorted))),
             // PARTITION BY a, ORDER BY b DESC NULLS LAST
-            (
-                vec!["a"],
-                vec![("b", true, false)],
-                Some((true, PartitionSearchMode::Sorted)),
-            ),
+            (vec!["a"], vec![("b", true, false)], Some((true, Sorted))),
             // PARTITION BY a, b ORDER BY c ASC NULLS FIRST
             (
                 vec!["a", "b"],
                 vec![("c", false, true)],
-                Some((false, PartitionSearchMode::Sorted)),
+                Some((false, Sorted)),
             ),
             // PARTITION BY b, a ORDER BY c ASC NULLS FIRST
             (
                 vec!["b", "a"],
                 vec![("c", false, true)],
-                Some((false, PartitionSearchMode::Sorted)),
+                Some((false, Sorted)),
             ),
             // PARTITION BY a, b ORDER BY c DESC NULLS LAST
             (
                 vec!["a", "b"],
                 vec![("c", true, false)],
-                Some((true, PartitionSearchMode::Sorted)),
+                Some((true, Sorted)),
             ),
             // PARTITION BY e ORDER BY a ASC NULLS FIRST
             (
                 vec!["e"],
                 vec![("a", false, true)],
                 // For unbounded, expects to work in Linear mode. Shouldn't reverse window function.
-                Some((false, PartitionSearchMode::Linear)),
+                Some((false, Linear)),
             ),
             // PARTITION BY b, c ORDER BY a ASC NULLS FIRST, c ASC NULLS FIRST
             (
                 vec!["b", "c"],
                 vec![("a", false, true), ("c", false, true)],
-                Some((false, PartitionSearchMode::Linear)),
+                Some((false, Linear)),
             ),
             // PARTITION BY b ORDER BY a ASC NULLS FIRST
-            (
-                vec!["b"],
-                vec![("a", false, true)],
-                Some((false, PartitionSearchMode::Linear)),
-            ),
+            (vec!["b"], vec![("a", false, true)], Some((false, Linear))),
             // PARTITION BY a, e ORDER BY b ASC NULLS FIRST
             (
                 vec!["a", "e"],
                 vec![("b", false, true)],
-                Some((false, PartitionSearchMode::PartiallySorted(vec![0]))),
+                Some((false, PartiallySorted(vec![0]))),
             ),
             // PARTITION BY a, c ORDER BY b ASC NULLS FIRST
             (
                 vec!["a", "c"],
                 vec![("b", false, true)],
-                Some((false, PartitionSearchMode::PartiallySorted(vec![0]))),
+                Some((false, PartiallySorted(vec![0]))),
             ),
             // PARTITION BY c, a ORDER BY b ASC NULLS FIRST
             (
                 vec!["c", "a"],
                 vec![("b", false, true)],
-                Some((false, PartitionSearchMode::PartiallySorted(vec![1]))),
+                Some((false, PartiallySorted(vec![1]))),
             ),
             // PARTITION BY d, b, a ORDER BY c ASC NULLS FIRST
             (
                 vec!["d", "b", "a"],
                 vec![("c", false, true)],
-                Some((false, PartitionSearchMode::PartiallySorted(vec![2, 1]))),
+                Some((false, PartiallySorted(vec![2, 1]))),
             ),
             // PARTITION BY e, b, a ORDER BY c ASC NULLS FIRST
             (
                 vec!["e", "b", "a"],
                 vec![("c", false, true)],
-                Some((false, PartitionSearchMode::PartiallySorted(vec![2, 1]))),
+                Some((false, PartiallySorted(vec![2, 1]))),
             ),
             // PARTITION BY d, a ORDER BY b ASC NULLS FIRST
             (
                 vec!["d", "a"],
                 vec![("b", false, true)],
-                Some((false, PartitionSearchMode::PartiallySorted(vec![1]))),
+                Some((false, PartiallySorted(vec![1]))),
             ),
             // PARTITION BY b, ORDER BY b, a ASC NULLS FIRST
             (
                 vec!["a"],
                 vec![("b", false, true), ("a", false, true)],
-                Some((false, PartitionSearchMode::Sorted)),
+                Some((false, Sorted)),
             ),
             // ORDER BY b, a ASC NULLS FIRST
             (vec![], vec![("b", false, true), ("a", false, true)], None),
         ];
-        for test_case in test_cases {
+        for (case_idx, test_case) in test_cases.iter().enumerate() {
             let (partition_by_columns, order_by_params, expected) = &test_case;
             let mut partition_by_exprs = vec![];
             for col_name in partition_by_columns {
@@ -1260,7 +1349,8 @@ mod tests {
             assert_eq!(
                 can_skip_sort(&partition_by_exprs, &order_by_exprs, &exec_unbounded)?,
                 *expected,
-                "Unexpected result for in unbounded test case: {:?}",
+                "Unexpected result for in unbounded test case#: {:?}, case: {:?}",
+                case_idx,
                 test_case
             );
         }

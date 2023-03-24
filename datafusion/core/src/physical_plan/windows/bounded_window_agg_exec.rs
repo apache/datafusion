@@ -212,11 +212,11 @@ impl BoundedWindowAggExec {
         Ok(match search_mode {
             PartitionSearchMode::Sorted => {
                 // In BoundedWindowAggExec if mode is Sorted all partition by columns should be ordered.
-                assert_eq!(
-                    self.window_expr()[0].partition_by().len(),
-                    ordered_partition_by_indices.len(),
-                    "All partition by columns should have an ordering"
-                );
+                if self.window_expr()[0].partition_by().len()
+                    != ordered_partition_by_indices.len()
+                {
+                    return Err(DataFusionError::Execution("All partition by columns should have an ordering to work in Sorted Mode.".to_string()));
+                }
                 Box::new(SortedSearch {
                     partition_by_sort_keys,
                     ordered_partition_by_indices,
@@ -556,7 +556,6 @@ impl PartitionSearcher for LinearSearch {
         record_batch: &RecordBatch,
         window_expr: &[Arc<dyn WindowExpr>],
     ) -> Result<Vec<(PartitionKey, RecordBatch)>> {
-        let mut res = vec![];
         let partition_bys =
             self.evaluate_partition_by_column_values(record_batch, window_expr)?;
         // In Linear or PartiallySorted mode we are sure that partition_by columns are not empty.
@@ -564,14 +563,17 @@ impl PartitionSearcher for LinearSearch {
         let per_partition_indices =
             self.get_per_partition_indices(&partition_bys, record_batch)?;
         // Construct new record batch from the rows at the calculated indices for each partition.
-        for (row, indices) in per_partition_indices.into_iter() {
-            let mut new_indices = UInt32Builder::with_capacity(indices.len());
-            new_indices.append_slice(&indices);
-            let indices = new_indices.finish();
-            let partition_batch = get_record_batch_at_indices(record_batch, &indices)?;
-            res.push((row, partition_batch));
-        }
-        Ok(res)
+        per_partition_indices
+            .into_iter()
+            .map(|(row, indices)| {
+                let mut new_indices = UInt32Builder::with_capacity(indices.len());
+                new_indices.append_slice(&indices);
+                let indices = new_indices.finish();
+                let partition_batch =
+                    get_record_batch_at_indices(record_batch, &indices)?;
+                Ok((row, partition_batch))
+            })
+            .collect::<Result<Vec<_>>>()
     }
 
     fn prune(&mut self, n_out: usize) -> Result<()> {
@@ -772,7 +774,6 @@ impl PartitionSearcher for SortedSearch {
         record_batch: &RecordBatch,
         _window_expr: &[Arc<dyn WindowExpr>],
     ) -> Result<Vec<(PartitionKey, RecordBatch)>> {
-        let mut res = vec![];
         let num_rows = record_batch.num_rows();
         // Calculate result of partition by column expressions
         let partition_columns = self
@@ -789,13 +790,16 @@ impl PartitionSearcher for SortedSearch {
             .into_iter()
             .map(|arr| arr.values)
             .collect::<Vec<ArrayRef>>();
-        for range in partition_points {
-            let row = get_row_at_idx(&partition_bys, range.start)?;
-            let len = range.end - range.start;
-            let slice = record_batch.slice(range.start, len);
-            res.push((row, slice));
-        }
-        Ok(res)
+
+        partition_points
+            .iter()
+            .map(|range| {
+                let row = get_row_at_idx(&partition_bys, range.start)?;
+                let len = range.end - range.start;
+                let slice = record_batch.slice(range.start, len);
+                Ok((row, slice))
+            })
+            .collect::<Result<Vec<_>>>()
     }
 
     fn mark_partition_end(&mut self, partition_buffers: &mut PartitionBatches) {
