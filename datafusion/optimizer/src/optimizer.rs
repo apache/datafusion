@@ -51,7 +51,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
-/// `OptimizerRule` transforms one ['LogicalPlan'] into another which
+/// `OptimizerRule` transforms one [`LogicalPlan`] into another which
 /// computes the same results, but in a potentially more efficient
 /// way. If there are no suitable transformations for the input plan,
 /// the optimizer can simply return it as is.
