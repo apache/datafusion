@@ -19,7 +19,7 @@
 
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
-use datafusion_common::tree_node::TreeNode;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::Result;
 use datafusion_common::{Column, DFSchema};
 use std::collections::HashMap;
@@ -32,13 +32,15 @@ pub use order_by::rewrite_sort_cols_by_aggs;
 /// Recursively call [`Column::normalize_with_schemas`] on all [`Column`] expressions
 /// in the `expr` expression tree.
 pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
-    rewrite_expr(expr, |expr| {
-        if let Expr::Column(c) = expr {
-            let col = LogicalPlanBuilder::normalize(plan, c)?;
-            Ok(Expr::Column(col))
-        } else {
-            Ok(expr)
-        }
+    expr.transform(&|expr| {
+        Ok({
+            if let Expr::Column(c) = expr {
+                let col = LogicalPlanBuilder::normalize(plan, c)?;
+                Transformed::Yes(Expr::Column(col))
+            } else {
+                Transformed::No(expr)
+            }
+        })
     })
 }
 
@@ -54,14 +56,15 @@ pub fn normalize_col_with_schemas(
     schemas: &[&Arc<DFSchema>],
     using_columns: &[HashSet<Column>],
 ) -> Result<Expr> {
-    rewrite_expr(expr, |expr| {
-        if let Expr::Column(c) = expr {
-            Ok(Expr::Column(
-                c.normalize_with_schemas(schemas, using_columns)?,
-            ))
-        } else {
-            Ok(expr)
-        }
+    expr.transform(&|expr| {
+        Ok({
+            if let Expr::Column(c) = expr {
+                let col = c.normalize_with_schemas(schemas, using_columns)?;
+                Transformed::Yes(Expr::Column(col))
+            } else {
+                Transformed::No(expr)
+            }
+        })
     })
 }
 
@@ -71,15 +74,16 @@ pub fn normalize_col_with_schemas_and_ambiguity_check(
     schemas: &[&[&DFSchema]],
     using_columns: &[HashSet<Column>],
 ) -> Result<Expr> {
-    rewrite_expr(expr, |expr| {
-        if let Expr::Column(c) = expr {
-            Ok(Expr::Column(c.normalize_with_schemas_and_ambiguity_check(
-                schemas,
-                using_columns,
-            )?))
-        } else {
-            Ok(expr)
-        }
+    expr.transform(&|expr| {
+        Ok({
+            if let Expr::Column(c) = expr {
+                let col =
+                    c.normalize_with_schemas_and_ambiguity_check(schemas, using_columns)?;
+                Transformed::Yes(Expr::Column(col))
+            } else {
+                Transformed::No(expr)
+            }
+        })
     })
 }
 
@@ -96,16 +100,18 @@ pub fn normalize_cols(
 
 /// Recursively replace all [`Column`] expressions in a given expression tree with
 /// `Column` expressions provided by the hash map argument.
-pub fn replace_col(e: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<Expr> {
-    rewrite_expr(e, |expr| {
-        if let Expr::Column(c) = &expr {
-            match replace_map.get(c) {
-                Some(new_c) => Ok(Expr::Column((*new_c).to_owned())),
-                None => Ok(expr),
+pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<Expr> {
+    expr.transform(&|expr| {
+        Ok({
+            if let Expr::Column(c) = &expr {
+                match replace_map.get(c) {
+                    Some(new_c) => Transformed::Yes(Expr::Column((*new_c).to_owned())),
+                    None => Transformed::No(expr),
+                }
+            } else {
+                Transformed::No(expr)
             }
-        } else {
-            Ok(expr)
-        }
+        })
     })
 }
 
@@ -115,15 +121,18 @@ pub fn replace_col(e: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<E
 /// For example, if there were expressions like `foo.bar` this would
 /// rewrite it to just `bar`.
 pub fn unnormalize_col(expr: Expr) -> Expr {
-    rewrite_expr(expr, |expr| {
-        if let Expr::Column(col) = expr {
-            Ok(Expr::Column(Column {
-                relation: None,
-                name: col.name,
-            }))
-        } else {
-            Ok(expr)
-        }
+    expr.transform(&|expr| {
+        Ok({
+            if let Expr::Column(c) = expr {
+                let col = Column {
+                    relation: None,
+                    name: c.name,
+                };
+                Transformed::Yes(Expr::Column(col))
+            } else {
+                Transformed::No(expr)
+            }
+        })
     })
     .expect("Unnormalize is infallable")
 }
@@ -137,44 +146,16 @@ pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
 /// Recursively remove all the ['OuterReferenceColumn'] and return the inside Column
 /// in the expression tree.
 pub fn strip_outer_reference(expr: Expr) -> Expr {
-    rewrite_expr(expr, |expr| {
-        if let Expr::OuterReferenceColumn(_, col) = expr {
-            Ok(Expr::Column(col))
-        } else {
-            Ok(expr)
-        }
+    expr.transform(&|expr| {
+        Ok({
+            if let Expr::OuterReferenceColumn(_, col) = expr {
+                Transformed::Yes(Expr::Column(col))
+            } else {
+                Transformed::No(expr)
+            }
+        })
     })
     .expect("strip_outer_reference is infallable")
-}
-
-/// Recursively rewrite an [`Expr`] via a function.
-///
-/// Rewrites the expression bottom up by recursively calling `f(expr)`
-/// on `expr`'s children and then on `expr`. See [`TreeNodeRewriter`]
-/// for more details and more options to control the walk.
-///
-/// # Example:
-/// ```
-/// # use datafusion_expr::*;
-/// # use datafusion_expr::expr_rewriter::rewrite_expr;
-/// let expr = col("a") + lit(1);
-///
-/// // rewrite all literals to 42
-/// let rewritten = rewrite_expr(expr, |e| {
-///   if let Expr::Literal(_) = e {
-///     Ok(lit(42))
-///   } else {
-///     Ok(e)
-///   }
-/// }).unwrap();
-///
-/// assert_eq!(rewritten, col("a") + lit(42));
-/// ```
-pub fn rewrite_expr<F>(expr: Expr, f: F) -> Result<Expr>
-where
-    F: Fn(Expr) -> Result<Expr>,
-{
-    expr.transform(&|expr| f(expr).map(Some))
 }
 
 /// Returns plan with expressions coerced to types compatible with
@@ -270,7 +251,7 @@ mod test {
     #[test]
     fn rewriter_rewrite() {
         // rewrites all "foo" string literals to "bar"
-        let transformer = |expr: Expr| -> Result<Option<Expr>> {
+        let transformer = |expr: Expr| -> Result<Transformed<Expr>> {
             match expr {
                 Expr::Literal(ScalarValue::Utf8(Some(utf8_val))) => {
                     let utf8_val = if utf8_val == "foo" {
@@ -278,10 +259,10 @@ mod test {
                     } else {
                         utf8_val
                     };
-                    Ok(Some(lit(utf8_val)))
+                    Ok(Transformed::Yes(lit(utf8_val)))
                 }
                 // otherwise, return None
-                _ => Ok(None),
+                _ => Ok(Transformed::No(expr)),
             }
         };
 

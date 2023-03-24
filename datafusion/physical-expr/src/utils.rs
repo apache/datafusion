@@ -22,7 +22,9 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
 use datafusion_expr::Operator;
 
-use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter, VisitRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeRewriter, VisitRecursion,
+};
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 use std::collections::HashMap;
@@ -141,7 +143,11 @@ pub fn normalize_out_expr_with_alias_schema(
                     }
                     None => None,
                 };
-            Ok(normalized_form)
+            Ok(if let Some(normalized_form) = normalized_form {
+                Transformed::Yes(normalized_form)
+            } else {
+                Transformed::No(expr)
+            })
         })
         .unwrap_or(expr)
 }
@@ -152,18 +158,26 @@ pub fn normalize_expr_with_equivalence_properties(
 ) -> Arc<dyn PhysicalExpr> {
     let expr_clone = expr.clone();
     expr_clone
-        .transform(&|expr| match expr.as_any().downcast_ref::<Column>() {
-            Some(column) => {
-                let mut normalized: Option<Arc<dyn PhysicalExpr>> = None;
-                for class in eq_properties {
-                    if class.contains(column) {
-                        normalized = Some(Arc::new(class.head().clone()));
-                        break;
+        .transform(&|expr| {
+            let normalized_form: Option<Arc<dyn PhysicalExpr>> =
+                match expr.as_any().downcast_ref::<Column>() {
+                    Some(column) => {
+                        let mut normalized: Option<Arc<dyn PhysicalExpr>> = None;
+                        for class in eq_properties {
+                            if class.contains(column) {
+                                normalized = Some(Arc::new(class.head().clone()));
+                                break;
+                            }
+                        }
+                        normalized
                     }
-                }
-                Ok(normalized)
-            }
-            None => Ok(None),
+                    None => None,
+                };
+            Ok(if let Some(normalized_form) = normalized_form {
+                Transformed::Yes(normalized_form)
+            } else {
+                Transformed::No(expr)
+            })
         })
         .unwrap_or(expr)
 }
@@ -395,10 +409,13 @@ pub fn reassign_predicate_columns(
                 Err(_) if ignore_not_found => usize::MAX,
                 Err(e) => return Err(e.into()),
             };
-            return Ok(Some(Arc::new(Column::new(column.name(), index))));
+            return Ok(Transformed::Yes(Arc::new(Column::new(
+                column.name(),
+                index,
+            ))));
         }
 
-        Ok(None)
+        Ok(Transformed::No(expr))
     })
 }
 

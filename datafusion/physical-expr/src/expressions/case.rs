@@ -392,7 +392,7 @@ mod tests {
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
     use datafusion_common::cast::{as_float64_array, as_int32_array};
-    use datafusion_common::tree_node::TreeNode;
+    use datafusion_common::tree_node::{Transformed, TreeNode};
     use datafusion_common::ScalarValue;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_expr::Operator;
@@ -870,32 +870,43 @@ mod tests {
 
         let expr2 = expr
             .clone()
-            .transform(
-                &|e| match e.as_any().downcast_ref::<crate::expressions::Literal>() {
-                    Some(lit_value) => match lit_value.value() {
-                        ScalarValue::Utf8(Some(str_value)) => {
-                            Ok(Some(lit(str_value.to_uppercase())))
-                        }
-                        _ => Ok(None),
-                    },
-                    _ => Ok(None),
-                },
-            )
+            .transform(&|e| {
+                let transformed =
+                    match e.as_any().downcast_ref::<crate::expressions::Literal>() {
+                        Some(lit_value) => match lit_value.value() {
+                            ScalarValue::Utf8(Some(str_value)) => {
+                                Some(lit(str_value.to_uppercase()))
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                Ok(if let Some(transformed) = transformed {
+                    Transformed::Yes(transformed)
+                } else {
+                    Transformed::No(e)
+                })
+            })
             .unwrap();
 
         let expr3 = expr
             .clone()
-            .transform_down(&|e| match e
-                .as_any()
-                .downcast_ref::<crate::expressions::Literal>()
-            {
-                Some(lit_value) => match lit_value.value() {
-                    ScalarValue::Utf8(Some(str_value)) => {
-                        Ok(Some(lit(str_value.to_uppercase())))
-                    }
-                    _ => Ok(None),
-                },
-                _ => Ok(None),
+            .transform_down(&|e| {
+                let transformed =
+                    match e.as_any().downcast_ref::<crate::expressions::Literal>() {
+                        Some(lit_value) => match lit_value.value() {
+                            ScalarValue::Utf8(Some(str_value)) => {
+                                Some(lit(str_value.to_uppercase()))
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                Ok(if let Some(transformed) = transformed {
+                    Transformed::Yes(transformed)
+                } else {
+                    Transformed::No(e)
+                })
             })
             .unwrap();
 

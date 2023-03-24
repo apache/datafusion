@@ -23,7 +23,7 @@ use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use std::sync::Arc;
 
 /// The PipelineChecker rule rejects non-runnable query plans that use
@@ -115,7 +115,7 @@ impl TreeNode for PipelineStatePropagator {
                 .map(|child| child.plan)
                 .collect::<Vec<_>>();
             Ok(PipelineStatePropagator {
-                plan: with_new_children_if_necessary(self.plan, children_plans)?,
+                plan: with_new_children_if_necessary(self.plan, children_plans)?.into(),
                 unbounded: self.unbounded,
                 children_unbounded,
             })
@@ -129,11 +129,11 @@ impl TreeNode for PipelineStatePropagator {
 /// pipeline-breaking operators acting on infinite inputs.
 pub fn check_finiteness_requirements(
     input: PipelineStatePropagator,
-) -> Result<Option<PipelineStatePropagator>> {
+) -> Result<Transformed<PipelineStatePropagator>> {
     let plan = input.plan;
     let children = input.children_unbounded;
     plan.unbounded_output(&children).map(|value| {
-        Some(PipelineStatePropagator {
+        Transformed::Yes(PipelineStatePropagator {
             plan,
             unbounded: value,
             children_unbounded: children,

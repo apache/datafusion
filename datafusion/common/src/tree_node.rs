@@ -22,7 +22,7 @@ use std::sync::Arc;
 use crate::Result;
 
 /// Trait for tree node. It can be [`ExecutionPlan`], [`PhysicalExpr`], [`LogicalPlan`], [`Expr`], etc.
-pub trait TreeNode: Clone {
+pub trait TreeNode: Sized {
     /// Use preorder to iterate the node on the tree so that we can stop fast for some cases.
     ///
     /// [`op`] can be used to collect some info from the tree node
@@ -97,7 +97,7 @@ pub trait TreeNode: Clone {
     /// The default tree traversal direction is transform_up(Postorder Traversal).
     fn transform<F>(self, op: &F) -> Result<Self>
     where
-        F: Fn(Self) -> Result<Option<Self>>,
+        F: Fn(Self) -> Result<Transformed<Self>>,
     {
         self.transform_up(op)
     }
@@ -107,13 +107,9 @@ pub trait TreeNode: Clone {
     /// When the `op` does not apply to a given node, it is left unchanged.
     fn transform_down<F>(self, op: &F) -> Result<Self>
     where
-        F: Fn(Self) -> Result<Option<Self>>,
+        F: Fn(Self) -> Result<Transformed<Self>>,
     {
-        let node_cloned = self.clone();
-        let after_op = match op(node_cloned)? {
-            Some(value) => value,
-            None => self,
-        };
+        let after_op = op(self)?.into();
         after_op.map_children(|node| node.transform_down(op))
     }
 
@@ -122,15 +118,11 @@ pub trait TreeNode: Clone {
     /// When the `op` does not apply to a given node, it is left unchanged.
     fn transform_up<F>(self, op: &F) -> Result<Self>
     where
-        F: Fn(Self) -> Result<Option<Self>>,
+        F: Fn(Self) -> Result<Transformed<Self>>,
     {
         let after_op_children = self.map_children(|node| node.transform_up(op))?;
 
-        let after_op_children_clone = after_op_children.clone();
-        let new_node = match op(after_op_children)? {
-            Some(value) => value,
-            None => after_op_children_clone,
-        };
+        let new_node = op(after_op_children)?.into();
         Ok(new_node)
     }
 
@@ -269,6 +261,29 @@ pub enum VisitRecursion {
     Skip,
     /// Stop the visit to this node tree.
     Stop,
+}
+
+pub enum Transformed<T> {
+    /// The item was transformed / rewritten somehow
+    Yes(T),
+    /// The item was not transformed
+    No(T),
+}
+
+impl<T> Transformed<T> {
+    pub fn into(self) -> T {
+        match self {
+            Transformed::Yes(t) => t,
+            Transformed::No(t) => t,
+        }
+    }
+
+    pub fn into_pair(self) -> (T, bool) {
+        match self {
+            Transformed::Yes(t) => (t, true),
+            Transformed::No(t) => (t, false),
+        }
+    }
 }
 
 /// Helper trait for implementing [`TreeNode`] that have children stored as Arc's

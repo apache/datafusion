@@ -45,7 +45,7 @@ use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{reverse_sort_options, DataFusionError};
 use datafusion_physical_expr::utils::{ordering_satisfy, ordering_satisfy_concrete};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
@@ -176,7 +176,7 @@ impl PlanWithCorrespondingSort {
             })
             .collect();
 
-        let plan = with_new_children_if_necessary(parent_plan, children_plans)?;
+        let plan = with_new_children_if_necessary(parent_plan, children_plans)?.into();
         Ok(PlanWithCorrespondingSort { plan, sort_onwards })
     }
 
@@ -289,7 +289,7 @@ impl PlanWithCorrespondingCoalescePartitions {
                 }
             })
             .collect();
-        let plan = with_new_children_if_necessary(parent_plan, children_plans)?;
+        let plan = with_new_children_if_necessary(parent_plan, children_plans)?.into();
         Ok(PlanWithCorrespondingCoalescePartitions {
             plan,
             coalesce_onwards,
@@ -386,11 +386,11 @@ impl PhysicalOptimizerRule for EnforceSorting {
 /// By performing sorting in parallel, we can increase performance in some scenarios.
 fn parallelize_sorts(
     requirements: PlanWithCorrespondingCoalescePartitions,
-) -> Result<Option<PlanWithCorrespondingCoalescePartitions>> {
-    let plan = requirements.plan;
-    if plan.children().is_empty() {
-        return Ok(None);
+) -> Result<Transformed<PlanWithCorrespondingCoalescePartitions>> {
+    if requirements.plan.children().is_empty() {
+        return Ok(Transformed::No(requirements));
     }
+    let plan = requirements.plan;
     let mut coalesce_onwards = requirements.coalesce_onwards;
     // We know that `plan` has children, so `coalesce_onwards` is non-empty.
     if coalesce_onwards[0].is_some() {
@@ -409,7 +409,7 @@ fn parallelize_sorts(
             let sort_exprs = get_sort_exprs(&plan)?;
             add_sort_above(&mut prev_layer, sort_exprs.to_vec())?;
             let spm = SortPreservingMergeExec::new(sort_exprs.to_vec(), prev_layer);
-            return Ok(Some(PlanWithCorrespondingCoalescePartitions {
+            return Ok(Transformed::Yes(PlanWithCorrespondingCoalescePartitions {
                 plan: Arc::new(spm),
                 coalesce_onwards: vec![None],
             }));
@@ -418,13 +418,13 @@ fn parallelize_sorts(
             let mut prev_layer = plan.clone();
             update_child_to_remove_coalesce(&mut prev_layer, &mut coalesce_onwards[0])?;
             let new_plan = plan.with_new_children(vec![prev_layer])?;
-            return Ok(Some(PlanWithCorrespondingCoalescePartitions {
+            return Ok(Transformed::Yes(PlanWithCorrespondingCoalescePartitions {
                 plan: new_plan,
                 coalesce_onwards: vec![None],
             }));
         }
     }
-    Ok(Some(PlanWithCorrespondingCoalescePartitions {
+    Ok(Transformed::Yes(PlanWithCorrespondingCoalescePartitions {
         plan,
         coalesce_onwards,
     }))
@@ -450,16 +450,16 @@ fn is_sort_preserving_merge(plan: &Arc<dyn ExecutionPlan>) -> bool {
 /// violating these requirements whenever possible.
 fn ensure_sorting(
     requirements: PlanWithCorrespondingSort,
-) -> Result<Option<PlanWithCorrespondingSort>> {
+) -> Result<Transformed<PlanWithCorrespondingSort>> {
     // Perform naive analysis at the beginning -- remove already-satisfied sorts:
+    if requirements.plan.children().is_empty() {
+        return Ok(Transformed::No(requirements));
+    }
     let plan = requirements.plan;
     let mut children = plan.children();
-    if children.is_empty() {
-        return Ok(None);
-    }
     let mut sort_onwards = requirements.sort_onwards;
     if let Some(result) = analyze_immediate_sort_removal(&plan, &sort_onwards) {
-        return Ok(Some(result));
+        return Ok(Transformed::Yes(result));
     }
     for (idx, (child, sort_onwards, required_ordering)) in izip!(
         children.iter_mut(),
@@ -490,7 +490,7 @@ fn ensure_sorting(
                         || plan.as_any().is::<BoundedWindowAggExec>()
                     {
                         if let Some(result) = analyze_window_sort_removal(tree, &plan)? {
-                            return Ok(Some(result));
+                            return Ok(Transformed::Yes(result));
                         }
                     }
                 }
@@ -519,7 +519,7 @@ fn ensure_sorting(
             (None, None) => {}
         }
     }
-    Ok(Some(PlanWithCorrespondingSort {
+    Ok(Transformed::Yes(PlanWithCorrespondingSort {
         plan: plan.with_new_children(children)?,
         sort_onwards,
     }))

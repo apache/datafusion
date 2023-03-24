@@ -16,7 +16,7 @@
 // under the License.
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNode;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::Result;
 use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
@@ -49,11 +49,11 @@ impl AnalyzerRule for CountWildcardRule {
     }
 }
 
-fn analyze_internal(plan: LogicalPlan) -> Result<Option<LogicalPlan>> {
+fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     match plan {
         LogicalPlan::Window(window) => {
             let window_expr = handle_wildcard(&window.window_expr);
-            Ok(Some(LogicalPlan::Window(Window {
+            Ok(Transformed::Yes(LogicalPlan::Window(Window {
                 input: window.input.clone(),
                 window_expr,
                 schema: window.schema,
@@ -61,7 +61,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Option<LogicalPlan>> {
         }
         LogicalPlan::Aggregate(agg) => {
             let aggr_expr = handle_wildcard(&agg.aggr_expr);
-            Ok(Some(LogicalPlan::Aggregate(
+            Ok(Transformed::Yes(LogicalPlan::Aggregate(
                 Aggregate::try_new_with_schema(
                     agg.input.clone(),
                     agg.group_expr.clone(),
@@ -70,7 +70,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Option<LogicalPlan>> {
                 )?,
             )))
         }
-        _ => Ok(None),
+        _ => Ok(Transformed::No(plan)),
     }
 }
 

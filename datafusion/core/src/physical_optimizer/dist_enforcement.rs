@@ -33,7 +33,7 @@ use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
 use datafusion_physical_expr::expressions::Column;
@@ -81,15 +81,13 @@ impl PhysicalOptimizerRule for EnforceDistribution {
             plan
         };
         // Distribution enforcement needs to be applied bottom-up.
-        new_plan.transform_up(&{
-            |plan| {
-                let adjusted = if !top_down_join_key_reordering {
-                    reorder_join_keys_to_inputs(plan)?
-                } else {
-                    plan
-                };
-                Ok(Some(ensure_distribution(adjusted, target_partitions)?))
-            }
+        new_plan.transform_up(&|plan| {
+            let adjusted = if !top_down_join_key_reordering {
+                reorder_join_keys_to_inputs(plan)?
+            } else {
+                plan
+            };
+            ensure_distribution(adjusted, target_partitions)
         })
     }
 
@@ -146,10 +144,10 @@ impl PhysicalOptimizerRule for EnforceDistribution {
 ///
 fn adjust_input_keys_ordering(
     requirements: PlanWithKeyRequirements,
-) -> Result<Option<PlanWithKeyRequirements>> {
+) -> Result<Transformed<PlanWithKeyRequirements>> {
     let parent_required = requirements.required_key_ordering.clone();
     let plan_any = requirements.plan.as_any();
-    if let Some(HashJoinExec {
+    let transformed = if let Some(HashJoinExec {
         left,
         right,
         on,
@@ -174,13 +172,13 @@ fn adjust_input_keys_ordering(
                             *null_equals_null,
                         )?) as Arc<dyn ExecutionPlan>)
                     };
-                Ok(Some(reorder_partitioned_join_keys(
+                Some(reorder_partitioned_join_keys(
                     requirements.plan.clone(),
                     &parent_required,
                     on,
                     vec![],
                     &join_constructor,
-                )?))
+                )?)
             }
             PartitionMode::CollectLeft => {
                 let new_right_request = match join_type {
@@ -198,17 +196,15 @@ fn adjust_input_keys_ordering(
                 };
 
                 // Push down requirements to the right side
-                Ok(Some(PlanWithKeyRequirements {
+                Some(PlanWithKeyRequirements {
                     plan: requirements.plan.clone(),
                     required_key_ordering: vec![],
                     request_key_ordering: vec![None, new_right_request],
-                }))
+                })
             }
             PartitionMode::Auto => {
                 // Can not satisfy, clear the current requirements and generate new empty requirements
-                Ok(Some(PlanWithKeyRequirements::new(
-                    requirements.plan.clone(),
-                )))
+                Some(PlanWithKeyRequirements::new(requirements.plan.clone()))
             }
         }
     } else if let Some(CrossJoinExec { left, .. }) =
@@ -216,14 +212,14 @@ fn adjust_input_keys_ordering(
     {
         let left_columns_len = left.schema().fields().len();
         // Push down requirements to the right side
-        Ok(Some(PlanWithKeyRequirements {
+        Some(PlanWithKeyRequirements {
             plan: requirements.plan.clone(),
             required_key_ordering: vec![],
             request_key_ordering: vec![
                 None,
                 shift_right_required(&parent_required, left_columns_len),
             ],
-        }))
+        })
     } else if let Some(SortMergeJoinExec {
         left,
         right,
@@ -245,13 +241,13 @@ fn adjust_input_keys_ordering(
                     *null_equals_null,
                 )?) as Arc<dyn ExecutionPlan>)
             };
-        Ok(Some(reorder_partitioned_join_keys(
+        Some(reorder_partitioned_join_keys(
             requirements.plan.clone(),
             &parent_required,
             on,
             sort_options.clone(),
             &join_constructor,
-        )?))
+        )?)
     } else if let Some(AggregateExec {
         mode,
         group_by,
@@ -263,21 +259,19 @@ fn adjust_input_keys_ordering(
     {
         if !parent_required.is_empty() {
             match mode {
-                AggregateMode::FinalPartitioned => Ok(Some(reorder_aggregate_keys(
+                AggregateMode::FinalPartitioned => Some(reorder_aggregate_keys(
                     requirements.plan.clone(),
                     &parent_required,
                     group_by,
                     aggr_expr,
                     input.clone(),
                     input_schema,
-                )?)),
-                _ => Ok(Some(PlanWithKeyRequirements::new(
-                    requirements.plan.clone(),
-                ))),
+                )?),
+                _ => Some(PlanWithKeyRequirements::new(requirements.plan.clone())),
             }
         } else {
             // Keep everything unchanged
-            Ok(None)
+            None
         }
     } else if let Some(ProjectionExec { expr, .. }) =
         plan_any.downcast_ref::<ProjectionExec>()
@@ -287,33 +281,34 @@ fn adjust_input_keys_ordering(
         // Construct a mapping from new name to the the orginal Column
         let new_required = map_columns_before_projection(&parent_required, expr);
         if new_required.len() == parent_required.len() {
-            Ok(Some(PlanWithKeyRequirements {
+            Some(PlanWithKeyRequirements {
                 plan: requirements.plan.clone(),
                 required_key_ordering: vec![],
                 request_key_ordering: vec![Some(new_required.clone())],
-            }))
+            })
         } else {
             // Can not satisfy, clear the current requirements and generate new empty requirements
-            Ok(Some(PlanWithKeyRequirements::new(
-                requirements.plan.clone(),
-            )))
+            Some(PlanWithKeyRequirements::new(requirements.plan.clone()))
         }
     } else if plan_any.downcast_ref::<RepartitionExec>().is_some()
         || plan_any.downcast_ref::<CoalescePartitionsExec>().is_some()
         || plan_any.downcast_ref::<WindowAggExec>().is_some()
     {
-        Ok(Some(PlanWithKeyRequirements::new(
-            requirements.plan.clone(),
-        )))
+        Some(PlanWithKeyRequirements::new(requirements.plan.clone()))
     } else {
         // By default, push down the parent requirements to children
         let children_len = requirements.plan.children().len();
-        Ok(Some(PlanWithKeyRequirements {
+        Some(PlanWithKeyRequirements {
             plan: requirements.plan.clone(),
             required_key_ordering: vec![],
             request_key_ordering: vec![Some(parent_required.clone()); children_len],
-        }))
-    }
+        })
+    };
+    Ok(if let Some(transformed) = transformed {
+        Transformed::Yes(transformed)
+    } else {
+        Transformed::No(requirements)
+    })
 }
 
 fn reorder_partitioned_join_keys<F>(
@@ -841,11 +836,11 @@ fn new_join_conditions(
 /// takes care of such requirements, we should avoid manually adding data
 /// exchange operators in other places.
 fn ensure_distribution(
-    plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
+    plan: Arc<dyn ExecutionPlan>,
     target_partitions: usize,
-) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     if plan.children().is_empty() {
-        return Ok(plan);
+        return Ok(Transformed::No(plan));
     }
 
     let required_input_distributions = plan.required_input_distribution();
@@ -957,7 +952,7 @@ impl TreeNode for PlanWithKeyRequirements {
                 .collect::<Vec<_>>();
             let new_plan = with_new_children_if_necessary(self.plan, children_plans)?;
             Ok(PlanWithKeyRequirements {
-                plan: new_plan,
+                plan: new_plan.into(),
                 required_key_ordering: self.required_key_ordering,
                 request_key_ordering: self.request_key_ordering,
             })
@@ -1673,7 +1668,8 @@ mod tests {
         let bottom_left_join = ensure_distribution(
             hash_join_exec(left.clone(), right.clone(), &join_on, &JoinType::Inner),
             10,
-        )?;
+        )?
+        .into();
 
         // Projection(a as A, a as AA, b as B, c as C)
         let alias_pairs: Vec<(String, String)> = vec![
@@ -1703,7 +1699,8 @@ mod tests {
         let bottom_right_join = ensure_distribution(
             hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner),
             10,
-        )?;
+        )?
+        .into();
 
         // Join on (B == b1 and C == c and AA = a1)
         let top_join_on = vec![
@@ -1792,7 +1789,8 @@ mod tests {
         let bottom_left_join = ensure_distribution(
             hash_join_exec(left.clone(), right.clone(), &join_on, &JoinType::Inner),
             10,
-        )?;
+        )?
+        .into();
 
         // Projection(a as A, a as AA, b as B, c as C)
         let alias_pairs: Vec<(String, String)> = vec![
@@ -1822,7 +1820,8 @@ mod tests {
         let bottom_right_join = ensure_distribution(
             hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner),
             10,
-        )?;
+        )?
+        .into();
 
         // Join on (B == b1 and C == c and AA = a1)
         let top_join_on = vec![

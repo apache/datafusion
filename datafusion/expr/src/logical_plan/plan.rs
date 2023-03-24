@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expr_rewriter::rewrite_expr;
 ///! Logical plan types
 use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
@@ -30,7 +29,9 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeVisitor, VisitRecursion,
+};
 use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
     Result, ScalarValue, TableReference,
@@ -599,7 +600,7 @@ impl LogicalPlan {
         expr: Expr,
         param_values: &[ScalarValue],
     ) -> Result<Expr> {
-        rewrite_expr(expr, |expr| {
+        expr.transform(&|expr| {
             match &expr {
                 Expr::Placeholder { id, data_type } => {
                     // convert id (in format $1, $2, ..) to idx (0, 1, ..)
@@ -623,17 +624,17 @@ impl LogicalPlan {
                         )));
                     }
                     // Replace the placeholder with the value
-                    Ok(Expr::Literal(value.clone()))
+                    Ok(Transformed::Yes(Expr::Literal(value.clone())))
                 }
                 Expr::ScalarSubquery(qry) => {
                     let subquery =
                         Arc::new(qry.subquery.replace_params_with_values(param_values)?);
-                    Ok(Expr::ScalarSubquery(plan::Subquery {
+                    Ok(Transformed::Yes(Expr::ScalarSubquery(plan::Subquery {
                         subquery,
                         outer_ref_columns: qry.outer_ref_columns.clone(),
-                    }))
+                    })))
                 }
-                _ => Ok(expr),
+                _ => Ok(Transformed::No(expr)),
             }
         })
     }

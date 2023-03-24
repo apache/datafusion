@@ -35,7 +35,7 @@ use crate::physical_plan::joins::{
     SymmetricHashJoinExec,
 };
 use crate::physical_plan::ExecutionPlan;
-use datafusion_common::tree_node::TreeNode;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::DataFusionError;
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr, Column, Literal};
@@ -292,7 +292,7 @@ fn swap(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
 fn apply_subrules_and_check_finiteness_requirements(
     mut input: PipelineStatePropagator,
     physical_optimizer_subrules: &Vec<Box<PipelineFixerSubrule>>,
-) -> Result<Option<PipelineStatePropagator>> {
+) -> Result<Transformed<PipelineStatePropagator>> {
     for sub_rule in physical_optimizer_subrules {
         if let Some(value) = sub_rule(input.clone()).transpose()? {
             input = value;
