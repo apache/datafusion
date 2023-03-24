@@ -29,8 +29,16 @@ use log::{debug, trace};
 use std::sync::Arc;
 use std::time::Instant;
 
-/// `AnalyzerRule` transforms the unresolved ['LogicalPlan']s and unresolved ['Expr']s into
-/// the resolved form.
+/// [`AnalyzerRule`]s transform [`LogicalPlan`]s in some way to make
+/// the plan valid prior to the rest of the DataFusion optimization process.
+///
+/// For example, it may resolve [`Expr]s into more specific forms such
+/// as a subquery reference, to do type coercion to ensure the types
+/// of operands are correct.
+///
+/// This is different than an [`OptimizerRule`](crate::OptimizerRule)
+/// which should preserve the semantics of the LogicalPlan but compute
+/// it the same result in some more optimal way.
 pub trait AnalyzerRule {
     /// Rewrite `plan`
     fn analyze(&self, plan: &LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan>;
