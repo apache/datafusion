@@ -748,7 +748,7 @@ mod ci {
         let queries = get_query_sql(query)?;
         for query in queries {
             let plan = ctx.sql(&query).await?;
-            let plan = plan.to_logical_plan()?;
+            let plan = plan.into_optimized_plan()?;
             let bytes = logical_plan_to_bytes(&plan)?;
             let plan2 = logical_plan_from_bytes(&bytes, &ctx)?;
             let plan_formatted = format!("{}", plan.display_indent());
