@@ -32,13 +32,10 @@ use crate::physical_plan::tree_node::TreeNodeRewritable;
 use crate::physical_plan::ExecutionPlan;
 use datafusion_common::DataFusionError;
 use datafusion_expr::logical_plan::JoinType;
-use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr, Column, Literal};
-use datafusion_physical_expr::intervals::{is_datatype_supported, is_operator_supported};
-use datafusion_physical_expr::PhysicalExpr;
 
 use std::sync::Arc;
 
-/// The [PipelineFixer] rule tries to modify a given plan so that it can
+/// The [`PipelineFixer`] rule tries to modify a given plan so that it can
 /// accommodate its infinite sources, if there are any. If this is not
 /// possible, the rule emits a diagnostic error message.
 #[derive(Default)]
@@ -50,10 +47,10 @@ impl PipelineFixer {
         Self {}
     }
 }
-/// [PipelineFixer] subrules are functions of this type. Such functions take a
-/// single [PipelineStatePropagator] argument, which stores state variables
-/// indicating the unboundedness status of the current [ExecutionPlan] as
-/// the [PipelineFixer] rule traverses the entire plan tree.
+/// [`PipelineFixer`] subrules are functions of this type. Such functions take a
+/// single [`PipelineStatePropagator`] argument, which stores state variables
+/// indicating the unboundedness status of the current [`ExecutionPlan`] as
+/// the `PipelineFixer` rule traverses the entire plan tree.
 type PipelineFixerSubrule =
     dyn Fn(PipelineStatePropagator) -> Option<Result<PipelineStatePropagator>>;
 
@@ -86,36 +83,6 @@ impl PhysicalOptimizerRule for PipelineFixer {
     }
 }
 
-/// Indicates whether interval arithmetic is supported for the given expression.
-/// Currently, we do not support all [PhysicalExpr]s for interval calculations.
-/// We do not support every type of [Operator]s either. Over time, this check
-/// will relax as more types of [PhysicalExpr]s and [Operator]s are supported.
-/// Currently, [CastExpr], [BinaryExpr], [Column] and [Literal] is supported.
-fn check_support(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    let expr_any = expr.as_any();
-    let expr_supported = if let Some(binary_expr) = expr_any.downcast_ref::<BinaryExpr>()
-    {
-        is_operator_supported(binary_expr.op())
-    } else {
-        expr_any.is::<Column>() || expr_any.is::<Literal>() || expr_any.is::<CastExpr>()
-    };
-    expr_supported && expr.children().iter().all(check_support)
-}
-
-/// This function returns whether a given hash join is replaceable by a
-/// symmetric hash join. Basically, the requirement is that involved
-/// [`PhysicalExpr`]s, [`Operator`]s and data types need to be supported
-fn is_suitable_for_symmetric_hash_join(hash_join: &HashJoinExec) -> bool {
-    hash_join.filter().map_or(true, |filter| {
-        check_support(filter.expression())
-            && filter
-                .schema()
-                .fields()
-                .iter()
-                .all(|f| is_datatype_supported(f.data_type()))
-    })
-}
-
 /// This subrule checks if one can replace a hash join with a symmetric hash
 /// join so that the pipeline does not break due to the join operation in
 /// question. If possible, it makes this replacement; otherwise, it has no
@@ -127,10 +94,7 @@ fn hash_join_convert_symmetric_subrule(
     if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
         let ub_flags = input.children_unbounded;
         let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
-        let new_plan = if left_unbounded
-            && right_unbounded
-            && is_suitable_for_symmetric_hash_join(hash_join)
-        {
+        let new_plan = if left_unbounded && right_unbounded {
             SymmetricHashJoinExec::try_new(
                 hash_join.left().clone(),
                 hash_join.right().clone(),
@@ -276,9 +240,9 @@ fn apply_subrules_and_check_finiteness_requirements(
 
 #[cfg(test)]
 mod util_tests {
-    use crate::physical_optimizer::pipeline_fixer::check_support;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
+    use datafusion_physical_expr::intervals::check_support;
     use datafusion_physical_expr::PhysicalExpr;
     use std::sync::Arc;
 

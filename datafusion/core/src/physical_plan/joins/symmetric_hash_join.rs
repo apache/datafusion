@@ -166,8 +166,8 @@ pub struct SymmetricHashJoinExec {
     pub(crate) filter: Option<JoinFilter>,
     /// How the join is performed
     pub(crate) join_type: JoinType,
-    /// Expression graph and SortedFilterExprs for interval calculations
-    filter_order_state: Option<Arc<Mutex<IntervalCalculatorInnerState>>>,
+    /// Expression graph and `SortedFilterExpr`s for interval calculations
+    filter_state: Option<Arc<Mutex<IntervalCalculatorInnerState>>>,
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Shares the `RandomState` for the hashing algorithm
@@ -182,14 +182,14 @@ pub struct SymmetricHashJoinExec {
 
 struct IntervalCalculatorInnerState {
     /// Expression graph for interval calculations
-    physical_expr_graph: Option<ExprIntervalGraph>,
-    sorted_filter_exprs: Vec<Option<SortedFilterExpr>>,
+    graph: Option<ExprIntervalGraph>,
+    sorted_exprs: Vec<Option<SortedFilterExpr>>,
     calculated: bool,
 }
 
 impl Debug for IntervalCalculatorInnerState {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "Exprs({:?})", self.sorted_filter_exprs)
+        write!(f, "Exprs({:?})", self.sorted_exprs)
     }
 }
 
@@ -281,10 +281,10 @@ impl SymmetricHashJoinExec {
         // Initialize the random state for the join operation:
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
-        let filter_order_state = if filter.is_some() {
+        let filter_state = if filter.is_some() {
             let inner_state = IntervalCalculatorInnerState {
-                physical_expr_graph: None,
-                sorted_filter_exprs: vec![],
+                graph: None,
+                sorted_exprs: vec![],
                 calculated: false,
             };
             Some(Arc::new(Mutex::new(inner_state)))
@@ -298,7 +298,7 @@ impl SymmetricHashJoinExec {
             on,
             filter,
             join_type: *join_type,
-            filter_order_state,
+            filter_state,
             schema: Arc::new(schema),
             random_state,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -475,17 +475,16 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let on_left = self.on.iter().map(|on| on.0.clone()).collect::<Vec<_>>();
-        let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
-        // If self.filter_order_state and self.filter are both present, then calculate sorted filter expressions
-        // for the left and right sides and build a physical expression graph from them
-        let (left_sorted_filter_expr, right_sorted_filter_expr, physical_expr_graph) =
-            match (&self.filter_order_state, &self.filter) {
+        // If `filter_state` and `filter` are both present, then calculate sorted filter expressions
+        // for both sides, and build an expression graph if one is not already built.
+        let (left_sorted_filter_expr, right_sorted_filter_expr, graph) =
+            match (&self.filter_state, &self.filter) {
                 (Some(interval_state), Some(filter)) => {
-                    // Lock the mutexes of the interval state
-                    let mut filter_order_state = interval_state.lock();
-                    // if this is the first partition to be invoked then we need to set up initial state
-                    if !filter_order_state.calculated {
+                    // Lock the mutex of the interval state:
+                    let mut filter_state = interval_state.lock();
+                    // If this is the first partition to be invoked, then we need to initialize our state
+                    // (the expression graph for pruning, sorted filter expressions etc.)
+                    if !filter_state.calculated {
                         // Interval calculations require each column to exhibit monotonicity
                         // independently. However, a `PhysicalSortExpr` object defines a
                         // lexicographical ordering, so we can only use their first elements.
@@ -511,62 +510,59 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                                 })
                                 .transpose()?;
 
-                            filter_order_state.sorted_filter_exprs.push(sorted_expr);
+                            filter_state.sorted_exprs.push(sorted_expr);
                         }
-                        // Gather filter expressions
-                        let filter_exprs = filter_order_state
-                            .sorted_filter_exprs
-                            .iter()
-                            .filter_map(|sorted_expr| {
-                                sorted_expr
-                                    .as_ref()
-                                    .map(|expr| expr.filter_expr().clone())
-                            })
+
+                        // Collect available sorted filter expressions:
+                        let sorted_exprs_size = filter_state.sorted_exprs.len();
+                        let mut sorted_exprs = filter_state
+                            .sorted_exprs
+                            .iter_mut()
+                            .flatten()
                             .collect::<Vec<_>>();
 
-                        // Create the physical expression graph if sorted filter expressions can be created for both children:
-                        let physical_expr_graph = if filter_order_state
-                            .sorted_filter_exprs
-                            .iter()
-                            .all(Option::is_some)
-                        {
-                            let mut physical_expr_graph =
+                        // Create the expression graph if we can create sorted filter expressions for both children:
+                        filter_state.graph = if sorted_exprs.len() == sorted_exprs_size {
+                            let mut graph =
                                 ExprIntervalGraph::try_new(filter.expression().clone())?;
-                            // Gather node indices of converted filter expressions in `SortedFilterExpr`
+
+                            // Gather filter expressions:
+                            let filter_exprs = sorted_exprs
+                                .iter()
+                                .map(|sorted_expr| sorted_expr.filter_expr().clone())
+                                .collect::<Vec<_>>();
+
+                            // Gather node indices of converted filter expressions in `SortedFilterExpr`s
                             // using the filter columns vector:
                             let child_node_indices =
-                                physical_expr_graph.gather_node_indices(&filter_exprs);
+                                graph.gather_node_indices(&filter_exprs);
 
                             // Update SortedFilterExpr instances with the corresponding node indices:
-                            filter_order_state
-                                .sorted_filter_exprs
-                                .iter_mut()
-                                .map(Option::as_mut)
-                                .map(Option::unwrap)
-                                .zip(child_node_indices.iter())
-                                .for_each(|(sorted_expr, (_, index))| {
-                                    sorted_expr.set_node_index(*index);
-                                });
+                            for (sorted_expr, (_, index)) in
+                                sorted_exprs.iter_mut().zip(child_node_indices.iter())
+                            {
+                                sorted_expr.set_node_index(*index);
+                            }
 
-                            Some(physical_expr_graph)
+                            Some(graph)
                         } else {
                             None
                         };
-                        // Store the calculated physical expression graph in the interval state
-                        filter_order_state.physical_expr_graph = physical_expr_graph;
-                        filter_order_state.calculated = true;
+                        filter_state.calculated = true;
                     }
-                    // Return the sorted filter expressions for the left and right sides, along with the physical
-                    // expression graph
+                    // Return the sorted filter expressions for both sides along with the expression graph:
                     (
-                        filter_order_state.sorted_filter_exprs[0].clone(),
-                        filter_order_state.sorted_filter_exprs[1].clone(),
-                        filter_order_state.physical_expr_graph.as_ref().cloned(),
+                        filter_state.sorted_exprs[0].clone(),
+                        filter_state.sorted_exprs[1].clone(),
+                        filter_state.graph.as_ref().cloned(),
                     )
                 }
-                // If self.filter_order_state or self.filter is None, then return None for all three values
+                // If `filter_state` or `filter` is not present, then return None for all three values:
                 (_, _) => (None, None, None),
             };
+
+        let on_left = self.on.iter().map(|on| on.0.clone()).collect::<Vec<_>>();
+        let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
 
         let left_side_joiner =
             OneSideHashJoiner::new(JoinSide::Left, on_left, self.left.schema());
@@ -587,7 +583,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             right: right_side_joiner,
             column_indices: self.column_indices.clone(),
             metrics: SymmetricHashJoinMetrics::new(partition, &self.metrics),
-            physical_expr_graph,
+            graph,
             left_sorted_filter_expr,
             right_sorted_filter_expr,
             null_equals_null: self.null_equals_null,
@@ -615,8 +611,8 @@ struct SymmetricHashJoinStream {
     right: OneSideHashJoiner,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
-    // Range pruner.
-    physical_expr_graph: Option<ExprIntervalGraph>,
+    // Expression graph for range pruning.
+    graph: Option<ExprIntervalGraph>,
     // Left globally sorted filter expr
     left_sorted_filter_expr: Option<SortedFilterExpr>,
     // Right globally sorted filter expr
@@ -763,8 +759,7 @@ fn calculate_filter_expr_intervals(
     update_filter_expr_interval(
         &probe_batch.slice(probe_batch.num_rows() - 1, 1),
         probe_sorted_filter_expr,
-    )?;
-    Ok(())
+    )
 }
 
 /// This is a subroutine of the function [`calculate_filter_expr_intervals`].
@@ -1235,7 +1230,7 @@ impl OneSideHashJoiner {
     /// * `join_type` - The type of join (e.g. inner, left, right, etc.).
     /// * `column_indices` - A vector of column indices that specifies which columns from the
     ///     build side should be included in the output.
-    /// * `physical_expr_graph` - A mutable reference to the physical expression graph.
+    /// * `graph` - A mutable reference to the physical expression graph.
     ///
     /// # Returns
     ///
@@ -1245,7 +1240,7 @@ impl OneSideHashJoiner {
         &mut self,
         build_side_sorted_filter_expr: &mut SortedFilterExpr,
         probe_side_sorted_filter_expr: &mut SortedFilterExpr,
-        physical_expr_graph: &mut ExprIntervalGraph,
+        graph: &mut ExprIntervalGraph,
     ) -> Result<usize> {
         // Return early if the input buffer is empty:
         if self.input_buffer.num_rows() == 0 {
@@ -1261,7 +1256,7 @@ impl OneSideHashJoiner {
             filter_intervals.push((expr.node_index(), expr.interval().clone()))
         }
         // Update the physical expression graph using the join filter intervals:
-        physical_expr_graph.update_ranges(&mut filter_intervals)?;
+        graph.update_ranges(&mut filter_intervals)?;
         // Extract the new join filter interval for the build side:
         let calculated_build_side_interval = filter_intervals.remove(0).1;
         // If the intervals have not changed, return early without pruning:
@@ -1442,11 +1437,11 @@ impl SymmetricHashJoinStream {
                     let anti_result = if let (
                         Some(build_side_sorted_filter_expr),
                         Some(probe_side_sorted_filter_expr),
-                        Some(physical_expr_graph),
+                        Some(graph),
                     ) = (
                         build_side_sorted_filter_expr.as_mut(),
                         probe_side_sorted_filter_expr.as_mut(),
-                        self.physical_expr_graph.as_mut(),
+                        self.graph.as_mut(),
                     ) {
                         // Calculate filter intervals:
                         calculate_filter_expr_intervals(
@@ -1459,7 +1454,7 @@ impl SymmetricHashJoinStream {
                             .calculate_prune_length_with_probe_batch(
                                 build_side_sorted_filter_expr,
                                 probe_side_sorted_filter_expr,
-                                physical_expr_graph,
+                                graph,
                             )?;
 
                         if prune_length > 0 {
@@ -2305,7 +2300,7 @@ mod tests {
         match df.create_physical_plan().await {
             Ok(_) => panic!("Expecting error."),
             Err(e) => {
-                assert_eq!(e.to_string(), "PipelineChecker\ncaused by\nError during planning: Join operation cannot operate on stream without enabling the 'allow_symmetric_joins_without_pruning' configuration flag")
+                assert_eq!(e.to_string(), "PipelineChecker\ncaused by\nError during planning: Join operation cannot operate on a non-prunable stream without enabling the 'allow_symmetric_joins_without_pruning' configuration flag")
             }
         }
         Ok(())

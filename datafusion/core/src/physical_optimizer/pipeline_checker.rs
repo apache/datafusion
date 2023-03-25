@@ -27,6 +27,7 @@ use crate::physical_plan::tree_node::TreeNodeRewritable;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use datafusion_common::config::OptimizerOptions;
 use datafusion_common::DataFusionError;
+use datafusion_physical_expr::intervals::{check_support, is_datatype_supported};
 use std::sync::Arc;
 
 /// The PipelineChecker rule rejects non-runnable query plans that use
@@ -122,10 +123,11 @@ pub fn check_finiteness_requirements(
     let plan = input.plan;
     if let Some(exec) = plan.as_any().downcast_ref::<SymmetricHashJoinExec>() {
         if !(optimizer_options.allow_symmetric_joins_without_pruning
-            || exec.check_if_order_information_available()?)
+            || (exec.check_if_order_information_available()? && is_prunable(exec)))
         {
-            let msg = "Join operation cannot operate on stream without enabling the 'allow_symmetric_joins_without_pruning' configuration flag";
-            return Err(DataFusionError::Plan(msg.to_owned()));
+            const MSG: &str = "Join operation cannot operate on a non-prunable stream without enabling \
+                               the 'allow_symmetric_joins_without_pruning' configuration flag";
+            return Err(DataFusionError::Plan(MSG.to_owned()));
         }
     }
     let children = input.children_unbounded;
@@ -135,6 +137,21 @@ pub fn check_finiteness_requirements(
             unbounded: value,
             children_unbounded: children,
         })
+    })
+}
+
+/// This function returns whether a given symmetric hash join is amenable to
+/// data pruning. For this to be possible, it needs to have a filter where
+/// all involved [`PhysicalExpr`]s, [`Operator`]s and data types support
+/// interval calculations.
+fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
+    join.filter().map_or(false, |filter| {
+        check_support(filter.expression())
+            && filter
+                .schema()
+                .fields()
+                .iter()
+                .all(|f| is_datatype_supported(f.data_type()))
     })
 }
 
