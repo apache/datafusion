@@ -283,6 +283,9 @@ name = "arrow-schema"
 version = "34.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64951898473bfb8e22293e83a44f02874d2257514d49cd95f9aa4afcff183fbc"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "arrow-schema"
