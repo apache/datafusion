@@ -130,7 +130,7 @@ pub fn to_substrait_rel(
                         }),
                         advanced_extension: None,
                         read_type: Some(ReadType::NamedTable(NamedTable {
-                            names: vec![scan.table_name.to_string()],
+                            names: scan.table_name.to_vec(),
                             advanced_extension: None,
                         })),
                     }))),
