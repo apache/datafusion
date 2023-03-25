@@ -180,13 +180,38 @@ STORED AS CSV
 LOCATION '/path/to/aggregate_test_100.csv';
 ```
 
-## Querying S3 Data Sources
+## Registering S3 Data Sources
 
-The CLI can query data in S3 if the following environment variables are defined:
+S3 data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement.
+```sql
+CREATE EXTERNAL TABLE test
+STORED AS PARQUET
+OPTIONS(
+    'access_key_id' '******',
+    'access_key' '******',
+    'region' 'us-east-2'
+)
+LOCATION 's3://bucket/path/file.parquet';
+```
 
-- `AWS_DEFAULT_REGION`
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
+It is also simplify sql statements by  environment variables.
+```bash
+$ export AWS_DEFAULT_REGION=us-east-2
+$ export AWS_SECRET_ACCESS_KEY=******
+$ export AWS_ACCESS_KEY_ID=******
+
+$ datafusion-cli
+DataFusion CLI v21.0.0
+❯ create external table test stored as csv location 's3://bucket/path/file.parquet';
+0 rows in set. Query took 0.374 seconds.
+❯ select * from test;
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
+| 1        | 2        |
++----------+----------+
+1 row in set. Query took 0.171 seconds.
+```
 
 Details of the environment variables that can be used are
 
@@ -198,28 +223,21 @@ Details of the environment variables that can be used are
 - AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
 - AWS_ALLOW_HTTP -> set to "true" to permit HTTP connections without TLS
 
-Example:
+## Registering OSS Data Sources
 
-```bash
-$ aws s3 cp test.csv s3://my-bucket/
-upload: ./test.csv to s3://my-bucket/test.csv
-
-$ export AWS_DEFAULT_REGION=us-east-2
-$ export AWS_SECRET_ACCESS_KEY=***************************
-$ export AWS_ACCESS_KEY_ID=**************
-
-$ datafusion-cli
-DataFusion CLI v14.0.0
-❯ create external table test stored as csv location 's3://my-bucket/test.csv';
-0 rows in set. Query took 0.374 seconds.
-❯ select * from test;
-+----------+----------+
-| column_1 | column_2 |
-+----------+----------+
-| 1        | 2        |
-+----------+----------+
-1 row in set. Query took 0.171 seconds.
+OSS data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement.
+```sql
+CREATE EXTERNAL TABLE test
+STORED AS PARQUET
+OPTIONS(
+    'access_key_id' '******',
+    'access_key' '******',
+    'endpoint' 'https://bucket.oss-cn-hangzhou.aliyuncs.com'
+)
+LOCATION 'oss://bucket/path/file.parquet';
 ```
+
+Note that the `endpoint` format of oss needs to be: `https://{bucket}.{oss-region-endpoint}`
 
 ## Commands
 
