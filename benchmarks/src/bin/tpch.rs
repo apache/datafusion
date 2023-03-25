@@ -525,13 +525,19 @@ mod tests {
         let mut actual = String::new();
         let sql = get_query_sql(query)?;
         for sql in &sql {
-            let df = ctx.sql(sql.as_str()).await?;
-            let plan = df.into_optimized_plan()?;
-            if !actual.is_empty() {
-                actual += "\n";
+            if sql.starts_with("select") {
+                let explain = "explain ".to_string() + sql;
+                let result_batch =
+                    execute_query(&ctx, explain.as_str(), false, false).await?;
+                if !actual.is_empty() {
+                    actual += "\n";
+                }
+                use std::fmt::Write as _;
+                write!(actual, "{}", pretty::pretty_format_batches(&result_batch)?)
+                    .unwrap();
+            } else {
+                execute_query(&ctx, sql.as_str(), false, false).await?;
             }
-            use std::fmt::Write as _;
-            write!(actual, "{}", plan.display_indent()).unwrap();
         }
 
         let possibilities = vec![
