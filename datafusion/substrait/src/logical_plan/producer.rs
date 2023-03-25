@@ -23,7 +23,6 @@ use datafusion::{
     logical_expr::{WindowFrame, WindowFrameBound},
     prelude::JoinType,
     scalar::ScalarValue,
-    sql::TableReference,
 };
 
 use datafusion::common::DFSchemaRef;
@@ -110,17 +109,6 @@ pub fn to_substrait_rel(
             });
 
             if let Some(struct_items) = projection {
-                let names = match &scan.table_name {
-                    TableReference::Bare { table } => vec![table.to_string()],
-                    TableReference::Partial { schema, table } => {
-                        vec![schema.to_string(), table.to_string()]
-                    }
-                    TableReference::Full {
-                        catalog,
-                        schema,
-                        table,
-                    } => vec![catalog.to_string(), schema.to_string(), table.to_string()],
-                };
                 Ok(Box::new(Rel {
                     rel_type: Some(RelType::Read(Box::new(ReadRel {
                         common: None,
@@ -142,7 +130,7 @@ pub fn to_substrait_rel(
                         }),
                         advanced_extension: None,
                         read_type: Some(ReadType::NamedTable(NamedTable {
-                            names,
+                            names: scan.table_name.to_vec(),
                             advanced_extension: None,
                         })),
                     }))),
