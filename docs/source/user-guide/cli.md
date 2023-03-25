@@ -183,6 +183,7 @@ LOCATION '/path/to/aggregate_test_100.csv';
 ## Registering S3 Data Sources
 
 S3 data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement.
+
 ```sql
 CREATE EXTERNAL TABLE test
 STORED AS PARQUET
@@ -194,7 +195,8 @@ OPTIONS(
 LOCATION 's3://bucket/path/file.parquet';
 ```
 
-It is also simplify sql statements by  environment variables.
+It is also simplify sql statements by environment variables.
+
 ```bash
 $ export AWS_DEFAULT_REGION=us-east-2
 $ export AWS_SECRET_ACCESS_KEY=******
@@ -226,6 +228,7 @@ Details of the environment variables that can be used are
 ## Registering OSS Data Sources
 
 OSS data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement.
+
 ```sql
 CREATE EXTERNAL TABLE test
 STORED AS PARQUET
