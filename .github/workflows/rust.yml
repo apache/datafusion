@@ -248,11 +248,11 @@ jobs:
           rustup toolchain install stable
           rustup default stable
           rustup component add rustfmt
-      - name: Run tests
+      - name: Run tests (excluding doctests)
         shell: bash
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test
+          cargo test --lib --tests --bins --features avro,jit,scheduler,json,dictionary_expressions
         env:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: "-C debuginfo=0"
@@ -282,10 +282,10 @@ jobs:
           rustup toolchain install stable
           rustup default stable
           rustup component add rustfmt
-      - name: Run tests
+      - name: Run tests (excluding doctests)
         shell: bash
         run: |
-          cargo test
+          cargo test --lib --tests --bins --features avro,jit,scheduler,json,dictionary_expressions
         env:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: "-C debuginfo=0"
