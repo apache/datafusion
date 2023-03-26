@@ -1690,7 +1690,7 @@ async fn right_semi_join() -> Result<()> {
             vec!["SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
                 "  SortExec: expr=[t1_id@0 ASC NULLS LAST]",
                 "    CoalesceBatchesExec: target_batch_size=4096",
-                "      HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
+                "      HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 }, data_type: None }",
                 "        CoalesceBatchesExec: target_batch_size=4096",
                 "          RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
                 "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
@@ -1704,7 +1704,7 @@ async fn right_semi_join() -> Result<()> {
             vec![
                 "SortExec: expr=[t1_id@0 ASC NULLS LAST]",
                 "  CoalesceBatchesExec: target_batch_size=4096",
-                "    HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
+                "    HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 }, data_type: None }",
                 "      MemoryExec: partitions=1, partition_sizes=[1]",
                 "      MemoryExec: partitions=1, partition_sizes=[1]",
             ]
@@ -1734,7 +1734,7 @@ async fn right_semi_join() -> Result<()> {
             vec!["SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
                 "  SortExec: expr=[t1_id@0 ASC NULLS LAST]",
                 "    CoalesceBatchesExec: target_batch_size=4096",
-                "      HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 0 }, op: NotEq, right: Column { name: \"t1_name\", index: 1 } }",
+                "      HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 0 }, op: NotEq, right: Column { name: \"t1_name\", index: 1 }, data_type: None }",
                 "        CoalesceBatchesExec: target_batch_size=4096",
                 "          RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
                 "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
@@ -1748,7 +1748,7 @@ async fn right_semi_join() -> Result<()> {
             vec![
                 "SortExec: expr=[t1_id@0 ASC NULLS LAST]",
                 "  CoalesceBatchesExec: target_batch_size=4096",
-                "    HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 0 }, op: NotEq, right: Column { name: \"t1_name\", index: 1 } }",
+                "    HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 0 }, op: NotEq, right: Column { name: \"t1_name\", index: 1 }, data_type: None }",
                 "      MemoryExec: partitions=1, partition_sizes=[1]",
                 "      MemoryExec: partitions=1, partition_sizes=[1]",
             ]
@@ -2564,7 +2564,7 @@ async fn right_as_inner_table_nested_loop_join() -> Result<()> {
 
     // right is single partition side, so it will be visited many times.
     let expected = vec![
-        "NestedLoopJoinExec: join_type=Inner, filter=BinaryExpr { left: Column { name: \"t1_id\", index: 0 }, op: Gt, right: Column { name: \"t2_id\", index: 1 } }",
+        "NestedLoopJoinExec: join_type=Inner, filter=BinaryExpr { left: Column { name: \"t1_id\", index: 0 }, op: Gt, right: Column { name: \"t2_id\", index: 1 }, data_type: None }",
         "  CoalesceBatchesExec: target_batch_size=4096",
         "    FilterExec: t1_id@0 > 10",
         "      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
@@ -2614,7 +2614,7 @@ async fn left_as_inner_table_nested_loop_join() -> Result<()> {
 
     // left is single partition side, so it will be visited many times.
     let expected = vec![
-        "NestedLoopJoinExec: join_type=Right, filter=BinaryExpr { left: Column { name: \"t1_id\", index: 0 }, op: Lt, right: Column { name: \"t2_id\", index: 1 } }",
+        "NestedLoopJoinExec: join_type=Right, filter=BinaryExpr { left: Column { name: \"t1_id\", index: 0 }, op: Lt, right: Column { name: \"t2_id\", index: 1 }, data_type: None }",
         "  CoalescePartitionsExec",
         "    CoalesceBatchesExec: target_batch_size=4096",
         "      FilterExec: t1_id@0 > 22",
