@@ -42,12 +42,13 @@ use crate::physical_plan::metrics::{
 use crate::physical_plan::sorts::{RowIndex, SortKeyCursor, SortedStream};
 use crate::physical_plan::stream::RecordBatchReceiverStream;
 use crate::physical_plan::{
-    common::spawn_execution, expressions::PhysicalSortExpr, DisplayFormatType,
-    Distribution, ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    common::spawn_execution,
+    expressions::{ExprOrdering, ExprOrderingRef},
+    DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PhysicalExpr,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use datafusion_physical_expr::{
-    make_sort_requirements_from_exprs, EquivalenceProperties, PhysicalSortRequirement,
+    make_requirements_from_ordering, EquivalenceProperties, OrderingRequirement,
 };
 
 /// Sort preserving merge execution plan
@@ -82,14 +83,14 @@ pub struct SortPreservingMergeExec {
     /// Input plan
     input: Arc<dyn ExecutionPlan>,
     /// Sort expressions
-    expr: Vec<PhysicalSortExpr>,
+    expr: ExprOrdering,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
 
 impl SortPreservingMergeExec {
     /// Create a new sort execution plan
-    pub fn new(expr: Vec<PhysicalSortExpr>, input: Arc<dyn ExecutionPlan>) -> Self {
+    pub fn new(expr: ExprOrdering, input: Arc<dyn ExecutionPlan>) -> Self {
         Self {
             input,
             expr,
@@ -103,7 +104,7 @@ impl SortPreservingMergeExec {
     }
 
     /// Sort expressions
-    pub fn expr(&self) -> &[PhysicalSortExpr] {
+    pub fn expr(&self) -> ExprOrderingRef {
         &self.expr
     }
 }
@@ -127,11 +128,11 @@ impl ExecutionPlan for SortPreservingMergeExec {
         vec![Distribution::UnspecifiedDistribution]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
-        vec![Some(make_sort_requirements_from_exprs(&self.expr))]
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirement>> {
+        vec![Some(make_requirements_from_ordering(&self.expr))]
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         self.input.output_ordering()
     }
 
@@ -352,7 +353,7 @@ impl SortPreservingMergeStream {
     pub(crate) fn new_from_streams(
         streams: Vec<SortedStream>,
         schema: SchemaRef,
-        expressions: &[PhysicalSortExpr],
+        expressions: ExprOrderingRef,
         mut tracking_metrics: MemTrackingMetrics,
         batch_size: usize,
     ) -> Result<Self> {
@@ -716,7 +717,7 @@ mod tests {
     use crate::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
     use crate::from_slice::FromSlice;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-    use crate::physical_plan::expressions::col;
+    use crate::physical_plan::expressions::{col, PhysicalSortExpr};
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::metrics::MetricValue;
     use crate::physical_plan::sorts::sort::SortExec;
@@ -966,7 +967,7 @@ mod tests {
 
     async fn sorted_merge(
         input: Arc<dyn ExecutionPlan>,
-        sort: Vec<PhysicalSortExpr>,
+        sort: ExprOrdering,
         context: Arc<TaskContext>,
     ) -> RecordBatch {
         let merge = Arc::new(SortPreservingMergeExec::new(sort, input));
@@ -977,7 +978,7 @@ mod tests {
 
     async fn partition_sort(
         input: Arc<dyn ExecutionPlan>,
-        sort: Vec<PhysicalSortExpr>,
+        sort: ExprOrdering,
         context: Arc<TaskContext>,
     ) -> RecordBatch {
         let sort_exec = Arc::new(SortExec::new_with_partitioning(
@@ -991,7 +992,7 @@ mod tests {
 
     async fn basic_sort(
         src: Arc<dyn ExecutionPlan>,
-        sort: Vec<PhysicalSortExpr>,
+        sort: ExprOrdering,
         context: Arc<TaskContext>,
     ) -> RecordBatch {
         let merge = Arc::new(CoalescePartitionsExec::new(src));
@@ -1071,7 +1072,7 @@ mod tests {
     }
 
     async fn sorted_partitioned_input(
-        sort: Vec<PhysicalSortExpr>,
+        sort: ExprOrdering,
         sizes: &[usize],
         context: Arc<TaskContext>,
     ) -> Arc<dyn ExecutionPlan> {

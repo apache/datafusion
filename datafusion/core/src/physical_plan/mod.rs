@@ -24,7 +24,6 @@ use self::{
 };
 pub use crate::common::{ColumnStatistics, Statistics};
 use crate::error::Result;
-use crate::physical_plan::expressions::PhysicalSortExpr;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -127,7 +126,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     ///
     /// It is safe to return `None` here if your operator does not
     /// have any particular output order here
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
+    fn output_ordering(&self) -> Option<ExprOrderingRef>;
 
     /// Specifies the data distribution requirements for all the
     /// children for this operator, By default it's [[Distribution::UnspecifiedDistribution]] for each child,
@@ -142,7 +141,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// NOTE that checking `!is_empty()` does **not** check for a
     /// required input ordering. Instead, the correct check is that at
     /// least one entry must be `Some`
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirement>> {
         vec![None; self.children().len()]
     }
 
@@ -589,13 +588,15 @@ impl Distribution {
     }
 }
 
-use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::WindowExpr;
 use datafusion_physical_expr::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties,
+    expr_list_eq_strict_order, expressions::Column,
+    normalize_expr_with_equivalence_properties, EquivalenceProperties,
+    OrderingRequirement,
 };
-pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
+pub use datafusion_physical_expr::{
+    AggregateExpr, ExprOrdering, ExprOrderingRef, PhysicalExpr,
+};
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
 /// projected schema

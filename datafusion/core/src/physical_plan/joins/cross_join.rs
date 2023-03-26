@@ -30,8 +30,8 @@ use crate::execution::memory_pool::{SharedOptionalMemoryReservation, TryGrow};
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
-    ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
-    ExecutionPlan, Partitioning, PhysicalSortExpr, RecordBatchStream,
+    expressions::ExprOrderingRef, ColumnStatistics, DisplayFormatType, Distribution,
+    EquivalenceProperties, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
 use crate::{error::Result, scalar::ScalarValue};
@@ -200,7 +200,7 @@ impl ExecutionPlan for CrossJoinExec {
     }
 
     // TODO check the output ordering of CrossJoin
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 

@@ -26,7 +26,7 @@ use crate::physical_plan::{displayable, ColumnStatistics, ExecutionPlan, Statist
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::ExprOrderingRef;
 use futures::{Future, Stream, StreamExt, TryStreamExt};
 use log::debug;
 use parking_lot::Mutex;
@@ -285,7 +285,7 @@ pub fn transpose<T>(original: Vec<Vec<T>>) -> Vec<Vec<T>> {
 /// orderings, see <https://en.wikipedia.org/wiki/Join_and_meet>.
 pub fn get_meet_of_orderings(
     given: &[Arc<dyn ExecutionPlan>],
-) -> Option<&[PhysicalSortExpr]> {
+) -> Option<ExprOrderingRef> {
     given
         .iter()
         .map(|item| item.output_ordering())
@@ -294,8 +294,8 @@ pub fn get_meet_of_orderings(
 }
 
 fn get_meet_of_orderings_helper(
-    orderings: Vec<&[PhysicalSortExpr]>,
-) -> Option<&[PhysicalSortExpr]> {
+    orderings: Vec<ExprOrderingRef>,
+) -> Option<ExprOrderingRef> {
     let mut idx = 0;
     let first = orderings[0];
     loop {
@@ -328,10 +328,11 @@ mod tests {
         record_batch::RecordBatch,
     };
     use datafusion_physical_expr::expressions::{col, Column};
+    use datafusion_physical_expr::{ExprOrdering, PhysicalSortExpr};
 
     #[test]
     fn get_meet_of_orderings_helper_common_prefix_test() -> Result<()> {
-        let input1: Vec<PhysicalSortExpr> = vec![
+        let input1: ExprOrdering = vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
                 options: SortOptions::default(),
@@ -346,7 +347,7 @@ mod tests {
             },
         ];
 
-        let input2: Vec<PhysicalSortExpr> = vec![
+        let input2: ExprOrdering = vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
                 options: SortOptions::default(),
@@ -361,7 +362,7 @@ mod tests {
             },
         ];
 
-        let input3: Vec<PhysicalSortExpr> = vec![
+        let input3: ExprOrdering = vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
                 options: SortOptions::default(),
@@ -388,7 +389,7 @@ mod tests {
 
     #[test]
     fn get_meet_of_orderings_helper_subset_test() -> Result<()> {
-        let input1: Vec<PhysicalSortExpr> = vec![
+        let input1: ExprOrdering = vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
                 options: SortOptions::default(),
@@ -399,7 +400,7 @@ mod tests {
             },
         ];
 
-        let input2: Vec<PhysicalSortExpr> = vec![
+        let input2: ExprOrdering = vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
                 options: SortOptions::default(),
@@ -414,7 +415,7 @@ mod tests {
             },
         ];
 
-        let input3: Vec<PhysicalSortExpr> = vec![
+        let input3: ExprOrdering = vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
                 options: SortOptions::default(),
@@ -436,7 +437,7 @@ mod tests {
 
     #[test]
     fn get_meet_of_orderings_helper_no_overlap_test() -> Result<()> {
-        let input1: Vec<PhysicalSortExpr> = vec![
+        let input1: ExprOrdering = vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
                 options: SortOptions::default(),
@@ -447,7 +448,7 @@ mod tests {
             },
         ];
 
-        let input2: Vec<PhysicalSortExpr> = vec![
+        let input2: ExprOrdering = vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("x", 0)),
                 options: SortOptions::default(),
@@ -458,7 +459,7 @@ mod tests {
             },
         ];
 
-        let input3: Vec<PhysicalSortExpr> = vec![
+        let input3: ExprOrdering = vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
                 options: SortOptions::default(),

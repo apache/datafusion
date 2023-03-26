@@ -20,8 +20,8 @@ use datafusion::common::Result;
 use datafusion::logical_expr::{lit, or, Expr};
 use datafusion::optimizer::utils::disjunction;
 use datafusion::physical_expr::PhysicalSortExpr;
-use datafusion::physical_plan::collect;
 use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::{collect, ExprOrderingRef};
 use datafusion::prelude::{col, SessionConfig, SessionContext};
 use datafusion::test_util::parquet::{ParquetScanOptions, TestParquetFile};
 use datafusion_benchmarks::BenchmarkRun;
@@ -319,7 +319,7 @@ async fn exec_scan(
 
 async fn exec_sort(
     ctx: &SessionContext,
-    expr: &[PhysicalSortExpr],
+    expr: ExprOrderingRef<'_>,
     test_file: &TestParquetFile,
     debug: bool,
 ) -> Result<(usize, std::time::Duration)> {

@@ -20,7 +20,6 @@
 use crate::error::Result;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::common::transpose;
-use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
@@ -40,7 +39,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::DataFusionError;
-use datafusion_physical_expr::PhysicalSortRequirement;
+use datafusion_physical_expr::{ExprOrdering, ExprOrderingRef, OrderingRequirement};
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use std::any::Any;
@@ -107,7 +106,7 @@ impl WindowAggExec {
     // We are sure that partition by columns are always at the beginning of sort_keys
     // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
     // to calculate partition separation points
-    pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
+    pub fn partition_by_sort_keys(&self) -> Result<ExprOrdering> {
         let mut result = vec![];
         // All window exprs have the same partition by, so we just use the first one:
         let partition_by = self.window_expr()[0].partition_by();
@@ -161,7 +160,7 @@ impl ExecutionPlan for WindowAggExec {
         }
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         self.input().output_ordering()
     }
 
@@ -169,7 +168,7 @@ impl ExecutionPlan for WindowAggExec {
         vec![true]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirement>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
         let requirements = calc_requirements(partition_bys, order_keys);
@@ -298,7 +297,7 @@ pub struct WindowAggStream {
     batches: Vec<RecordBatch>,
     finished: bool,
     window_expr: Vec<Arc<dyn WindowExpr>>,
-    partition_by_sort_keys: Vec<PhysicalSortExpr>,
+    partition_by_sort_keys: ExprOrdering,
     baseline_metrics: BaselineMetrics,
 }
 
@@ -309,7 +308,7 @@ impl WindowAggStream {
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
-        partition_by_sort_keys: Vec<PhysicalSortExpr>,
+        partition_by_sort_keys: ExprOrdering,
     ) -> Self {
         Self {
             schema,

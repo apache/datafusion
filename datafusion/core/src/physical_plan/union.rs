@@ -36,7 +36,7 @@ use log::debug;
 use log::warn;
 
 use super::{
-    expressions::PhysicalSortExpr,
+    expressions::ExprOrderingRef,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
@@ -218,7 +218,7 @@ impl ExecutionPlan for UnionExec {
         }
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         // If the Union is partition aware, there is no output ordering.
         // Otherwise, the output ordering is the "meet" of its input orderings.
         // The meet is the finest ordering that satisfied by all the input

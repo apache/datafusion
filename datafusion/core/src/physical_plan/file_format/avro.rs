@@ -17,7 +17,7 @@
 
 //! Execution plan for reading line-delimited Avro files
 use crate::error::Result;
-use crate::physical_plan::expressions::PhysicalSortExpr;
+use crate::physical_plan::expressions::ExprOrderingRef;
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
@@ -76,7 +76,7 @@ impl ExecutionPlan for AvroExec {
         Ok(self.base_config().infinite_source)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         get_output_ordering(&self.base_config)
     }
 

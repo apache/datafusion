@@ -80,7 +80,7 @@ use datafusion::{
     },
     optimizer::{optimize_children, OptimizerConfig, OptimizerRule},
     physical_plan::{
-        expressions::PhysicalSortExpr,
+        expressions::ExprOrderingRef,
         planner::{DefaultPhysicalPlanner, ExtensionPlanner},
         DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PhysicalPlanner,
         RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -437,7 +437,7 @@ impl ExecutionPlan for TopKExec {
         Partitioning::UnknownPartitioning(1)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 

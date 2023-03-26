@@ -39,7 +39,7 @@ use crate::{
     execution::context::TaskContext,
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
-        expressions::PhysicalSortExpr,
+        expressions::ExprOrderingRef,
         file_format::{FileScanConfig, SchemaAdapter},
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
         DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
@@ -342,7 +342,7 @@ impl ExecutionPlan for ParquetExec {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         get_output_ordering(&self.base_config)
     }
 
@@ -448,7 +448,7 @@ impl ExecutionPlan for ParquetExec {
     }
 }
 
-fn make_output_ordering_string(ordering: &[PhysicalSortExpr]) -> String {
+fn make_output_ordering_string(ordering: ExprOrderingRef) -> String {
     use std::fmt::Write;
     let mut w: String = ", output_ordering=[".into();
 

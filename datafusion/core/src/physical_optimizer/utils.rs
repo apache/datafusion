@@ -31,7 +31,7 @@ use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use datafusion_common::tree_node::Transformed;
 use datafusion_physical_expr::utils::ordering_satisfy;
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::ExprOrdering;
 use std::sync::Arc;
 
 /// Convenience rule for writing optimizers: recursively invoke
@@ -60,7 +60,7 @@ pub fn optimize_children(
 /// given ordering requirements while preserving the original partitioning.
 pub fn add_sort_above(
     node: &mut Arc<dyn ExecutionPlan>,
-    sort_expr: Vec<PhysicalSortExpr>,
+    sort_expr: ExprOrdering,
 ) -> Result<()> {
     // If the ordering requirement is already satisfied, do not add a sort.
     if !ordering_satisfy(node.output_ordering(), Some(&sort_expr), || {

@@ -33,7 +33,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 
-use super::expressions::PhysicalSortExpr;
+use super::expressions::ExprOrderingRef;
 use super::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -112,7 +112,7 @@ impl ExecutionPlan for GlobalLimitExec {
         false
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         self.input.output_ordering()
     }
 
@@ -288,7 +288,7 @@ impl ExecutionPlan for LocalLimitExec {
     }
 
     // Local limit will not change the input plan's ordering
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         self.input.output_ordering()
     }
 

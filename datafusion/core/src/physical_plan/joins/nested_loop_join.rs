@@ -40,7 +40,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use datafusion_common::{DataFusionError, Statistics};
 use datafusion_expr::JoinType;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortExpr};
+use datafusion_physical_expr::{EquivalenceProperties, ExprOrderingRef};
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use std::any::Any;
 use std::fmt::Formatter;
@@ -157,7 +157,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
         }
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         // no specified order for the output
         None
     }

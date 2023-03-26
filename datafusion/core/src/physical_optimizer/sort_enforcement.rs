@@ -53,7 +53,7 @@ use datafusion_physical_expr::utils::{
     make_sort_exprs_from_requirements, ordering_satisfy,
     ordering_satisfy_requirement_concrete,
 };
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_expr::{ExprOrderingRef, PhysicalExpr, PhysicalSortExpr};
 use itertools::{concat, izip};
 use std::iter::zip;
 use std::sync::Arc;
@@ -766,7 +766,7 @@ fn remove_corresponding_sort_from_sub_plan(
 }
 
 /// Converts an [ExecutionPlan] trait object to a [PhysicalSortExpr] slice when possible.
-fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExpr]> {
+fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<ExprOrderingRef> {
     if let Some(sort_exec) = sort_any.as_any().downcast_ref::<SortExec>() {
         Ok(sort_exec.expr())
     } else if let Some(sort_preserving_merge_exec) =
@@ -795,9 +795,9 @@ pub struct ColumnInfo {
 /// remove physical sort expressions from the plan.
 pub fn can_skip_sort(
     partition_keys: &[Arc<dyn PhysicalExpr>],
-    required: &[PhysicalSortExpr],
+    required: ExprOrderingRef,
     input_schema: &SchemaRef,
-    physical_ordering: &[PhysicalSortExpr],
+    physical_ordering: ExprOrderingRef,
 ) -> Result<(bool, bool)> {
     if required.len() > physical_ordering.len() {
         return Ok((false, false));

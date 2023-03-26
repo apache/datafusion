@@ -32,7 +32,7 @@ use arrow::{
 use futures::Stream;
 
 use crate::execution::context::TaskContext;
-use crate::physical_plan::expressions::PhysicalSortExpr;
+use crate::physical_plan::expressions::ExprOrderingRef;
 use crate::physical_plan::{
     common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
@@ -146,7 +146,7 @@ impl ExecutionPlan for MockExec {
         Partitioning::UnknownPartitioning(1)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 
@@ -284,7 +284,7 @@ impl ExecutionPlan for BarrierExec {
         Partitioning::UnknownPartitioning(self.data.len())
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 
@@ -384,7 +384,7 @@ impl ExecutionPlan for ErrorExec {
         Partitioning::UnknownPartitioning(1)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 
@@ -462,7 +462,7 @@ impl ExecutionPlan for StatisticsExec {
         Partitioning::UnknownPartitioning(2)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 
@@ -560,7 +560,7 @@ impl ExecutionPlan for BlockingExec {
         Partitioning::UnknownPartitioning(self.n_partitions)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 

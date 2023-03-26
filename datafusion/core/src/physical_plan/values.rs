@@ -17,7 +17,7 @@
 
 //! Values execution plan
 
-use super::expressions::PhysicalSortExpr;
+use super::expressions::ExprOrderingRef;
 use super::{common, SendableRecordBatchStream, Statistics};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
@@ -112,7 +112,7 @@ impl ExecutionPlan for ValuesExec {
         Partitioning::UnknownPartitioning(1)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 

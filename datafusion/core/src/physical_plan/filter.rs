@@ -23,7 +23,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::expressions::PhysicalSortExpr;
+use super::expressions::ExprOrderingRef;
 use super::{ColumnStatistics, RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
@@ -113,7 +113,7 @@ impl ExecutionPlan for FilterExec {
         Ok(children[0])
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         self.input.output_ordering()
     }
 

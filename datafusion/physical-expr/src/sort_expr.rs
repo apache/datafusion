@@ -116,9 +116,11 @@ impl PhysicalSortRequirement {
     }
 }
 
-pub fn make_sort_requirements_from_exprs(
-    ordering: &[PhysicalSortExpr],
-) -> Vec<PhysicalSortRequirement> {
+pub type ExprOrdering = Vec<PhysicalSortExpr>;
+pub type ExprOrderingRef<'a> = &'a [PhysicalSortExpr];
+pub type OrderingRequirement = Vec<PhysicalSortRequirement>;
+
+pub fn make_requirements_from_ordering(ordering: ExprOrderingRef) -> OrderingRequirement {
     ordering.iter().map(|e| e.clone().into()).collect()
 }
 

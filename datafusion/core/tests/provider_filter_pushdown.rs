@@ -24,7 +24,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::common::SizedRecordBatchStream;
-use datafusion::physical_plan::expressions::PhysicalSortExpr;
+use datafusion::physical_plan::expressions::ExprOrderingRef;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics};
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
@@ -72,7 +72,7 @@ impl ExecutionPlan for CustomPlan {
         Partitioning::UnknownPartitioning(1)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 

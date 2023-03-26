@@ -35,9 +35,7 @@ use arrow::compute::{concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
-use datafusion_physical_expr::{
-    make_sort_requirements_from_exprs, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{make_requirements_from_ordering, OrderingRequirement};
 use futures::{Stream, StreamExt};
 
 use crate::error::DataFusionError;
@@ -45,8 +43,9 @@ use crate::error::Result;
 use crate::execution::context::TaskContext;
 use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use crate::logical_expr::JoinType;
-use crate::physical_plan::expressions::Column;
-use crate::physical_plan::expressions::PhysicalSortExpr;
+use crate::physical_plan::expressions::{
+    Column, ExprOrdering, ExprOrderingRef, PhysicalSortExpr,
+};
 use crate::physical_plan::joins::utils::{
     build_join_schema, check_join_is_valid, combine_join_equivalence_properties,
     estimate_join_statistics, partitioned_join_output_partitioning, JoinOn,
@@ -76,11 +75,11 @@ pub struct SortMergeJoinExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// The left SortExpr
-    left_sort_exprs: Vec<PhysicalSortExpr>,
+    left_sort_exprs: ExprOrdering,
     /// The right SortExpr
-    right_sort_exprs: Vec<PhysicalSortExpr>,
+    right_sort_exprs: ExprOrdering,
     /// The output ordering
-    output_ordering: Option<Vec<PhysicalSortExpr>>,
+    output_ordering: Option<ExprOrdering>,
     /// Sort options of join columns used in sorting left and right execution plans
     pub(crate) sort_options: Vec<SortOptions>,
     /// If null_equals_null is true, null == null else null != null
@@ -149,7 +148,7 @@ impl SortMergeJoinExec {
                 right
                     .output_ordering()
                     .map(|sort_exprs| {
-                        let new_sort_exprs: Result<Vec<PhysicalSortExpr>> = sort_exprs
+                        let new_sort_exprs: Result<ExprOrdering> = sort_exprs
                             .iter()
                             .map(|e| {
                                 let new_expr =
@@ -228,10 +227,10 @@ impl ExecutionPlan for SortMergeJoinExec {
         ]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirement>> {
         vec![
-            Some(make_sort_requirements_from_exprs(&self.left_sort_exprs)),
-            Some(make_sort_requirements_from_exprs(&self.right_sort_exprs)),
+            Some(make_requirements_from_ordering(&self.left_sort_exprs)),
+            Some(make_requirements_from_ordering(&self.right_sort_exprs)),
         ]
     }
 
@@ -245,7 +244,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         )
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         self.output_ordering.as_deref()
     }
 

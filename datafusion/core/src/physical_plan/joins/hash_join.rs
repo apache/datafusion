@@ -58,8 +58,7 @@ use hashbrown::raw::RawTable;
 use crate::physical_plan::{
     coalesce_batches::concat_batches,
     coalesce_partitions::CoalescePartitionsExec,
-    expressions::Column,
-    expressions::PhysicalSortExpr,
+    expressions::{Column, ExprOrderingRef},
     hash_utils::create_hashes,
     joins::utils::{
         adjust_right_output_partitioning, build_join_schema, check_join_is_valid,
@@ -335,7 +334,7 @@ impl ExecutionPlan for HashJoinExec {
 
     // TODO Output ordering might be kept for some cases.
     // For example if it is inner join then the stream side order can be kept
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 

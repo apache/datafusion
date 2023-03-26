@@ -53,8 +53,7 @@ use crate::execution::context::TaskContext;
 use crate::logical_expr::JoinType;
 use crate::physical_plan::joins::hash_join_utils::convert_sort_expr_with_filter_schema;
 use crate::physical_plan::{
-    expressions::Column,
-    expressions::PhysicalSortExpr,
+    expressions::{Column, ExprOrderingRef},
     joins::{
         hash_join::{build_join_indices, update_hash, JoinHashMap},
         hash_join_utils::{build_filter_input_order, SortedFilterExpr},
@@ -411,7 +410,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     }
 
     // TODO: Output ordering might be kept for some cases.
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 
@@ -1521,7 +1520,7 @@ mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, col, Column};
     use datafusion_physical_expr::intervals::test_utils::gen_conjunctive_numeric_expr;
-    use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_expr::{ExprOrdering, PhysicalExpr, PhysicalSortExpr};
 
     use crate::physical_plan::joins::{
         hash_join_utils::tests::complicated_filter, HashJoinExec, PartitionMode,
@@ -1823,8 +1822,8 @@ mod tests {
     fn create_memory_table(
         left_batch: RecordBatch,
         right_batch: RecordBatch,
-        left_sorted: Option<Vec<PhysicalSortExpr>>,
-        right_sorted: Option<Vec<PhysicalSortExpr>>,
+        left_sorted: Option<ExprOrdering>,
+        right_sorted: Option<ExprOrdering>,
         batch_size: usize,
     ) -> Result<(Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>)> {
         let mut left = MemoryExec::try_new(

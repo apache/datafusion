@@ -35,7 +35,7 @@ use datafusion::{
     physical_plan::{memory::MemoryExec, sorts::sort::SortExec, ExecutionPlan},
     prelude::SessionContext,
 };
-use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
+use datafusion_physical_expr::{expressions::col, ExprOrdering, PhysicalSortExpr};
 use futures::StreamExt;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -288,7 +288,7 @@ impl SortBenchCasePreservePartitioning {
 }
 
 /// Make sort exprs for each column in `schema`
-fn make_sort_exprs(schema: &Schema) -> Vec<PhysicalSortExpr> {
+fn make_sort_exprs(schema: &Schema) -> ExprOrdering {
     schema
         .fields()
         .iter()

@@ -33,7 +33,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
-    expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr,
+    expressions, AggregateExpr, ExprOrderingRef, PhysicalExpr,
 };
 use std::any::Any;
 use std::collections::HashMap;
@@ -354,7 +354,7 @@ impl ExecutionPlan for AggregateExec {
         }
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 
@@ -725,7 +725,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_physical_expr::expressions::{lit, ApproxDistinct, Count, Median};
-    use datafusion_physical_expr::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
+    use datafusion_physical_expr::{AggregateExpr, ExprOrderingRef, PhysicalExpr};
     use futures::{FutureExt, Stream};
     use std::any::Any;
     use std::sync::Arc;
@@ -991,7 +991,7 @@ mod tests {
             Partitioning::UnknownPartitioning(1)
         }
 
-        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        fn output_ordering(&self) -> Option<ExprOrderingRef> {
             None
         }
 

@@ -29,7 +29,7 @@ use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::record_batch::RecordBatch;
 use crate::error::Result;
 use crate::execution::context::TaskContext;
-use crate::physical_plan::expressions::PhysicalSortExpr;
+use crate::physical_plan::expressions::ExprOrderingRef;
 use crate::physical_plan::metrics::MetricsSet;
 use crate::physical_plan::{
     displayable, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
@@ -231,7 +231,7 @@ impl ExecutionPlan for ProxyExecutionPlan {
         self.inner.output_partitioning()
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         self.inner.output_ordering()
     }
 

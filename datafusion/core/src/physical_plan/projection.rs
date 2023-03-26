@@ -29,7 +29,7 @@ use std::task::{Context, Poll};
 use crate::error::Result;
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, EquivalenceProperties, ExecutionPlan,
-    Partitioning, PhysicalExpr,
+    ExprOrdering, ExprOrderingRef, Partitioning, PhysicalExpr,
 };
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
@@ -54,7 +54,7 @@ pub struct ProjectionExec {
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
     /// The output ordering
-    output_ordering: Option<Vec<PhysicalSortExpr>>,
+    output_ordering: Option<ExprOrdering>,
     /// The alias map used to normalize out expressions like Partitioning and PhysicalSortExpr
     /// The key is the column from the input schema and the values are the columns from the output schema
     alias_map: HashMap<Column, Vec<Column>>,
@@ -191,7 +191,7 @@ impl ExecutionPlan for ProjectionExec {
         }
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         self.output_ordering.as_deref()
     }
 

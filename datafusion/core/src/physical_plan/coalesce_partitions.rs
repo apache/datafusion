@@ -29,7 +29,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 
 use super::common::AbortOnDropMany;
-use super::expressions::PhysicalSortExpr;
+use super::expressions::ExprOrderingRef;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, Statistics};
 use crate::error::{DataFusionError, Result};
@@ -91,7 +91,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         Partitioning::UnknownPartitioning(1)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 

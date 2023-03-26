@@ -30,7 +30,7 @@ use crate::{
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use futures::StreamExt;
 
-use super::expressions::PhysicalSortExpr;
+use super::expressions::ExprOrderingRef;
 use super::{stream::RecordBatchReceiverStream, Distribution, SendableRecordBatchStream};
 use crate::execution::context::TaskContext;
 
@@ -95,7 +95,7 @@ impl ExecutionPlan for AnalyzeExec {
         Partitioning::UnknownPartitioning(1)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 

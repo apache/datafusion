@@ -95,7 +95,7 @@ pub use try_cast::{try_cast, TryCastExpr};
 pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{name}[{state_name}]")
 }
-pub use crate::PhysicalSortExpr;
+pub use crate::{ExprOrdering, ExprOrderingRef, PhysicalSortExpr};
 
 #[cfg(test)]
 pub(crate) mod tests {

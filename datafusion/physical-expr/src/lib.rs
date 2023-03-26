@@ -54,7 +54,8 @@ pub use physical_expr::{AnalysisContext, ExprBoundaries, PhysicalExpr, PhysicalE
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
 pub use sort_expr::{
-    make_sort_requirements_from_exprs, PhysicalSortExpr, PhysicalSortRequirement,
+    make_requirements_from_ordering, ExprOrdering, ExprOrderingRef, OrderingRequirement,
+    PhysicalSortExpr, PhysicalSortRequirement,
 };
 pub use utils::{
     expr_list_eq_any_order, expr_list_eq_strict_order,

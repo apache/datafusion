@@ -340,7 +340,7 @@ mod tests {
     use crate::physical_plan::union::UnionExec;
     use crate::physical_plan::{displayable, DisplayFormatType, Statistics};
     use datafusion_physical_expr::{
-        make_sort_requirements_from_exprs, PhysicalSortRequirement,
+        make_requirements_from_ordering, ExprOrderingRef, OrderingRequirement,
     };
 
     fn schema() -> SchemaRef {
@@ -1150,7 +1150,7 @@ mod tests {
             self.input.output_partitioning()
         }
 
-        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        fn output_ordering(&self) -> Option<ExprOrderingRef> {
             self.input.output_ordering()
         }
 
@@ -1159,10 +1159,8 @@ mod tests {
         }
 
         // model that it requires the output ordering of its input
-        fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
-            vec![self
-                .output_ordering()
-                .map(make_sort_requirements_from_exprs)]
+        fn required_input_ordering(&self) -> Vec<Option<OrderingRequirement>> {
+            vec![self.output_ordering().map(make_requirements_from_ordering)]
         }
 
         fn with_new_children(

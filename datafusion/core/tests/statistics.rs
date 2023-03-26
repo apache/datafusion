@@ -25,7 +25,7 @@ use datafusion::{
     error::Result,
     logical_expr::Expr,
     physical_plan::{
-        expressions::PhysicalSortExpr, project_schema, ColumnStatistics,
+        expressions::ExprOrderingRef, project_schema, ColumnStatistics,
         DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
         Statistics,
     },
@@ -124,7 +124,7 @@ impl ExecutionPlan for StatisticsValidation {
         Partitioning::UnknownPartitioning(2)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 

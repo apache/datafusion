@@ -33,8 +33,8 @@ use std::{any::Any, sync::Arc};
 use crate::execution::context::TaskContext;
 use crate::physical_plan::{
     coalesce_batches::concat_batches, expressions::Column, DisplayFormatType,
-    Distribution, EquivalenceProperties, ExecutionPlan, Partitioning, PhysicalExpr,
-    PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    Distribution, EquivalenceProperties, ExecutionPlan, ExprOrderingRef, Partitioning,
+    PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::{
     error::{DataFusionError, Result},
@@ -102,7 +102,7 @@ impl ExecutionPlan for UnnestExec {
         self.input.output_partitioning()
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 

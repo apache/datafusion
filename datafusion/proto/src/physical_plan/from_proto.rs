@@ -28,7 +28,7 @@ use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::window_function::WindowFunction;
 use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
-use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::physical_expr::{ExprOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::GetIndexedFieldExpr;
 use datafusion::physical_plan::expressions::LikeExpr;
 use datafusion::physical_plan::file_format::FileScanConfig;
@@ -421,7 +421,7 @@ pub fn parse_protobuf_file_scan_config(
                 },
             })
         })
-        .collect::<Result<Vec<PhysicalSortExpr>>>()?;
+        .collect::<Result<ExprOrdering>>()?;
     let output_ordering = if output_ordering.is_empty() {
         None
     } else {

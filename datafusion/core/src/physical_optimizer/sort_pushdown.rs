@@ -31,10 +31,10 @@ use datafusion_physical_expr::utils::{
     requirements_compatible,
 };
 use datafusion_physical_expr::{
-    make_sort_requirements_from_exprs, PhysicalSortExpr, PhysicalSortRequirement,
+    make_requirements_from_ordering, ExprOrdering, ExprOrderingRef, OrderingRequirement,
+    PhysicalSortRequirement,
 };
 use itertools::izip;
-use std::ops::Deref;
 use std::sync::Arc;
 
 /// This is a "data class" we use within the [`EnforceSorting`] rule to push
@@ -45,10 +45,10 @@ pub(crate) struct SortPushDown {
     /// Current plan
     pub plan: Arc<dyn ExecutionPlan>,
     /// Parent required sort ordering
-    required_ordering: Option<Vec<PhysicalSortRequirement>>,
+    required_ordering: Option<OrderingRequirement>,
     /// The adjusted request sort ordering to children.
     /// By default they are the same as the plan's required input ordering, but can be adjusted based on parent required sort ordering properties.
-    adjusted_request_ordering: Vec<Option<Vec<PhysicalSortRequirement>>>,
+    adjusted_request_ordering: Vec<Option<OrderingRequirement>>,
 }
 
 impl SortPushDown {
@@ -121,7 +121,7 @@ pub(crate) fn pushdown_sorts(
     requirements: SortPushDown,
 ) -> Result<Transformed<SortPushDown>> {
     let plan = &requirements.plan;
-    let parent_required = requirements.required_ordering.as_deref();
+    let parent_required = requirements.required_ordering.as_ref();
     const ERR_MSG: &str = "Expects parent requirement to contain something";
     let err = || DataFusionError::Plan(ERR_MSG.to_string());
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
@@ -137,11 +137,11 @@ pub(crate) fn pushdown_sorts(
         };
         let required_ordering = new_plan
             .output_ordering()
-            .map(make_sort_requirements_from_exprs);
+            .map(make_requirements_from_ordering);
         // Since new_plan is a SortExec, we can safely get the 0th index.
         let child = &new_plan.children()[0];
         if let Some(adjusted) =
-            pushdown_requirement_to_children(child, required_ordering.as_deref())?
+            pushdown_requirement_to_children(child, required_ordering.as_ref())?
         {
             // Can push down requirements
             Ok(Transformed::Yes(SortPushDown {
@@ -184,14 +184,14 @@ pub(crate) fn pushdown_sorts(
 
 fn pushdown_requirement_to_children(
     plan: &Arc<dyn ExecutionPlan>,
-    parent_required: Option<&[PhysicalSortRequirement]>,
-) -> Result<Option<Vec<Option<Vec<PhysicalSortRequirement>>>>> {
+    parent_required: Option<&OrderingRequirement>,
+) -> Result<Option<Vec<Option<OrderingRequirement>>>> {
     const ERR_MSG: &str = "Expects parent requirement to contain something";
     let err = || DataFusionError::Plan(ERR_MSG.to_string());
     let maintains_input_order = plan.maintains_input_order();
     if is_window(plan) {
         let required_input_ordering = plan.required_input_ordering();
-        let request_child = required_input_ordering[0].as_deref();
+        let request_child = required_input_ordering[0].as_ref();
         let child_plan = plan.children()[0].clone();
         match determine_children_requirement(parent_required, request_child, child_plan) {
             RequirementsCompatibility::Satisfy => {
@@ -238,7 +238,7 @@ fn pushdown_requirement_to_children(
                 };
                 try_pushdown_requirements_to_join(
                     plan,
-                    Some(new_right_required.deref()),
+                    Some(new_right_required.as_ref()),
                     parent_required_expr,
                     JoinSide::Right,
                 )
@@ -274,8 +274,8 @@ fn pushdown_requirement_to_children(
 /// If the the parent requirements are more specific, push down the parent requirements
 /// If they are not compatible, need to add Sort.
 fn determine_children_requirement(
-    parent_required: Option<&[PhysicalSortRequirement]>,
-    request_child: Option<&[PhysicalSortRequirement]>,
+    parent_required: Option<&OrderingRequirement>,
+    request_child: Option<&OrderingRequirement>,
     child_plan: Arc<dyn ExecutionPlan>,
 ) -> RequirementsCompatibility {
     if requirements_compatible(request_child, parent_required, || {
@@ -296,16 +296,16 @@ fn determine_children_requirement(
 
 fn try_pushdown_requirements_to_join(
     plan: &Arc<dyn ExecutionPlan>,
-    parent_required: Option<&[PhysicalSortRequirement]>,
-    sort_expr: Vec<PhysicalSortExpr>,
+    parent_required: Option<&OrderingRequirement>,
+    sort_expr: ExprOrdering,
     push_side: JoinSide,
-) -> Result<Option<Vec<Option<Vec<PhysicalSortRequirement>>>>> {
+) -> Result<Option<Vec<Option<OrderingRequirement>>>> {
     let child_idx = match push_side {
         JoinSide::Left => 0,
         JoinSide::Right => 1,
     };
     let required_input_ordering = plan.required_input_ordering();
-    let request_child = required_input_ordering[child_idx].as_deref();
+    let request_child = required_input_ordering[child_idx].as_ref();
     let child_plan = plan.children()[child_idx].clone();
     match determine_children_requirement(parent_required, request_child, child_plan) {
         RequirementsCompatibility::Satisfy => Ok(None),
@@ -329,7 +329,7 @@ fn try_pushdown_requirements_to_join(
 }
 
 fn expr_source_sides(
-    required_exprs: &[PhysicalSortExpr],
+    required_exprs: ExprOrderingRef,
     join_type: JoinType,
     left_columns_len: usize,
 ) -> Option<JoinSide> {
@@ -377,10 +377,10 @@ fn expr_source_sides(
 }
 
 fn shift_right_required(
-    parent_required: &[PhysicalSortRequirement],
+    parent_required: &OrderingRequirement,
     left_columns_len: usize,
-) -> Result<Vec<PhysicalSortRequirement>> {
-    let new_right_required: Vec<PhysicalSortRequirement> = parent_required
+) -> Result<OrderingRequirement> {
+    let new_right_required = parent_required
         .iter()
         .filter_map(|r| {
             r.expr.as_any().downcast_ref::<Column>().and_then(|col| {
@@ -410,7 +410,7 @@ enum RequirementsCompatibility {
     /// Requirements satisfy
     Satisfy,
     /// Requirements compatible
-    Compatible(Option<Vec<PhysicalSortRequirement>>),
+    Compatible(Option<OrderingRequirement>),
     /// Requirements not compatible
     NonCompatible,
 }

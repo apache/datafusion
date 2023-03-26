@@ -46,7 +46,9 @@ pub use bounded_window_agg_exec::BoundedWindowAggExec;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
-use datafusion_physical_expr::PhysicalSortRequirement;
+use datafusion_physical_expr::{
+    ExprOrderingRef, OrderingRequirement, PhysicalSortRequirement,
+};
 pub use window_agg_exec::WindowAggExec;
 
 /// Create a physical expression for window function
@@ -55,7 +57,7 @@ pub fn create_window_expr(
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
     partition_by: &[Arc<dyn PhysicalExpr>],
-    order_by: &[PhysicalSortExpr],
+    order_by: ExprOrderingRef,
     window_frame: Arc<WindowFrame>,
     input_schema: &Schema,
 ) -> Result<Arc<dyn WindowExpr>> {
@@ -190,8 +192,8 @@ fn create_built_in_window_expr(
 
 pub(crate) fn calc_requirements(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
-    orderby_sort_exprs: &[PhysicalSortExpr],
-) -> Option<Vec<PhysicalSortRequirement>> {
+    orderby_sort_exprs: ExprOrderingRef,
+) -> Option<OrderingRequirement> {
     let mut sort_reqs = vec![];
     for partition_by in partition_by_exprs {
         sort_reqs.push(PhysicalSortRequirement {
@@ -290,7 +292,7 @@ mod tests {
                 orderbys.push(PhysicalSortExpr { expr, options });
             }
 
-            let mut expected: Option<Vec<PhysicalSortRequirement>> = None;
+            let mut expected: Option<OrderingRequirement> = None;
             for (col_name, reqs) in expected_params {
                 let options = reqs.map(|(descending, nulls_first)| SortOptions {
                     descending,

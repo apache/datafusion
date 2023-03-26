@@ -20,7 +20,7 @@
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
-use crate::physical_plan::expressions::PhysicalSortExpr;
+use crate::physical_plan::expressions::ExprOrderingRef;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -117,7 +117,7 @@ impl ExecutionPlan for CsvExec {
     }
 
     /// See comments on `impl ExecutionPlan for ParquetExec`: output order can't be
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         get_output_ordering(&self.base_config)
     }
 

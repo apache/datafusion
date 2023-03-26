@@ -17,7 +17,7 @@
 
 use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::window_frame_state::WindowFrameContext;
-use crate::{PhysicalExpr, PhysicalSortExpr};
+use crate::{ExprOrdering, ExprOrderingRef, PhysicalExpr, PhysicalSortExpr};
 use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::kernels::partition::lexicographical_partition_ranges;
 use arrow::compute::kernels::sort::SortColumn;
@@ -103,7 +103,7 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>];
 
     /// Expressions that's from the window function's order by clause, empty if absent
-    fn order_by(&self) -> &[PhysicalSortExpr];
+    fn order_by(&self) -> ExprOrderingRef;
 
     /// Get order by columns, empty if absent
     fn order_by_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
@@ -276,7 +276,7 @@ pub trait AggregateWindowExpr: WindowExpr {
 /// Reverses the ORDER BY expression, which is useful during equivalent window
 /// expression construction. For instance, 'ORDER BY a ASC, NULLS LAST' turns into
 /// 'ORDER BY a DESC, NULLS FIRST'.
-pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr> {
+pub fn reverse_order_bys(order_bys: ExprOrderingRef) -> ExprOrdering {
     order_bys
         .iter()
         .map(|e| PhysicalSortExpr {

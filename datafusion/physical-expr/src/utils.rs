@@ -18,7 +18,8 @@
 use crate::equivalence::EquivalentClass;
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
 use crate::{
-    EquivalenceProperties, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    EquivalenceProperties, ExprOrdering, ExprOrderingRef, OrderingRequirement,
+    PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
 use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
@@ -73,8 +74,8 @@ pub fn expr_list_eq_strict_order(
 /// SortExpr('a','b','c') != SortExpr('c','b','a')
 #[allow(dead_code)]
 pub fn sort_expr_list_eq_strict_order(
-    list1: &[PhysicalSortExpr],
-    list2: &[PhysicalSortExpr],
+    list1: ExprOrderingRef,
+    list2: ExprOrderingRef,
 ) -> bool {
     list1.len() == list2.len() && list1.iter().zip(list2.iter()).all(|(e1, e2)| e1.eq(e2))
 }
@@ -213,8 +214,8 @@ pub fn normalize_sort_requirement_with_equivalence_properties(
 
 /// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
 pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
-    provided: Option<&[PhysicalSortExpr]>,
-    required: Option<&[PhysicalSortExpr]>,
+    provided: Option<ExprOrderingRef>,
+    required: Option<ExprOrderingRef>,
     equal_properties: F,
 ) -> bool {
     match (provided, required) {
@@ -229,8 +230,8 @@ pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
 /// Checks whether the required [`PhysicalSortExpr`]s are satisfied by the
 /// provided [`PhysicalSortExpr`]s.
 fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(
-    provided: &[PhysicalSortExpr],
-    required: &[PhysicalSortExpr],
+    provided: ExprOrderingRef,
+    required: ExprOrderingRef,
     equal_properties: F,
 ) -> bool {
     if required.len() > provided.len() {
@@ -259,8 +260,8 @@ fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(
 /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
 /// provided [`PhysicalSortExpr`]s.
 pub fn ordering_satisfy_requirement<F: FnOnce() -> EquivalenceProperties>(
-    provided: Option<&[PhysicalSortExpr]>,
-    required: Option<&[PhysicalSortRequirement]>,
+    provided: Option<ExprOrderingRef>,
+    required: Option<&OrderingRequirement>,
     equal_properties: F,
 ) -> bool {
     match (provided, required) {
@@ -275,8 +276,8 @@ pub fn ordering_satisfy_requirement<F: FnOnce() -> EquivalenceProperties>(
 /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
 /// provided [`PhysicalSortExpr`]s.
 pub fn ordering_satisfy_requirement_concrete<F: FnOnce() -> EquivalenceProperties>(
-    provided: &[PhysicalSortExpr],
-    required: &[PhysicalSortRequirement],
+    provided: ExprOrderingRef,
+    required: &OrderingRequirement,
     equal_properties: F,
 ) -> bool {
     if required.len() > provided.len() {
@@ -308,8 +309,8 @@ pub fn ordering_satisfy_requirement_concrete<F: FnOnce() -> EquivalencePropertie
 /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
 /// specific than the provided [`PhysicalSortRequirement`]s.
 pub fn requirements_compatible<F: FnOnce() -> EquivalenceProperties>(
-    provided: Option<&[PhysicalSortRequirement]>,
-    required: Option<&[PhysicalSortRequirement]>,
+    provided: Option<&OrderingRequirement>,
+    required: Option<&OrderingRequirement>,
     equal_properties: F,
 ) -> bool {
     match (provided, required) {
@@ -324,8 +325,8 @@ pub fn requirements_compatible<F: FnOnce() -> EquivalenceProperties>(
 /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
 /// specific than the provided [`PhysicalSortRequirement`]s.
 fn requirements_compatible_concrete<F: FnOnce() -> EquivalenceProperties>(
-    provided: &[PhysicalSortRequirement],
-    required: &[PhysicalSortRequirement],
+    provided: &OrderingRequirement,
+    required: &OrderingRequirement,
     equal_properties: F,
 ) -> bool {
     if required.len() > provided.len() {
@@ -393,9 +394,7 @@ pub fn map_columns_before_projection(
 /// This function converts `PhysicalSortRequirement` to `PhysicalSortExpr`
 /// for each entry in the input. If required ordering is None for an entry
 /// default ordering `ASC, NULLS LAST` if given.
-pub fn make_sort_exprs_from_requirements(
-    required: &[PhysicalSortRequirement],
-) -> Vec<PhysicalSortExpr> {
+pub fn make_sort_exprs_from_requirements(required: &OrderingRequirement) -> ExprOrdering {
     required
         .iter()
         .map(|requirement| {
@@ -766,7 +765,7 @@ mod tests {
 
     #[test]
     fn sort_expr_list_eq_strict_order_test() -> Result<()> {
-        let list1: Vec<PhysicalSortExpr> = vec![
+        let list1: ExprOrdering = vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
                 options: SortOptions::default(),
@@ -781,7 +780,7 @@ mod tests {
             },
         ];
 
-        let list2: Vec<PhysicalSortExpr> = vec![
+        let list2: ExprOrdering = vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("b", 1)),
                 options: SortOptions::default(),
@@ -805,7 +804,7 @@ mod tests {
             list1.as_slice()
         ));
 
-        let list3: Vec<PhysicalSortExpr> = vec![
+        let list3: ExprOrdering = vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
                 options: SortOptions::default(),
@@ -819,7 +818,7 @@ mod tests {
                 options: SortOptions::default(),
             },
         ];
-        let list4: Vec<PhysicalSortExpr> = vec![
+        let list4: ExprOrdering = vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
                 options: SortOptions::default(),

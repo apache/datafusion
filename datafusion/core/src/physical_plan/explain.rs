@@ -31,7 +31,7 @@ use crate::{
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use log::debug;
 
-use super::{expressions::PhysicalSortExpr, SendableRecordBatchStream};
+use super::{expressions::ExprOrderingRef, SendableRecordBatchStream};
 use crate::execution::context::TaskContext;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics};
 
@@ -93,7 +93,7 @@ impl ExecutionPlan for ExplainExec {
         Partitioning::UnknownPartitioning(1)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 

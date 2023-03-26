@@ -30,7 +30,7 @@ use crate::window::window_expr::{
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, WindowAggState, WindowState,
 };
-use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
+use crate::{ExprOrdering, ExprOrderingRef, PhysicalExpr};
 use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
@@ -43,7 +43,7 @@ use datafusion_expr::WindowFrame;
 pub struct BuiltInWindowExpr {
     expr: Arc<dyn BuiltInWindowFunctionExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
-    order_by: Vec<PhysicalSortExpr>,
+    order_by: ExprOrdering,
     window_frame: Arc<WindowFrame>,
 }
 
@@ -52,7 +52,7 @@ impl BuiltInWindowExpr {
     pub fn new(
         expr: Arc<dyn BuiltInWindowFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
-        order_by: &[PhysicalSortExpr],
+        order_by: ExprOrderingRef,
         window_frame: Arc<WindowFrame>,
     ) -> Self {
         Self {
@@ -91,7 +91,7 @@ impl WindowExpr for BuiltInWindowExpr {
         &self.partition_by
     }
 
-    fn order_by(&self) -> &[PhysicalSortExpr] {
+    fn order_by(&self) -> ExprOrderingRef {
         &self.order_by
     }
 

@@ -22,7 +22,6 @@
 
 use crate::error::Result;
 use crate::execution::context::TaskContext;
-use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
@@ -56,7 +55,8 @@ use datafusion_physical_expr::window::{
     WindowAggState, WindowState,
 };
 use datafusion_physical_expr::{
-    EquivalenceProperties, PhysicalExpr, PhysicalSortRequirement,
+    EquivalenceProperties, ExprOrdering, ExprOrderingRef, OrderingRequirement,
+    PhysicalExpr,
 };
 use indexmap::IndexMap;
 use log::debug;
@@ -118,7 +118,7 @@ impl BoundedWindowAggExec {
     // We are sure that partition by columns are always at the beginning of sort_keys
     // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
     // to calculate partition separation points
-    pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
+    pub fn partition_by_sort_keys(&self) -> Result<ExprOrdering> {
         let mut result = vec![];
         // All window exprs have the same partition by, so we just use the first one:
         let partition_by = self.window_expr()[0].partition_by();
@@ -162,11 +162,11 @@ impl ExecutionPlan for BoundedWindowAggExec {
         Ok(children[0])
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         self.input().output_ordering()
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirement>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
         let requirements = calc_requirements(partition_bys, order_keys);
@@ -319,7 +319,7 @@ pub struct SortedPartitionByBoundedWindowStream {
     window_agg_states: Vec<PartitionWindowAggStates>,
     finished: bool,
     window_expr: Vec<Arc<dyn WindowExpr>>,
-    partition_by_sort_keys: Vec<PhysicalSortExpr>,
+    partition_by_sort_keys: ExprOrdering,
     baseline_metrics: BaselineMetrics,
 }
 
@@ -430,7 +430,7 @@ impl SortedPartitionByBoundedWindowStream {
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
-        partition_by_sort_keys: Vec<PhysicalSortExpr>,
+        partition_by_sort_keys: ExprOrdering,
     ) -> Self {
         let state = window_expr.iter().map(|_| IndexMap::new()).collect();
         let empty_batch = RecordBatch::new_empty(schema.clone());

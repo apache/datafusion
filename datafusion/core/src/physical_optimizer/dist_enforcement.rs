@@ -949,7 +949,7 @@ mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::{
         expressions, expressions::binary, expressions::lit, expressions::Column,
-        PhysicalExpr, PhysicalSortExpr,
+        ExprOrdering, PhysicalExpr, PhysicalSortExpr,
     };
     use std::ops::Deref;
 
@@ -982,9 +982,7 @@ mod tests {
         parquet_exec_with_sort(None)
     }
 
-    fn parquet_exec_with_sort(
-        output_ordering: Option<Vec<PhysicalSortExpr>>,
-    ) -> Arc<ParquetExec> {
+    fn parquet_exec_with_sort(output_ordering: Option<ExprOrdering>) -> Arc<ParquetExec> {
         Arc::new(ParquetExec::new(
             FileScanConfig {
                 object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),

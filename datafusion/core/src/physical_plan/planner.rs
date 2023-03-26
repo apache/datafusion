@@ -1856,6 +1856,7 @@ mod tests {
         col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder,
         UserDefinedLogicalNodeCore,
     };
+    use datafusion_physical_expr::ExprOrderingRef;
     use fmt::Debug;
     use std::collections::HashMap;
     use std::convert::TryFrom;
@@ -2422,7 +2423,7 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
             Partitioning::UnknownPartitioning(1)
         }
 
-        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        fn output_ordering(&self) -> Option<ExprOrderingRef> {
             None
         }
 

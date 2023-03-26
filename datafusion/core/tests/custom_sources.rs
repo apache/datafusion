@@ -25,7 +25,7 @@ use datafusion::logical_expr::{
     col, Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE,
 };
 use datafusion::physical_plan::empty::EmptyExec;
-use datafusion::physical_plan::expressions::PhysicalSortExpr;
+use datafusion::physical_plan::expressions::ExprOrderingRef;
 use datafusion::physical_plan::{
     project_schema, ColumnStatistics, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
@@ -113,7 +113,7 @@ impl ExecutionPlan for CustomExecutionPlan {
         Partitioning::UnknownPartitioning(1)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 

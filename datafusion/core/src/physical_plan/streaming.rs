@@ -25,7 +25,7 @@ use async_trait::async_trait;
 use futures::stream::StreamExt;
 
 use datafusion_common::{DataFusionError, Result, Statistics};
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::ExprOrderingRef;
 
 use crate::datasource::streaming::PartitionStream;
 use crate::execution::context::TaskContext;
@@ -85,7 +85,7 @@ impl ExecutionPlan for StreamingTableExec {
         Partitioning::UnknownPartitioning(self.partitions.len())
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 

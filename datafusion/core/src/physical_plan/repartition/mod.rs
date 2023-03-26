@@ -38,7 +38,7 @@ use log::debug;
 use self::distributor_channels::{DistributionReceiver, DistributionSender};
 
 use super::common::{AbortOnDropMany, AbortOnDropSingle, SharedMemoryReservation};
-use super::expressions::PhysicalSortExpr;
+use super::expressions::ExprOrderingRef;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream};
 
@@ -328,7 +328,7 @@ impl ExecutionPlan for RepartitionExec {
         self.partitioning.clone()
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         if self.maintains_input_order()[0] {
             self.input().output_ordering()
         } else {

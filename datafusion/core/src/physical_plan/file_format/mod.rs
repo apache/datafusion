@@ -36,7 +36,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 pub use avro::AvroExec;
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::{ExprOrdering, ExprOrderingRef};
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream};
 pub(crate) use json::plan_to_json;
 pub use json::NdJsonExec;
@@ -149,7 +149,7 @@ pub struct FileScanConfig {
     /// The partitioning columns
     pub table_partition_cols: Vec<(String, DataType)>,
     /// The order in which the data is sorted, if known.
-    pub output_ordering: Option<Vec<PhysicalSortExpr>>,
+    pub output_ordering: Option<ExprOrdering>,
     /// Indicates whether this plan may produce an infinite stream of records.
     pub infinite_source: bool,
 }
@@ -704,7 +704,7 @@ impl From<ObjectMeta> for FileMeta {
 ///```
 pub(crate) fn get_output_ordering(
     base_config: &FileScanConfig,
-) -> Option<&[PhysicalSortExpr]> {
+) -> Option<ExprOrderingRef> {
     base_config.output_ordering.as_ref()
         .map(|output_ordering| if base_config.file_groups.iter().any(|group| group.len() > 1) {
             debug!("Skipping specified output ordering {:?}. Some file group had more than one file: {:?}",

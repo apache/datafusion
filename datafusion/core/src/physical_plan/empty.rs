@@ -29,7 +29,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use log::debug;
 
-use super::expressions::PhysicalSortExpr;
+use super::expressions::ExprOrderingRef;
 use super::{common, SendableRecordBatchStream, Statistics};
 
 use crate::execution::context::TaskContext;
@@ -113,7 +113,7 @@ impl ExecutionPlan for EmptyExec {
         Partitioning::UnknownPartitioning(self.partitions)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 

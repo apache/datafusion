@@ -26,7 +26,6 @@ use crate::execution::memory_pool::{
 };
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::common::{batch_byte_size, IPCWriter, SizedRecordBatchStream};
-use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, CompositeMetricsSet, MemTrackingMetrics, MetricsSet,
 };
@@ -45,7 +44,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{EquivalenceProperties, ExprOrdering, ExprOrderingRef};
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::{debug, error};
 use std::any::Any;
@@ -75,7 +74,7 @@ struct ExternalSorter {
     in_mem_batches: Vec<BatchWithSortArray>,
     spills: Vec<NamedTempFile>,
     /// Sort expressions
-    expr: Vec<PhysicalSortExpr>,
+    expr: ExprOrdering,
     session_config: Arc<SessionConfig>,
     runtime: Arc<RuntimeEnv>,
     metrics_set: CompositeMetricsSet,
@@ -89,7 +88,7 @@ impl ExternalSorter {
     pub fn new(
         partition_id: usize,
         schema: SchemaRef,
-        expr: Vec<PhysicalSortExpr>,
+        expr: ExprOrdering,
         metrics_set: CompositeMetricsSet,
         session_config: Arc<SessionConfig>,
         runtime: Arc<RuntimeEnv>,
@@ -278,7 +277,7 @@ impl Debug for ExternalSorter {
 fn in_mem_partial_sort(
     buffered_batches: &mut Vec<BatchWithSortArray>,
     schema: SchemaRef,
-    expressions: &[PhysicalSortExpr],
+    expressions: ExprOrderingRef,
     batch_size: usize,
     tracking_metrics: MemTrackingMetrics,
     fetch: Option<usize>,
@@ -328,7 +327,7 @@ struct CompositeIndex {
 /// Get sorted iterator by sort concatenated `SortColumn`s
 fn get_sorted_iter(
     sort_arrays: &[Vec<ArrayRef>],
-    expr: &[PhysicalSortExpr],
+    expr: ExprOrderingRef,
     batch_size: usize,
     fetch: Option<usize>,
 ) -> Result<SortedIterator> {
@@ -625,7 +624,7 @@ pub struct SortExec {
     /// Input schema
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// Sort expressions
-    expr: Vec<PhysicalSortExpr>,
+    expr: ExprOrdering,
     /// Containing all metrics set created during sort
     metrics_set: CompositeMetricsSet,
     /// Preserve partitions of input plan
@@ -637,7 +636,7 @@ pub struct SortExec {
 impl SortExec {
     /// Create a new sort execution plan
     pub fn try_new(
-        expr: Vec<PhysicalSortExpr>,
+        expr: ExprOrdering,
         input: Arc<dyn ExecutionPlan>,
         fetch: Option<usize>,
     ) -> Result<Self> {
@@ -652,7 +651,7 @@ impl SortExec {
     /// Create a new sort execution plan with the option to preserve
     /// the partitioning of the input plan
     pub fn new_with_partitioning(
-        expr: Vec<PhysicalSortExpr>,
+        expr: ExprOrdering,
         input: Arc<dyn ExecutionPlan>,
         preserve_partitioning: bool,
         fetch: Option<usize>,
@@ -672,7 +671,7 @@ impl SortExec {
     }
 
     /// Sort expressions
-    pub fn expr(&self) -> &[PhysicalSortExpr] {
+    pub fn expr(&self) -> ExprOrderingRef {
         &self.expr
     }
 
@@ -731,7 +730,7 @@ impl ExecutionPlan for SortExec {
         false
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         Some(&self.expr)
     }
 
@@ -816,7 +815,7 @@ struct BatchWithSortArray {
 fn sort_batch(
     batch: RecordBatch,
     schema: SchemaRef,
-    expr: &[PhysicalSortExpr],
+    expr: ExprOrderingRef,
     fetch: Option<usize>,
 ) -> Result<BatchWithSortArray> {
     let sort_columns = expr
@@ -868,7 +867,7 @@ fn sort_batch(
 async fn do_sort(
     mut input: SendableRecordBatchStream,
     partition_id: usize,
-    expr: Vec<PhysicalSortExpr>,
+    expr: ExprOrdering,
     metrics_set: CompositeMetricsSet,
     context: Arc<TaskContext>,
     fetch: Option<usize>,
@@ -912,7 +911,7 @@ mod tests {
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::collect;
-    use crate::physical_plan::expressions::col;
+    use crate::physical_plan::expressions::{col, PhysicalSortExpr};
     use crate::physical_plan::memory::MemoryExec;
     use crate::prelude::SessionContext;
     use crate::test;

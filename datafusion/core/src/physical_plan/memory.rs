@@ -22,7 +22,7 @@ use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::expressions::PhysicalSortExpr;
+use super::expressions::{ExprOrdering, ExprOrderingRef};
 use super::{
     common, project_schema, DisplayFormatType, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -46,7 +46,7 @@ pub struct MemoryExec {
     /// Optional projection
     projection: Option<Vec<usize>>,
     // Optional sort information
-    sort_information: Option<Vec<PhysicalSortExpr>>,
+    sort_information: Option<ExprOrdering>,
 }
 
 impl fmt::Debug for MemoryExec {
@@ -78,7 +78,7 @@ impl ExecutionPlan for MemoryExec {
         Partitioning::UnknownPartitioning(self.partitions.len())
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         self.sort_information.as_deref()
     }
 
@@ -151,10 +151,7 @@ impl MemoryExec {
     }
 
     /// Set sort information
-    pub fn with_sort_information(
-        mut self,
-        sort_information: Vec<PhysicalSortExpr>,
-    ) -> Self {
+    pub fn with_sort_information(mut self, sort_information: ExprOrdering) -> Self {
         self.sort_information = Some(sort_information);
         self
     }

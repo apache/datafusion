@@ -27,7 +27,7 @@ use dashmap::DashMap;
 use datafusion_common::ToDFSchema;
 use datafusion_expr::expr::Sort;
 use datafusion_optimizer::utils::conjunction;
-use datafusion_physical_expr::{create_physical_expr, PhysicalSortExpr};
+use datafusion_physical_expr::{create_physical_expr, ExprOrdering, PhysicalSortExpr};
 use futures::{future, stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -611,7 +611,7 @@ impl ListingTable {
     }
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
-    fn try_create_output_ordering(&self) -> Result<Option<Vec<PhysicalSortExpr>>> {
+    fn try_create_output_ordering(&self) -> Result<Option<ExprOrdering>> {
         let file_sort_order =
             if let Some(file_sort_order) = self.options.file_sort_order.as_ref() {
                 file_sort_order

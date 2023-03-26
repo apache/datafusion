@@ -41,7 +41,7 @@ use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion_common::{Statistics, TableReference};
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::ExprOrderingRef;
 use futures::Stream;
 
 /// Compares formatted output of a record batch with an expected
@@ -378,7 +378,7 @@ impl ExecutionPlan for UnboundedExec {
     fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
         Ok(self.batch_produce.is_none())
     }
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 

@@ -32,7 +32,7 @@ use crate::window::window_expr::{reverse_order_bys, AggregateWindowExpr};
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, PlainAggregateWindowExpr, WindowExpr,
 };
-use crate::{expressions::PhysicalSortExpr, AggregateExpr, PhysicalExpr};
+use crate::{AggregateExpr, ExprOrdering, ExprOrderingRef, PhysicalExpr};
 
 /// A window expr that takes the form of an aggregate function
 /// Aggregate Window Expressions that have the form
@@ -44,7 +44,7 @@ use crate::{expressions::PhysicalSortExpr, AggregateExpr, PhysicalExpr};
 pub struct SlidingAggregateWindowExpr {
     aggregate: Arc<dyn AggregateExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
-    order_by: Vec<PhysicalSortExpr>,
+    order_by: ExprOrdering,
     window_frame: Arc<WindowFrame>,
 }
 
@@ -53,7 +53,7 @@ impl SlidingAggregateWindowExpr {
     pub fn new(
         aggregate: Arc<dyn AggregateExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
-        order_by: &[PhysicalSortExpr],
+        order_by: ExprOrderingRef,
         window_frame: Arc<WindowFrame>,
     ) -> Self {
         Self {
@@ -108,7 +108,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         &self.partition_by
     }
 
-    fn order_by(&self) -> &[PhysicalSortExpr] {
+    fn order_by(&self) -> ExprOrderingRef {
         &self.order_by
     }
 

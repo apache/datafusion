@@ -24,7 +24,7 @@ use datafusion::datasource::provider_as_source;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionState, TaskContext};
-use datafusion::physical_plan::expressions::PhysicalSortExpr;
+use datafusion::physical_plan::expressions::ExprOrderingRef;
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{
     project_schema, ExecutionPlan, SendableRecordBatchStream, Statistics,
@@ -217,7 +217,7 @@ impl ExecutionPlan for CustomExec {
         datafusion::physical_plan::Partitioning::UnknownPartitioning(1)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<ExprOrderingRef> {
         None
     }
 
