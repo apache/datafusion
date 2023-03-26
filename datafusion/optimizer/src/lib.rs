@@ -31,6 +31,7 @@ pub mod filter_null_join_keys;
 pub mod merge_projection;
 pub mod optimizer;
 pub mod propagate_empty_relation;
+pub mod push_down_aggregate;
 pub mod push_down_filter;
 pub mod push_down_limit;
 pub mod push_down_projection;

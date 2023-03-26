@@ -32,6 +32,7 @@ use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::merge_projection::MergeProjection;
 use crate::plan_signature::LogicalPlanSignature;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
+use crate::push_down_aggregate::PushDownAggregate;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
 use crate::push_down_projection::PushDownProjection;
@@ -231,6 +232,7 @@ impl Optimizer {
             Arc::new(PropagateEmptyRelation::new()),
             Arc::new(FilterNullJoinKeys::default()),
             Arc::new(EliminateOuterJoin::new()),
+            Arc::new(PushDownAggregate::new()),
             // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit
             Arc::new(PushDownLimit::new()),
             Arc::new(PushDownFilter::new()),
