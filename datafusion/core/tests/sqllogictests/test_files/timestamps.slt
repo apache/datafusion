@@ -238,3 +238,27 @@ query P
 SELECT INTERVAL '8' MONTH + '2000-01-01T00:00:00'::timestamp;
 ----
 2000-09-01T00:00:00
+
+statement ok
+create table foo (val int, ts1 timestamp, ts2 timestamp) as values (1, '2023-03-15T15:00:20'::timestamp, '2023-03-15T15:00:00'::timestamp), (2, '2023-03-15T15:00:10'::timestamp, '2023-03-15T15:00:00'::timestamp);
+
+query I?
+SELECT val, ts1 - ts2 FROM foo ORDER BY ts2 - ts1;
+----
+1 0 years 0 mons 0 days 0 hours 0 mins 20.000000000 secs
+2 0 years 0 mons 0 days 0 hours 0 mins 10.000000000 secs
+
+statement ok
+drop table foo;
+
+statement ok
+create table foo (val int, ts1 timestamp, ts2 timestamp) as values (1, '2023-03-15T15:00:20.000000123'::timestamp, '2023-03-15T15:00:00.000000099'::timestamp), (2, '2023-03-15T15:00:10.000123456'::timestamp, '2023-03-15T15:00:00.000000001'::timestamp);
+
+query I?
+SELECT val, ts1 - ts2 FROM foo ORDER BY ts1 - ts2;
+----
+2 0 years 0 mons 0 days 0 hours 0 mins 10.000123455 secs
+1 0 years 0 mons 0 days 0 hours 0 mins 20.000000024 secs
+
+statement ok
+drop table foo;

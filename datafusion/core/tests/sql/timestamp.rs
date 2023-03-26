@@ -1711,13 +1711,29 @@ async fn timestamp_sub_simple() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
+    let table_b = make_timestamp_sub_table::<TimestampNanosecondType>()?;
+    ctx.register_table("table_b", table_b)?;
+
+    let sql = "SELECT val, ts1 - ts2 AS ts_diff FROM table_b ORDER BY ts2 - ts1";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----+--------------------------------------------------------+",
+        "| val | ts_diff                                                |",
+        "+-----+--------------------------------------------------------+",
+        "| 3   | 0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs |",
+        "| 1   | 0 years 0 mons 0 days 0 hours 0 mins 20.000000000 secs |",
+        "| 2   | 0 years 0 mons 0 days 0 hours 0 mins 10.000000000 secs |",
+        "+-----+--------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
     Ok(())
 }
 
 #[tokio::test]
 async fn timestamp_sub_with_tz() -> Result<()> {
     let ctx = SessionContext::new();
-    let table_a = make_timestamp_tz_sub_table::<TimestampSecondType>(
+    let table_a = make_timestamp_tz_sub_table::<TimestampMillisecondType>(
         Some("America/Los_Angeles".to_string()),
         Some("Europe/Istanbul".to_string()),
     )?;
