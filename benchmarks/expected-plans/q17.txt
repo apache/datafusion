@@ -28,18 +28,18 @@
 |               |                 CoalesceBatchesExec: target_batch_size=8192                                                                                                                     |
 |               |                   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: "p_partkey", index: 3 }, Column { name: "l_partkey", index: 0 })]                        |
 |               |                     CoalesceBatchesExec: target_batch_size=8192                                                                                                                 |
-|               |                       RepartitionExec: partitioning=Hash([Column { name: "p_partkey", index: 3 }], 8), input_partitions=8                                                       |
+|               |                       RepartitionExec: partitioning=Hash([Column { name: "p_partkey", index: 3 }], 2), input_partitions=2                                                       |
 |               |                         CoalesceBatchesExec: target_batch_size=8192                                                                                                             |
 |               |                           FilterExec: p_partkey@3 = l_partkey@0 AND l_partkey@0 = p_partkey@3                                                                                   |
-|               |                             RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=8                                                                                |
+|               |                             RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=2                                                                                |
 |               |                               CoalesceBatchesExec: target_batch_size=8192                                                                                                       |
 |               |                                 HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: "l_partkey", index: 0 }, Column { name: "p_partkey", index: 0 })]          |
 |               |                                   CoalesceBatchesExec: target_batch_size=8192                                                                                                   |
-|               |                                     RepartitionExec: partitioning=Hash([Column { name: "l_partkey", index: 0 }], 8), input_partitions=0                                         |
+|               |                                     RepartitionExec: partitioning=Hash([Column { name: "l_partkey", index: 0 }], 2), input_partitions=0                                         |
 |               |                                       MemoryExec: partitions=0, partition_sizes=[]                                                                                              |
 |               |                                   CoalesceBatchesExec: target_batch_size=8192                                                                                                   |
-|               |                                     RepartitionExec: partitioning=Hash([Column { name: "p_partkey", index: 0 }], 8), input_partitions=8                                         |
-|               |                                       RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=0                                                                      |
+|               |                                     RepartitionExec: partitioning=Hash([Column { name: "p_partkey", index: 0 }], 2), input_partitions=2                                         |
+|               |                                       RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=0                                                                      |
 |               |                                         ProjectionExec: expr=[p_partkey@0 as p_partkey]                                                                                         |
 |               |                                           CoalesceBatchesExec: target_batch_size=8192                                                                                           |
 |               |                                             FilterExec: p_brand@1 = Brand#23 AND p_container@2 = MED BOX                                                                        |
@@ -47,8 +47,8 @@
 |               |                     ProjectionExec: expr=[l_partkey@0 as l_partkey, 0.2 * CAST(AVG(lineitem.l_quantity)@1 AS Float64) as __value]                                               |
 |               |                       AggregateExec: mode=FinalPartitioned, gby=[l_partkey@0 as l_partkey], aggr=[AVG(lineitem.l_quantity)]                                                     |
 |               |                         CoalesceBatchesExec: target_batch_size=8192                                                                                                             |
-|               |                           RepartitionExec: partitioning=Hash([Column { name: "l_partkey", index: 0 }], 8), input_partitions=8                                                   |
-|               |                             RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=0                                                                                |
+|               |                           RepartitionExec: partitioning=Hash([Column { name: "l_partkey", index: 0 }], 2), input_partitions=2                                                   |
+|               |                             RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=0                                                                                |
 |               |                               AggregateExec: mode=Partial, gby=[l_partkey@0 as l_partkey], aggr=[AVG(lineitem.l_quantity)]                                                      |
 |               |                                 MemoryExec: partitions=0, partition_sizes=[]                                                                                                    |
 |               |                                                                                                                                                                                 |

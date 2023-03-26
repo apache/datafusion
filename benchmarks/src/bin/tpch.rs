@@ -404,6 +404,7 @@ struct QueryResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::config::ConfigOptions;
     use datafusion::sql::TableReference;
     use std::fs::File;
     use std::io::{BufRead, BufReader};
@@ -525,6 +526,7 @@ mod tests {
         let mut actual = String::new();
         let sql = get_query_sql(query)?;
         for sql in &sql {
+            // handle special q15 which contains "create view" sql statement
             if sql.starts_with("select") {
                 let explain = "explain ".to_string() + sql;
                 let result_batch =
@@ -535,6 +537,10 @@ mod tests {
                 use std::fmt::Write as _;
                 write!(actual, "{}", pretty::pretty_format_batches(&result_batch)?)
                     .unwrap();
+                // write to file for debugging
+                // use std::io::Write;
+                // let mut file = File::create(format!("expected-plans/q{}.txt", query))?;
+                // file.write_all(actual.as_bytes())?;
             } else {
                 execute_query(&ctx, sql.as_str(), false, false).await?;
             }
@@ -562,7 +568,10 @@ mod tests {
     }
 
     fn create_context() -> Result<SessionContext> {
-        let ctx = SessionContext::new();
+        let mut config = ConfigOptions::new();
+        // Ensure that the generated physical plans are the same in different machines.
+        config.execution.target_partitions = 2;
+        let ctx = SessionContext::with_config(config.into());
         for table in TPCH_TABLES {
             let table = table.to_string();
             let schema = get_tpch_table_schema(&table);
