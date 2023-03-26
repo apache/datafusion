@@ -249,7 +249,16 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                         // this is a workaround for https://github.com/apache/arrow-datafusion/issues/3419
                         Ok(expr.clone())
                     }
-                    (DataType::Decimal128(_, _), _) | (_, DataType::Decimal128(_, _)) => {
+                    (DataType::Decimal128(_, _), _) | (_, DataType::Decimal128(_, _))
+                        if matches!(
+                            op,
+                            Operator::Plus
+                                | Operator::Minus
+                                | Operator::Divide
+                                | Operator::Multiply
+                                | Operator::Modulo
+                        ) =>
+                    {
                         if !matches!(left.as_ref(), &Expr::PromotePrecision(_))
                             && !matches!(left.as_ref(), &Expr::PromotePrecision(_))
                         {
