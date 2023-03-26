@@ -54,8 +54,3 @@ serde_json = { version = "1.0", optional = true }
 [dev-dependencies]
 doc-comment = "0.3"
 tokio = "1.18"
-
-[build-dependencies]
-# Pin these dependencies so that the generated output is deterministic
-pbjson-build = { version = "=0.5.1" }
-prost-build = { version = "=0.11.7" }
