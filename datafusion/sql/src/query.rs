@@ -19,7 +19,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::normalize_ident;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
-use sqlparser::ast::{Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query};
+use sqlparser::ast::{Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, Value};
 
 use sqlparser::parser::ParserError::ParserError;
 
@@ -109,15 +109,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         let fetch = match fetch {
-            Some(limit_expr) => {
+            Some(limit_expr)
+                if limit_expr != sqlparser::ast::Expr::Value(Value::Null) =>
+            {
                 let n = match self.sql_to_expr(
                     limit_expr,
                     input.schema(),
                     &mut PlannerContext::new(),
                 )? {
-                    Expr::Literal(ScalarValue::Int64(Some(n))) => Ok(n as usize),
+                    Expr::Literal(ScalarValue::Int64(Some(n))) if n >= 0 => {
+                        Ok(n as usize)
+                    }
                     _ => Err(DataFusionError::Plan(
-                        "Unexpected expression for LIMIT clause".to_string(),
+                        "LIMIT must not be negative".to_string(),
                     )),
                 }?;
                 Some(n)

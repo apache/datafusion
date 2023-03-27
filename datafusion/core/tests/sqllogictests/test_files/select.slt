@@ -105,4 +105,24 @@ select
 ----
 false true false true true false false true false true true false true true false false true
 
+# select limit clause 
+query I
+select * from (select 1 a union all select 2) b order by a limit 1;
+----
+1
 
+# select limit clause invalid
+statement error DataFusion error: Error during planning: LIMIT must not be negative
+select * from (select 1 a union all select 2) b order by a limit -1;
+
+# select limit clause 
+query I
+select * from (select 1 a union all select 2) b order by a limit null;
+----
+1
+2
+
+# select limit clause 
+query I
+select * from (select 1 a union all select 2) b order by a limit 0;
+----
