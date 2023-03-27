@@ -41,7 +41,7 @@ impl PartialEq for PhysicalSortExpr {
 
 impl std::fmt::Display for PhysicalSortExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{} {}", self.expr, to_string(&self.options))
+        write!(f, "{} {}", self.expr, to_str(&self.options))
     }
 }
 
@@ -98,7 +98,7 @@ impl PartialEq for PhysicalSortRequirement {
 
 impl std::fmt::Display for PhysicalSortRequirement {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let opts_string = self.options.as_ref().map_or("NA", to_string);
+        let opts_string = self.options.as_ref().map_or("NA", to_str);
         write!(f, "{} {}", self.expr, opts_string)
     }
 }
@@ -121,7 +121,7 @@ pub fn make_sort_requirements_from_exprs(
 
 /// Returns the SQL string representation of the given [SortOptions] object.
 #[inline]
-fn to_string(options: &SortOptions) -> &str {
+fn to_str(options: &SortOptions) -> &str {
     match (options.descending, options.nulls_first) {
         (true, true) => "DESC",
         (true, false) => "DESC NULLS LAST",

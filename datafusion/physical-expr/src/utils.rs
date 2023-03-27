@@ -338,6 +338,14 @@ fn requirements_compatible_concrete<F: FnOnce() -> EquivalenceProperties>(
     }
 }
 
+/// This function maps back requirement after ProjectionExec
+/// to the Executor for its input.
+// Specifically, `ProjectionExec` changes index of `Column`s in the schema of its input executor.
+// This function changes requirement given according to ProjectionExec schema to the requirement
+// according to schema of input executor to the ProjectionExec.
+// For instance, Column{"a", 0} would turn to Column{"a", 1}. Please note that this function assumes that
+// name of the Column is unique. If we have a requirement such that Column{"a", 0}, Column{"a", 1}.
+// This function will produce incorrect result (It will only emit single Column as a result).
 pub fn map_columns_before_projection(
     parent_required: &[Arc<dyn PhysicalExpr>],
     proj_exprs: &[(Arc<dyn PhysicalExpr>, String)],
@@ -363,6 +371,9 @@ pub fn map_columns_before_projection(
         .collect()
 }
 
+/// This function converts `PhysicalSortRequirement` to `PhysicalSortExpr`
+/// for each entry in the input. If required ordering is None for an entry
+/// default ordering `ASC, NULLS LAST` if given.
 pub fn make_sort_exprs_from_requirements(
     required: &[PhysicalSortRequirement],
 ) -> Vec<PhysicalSortExpr> {

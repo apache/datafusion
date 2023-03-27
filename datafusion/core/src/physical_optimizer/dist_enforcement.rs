@@ -991,6 +991,30 @@ mod tests {
         ))
     }
 
+    // Created a sorted parquet exec with multiple files
+    fn parquet_exec_multiple_sorted(
+        output_ordering: Option<Vec<PhysicalSortExpr>>,
+    ) -> Arc<ParquetExec> {
+        Arc::new(ParquetExec::new(
+            FileScanConfig {
+                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+                file_schema: schema(),
+                file_groups: vec![
+                    vec![PartitionedFile::new("x".to_string(), 100)],
+                    vec![PartitionedFile::new("y".to_string(), 100)],
+                ],
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering,
+                infinite_source: false,
+            },
+            None,
+            None,
+        ))
+    }
+
     fn projection_exec_with_alias(
         input: Arc<dyn ExecutionPlan>,
         alias_pairs: Vec<(String, String)>,
@@ -2069,7 +2093,7 @@ mod tests {
         }];
 
         // Scan some sorted parquet files
-        let exec = parquet_exec_with_sort(Some(sort_key.clone()));
+        let exec = parquet_exec_multiple_sorted(Some(sort_key.clone()));
 
         // CoalesceBatchesExec to mimic behavior after a filter
         let exec = Arc::new(CoalesceBatchesExec::new(exec, 4096));
@@ -2080,8 +2104,9 @@ mod tests {
         // The optimizer should not add an additional SortExec as the
         // data is already sorted
         let expected = &[
+            "SortPreservingMergeExec: [a@0 ASC]",
             "CoalesceBatchesExec: target_batch_size=4096",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[a@0 ASC], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, output_ordering=[a@0 ASC], projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, exec);
         Ok(())
