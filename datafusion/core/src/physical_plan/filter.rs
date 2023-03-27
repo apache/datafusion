@@ -393,7 +393,8 @@ mod tests {
         let new_filter = filter.clone().with_new_children(vec![input.clone()])?;
         assert!(!Arc::ptr_eq(&filter, &new_filter));
 
-        let new_filter2 = with_new_children_if_necessary(filter.clone(), vec![input])?;
+        let new_filter2 =
+            with_new_children_if_necessary(filter.clone(), vec![input])?.into();
         assert!(Arc::ptr_eq(&filter, &new_filter2));
 
         Ok(())

@@ -35,7 +35,7 @@ members = [
 ]
 
 [workspace.package]
-version = "20.0.0"
+version = "21.0.0"
 edition = "2021"
 readme = "README.md"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -46,8 +46,10 @@ rust-version = "1.64"
 
 [workspace.dependencies]
 arrow = { version = "34.0.0", features = ["prettyprint"] }
-arrow-buffer = "34.0.0"
-arrow-schema = "34.0.0"
+arrow-flight = { version = "34.0.0", features = ["flight-sql-experimental"] }
+arrow-buffer = { version = "34.0.0", default-features = false }
+arrow-schema = { version = "34.0.0", default-features = false }
+arrow-array = { version = "34.0.0", default-features = false, features = ["chrono-tz"] }
 parquet = { version = "34.0.0", features = ["arrow", "async"] }
 
 [profile.release]

@@ -29,6 +29,7 @@ use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion_common::tree_node::Transformed;
 use datafusion_physical_expr::utils::ordering_satisfy;
 use datafusion_physical_expr::PhysicalSortExpr;
 use std::sync::Arc;
@@ -51,7 +52,7 @@ pub fn optimize_children(
     if children.is_empty() {
         Ok(Arc::clone(&plan))
     } else {
-        with_new_children_if_necessary(plan, children)
+        with_new_children_if_necessary(plan, children).map(Transformed::into)
     }
 }
 

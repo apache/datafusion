@@ -47,18 +47,23 @@ Preview the site on Linux by running this command.
 firefox build/html/index.html
 ```
 
+## Making Changes
+
+To make changes to the docs, simply make a Pull Request with your
+proposed changes as normal. When the PR is merged the docs will be
+automatically updated.
+
 ## Release Process
 
-The documentation is served through the
-[arrow-site](https://github.com/apache/arrow-site/) repo. To release a new
-version of the docs, follow these steps:
+This documentation is hosted at https://arrow.apache.org/datafusion/
 
-1. Run `./build.sh` inside `docs` folder to generate the docs website inside the `build/html` folder.
-2. Clone the arrow-site repo
-3. Checkout to the `asf-site` branch (NOT `master`)
-4. Copy build artifacts into `arrow-site` repo's `datafusion` folder with a command such as
+When the PR is merged to the `main` branch of the DataFusion
+repository, a [github workflow](https://github.com/apache/arrow-datafusion/blob/main/.github/workflows/docs.yaml) which:
 
-- `cp -rT ./build/html/ ../../arrow-site/datafusion/` (doesn't work on mac)
-- `rsync -avzr ./build/html/ ../../arrow-site/datafusion/`
+1. Builds the html content
+2. Pushes the html content to the [`asf-site`](https://github.com/apache/arrow-datafusion/tree/asf-site) branch in this repository.
 
-5. Commit changes in `arrow-site` and send a PR.
+The Apache Software Foundation provides https://arrow.apache.org/,
+which serves content based on the configuration in
+[.asf.yaml](https://github.com/apache/arrow-datafusion/blob/main/.asf.yaml),
+which specifies the target as https://arrow.apache.org/datafusion/.

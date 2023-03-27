@@ -21,8 +21,8 @@ use crate::physical_plan::joins::SortMergeJoinExec;
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::tree_node::TreeNodeRewritable;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
@@ -78,7 +78,23 @@ impl SortPushDown {
     }
 }
 
-impl TreeNodeRewritable for SortPushDown {
+impl TreeNode for SortPushDown {
+    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    where
+        F: FnMut(&Self) -> Result<VisitRecursion>,
+    {
+        let children = self.children();
+        for child in children {
+            match op(&child)? {
+                VisitRecursion::Continue => {}
+                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+            }
+        }
+
+        Ok(VisitRecursion::Continue)
+    }
+
     fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
@@ -91,13 +107,19 @@ impl TreeNodeRewritable for SortPushDown {
                 .map(|r| r.map(|s| s.plan))
                 .collect::<Result<Vec<_>>>()?;
 
-            self.plan = with_new_children_if_necessary(self.plan, children_plans)?;
+            match with_new_children_if_necessary(self.plan, children_plans)? {
+                Transformed::Yes(plan) | Transformed::No(plan) => {
+                    self.plan = plan;
+                }
+            }
         };
         Ok(self)
     }
 }
 
-pub(crate) fn pushdown_sorts(requirements: SortPushDown) -> Result<Option<SortPushDown>> {
+pub(crate) fn pushdown_sorts(
+    requirements: SortPushDown,
+) -> Result<Transformed<SortPushDown>> {
     let plan = &requirements.plan;
     let parent_required = requirements.required_ordering.as_deref();
     const ERR_MSG: &str = "Expects parent requirement to contain something";
@@ -122,28 +144,28 @@ pub(crate) fn pushdown_sorts(requirements: SortPushDown) -> Result<Option<SortPu
             pushdown_requirement_to_children(child, required_ordering.as_deref())?
         {
             // Can push down requirements
-            Ok(Some(SortPushDown {
+            Ok(Transformed::Yes(SortPushDown {
                 plan: child.clone(),
                 required_ordering,
                 adjusted_request_ordering: adjusted,
             }))
         } else {
             // Can not push down requirements
-            Ok(Some(SortPushDown::init(new_plan)))
+            Ok(Transformed::Yes(SortPushDown::init(new_plan)))
         }
     } else {
         // Executors other than SortExec
         if ordering_satisfy_requirement(plan.output_ordering(), parent_required, || {
             plan.equivalence_properties()
         }) {
-            return Ok(Some(SortPushDown {
+            return Ok(Transformed::Yes(SortPushDown {
                 required_ordering: None,
                 ..requirements
             }));
         }
         // Can not satisfy the parent requirements, check whether the requirements can be pushed down:
         if let Some(adjusted) = pushdown_requirement_to_children(plan, parent_required)? {
-            Ok(Some(SortPushDown {
+            Ok(Transformed::Yes(SortPushDown {
                 plan: plan.clone(),
                 adjusted_request_ordering: adjusted,
                 ..requirements
@@ -154,7 +176,7 @@ pub(crate) fn pushdown_sorts(requirements: SortPushDown) -> Result<Option<SortPu
                 make_sort_exprs_from_requirements(parent_required.ok_or_else(err)?);
             let mut new_plan = plan.clone();
             add_sort_above(&mut new_plan, parent_required_expr)?;
-            Ok(Some(SortPushDown::init(new_plan)))
+            Ok(Transformed::Yes(SortPushDown::init(new_plan)))
         }
     }
 }

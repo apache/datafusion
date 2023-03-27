@@ -37,6 +37,7 @@ use futures::stream::Stream;
 use std::fmt;
 use std::fmt::Debug;
 
+use datafusion_common::tree_node::Transformed;
 use datafusion_common::DataFusionError;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -269,7 +270,7 @@ pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
 pub fn with_new_children_if_necessary(
     plan: Arc<dyn ExecutionPlan>,
     children: Vec<Arc<dyn ExecutionPlan>>,
-) -> Result<Arc<dyn ExecutionPlan>> {
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let old_children = plan.children();
     if children.len() != old_children.len() {
         Err(DataFusionError::Internal(
@@ -281,9 +282,9 @@ pub fn with_new_children_if_necessary(
             .zip(old_children.iter())
             .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
     {
-        plan.with_new_children(children)
+        Ok(Transformed::Yes(plan.with_new_children(children)?))
     } else {
-        Ok(plan)
+        Ok(Transformed::No(plan))
     }
 }
 

@@ -57,7 +57,7 @@ use crate::physical_plan::{
     Partitioning, PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
-use datafusion_physical_expr::rewrite::TreeNodeRewritable;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -157,11 +157,13 @@ impl SortMergeJoinExec {
                                         .as_any()
                                         .downcast_ref::<Column>(
                                     ) {
-                                        Some(col) => Ok(Some(Arc::new(Column::new(
-                                            col.name(),
-                                            left_columns_len + col.index(),
-                                        )))),
-                                        None => Ok(None),
+                                        Some(col) => {
+                                            Ok(Transformed::Yes(Arc::new(Column::new(
+                                                col.name(),
+                                                left_columns_len + col.index(),
+                                            ))))
+                                        }
+                                        None => Ok(Transformed::No(e)),
                                     });
                                 Ok(PhysicalSortExpr {
                                     expr: new_expr?,

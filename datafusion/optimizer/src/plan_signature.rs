@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use std::{
     collections::hash_map::DefaultHasher,
-    convert::Infallible,
     hash::{Hash, Hasher},
     num::NonZeroUsize,
 };
 
-use datafusion_expr::{LogicalPlan, PlanVisitor};
+use datafusion_expr::LogicalPlan;
 
 /// Non-unique identifier of a [`LogicalPlan`].
 ///
@@ -72,25 +72,16 @@ impl LogicalPlanSignature {
 
 /// Get total number of [`LogicalPlan`]s in the plan.
 fn get_node_number(plan: &LogicalPlan) -> NonZeroUsize {
-    struct Visitor {
-        node_number: usize,
-    }
-
-    impl PlanVisitor for Visitor {
-        type Error = Infallible;
-
-        fn pre_visit(&mut self, _: &LogicalPlan) -> Result<bool, Self::Error> {
-            self.node_number += 1;
-            Ok(true)
-        }
-    }
-
-    let mut v = Visitor { node_number: 0 };
-    plan.accept(&mut v).unwrap(); // Infallible
-
+    let mut node_number = 0;
+    plan.apply(&mut |_plan| {
+        node_number += 1;
+        Ok(VisitRecursion::Continue)
+    })
+    // Closure always return Ok
+    .unwrap();
     // Visitor must have at least visited the root,
     // so v.node_number is at least 1.
-    NonZeroUsize::new(v.node_number).unwrap()
+    NonZeroUsize::new(node_number).unwrap()
 }
 
 #[cfg(test)]
