@@ -76,11 +76,55 @@ cargo run --release --bin tpch -- convert --input ./data --output /mnt/tpch-parq
 
 Or if you want to verify and run all the queries in the benchmark, you can just run `cargo test`.
 
-### Machine readable benchmark summary
+### Comparing results between runs
 
 Any `tpch` execution with `-o <dir>` argument will produce a summary file right under the `<dir>`
 directory. It is a JSON serialized form of all the runs that happened as well as the runtime metadata
 (number of cores, DataFusion version, etc.).
+
+```shell
+$ git checkout main
+# generate an output script in /tmp/output_main
+$ mkdir -p /tmp/output_main
+$ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_main
+# generate an output script in /tmp/output_branch
+$ mkdir -p /tmp/output_branch
+$ git checkout my_branch
+$ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_branch
+# compare the results:
+./compare.py /tmp/output_main/tpch-summary--1679330119.json  /tmp/output_branch/tpch-summary--1679328405.json
+```
+
+This will produce output like
+
+```
+┏━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
+┃ Query        ┃ /home/alamb… ┃ /home/alamb… ┃        Change ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━┩
+│ Q1           │   16252.56ms │   16031.82ms │     no change │
+│ Q2           │    3994.56ms │    4353.75ms │  1.09x slower │
+│ Q3           │    5572.06ms │    5620.27ms │     no change │
+│ Q4           │    2144.14ms │    2194.67ms │     no change │
+│ Q5           │    7796.93ms │    7646.74ms │     no change │
+│ Q6           │    4382.32ms │    4327.16ms │     no change │
+│ Q7           │   18702.50ms │   19922.74ms │  1.07x slower │
+│ Q8           │    7383.74ms │    7616.21ms │     no change │
+│ Q9           │   13855.17ms │   14408.42ms │     no change │
+│ Q10          │    7446.05ms │    8030.00ms │  1.08x slower │
+│ Q11          │    3414.81ms │    3850.34ms │  1.13x slower │
+│ Q12          │    3027.16ms │    3085.89ms │     no change │
+│ Q13          │   18859.06ms │   18627.02ms │     no change │
+│ Q14          │    4157.91ms │    4140.22ms │     no change │
+│ Q15          │    5293.05ms │    5369.17ms │     no change │
+│ Q16          │    6512.42ms │    3011.58ms │ +2.16x faster │
+│ Q17          │   86253.33ms │   76036.06ms │ +1.13x faster │
+│ Q18          │   45101.99ms │   49717.76ms │  1.10x slower │
+│ Q19          │    7323.15ms │    7409.85ms │     no change │
+│ Q20          │   19902.39ms │   20965.94ms │  1.05x slower │
+│ Q21          │   22040.06ms │   23184.84ms │  1.05x slower │
+│ Q22          │    2011.87ms │    2143.62ms │  1.07x slower │
+└──────────────┴──────────────┴──────────────┴───────────────┘
+```
 
 ## Expected output
 
