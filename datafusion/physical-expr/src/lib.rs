@@ -32,11 +32,11 @@ mod physical_expr;
 pub mod planner;
 #[cfg(feature = "regex_expressions")]
 pub mod regex_expressions;
-pub mod rewrite;
 mod scalar_function;
 mod sort_expr;
 pub mod string_expressions;
 pub mod struct_expressions;
+pub mod tree_node;
 pub mod type_coercion;
 pub mod udf;
 #[cfg(feature = "unicode_expressions")]

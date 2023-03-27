@@ -31,33 +31,36 @@ use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{BinaryExpr, Case, Cast, Sort, WindowFunction};
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::{binary_expr, Expr};
-use substrait::proto::{
-    aggregate_function::AggregationInvocation,
-    aggregate_rel::{Grouping, Measure},
-    expression::{
-        field_reference::ReferenceType,
-        if_then::IfClause,
-        literal::{Decimal, LiteralType},
-        mask_expression::{StructItem, StructSelect},
-        reference_segment,
-        window_function::bound as SubstraitBound,
-        window_function::bound::Kind as BoundKind,
-        window_function::Bound,
-        FieldReference, IfThen, Literal, MaskExpression, ReferenceSegment, RexType,
-        ScalarFunction, WindowFunction as SubstraitWindowFunction,
+use substrait::{
+    proto::{
+        aggregate_function::AggregationInvocation,
+        aggregate_rel::{Grouping, Measure},
+        expression::{
+            field_reference::ReferenceType,
+            if_then::IfClause,
+            literal::{Decimal, LiteralType},
+            mask_expression::{StructItem, StructSelect},
+            reference_segment,
+            window_function::bound as SubstraitBound,
+            window_function::bound::Kind as BoundKind,
+            window_function::Bound,
+            FieldReference, IfThen, Literal, MaskExpression, ReferenceSegment, RexType,
+            ScalarFunction, WindowFunction as SubstraitWindowFunction,
+        },
+        extensions::{
+            self,
+            simple_extension_declaration::{ExtensionFunction, MappingType},
+        },
+        function_argument::ArgType,
+        join_rel, plan_rel, r#type,
+        read_rel::{NamedTable, ReadType},
+        rel::RelType,
+        sort_field::{SortDirection, SortKind},
+        AggregateFunction, AggregateRel, AggregationPhase, Expression, FetchRel,
+        FilterRel, FunctionArgument, JoinRel, NamedStruct, Plan, PlanRel, ProjectRel,
+        ReadRel, Rel, RelRoot, SortField, SortRel,
     },
-    extensions::{
-        self,
-        simple_extension_declaration::{ExtensionFunction, MappingType},
-    },
-    function_argument::ArgType,
-    join_rel, plan_rel, r#type,
-    read_rel::{NamedTable, ReadType},
-    rel::RelType,
-    sort_field::{SortDirection, SortKind},
-    AggregateFunction, AggregateRel, AggregationPhase, Expression, FetchRel, FilterRel,
-    FunctionArgument, JoinRel, NamedStruct, Plan, PlanRel, ProjectRel, ReadRel, Rel,
-    RelRoot, SortField, SortRel,
+    version,
 };
 
 /// Convert DataFusion LogicalPlan to Substrait Plan
@@ -80,7 +83,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan) -> Result<Box<Plan>> {
 
     // Return parsed plan
     Ok(Box::new(Plan {
-        version: None, // TODO: https://github.com/apache/arrow-datafusion/issues/4949
+        version: Some(version::version_with_producer("datafusion")),
         extension_uris: vec![],
         extensions: function_extensions,
         relations: plan_rels,
