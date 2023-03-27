@@ -23,9 +23,9 @@ use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::joins::SymmetricHashJoinExec;
-use crate::physical_plan::tree_node::TreeNodeRewritable;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use datafusion_common::config::OptimizerOptions;
+use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::intervals::{check_support, is_datatype_supported};
 use std::sync::Arc;
@@ -83,7 +83,23 @@ impl PipelineStatePropagator {
     }
 }
 
-impl TreeNodeRewritable for PipelineStatePropagator {
+impl TreeNode for PipelineStatePropagator {
+    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    where
+        F: FnMut(&Self) -> Result<VisitRecursion>,
+    {
+        let children = self.plan.children();
+        for child in children {
+            match op(&PipelineStatePropagator::new(child))? {
+                VisitRecursion::Continue => {}
+                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+            }
+        }
+
+        Ok(VisitRecursion::Continue)
+    }
+
     fn map_children<F>(self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
@@ -104,7 +120,7 @@ impl TreeNodeRewritable for PipelineStatePropagator {
                 .map(|child| child.plan)
                 .collect::<Vec<_>>();
             Ok(PipelineStatePropagator {
-                plan: with_new_children_if_necessary(self.plan, children_plans)?,
+                plan: with_new_children_if_necessary(self.plan, children_plans)?.into(),
                 unbounded: self.unbounded,
                 children_unbounded,
             })
@@ -117,11 +133,10 @@ impl TreeNodeRewritable for PipelineStatePropagator {
 /// This function propagates finiteness information and rejects any plan with
 /// pipeline-breaking operators acting on infinite inputs.
 pub fn check_finiteness_requirements(
-    input: PipelineStatePropagator,
+    mut input: PipelineStatePropagator,
     optimizer_options: &OptimizerOptions,
-) -> Result<Option<PipelineStatePropagator>> {
-    let plan = input.plan;
-    if let Some(exec) = plan.as_any().downcast_ref::<SymmetricHashJoinExec>() {
+) -> Result<Transformed<PipelineStatePropagator>> {
+    if let Some(exec) = input.plan.as_any().downcast_ref::<SymmetricHashJoinExec>() {
         if !(optimizer_options.allow_symmetric_joins_without_pruning
             || (exec.check_if_order_information_available()? && is_prunable(exec)))
         {
@@ -130,14 +145,13 @@ pub fn check_finiteness_requirements(
             return Err(DataFusionError::Plan(MSG.to_owned()));
         }
     }
-    let children = input.children_unbounded;
-    plan.unbounded_output(&children).map(|value| {
-        Some(PipelineStatePropagator {
-            plan,
-            unbounded: value,
-            children_unbounded: children,
+    input
+        .plan
+        .unbounded_output(&input.children_unbounded)
+        .map(|value| {
+            input.unbounded = value;
+            Transformed::Yes(input)
         })
-    })
 }
 
 /// This function returns whether a given symmetric hash join is amenable to

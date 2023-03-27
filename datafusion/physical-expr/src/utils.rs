@@ -17,12 +17,14 @@
 
 use crate::equivalence::EquivalentClass;
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
-use crate::rewrite::{TreeNodeRewritable, TreeNodeRewriter};
 use crate::{EquivalenceProperties, PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
 use datafusion_expr::Operator;
 
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeRewriter, VisitRecursion,
+};
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 use std::collections::HashMap;
@@ -141,7 +143,11 @@ pub fn normalize_out_expr_with_alias_schema(
                     }
                     None => None,
                 };
-            Ok(normalized_form)
+            Ok(if let Some(normalized_form) = normalized_form {
+                Transformed::Yes(normalized_form)
+            } else {
+                Transformed::No(expr)
+            })
         })
         .unwrap_or(expr)
 }
@@ -152,18 +158,26 @@ pub fn normalize_expr_with_equivalence_properties(
 ) -> Arc<dyn PhysicalExpr> {
     let expr_clone = expr.clone();
     expr_clone
-        .transform(&|expr| match expr.as_any().downcast_ref::<Column>() {
-            Some(column) => {
-                let mut normalized: Option<Arc<dyn PhysicalExpr>> = None;
-                for class in eq_properties {
-                    if class.contains(column) {
-                        normalized = Some(Arc::new(class.head().clone()));
-                        break;
+        .transform(&|expr| {
+            let normalized_form: Option<Arc<dyn PhysicalExpr>> =
+                match expr.as_any().downcast_ref::<Column>() {
+                    Some(column) => {
+                        let mut normalized: Option<Arc<dyn PhysicalExpr>> = None;
+                        for class in eq_properties {
+                            if class.contains(column) {
+                                normalized = Some(Arc::new(class.head().clone()));
+                                break;
+                            }
+                        }
+                        normalized
                     }
-                }
-                Ok(normalized)
-            }
-            None => Ok(None),
+                    None => None,
+                };
+            Ok(if let Some(normalized_form) = normalized_form {
+                Transformed::Yes(normalized_form)
+            } else {
+                Transformed::No(expr)
+            })
         })
         .unwrap_or(expr)
 }
@@ -264,7 +278,22 @@ impl<T> ExprTreeNode<T> {
     }
 }
 
-impl<T: Clone> TreeNodeRewritable for ExprTreeNode<T> {
+impl<T: Clone> TreeNode for ExprTreeNode<T> {
+    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    where
+        F: FnMut(&Self) -> Result<VisitRecursion>,
+    {
+        for child in self.children() {
+            match op(&child)? {
+                VisitRecursion::Continue => {}
+                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+            }
+        }
+
+        Ok(VisitRecursion::Continue)
+    }
+
     fn map_children<F>(mut self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
@@ -292,9 +321,10 @@ struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> T> {
     constructor: &'a F,
 }
 
-impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> T>
-    TreeNodeRewriter<ExprTreeNode<NodeIndex>> for PhysicalExprDAEGBuilder<'a, T, F>
+impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> T> TreeNodeRewriter
+    for PhysicalExprDAEGBuilder<'a, T, F>
 {
+    type N = ExprTreeNode<NodeIndex>;
     // This method mutates an expression node by transforming it to a physical expression
     // and adding it to the graph. The method returns the mutated expression node.
     fn mutate(
@@ -344,29 +374,24 @@ where
         constructor,
     };
     // Use the builder to transform the expression tree node into a DAG.
-    let root = init.transform_using(&mut builder)?;
+    let root = init.rewrite(&mut builder)?;
     // Return a tuple containing the root node index and the DAG.
     Ok((root.data.unwrap(), builder.graph))
-}
-
-fn collect_columns_recursive(
-    expr: &Arc<dyn PhysicalExpr>,
-    columns: &mut HashSet<Column>,
-) {
-    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-        if !columns.iter().any(|c| c.eq(column)) {
-            columns.insert(column.clone());
-        }
-    }
-    expr.children()
-        .iter()
-        .for_each(|e| collect_columns_recursive(e, columns))
 }
 
 /// Recursively extract referenced [`Column`]s within a [`PhysicalExpr`].
 pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     let mut columns = HashSet::<Column>::new();
-    collect_columns_recursive(expr, &mut columns);
+    expr.apply(&mut |expr| {
+        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            if !columns.iter().any(|c| c.eq(column)) {
+                columns.insert(column.clone());
+            }
+        }
+        Ok(VisitRecursion::Continue)
+    })
+    // pre_visit always returns OK, so this will always too
+    .expect("no way to return error during recursion");
     columns
 }
 
@@ -384,10 +409,13 @@ pub fn reassign_predicate_columns(
                 Err(_) if ignore_not_found => usize::MAX,
                 Err(e) => return Err(e.into()),
             };
-            return Ok(Some(Arc::new(Column::new(column.name(), index))));
+            return Ok(Transformed::Yes(Arc::new(Column::new(
+                column.name(),
+                index,
+            ))));
         }
 
-        Ok(None)
+        Ok(Transformed::No(expr))
     })
 }
 

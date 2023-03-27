@@ -565,6 +565,11 @@ pub trait ExtensionOptions: Send + Sync + std::fmt::Debug + 'static {
 pub struct Extensions(BTreeMap<&'static str, ExtensionBox>);
 
 impl Extensions {
+    /// Create a new, empty [`Extensions`]
+    pub fn new() -> Self {
+        Self(BTreeMap::new())
+    }
+
     /// Registers a [`ConfigExtension`] with this [`ConfigOptions`]
     pub fn insert<T: ConfigExtension>(&mut self, extension: T) {
         assert_ne!(T::PREFIX, "datafusion");

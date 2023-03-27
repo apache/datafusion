@@ -26,6 +26,7 @@ use datafusion::datasource::listing::{
 use datafusion::datasource::MemTable;
 use datafusion::prelude::CsvReadOptions;
 use datafusion::{arrow::util::pretty, error::Result, prelude::SessionContext};
+use datafusion_benchmarks::BenchmarkRun;
 use std::path::PathBuf;
 use std::sync::Arc;
 use structopt::StructOpt;
@@ -51,6 +52,9 @@ struct GroupBy {
     /// Load the data into a MemTable before executing the query
     #[structopt(short = "m", long = "mem-table")]
     mem_table: bool,
+    /// Path to machine readable output file
+    #[structopt(parse(from_os_str), short = "o", long = "output")]
+    output_path: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -63,6 +67,7 @@ async fn main() -> Result<()> {
 }
 
 async fn group_by(opt: &GroupBy) -> Result<()> {
+    let mut rundata = BenchmarkRun::new();
     let path = opt.path.to_str().unwrap();
     let mut config = ConfigOptions::from_env()?;
     config.execution.batch_size = 65535;
@@ -94,7 +99,7 @@ async fn group_by(opt: &GroupBy) -> Result<()> {
         ctx.register_csv("x", path, CsvReadOptions::default().schema(&schema))
             .await?;
     }
-
+    rundata.start_new_case(&opt.query.to_string());
     let sql = match opt.query {
         1 => "select id1, sum(v1) as v1 from x group by id1",
         2 => "select id1, id2, sum(v1) as v1 from x group by id1, id2",
@@ -113,13 +118,17 @@ async fn group_by(opt: &GroupBy) -> Result<()> {
     let start = Instant::now();
     let df = ctx.sql(sql).await?;
     let batches = df.collect().await?;
-    let elapsed = start.elapsed().as_millis();
-
+    let elapsed = start.elapsed();
+    let numrows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
     if opt.debug {
         pretty::print_batches(&batches)?;
     }
-
-    println!("h2o groupby query {} took {} ms", opt.query, elapsed);
-
+    rundata.write_iter(elapsed, numrows);
+    println!(
+        "h2o groupby query {} took {} ms",
+        opt.query,
+        elapsed.as_secs_f64() * 1000.0
+    );
+    rundata.maybe_write_json(opt.output_path.as_ref())?;
     Ok(())
 }

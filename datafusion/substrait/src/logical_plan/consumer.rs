@@ -16,12 +16,14 @@
 // under the License.
 
 use async_recursion::async_recursion;
+use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DFField, DFSchema, DFSchemaRef};
-use datafusion::logical_expr::expr;
 use datafusion::logical_expr::{
-    aggregate_function, BinaryExpr, Case, Expr, LogicalPlan, Operator,
+    aggregate_function, window_function::find_df_window_func, BinaryExpr, Case, Expr,
+    LogicalPlan, Operator,
 };
 use datafusion::logical_expr::{build_join_schema, LogicalPlanBuilder};
+use datafusion::logical_expr::{expr, Cast, WindowFrameBound, WindowFrameUnits};
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
 use datafusion::{
@@ -34,7 +36,10 @@ use substrait::proto::{
     aggregate_function::AggregationInvocation,
     expression::{
         field_reference::ReferenceType::DirectReference, literal::LiteralType,
-        reference_segment::ReferenceType::StructField, MaskExpression, RexType,
+        reference_segment::ReferenceType::StructField,
+        window_function::bound as SubstraitBound,
+        window_function::bound::Kind as BoundKind, window_function::Bound,
+        MaskExpression, RexType,
     },
     extensions::simple_extension_declaration::MappingType,
     function_argument::ArgType,
@@ -44,6 +49,7 @@ use substrait::proto::{
     sort_field::{SortDirection, SortKind::*},
     AggregateFunction, Expression, Plan, Rel, Type,
 };
+use substrait::proto::{FunctionArgument, SortField};
 
 use datafusion::logical_expr::expr::Sort;
 use std::collections::HashMap;
@@ -138,13 +144,25 @@ pub async fn from_substrait_rel(
     match &rel.rel_type {
         Some(RelType::Project(p)) => {
             if let Some(input) = p.input.as_ref() {
-                let input = LogicalPlanBuilder::from(
+                let mut input = LogicalPlanBuilder::from(
                     from_substrait_rel(ctx, input, extensions).await?,
                 );
                 let mut exprs: Vec<Expr> = vec![];
                 for e in &p.expressions {
-                    let x = from_substrait_rex(e, input.schema(), extensions).await?;
-                    exprs.push(x.as_ref().clone());
+                    let x =
+                        from_substrait_rex(e, input.clone().schema(), extensions).await?;
+                    // if the expression is WindowFunction, wrap in a Window relation
+                    //   before returning and do not add to list of this Projection's expression list
+                    // otherwise, add expression to the Projection's expression list
+                    match &*x {
+                        Expr::WindowFunction(_) => {
+                            input = input.window(vec![x.as_ref().clone()])?;
+                            exprs.push(x.as_ref().clone());
+                        }
+                        _ => {
+                            exprs.push(x.as_ref().clone());
+                        }
+                    }
                 }
                 input.project(exprs)?.build()
             } else {
@@ -192,45 +210,8 @@ pub async fn from_substrait_rel(
                 let input = LogicalPlanBuilder::from(
                     from_substrait_rel(ctx, input, extensions).await?,
                 );
-                let mut sorts: Vec<Expr> = vec![];
-                for s in &sort.sorts {
-                    let expr = from_substrait_rex(
-                        s.expr.as_ref().unwrap(),
-                        input.schema(),
-                        extensions,
-                    )
-                    .await?;
-                    let asc_nullfirst = match &s.sort_kind {
-                        Some(k) => match k {
-                            Direction(d) => {
-                                let direction : SortDirection = unsafe {
-                                    ::std::mem::transmute(*d)
-                                };
-                                match direction {
-                                    SortDirection::AscNullsFirst => Ok((true, true)),
-                                    SortDirection::AscNullsLast => Ok((true, false)),
-                                    SortDirection::DescNullsFirst => Ok((false, true)),
-                                    SortDirection::DescNullsLast => Ok((false, false)),
-                                    SortDirection::Clustered =>
-                                        Err(DataFusionError::NotImplemented("Sort with direction clustered is not yet supported".to_string()))
-                                    ,
-                                    SortDirection::Unspecified =>
-                                        Err(DataFusionError::NotImplemented("Unspecified sort direction is invalid".to_string()))
-                                }
-                            }
-                            ComparisonFunctionReference(_) => {
-                                Err(DataFusionError::NotImplemented("Sort using comparison function reference is not supported".to_string()))
-                            },
-                        },
-                        None => Err(DataFusionError::NotImplemented("Sort without sort kind is invalid".to_string()))
-                    };
-                    let (asc, nulls_first) = asc_nullfirst.unwrap();
-                    sorts.push(Expr::Sort(Sort {
-                        expr: Box::new(expr.as_ref().clone()),
-                        asc,
-                        nulls_first,
-                    }));
-                }
+                let sorts =
+                    from_substrait_sorts(&sort.sorts, input.schema(), extensions).await?;
                 input.sort(sorts)?.build()
             } else {
                 Err(DataFusionError::NotImplemented(
@@ -449,6 +430,90 @@ fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
             "invalid join type variant {join_type:?}"
         )))
     }
+}
+
+/// Convert Substrait Sorts to DataFusion Exprs
+pub async fn from_substrait_sorts(
+    substrait_sorts: &Vec<SortField>,
+    input_schema: &DFSchema,
+    extensions: &HashMap<u32, &String>,
+) -> Result<Vec<Expr>> {
+    let mut sorts: Vec<Expr> = vec![];
+    for s in substrait_sorts {
+        let expr = from_substrait_rex(s.expr.as_ref().unwrap(), input_schema, extensions)
+            .await?;
+        let asc_nullfirst = match &s.sort_kind {
+            Some(k) => match k {
+                Direction(d) => {
+                    let direction: SortDirection = unsafe { ::std::mem::transmute(*d) };
+                    match direction {
+                        SortDirection::AscNullsFirst => Ok((true, true)),
+                        SortDirection::AscNullsLast => Ok((true, false)),
+                        SortDirection::DescNullsFirst => Ok((false, true)),
+                        SortDirection::DescNullsLast => Ok((false, false)),
+                        SortDirection::Clustered => Err(DataFusionError::NotImplemented(
+                            "Sort with direction clustered is not yet supported"
+                                .to_string(),
+                        )),
+                        SortDirection::Unspecified => {
+                            Err(DataFusionError::NotImplemented(
+                                "Unspecified sort direction is invalid".to_string(),
+                            ))
+                        }
+                    }
+                }
+                ComparisonFunctionReference(_) => Err(DataFusionError::NotImplemented(
+                    "Sort using comparison function reference is not supported"
+                        .to_string(),
+                )),
+            },
+            None => Err(DataFusionError::NotImplemented(
+                "Sort without sort kind is invalid".to_string(),
+            )),
+        };
+        let (asc, nulls_first) = asc_nullfirst.unwrap();
+        sorts.push(Expr::Sort(Sort {
+            expr: Box::new(expr.as_ref().clone()),
+            asc,
+            nulls_first,
+        }));
+    }
+    Ok(sorts)
+}
+
+/// Convert Substrait Expressions to DataFusion Exprs
+pub async fn from_substrait_rex_vec(
+    exprs: &Vec<Expression>,
+    input_schema: &DFSchema,
+    extensions: &HashMap<u32, &String>,
+) -> Result<Vec<Expr>> {
+    let mut expressions: Vec<Expr> = vec![];
+    for expr in exprs {
+        let expression = from_substrait_rex(expr, input_schema, extensions).await?;
+        expressions.push(expression.as_ref().clone());
+    }
+    Ok(expressions)
+}
+
+/// Convert Substrait FunctionArguments to DataFusion Exprs
+pub async fn from_substriat_func_args(
+    arguments: &Vec<FunctionArgument>,
+    input_schema: &DFSchema,
+    extensions: &HashMap<u32, &String>,
+) -> Result<Vec<Expr>> {
+    let mut args: Vec<Expr> = vec![];
+    for arg in arguments {
+        let arg_expr = match &arg.arg_type {
+            Some(ArgType::Value(e)) => {
+                from_substrait_rex(e, input_schema, extensions).await
+            }
+            _ => Err(DataFusionError::NotImplemented(
+                "Aggregated function argument non-Value type not supported".to_string(),
+            )),
+        };
+        args.push(arg_expr?.as_ref().clone());
+    }
+    Ok(args)
 }
 
 /// Convert Substrait AggregateFunction to DataFusion Expr
@@ -721,9 +786,127 @@ pub async fn from_substrait_rex(
                 ))),
             }
         }
+        Some(RexType::Cast(cast)) => match cast.as_ref().r#type.as_ref() {
+            Some(output_type) => Ok(Arc::new(Expr::Cast(Cast::new(
+                Box::new(
+                    from_substrait_rex(
+                        cast.as_ref().input.as_ref().unwrap().as_ref(),
+                        input_schema,
+                        extensions,
+                    )
+                    .await?
+                    .as_ref()
+                    .clone(),
+                ),
+                from_substrait_type(output_type)?,
+            )))),
+            None => Err(DataFusionError::Substrait(
+                "Cast experssion without output type is not allowed".to_string(),
+            )),
+        },
+        Some(RexType::WindowFunction(window)) => {
+            let fun = match extensions.get(&window.function_reference) {
+                Some(function_name) => Ok(find_df_window_func(function_name)),
+                None => Err(DataFusionError::NotImplemented(format!(
+                    "Window function not found: function anchor = {:?}",
+                    &window.function_reference
+                ))),
+            };
+            let order_by =
+                from_substrait_sorts(&window.sorts, input_schema, extensions).await?;
+            // Substrait does not encode WindowFrameUnits so we're using a simple logic to determine the units
+            // If there is no `ORDER BY`, then by default, the frame counts each row from the lower up to upper boundary
+            // If there is `ORDER BY`, then by default, each frame is a range starting from unbounded preceding to current row
+            // TODO: Consider the cases where window frame is specified in query and is different from default
+            let units = if order_by.is_empty() {
+                WindowFrameUnits::Rows
+            } else {
+                WindowFrameUnits::Range
+            };
+            Ok(Arc::new(Expr::WindowFunction(expr::WindowFunction {
+                fun: fun?.unwrap(),
+                args: from_substriat_func_args(
+                    &window.arguments,
+                    input_schema,
+                    extensions,
+                )
+                .await?,
+                partition_by: from_substrait_rex_vec(
+                    &window.partitions,
+                    input_schema,
+                    extensions,
+                )
+                .await?,
+                order_by,
+                window_frame: datafusion::logical_expr::WindowFrame {
+                    units,
+                    start_bound: from_substrait_bound(&window.lower_bound, true)?,
+                    end_bound: from_substrait_bound(&window.upper_bound, false)?,
+                },
+            })))
+        }
         _ => Err(DataFusionError::NotImplemented(
             "unsupported rex_type".to_string(),
         )),
+    }
+}
+
+fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
+    match &dt.kind {
+        Some(s_kind) => match s_kind {
+            r#type::Kind::Bool(_) => Ok(DataType::Boolean),
+            r#type::Kind::I8(_) => Ok(DataType::Int8),
+            r#type::Kind::I16(_) => Ok(DataType::Int16),
+            r#type::Kind::I32(_) => Ok(DataType::Int32),
+            r#type::Kind::I64(_) => Ok(DataType::Int64),
+            r#type::Kind::Decimal(d) => {
+                Ok(DataType::Decimal128(d.precision as u8, d.scale as i8))
+            }
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "Unsupported Substrait type: {s_kind:?}"
+            ))),
+        },
+        _ => Err(DataFusionError::NotImplemented(
+            "`None` Substrait kind is not supported".to_string(),
+        )),
+    }
+}
+
+fn from_substrait_bound(
+    bound: &Option<Bound>,
+    is_lower: bool,
+) -> Result<WindowFrameBound> {
+    match bound {
+        Some(b) => match &b.kind {
+            Some(k) => match k {
+                BoundKind::CurrentRow(SubstraitBound::CurrentRow {}) => {
+                    Ok(WindowFrameBound::CurrentRow)
+                }
+                BoundKind::Preceding(SubstraitBound::Preceding { offset }) => Ok(
+                    WindowFrameBound::Preceding(ScalarValue::Int64(Some(*offset))),
+                ),
+                BoundKind::Following(SubstraitBound::Following { offset }) => Ok(
+                    WindowFrameBound::Following(ScalarValue::Int64(Some(*offset))),
+                ),
+                BoundKind::Unbounded(SubstraitBound::Unbounded {}) => {
+                    if is_lower {
+                        Ok(WindowFrameBound::Preceding(ScalarValue::Null))
+                    } else {
+                        Ok(WindowFrameBound::Following(ScalarValue::Null))
+                    }
+                }
+            },
+            None => Err(DataFusionError::Substrait(
+                "WindowFunction missing Substrait Bound kind".to_string(),
+            )),
+        },
+        None => {
+            if is_lower {
+                Ok(WindowFrameBound::Preceding(ScalarValue::Null))
+            } else {
+                Ok(WindowFrameBound::Following(ScalarValue::Null))
+            }
+        }
     }
 }
 

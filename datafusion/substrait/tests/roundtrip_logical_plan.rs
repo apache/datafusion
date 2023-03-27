@@ -180,6 +180,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cast_decimal_to_int() -> Result<()> {
+        roundtrip("SELECT * FROM data WHERE a = CAST(2.5 AS int)").await
+    }
+
+    #[tokio::test]
+    async fn implicit_cast() -> Result<()> {
+        roundtrip("SELECT * FROM data WHERE a = b").await
+    }
+
+    #[tokio::test]
     async fn aggregate_case() -> Result<()> {
         assert_expected_plan(
             "SELECT SUM(CASE WHEN a > 0 THEN 1 ELSE NULL END) FROM data",
@@ -240,6 +250,21 @@ mod tests {
         .await
     }
 
+    #[tokio::test]
+    async fn simple_window_function() -> Result<()> {
+        roundtrip("SELECT RANK() OVER (PARTITION BY a ORDER BY b), d, SUM(b) OVER (PARTITION BY a) FROM data;").await
+    }
+
+    #[tokio::test]
+    async fn qualified_schema_table_reference() -> Result<()> {
+        roundtrip("SELECT * FROM public.data;").await
+    }
+
+    #[tokio::test]
+    async fn qualified_catalog_schema_table_reference() -> Result<()> {
+        roundtrip("SELECT * FROM datafusion.public.data;").await
+    }
+
     async fn assert_expected_plan(sql: &str, expected_plan_str: &str) -> Result<()> {
         let mut ctx = create_context().await?;
         let df = ctx.sql(sql).await?;
@@ -291,7 +316,6 @@ mod tests {
         Ok(())
     }
 
-    #[allow(deprecated)]
     async fn roundtrip(sql: &str) -> Result<()> {
         let mut ctx = create_context().await?;
         let df = ctx.sql(sql).await?;
