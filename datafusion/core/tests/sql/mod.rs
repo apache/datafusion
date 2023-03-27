@@ -1359,13 +1359,6 @@ where
     Ok(Arc::new(table))
 }
 
-fn make_timestamp_sub_table<A>() -> Result<Arc<MemTable>>
-where
-    A: ArrowTimestampType<Native = i64>,
-{
-    make_timestamp_tz_sub_table::<A>(None, None)
-}
-
 fn make_timestamp_tz_sub_table<A>(
     tz1: Option<String>,
     tz2: Option<String>,

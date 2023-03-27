@@ -1051,11 +1051,13 @@ pub fn with_timezone_to_naive_datetime<const INTERVAL_MODE: bool>(
 /// given timestamp, whose tick size is specified by `UNIT_NANOS`.
 #[inline]
 fn ticks_to_naive_datetime<const UNIT_NANOS: i128>(ticks: i64) -> Result<NaiveDateTime> {
-    NaiveDateTime::from_timestamp_opt(
-        ((ticks as i128 * UNIT_NANOS) / 1_000_000_000) as i64,
-        ((ticks as i128 * UNIT_NANOS) % 1_000_000_000) as u32,
-    )
-    .ok_or_else(|| {
+    let mut secs: i64 = ((ticks as i128 * UNIT_NANOS) / 1_000_000_000) as i64;
+    let mut nsecs: i32 = ((ticks as i128 * UNIT_NANOS) % 1_000_000_000) as i32;
+    if nsecs < 0 {
+        secs -= 1;
+        nsecs += 1_000_000_000;
+    }
+    NaiveDateTime::from_timestamp_opt(secs, nsecs as u32).ok_or_else(|| {
         DataFusionError::Execution(
             "Can not convert given timestamp to a NaiveDateTime".to_string(),
         )
@@ -5549,6 +5551,30 @@ mod tests {
                     Some("America/Los_Angeles".to_string()),
                 ),
                 ScalarValue::new_interval_dt(0, 0),
+            ),
+            // 11th test case, negative results
+            (
+                ScalarValue::TimestampMillisecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 3, 17)
+                            .unwrap()
+                            .and_hms_milli_opt(4, 10, 0, 0)
+                            .unwrap()
+                            .timestamp_millis(),
+                    ),
+                    None,
+                ),
+                ScalarValue::TimestampMillisecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 3, 17)
+                            .unwrap()
+                            .and_hms_milli_opt(4, 10, 0, 1)
+                            .unwrap()
+                            .timestamp_millis(),
+                    ),
+                    None,
+                ),
+                ScalarValue::new_interval_dt(0, -sign),
             ),
         ]
     }
