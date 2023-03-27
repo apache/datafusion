@@ -170,6 +170,7 @@ pub fn create_physical_expr(
             )
         }
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+            // Create physical expressions for left and right operands
             let lhs = create_physical_expr(
                 left,
                 input_dfschema,
@@ -182,6 +183,9 @@ pub fn create_physical_expr(
                 input_schema,
                 execution_props,
             )?;
+            // Match the data types and operator to determine the appropriate expression, if
+            // they are supported temporal types and operations, create DateTimeIntervalExpr,
+            // else create BinaryExpr.
             match (
                 lhs.data_type(input_schema)?,
                 op,
@@ -207,7 +211,6 @@ pub fn create_physical_expr(
                     lhs,
                     input_schema,
                 )?)),
-                // Timestamp + Timestamp operations cannot reach till that point already.
                 (
                     DataType::Timestamp(_, _),
                     Operator::Minus,

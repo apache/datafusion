@@ -78,8 +78,8 @@ impl DateTimeIntervalExpr {
                 rhs,
                 input_schema: input_schema.clone(),
             }),
-            other => Err(DataFusionError::Execution(format!(
-                "Invalid operation '{other:?}' for DateIntervalExpr"
+            (lhs, _, rhs) => Err(DataFusionError::Execution(format!(
+                "Invalid operation between '{lhs}' and '{rhs}' for DateIntervalExpr"
             ))),
         }
     }
@@ -350,6 +350,7 @@ pub fn evaluate_temporal_arrays(
     Ok(ColumnarValue::Array(ret))
 }
 
+/// Performs a timestamp subtraction operation on two arrays and returns the resulting array.
 fn ts_array_op(array_lhs: &ArrayRef, array_rhs: &ArrayRef) -> Result<ArrayRef> {
     match (array_lhs.data_type(), array_rhs.data_type()) {
         (
@@ -423,7 +424,9 @@ fn ts_array_op(array_lhs: &ArrayRef, array_rhs: &ArrayRef) -> Result<ArrayRef> {
         ))),
     }
 }
-
+/// Performs an interval operation on two arrays and returns the resulting array.
+/// The operation sign determines whether to perform addition or subtraction.
+/// The data type and unit of the two input arrays must match the supported combinations.
 fn interval_array_op(
     array_lhs: &ArrayRef,
     array_rhs: &ArrayRef,
@@ -555,7 +558,9 @@ fn interval_array_op(
         ))),
     }
 }
-
+/// Performs a timestamp/interval operation on two arrays and returns the resulting array.
+/// The operation sign determines whether to perform addition or subtraction.
+/// The data type and unit of the two input arrays must match the supported combinations.
 fn ts_interval_array_op(
     array_lhs: &ArrayRef,
     sign: i32,
