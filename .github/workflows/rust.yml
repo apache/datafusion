@@ -26,12 +26,14 @@ on:
     paths-ignore:
       - "docs/**"
       - "**.md"
-      - ".github/**"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/pull_request_template.md"
   pull_request:
     paths-ignore:
       - "docs/**"
       - "**.md"
-      - ".github/**"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/pull_request_template.md"
   # manual trigger
   # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
   workflow_dispatch:
