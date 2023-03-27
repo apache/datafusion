@@ -52,11 +52,11 @@ pub struct MemTable {
 impl MemTable {
     /// Create a new in-memory table from the provided schema and record batches
     pub fn try_new(schema: SchemaRef, partitions: Vec<Vec<RecordBatch>>) -> Result<Self> {
-        if partitions.iter().flatten().all(|batches| {
-            dbg!(&schema);
-            dbg!(&batches.schema());
-            equivalent_names_and_types(&schema, batches.schema())
-        }) {
+        if partitions
+            .iter()
+            .flatten()
+            .all(|batches| equivalent_names_and_types(&schema, batches.schema()))
+        {
             Ok(Self {
                 schema,
                 batches: Arc::new(RwLock::new(partitions)),
