@@ -38,7 +38,7 @@ pub struct DfSchema {
 pub struct LogicalPlanNode {
     #[prost(
         oneof = "logical_plan_node::LogicalPlanType",
-        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26"
+        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 260"
     )]
     pub logical_plan_type: ::core::option::Option<logical_plan_node::LogicalPlanType>,
 }
@@ -95,7 +95,7 @@ pub mod logical_plan_node {
         ViewScan(::prost::alloc::boxed::Box<super::ViewTableScanNode>),
         #[prost(message, tag = "25")]
         CustomScan(super::CustomTableScanNode),
-        #[prost(message, tag = "26")]
+        #[prost(message, tag = "260")]
         Prepare(::prost::alloc::boxed::Box<super::PrepareNode>),
     }
 }
