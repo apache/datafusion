@@ -85,6 +85,6 @@ g
 h
 
 ## Plan error when compare Utf8 and timestamp in where clause
-statement error DataFusion error: Error during planning: The type of Timestamp\(Nanosecond, Some\("\+00:00"\)\) Plus Utf8 of binary physical should be same
+statement error DataFusion error: Internal error: The type of Timestamp\(Nanosecond, Some\("\+00:00"\)\) Plus Utf8 of binary physical should be same\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 select i_item_desc from test
 where d3_date > now() + '5 days';
