@@ -19,6 +19,7 @@
 //! queried by DataFusion. This allows data to be pre-loaded into memory and then
 //! repeatedly queried without incurring additional file I/O overhead.
 
+use datafusion_common::utils::equivalent_names_and_types;
 use futures::{StreamExt, TryStreamExt};
 use std::any::Any;
 use std::sync::Arc;
@@ -51,11 +52,11 @@ pub struct MemTable {
 impl MemTable {
     /// Create a new in-memory table from the provided schema and record batches
     pub fn try_new(schema: SchemaRef, partitions: Vec<Vec<RecordBatch>>) -> Result<Self> {
-        if partitions
-            .iter()
-            .flatten()
-            .all(|batches| schema.contains(&batches.schema()))
-        {
+        if partitions.iter().flatten().all(|batches| {
+            dbg!(&schema);
+            dbg!(&batches.schema());
+            equivalent_names_and_types(&schema, batches.schema())
+        }) {
             Ok(Self {
                 schema,
                 batches: Arc::new(RwLock::new(partitions)),

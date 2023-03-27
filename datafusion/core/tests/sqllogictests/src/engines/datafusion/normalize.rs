@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::SchemaRef;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
+use datafusion_common::utils::equivalent_names_and_types;
 use datafusion_common::DFField;
 use datafusion_common::DataFusionError;
 use lazy_static::lazy_static;
@@ -142,18 +142,6 @@ fn workspace_root() -> object_store::path::Path {
 // holds the root directory (
 lazy_static! {
     static ref WORKSPACE_ROOT: object_store::path::Path = workspace_root();
-}
-
-/// Check two schemas for being equal for field names/types
-fn equivalent_names_and_types(schema: &SchemaRef, other: SchemaRef) -> bool {
-    if schema.fields().len() != other.fields().len() {
-        return false;
-    }
-    let self_fields = schema.fields().iter();
-    let other_fields = other.fields().iter();
-    self_fields
-        .zip(other_fields)
-        .all(|(f1, f2)| f1.name() == f2.name() && f1.data_type() == f2.data_type())
 }
 
 /// Convert a single batch to a `Vec<Vec<String>>` for comparison

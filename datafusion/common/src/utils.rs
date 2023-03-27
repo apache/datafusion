@@ -20,6 +20,7 @@
 use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::ArrayRef;
 use arrow::compute::SortOptions;
+use arrow::datatypes::SchemaRef;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::{Parser, ParserError};
@@ -232,6 +233,18 @@ pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
             None => id.value.to_ascii_lowercase(),
         })
         .collect::<Vec<_>>()
+}
+
+/// Check two schemas for being equal for field names/types
+pub fn equivalent_names_and_types(schema: &SchemaRef, other: SchemaRef) -> bool {
+    if schema.fields().len() != other.fields().len() {
+        return false;
+    }
+    let self_fields = schema.fields().iter();
+    let other_fields = other.fields().iter();
+    self_fields
+        .zip(other_fields)
+        .all(|(f1, f2)| f1.name() == f2.name() && f1.data_type() == f2.data_type())
 }
 
 #[cfg(test)]
