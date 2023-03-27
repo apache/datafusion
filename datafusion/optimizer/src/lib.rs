@@ -28,7 +28,6 @@ pub mod eliminate_outer_join;
 pub mod eliminate_project;
 pub mod extract_equijoin_predicate;
 pub mod filter_null_join_keys;
-pub mod inline_table_scan;
 pub mod merge_projection;
 pub mod optimizer;
 pub mod propagate_empty_relation;
@@ -36,7 +35,6 @@ pub mod push_down_filter;
 pub mod push_down_limit;
 pub mod push_down_projection;
 pub mod replace_distinct_aggregate;
-pub mod rewrite;
 pub mod rewrite_disjunctive_predicate;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
@@ -45,9 +43,10 @@ pub mod type_coercion;
 pub mod unwrap_cast_in_comparison;
 pub mod utils;
 
-pub mod count_wildcard_rule;
 #[cfg(test)]
 pub mod test;
 
 pub use optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
 pub use utils::optimize_children;
+
+mod plan_signature;

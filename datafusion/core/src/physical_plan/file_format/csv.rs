@@ -337,6 +337,7 @@ mod tests {
     use std::fs::File;
     use std::io::Write;
     use tempfile::TempDir;
+    use url::Url;
 
     #[rstest(
         file_compression_type,
@@ -656,8 +657,8 @@ mod tests {
         store: Arc<dyn ObjectStore>,
     ) {
         let ctx = SessionContext::new();
-        ctx.runtime_env()
-            .register_object_store("file", "", store.clone());
+        let url = Url::parse("file://").unwrap();
+        ctx.runtime_env().register_object_store(&url, store.clone());
 
         let task_ctx = ctx.task_ctx();
 
@@ -717,9 +718,10 @@ mod tests {
         let path = object_store::path::Path::from("a.csv");
         store.put(&path, data).await.unwrap();
 
+        let url = Url::parse("memory://").unwrap();
         session_ctx
             .runtime_env()
-            .register_object_store("memory", "", Arc::new(store));
+            .register_object_store(&url, Arc::new(store));
 
         let df = session_ctx
             .read_csv("memory:///", CsvReadOptions::new())

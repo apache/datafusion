@@ -15,59 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::analyzer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::Result;
 use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::{aggregate_function, lit, Aggregate, Expr, LogicalPlan, Window};
-use std::ops::Deref;
-use std::sync::Arc;
 
+use crate::analyzer::AnalyzerRule;
+
+/// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
+/// Resolve issue: https://github.com/apache/arrow-datafusion/issues/5473.
 pub struct CountWildcardRule {}
-
-impl Default for CountWildcardRule {
-    fn default() -> Self {
-        CountWildcardRule::new()
-    }
-}
 
 impl CountWildcardRule {
     pub fn new() -> Self {
         CountWildcardRule {}
     }
 }
-impl AnalyzerRule for CountWildcardRule {
-    fn analyze(&self, plan: &LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
-        let new_plan = match plan {
-            LogicalPlan::Window(window) => {
-                let inputs = plan.inputs();
-                let window_expr = window.clone().window_expr;
-                let window_expr = handle_wildcard(window_expr).unwrap();
-                LogicalPlan::Window(Window {
-                    input: Arc::new(inputs.get(0).unwrap().deref().clone()),
-                    window_expr,
-                    schema: plan.schema().clone(),
-                })
-            }
 
-            LogicalPlan::Aggregate(aggregate) => {
-                let inputs = plan.inputs();
-                let aggr_expr = aggregate.clone().aggr_expr;
-                let aggr_expr = handle_wildcard(aggr_expr).unwrap();
-                LogicalPlan::Aggregate(
-                    Aggregate::try_new_with_schema(
-                        Arc::new(inputs.get(0).unwrap().deref().clone()),
-                        aggregate.clone().group_expr,
-                        aggr_expr,
-                        plan.schema().clone(),
-                    )
-                    .unwrap(),
-                )
-            }
-            _ => plan.clone(),
-        };
-        Ok(new_plan)
+impl AnalyzerRule for CountWildcardRule {
+    fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
+        plan.transform_down(&analyze_internal)
     }
 
     fn name(&self) -> &str {
@@ -75,9 +44,34 @@ impl AnalyzerRule for CountWildcardRule {
     }
 }
 
-//handle Count(Expr:Wildcard) with DataFrame API
-pub fn handle_wildcard(exprs: Vec<Expr>) -> Result<Vec<Expr>> {
-    let exprs: Vec<Expr> = exprs
+fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    match plan {
+        LogicalPlan::Window(window) => {
+            let window_expr = handle_wildcard(&window.window_expr);
+            Ok(Transformed::Yes(LogicalPlan::Window(Window {
+                input: window.input.clone(),
+                window_expr,
+                schema: window.schema,
+            })))
+        }
+        LogicalPlan::Aggregate(agg) => {
+            let aggr_expr = handle_wildcard(&agg.aggr_expr);
+            Ok(Transformed::Yes(LogicalPlan::Aggregate(
+                Aggregate::try_new_with_schema(
+                    agg.input.clone(),
+                    agg.group_expr.clone(),
+                    aggr_expr,
+                    agg.schema,
+                )?,
+            )))
+        }
+        _ => Ok(Transformed::No(plan)),
+    }
+}
+
+// handle Count(Expr:Wildcard) with DataFrame API
+pub fn handle_wildcard(exprs: &[Expr]) -> Vec<Expr> {
+    exprs
         .iter()
         .map(|expr| match expr {
             Expr::AggregateFunction(AggregateFunction {
@@ -96,6 +90,5 @@ pub fn handle_wildcard(exprs: Vec<Expr>) -> Result<Vec<Expr>> {
             },
             _ => expr.clone(),
         })
-        .collect();
-    Ok(exprs)
+        .collect()
 }

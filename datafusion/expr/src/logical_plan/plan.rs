@@ -15,26 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expr_rewriter::rewrite_expr;
-use crate::expr_visitor::inspect_expr_pre;
-use crate::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 ///! Logical plan types
 use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::plan;
 use crate::utils::{
-    exprlist_to_fields, find_out_reference_exprs, from_plan, grouping_set_expr_count,
-    grouping_set_to_exprlist,
+    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs, from_plan,
+    grouping_set_expr_count, grouping_set_to_exprlist, inspect_expr_pre,
 };
 use crate::{
     build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeVisitor, VisitRecursion,
+};
 use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
-    ScalarValue, TableReference,
+    Result, ScalarValue, TableReference,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -259,7 +259,7 @@ impl LogicalPlan {
         let mut exprs = vec![];
         self.inspect_expressions(|e| {
             exprs.push(e.clone());
-            Ok(()) as Result<(), DataFusionError>
+            Ok(()) as Result<()>
         })
         // closure always returns OK
         .unwrap();
@@ -418,44 +418,31 @@ impl LogicalPlan {
 
     /// returns all `Using` join columns in a logical plan
     pub fn using_columns(&self) -> Result<Vec<HashSet<Column>>, DataFusionError> {
-        struct UsingJoinColumnVisitor {
-            using_columns: Vec<HashSet<Column>>,
-        }
+        let mut using_columns: Vec<HashSet<Column>> = vec![];
 
-        impl PlanVisitor for UsingJoinColumnVisitor {
-            type Error = DataFusionError;
-
-            fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
-                if let LogicalPlan::Join(Join {
-                    join_constraint: JoinConstraint::Using,
-                    on,
-                    ..
-                }) = plan
-                {
-                    // The join keys in using-join must be columns.
-                    let columns =
-                        on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
-                            accumu.insert(l.try_into_col()?);
-                            accumu.insert(r.try_into_col()?);
-                            Result::<_, DataFusionError>::Ok(accumu)
-                        })?;
-                    self.using_columns.push(columns);
-                }
-                Ok(true)
+        self.apply(&mut |plan| {
+            if let LogicalPlan::Join(Join {
+                join_constraint: JoinConstraint::Using,
+                on,
+                ..
+            }) = plan
+            {
+                // The join keys in using-join must be columns.
+                let columns =
+                    on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
+                        accumu.insert(l.try_into_col()?);
+                        accumu.insert(r.try_into_col()?);
+                        Result::<_, DataFusionError>::Ok(accumu)
+                    })?;
+                using_columns.push(columns);
             }
-        }
+            Ok(VisitRecursion::Continue)
+        })?;
 
-        let mut visitor = UsingJoinColumnVisitor {
-            using_columns: vec![],
-        };
-        self.accept(&mut visitor)?;
-        Ok(visitor.using_columns)
+        Ok(using_columns)
     }
 
-    pub fn with_new_inputs(
-        &self,
-        inputs: &[LogicalPlan],
-    ) -> Result<LogicalPlan, DataFusionError> {
+    pub fn with_new_inputs(&self, inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
         from_plan(self, &self.expressions(), inputs)
     }
 
@@ -464,7 +451,7 @@ impl LogicalPlan {
     pub fn with_param_values(
         self,
         param_values: Vec<ScalarValue>,
-    ) -> Result<LogicalPlan, DataFusionError> {
+    ) -> Result<LogicalPlan> {
         match self {
             LogicalPlan::Prepare(prepare_lp) => {
                 // Verify if the number of params matches the number of values
@@ -497,138 +484,37 @@ impl LogicalPlan {
     }
 }
 
-/// Trait that implements the [Visitor
-/// pattern](https://en.wikipedia.org/wiki/Visitor_pattern) for a
-/// depth first walk of `LogicalPlan` nodes. `pre_visit` is called
-/// before any children are visited, and then `post_visit` is called
-/// after all children have been visited.
-////
-/// To use, define a struct that implements this trait and then invoke
-/// [`LogicalPlan::accept`].
-///
-/// For example, for a logical plan like:
-///
-/// ```text
-/// Projection: id
-///    Filter: state Eq Utf8(\"CO\")\
-///       CsvScan: employee.csv projection=Some([0, 3])";
-/// ```
-///
-/// The sequence of visit operations would be:
-/// ```text
-/// visitor.pre_visit(Projection)
-/// visitor.pre_visit(Filter)
-/// visitor.pre_visit(CsvScan)
-/// visitor.post_visit(CsvScan)
-/// visitor.post_visit(Filter)
-/// visitor.post_visit(Projection)
-/// ```
-pub trait PlanVisitor {
-    /// The type of error returned by this visitor
-    type Error;
-
-    /// Invoked on a logical plan before any of its child inputs have been
-    /// visited. If Ok(true) is returned, the recursion continues. If
-    /// Err(..) or Ok(false) are returned, the recursion stops
-    /// immediately and the error, if any, is returned to `accept`
-    fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error>;
-
-    /// Invoked on a logical plan after all of its child inputs have
-    /// been visited. The return value is handled the same as the
-    /// return value of `pre_visit`. The provided default implementation
-    /// returns `Ok(true)`.
-    fn post_visit(&mut self, _plan: &LogicalPlan) -> Result<bool, Self::Error> {
-        Ok(true)
-    }
-}
-
 impl LogicalPlan {
-    /// Visits all inputs in the logical plan. Returns Ok(true) if
-    /// all nodes were visited, and Ok(false) if any call to
-    /// `pre_visit` or `post_visit` returned Ok(false) and may have
-    /// cut short the recursion
-    pub fn accept<V>(&self, visitor: &mut V) -> Result<bool, V::Error>
+    /// applies collect to any subqueries in the plan
+    pub(crate) fn apply_subqueries<F>(&self, op: &mut F) -> datafusion_common::Result<()>
     where
-        V: PlanVisitor,
+        F: FnMut(&Self) -> datafusion_common::Result<VisitRecursion>,
     {
-        if !visitor.pre_visit(self)? {
-            return Ok(false);
-        }
-
-        // Now visit any subqueries in expressions
-        self.visit_subqueries(visitor)?;
-
-        let recurse = match self {
-            LogicalPlan::Projection(Projection { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Filter(Filter { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Repartition(Repartition { input, .. }) => {
-                input.accept(visitor)?
-            }
-            LogicalPlan::Window(Window { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Aggregate(Aggregate { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Sort(Sort { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Join(Join { left, right, .. })
-            | LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
-                left.accept(visitor)? && right.accept(visitor)?
-            }
-            LogicalPlan::Union(Union { inputs, .. }) => {
-                for input in inputs {
-                    if !input.accept(visitor)? {
-                        return Ok(false);
+        self.inspect_expressions(|expr| {
+            // recursively look for subqueries
+            inspect_expr_pre(expr, |expr| {
+                match expr {
+                    Expr::Exists { subquery, .. }
+                    | Expr::InSubquery { subquery, .. }
+                    | Expr::ScalarSubquery(subquery) => {
+                        // use a synthetic plan so the collector sees a
+                        // LogicalPlan::Subquery (even though it is
+                        // actually a Subquery alias)
+                        let synthetic_plan = LogicalPlan::Subquery(subquery.clone());
+                        synthetic_plan.apply(op)?;
                     }
+                    _ => {}
                 }
-                true
-            }
-            LogicalPlan::Distinct(Distinct { input }) => input.accept(visitor)?,
-            LogicalPlan::Limit(Limit { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Subquery(Subquery { subquery, .. }) => {
-                subquery.accept(visitor)?
-            }
-            LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
-                input.accept(visitor)?
-            }
-            LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
-            | LogicalPlan::CreateView(CreateView { input, .. })
-            | LogicalPlan::Prepare(Prepare { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Extension(extension) => {
-                for input in extension.node.inputs() {
-                    if !input.accept(visitor)? {
-                        return Ok(false);
-                    }
-                }
-                true
-            }
-            LogicalPlan::Explain(explain) => explain.plan.accept(visitor)?,
-            LogicalPlan::Analyze(analyze) => analyze.input.accept(visitor)?,
-            LogicalPlan::Dml(write) => write.input.accept(visitor)?,
-            LogicalPlan::Unnest(Unnest { input, .. }) => input.accept(visitor)?,
-            // plans without inputs
-            LogicalPlan::TableScan { .. }
-            | LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::Values(_)
-            | LogicalPlan::CreateExternalTable(_)
-            | LogicalPlan::CreateCatalogSchema(_)
-            | LogicalPlan::CreateCatalog(_)
-            | LogicalPlan::DropTable(_)
-            | LogicalPlan::SetVariable(_)
-            | LogicalPlan::DropView(_)
-            | LogicalPlan::DescribeTable(_) => true,
-        };
-        if !recurse {
-            return Ok(false);
-        }
-
-        if !visitor.post_visit(self)? {
-            return Ok(false);
-        }
-
-        Ok(true)
+                Ok::<(), DataFusionError>(())
+            })
+        })?;
+        Ok(())
     }
 
     /// applies visitor to any subqueries in the plan
-    fn visit_subqueries<V>(&self, v: &mut V) -> Result<bool, V::Error>
+    pub(crate) fn visit_subqueries<V>(&self, v: &mut V) -> datafusion_common::Result<()>
     where
-        V: PlanVisitor,
+        V: TreeNodeVisitor<N = LogicalPlan>,
     {
         self.inspect_expressions(|expr| {
             // recursively look for subqueries
@@ -641,15 +527,14 @@ impl LogicalPlan {
                         // LogicalPlan::Subquery (even though it is
                         // actually a Subquery alias)
                         let synthetic_plan = LogicalPlan::Subquery(subquery.clone());
-                        synthetic_plan.accept(v)?;
+                        synthetic_plan.visit(v)?;
                     }
                     _ => {}
                 }
-                Ok(())
+                Ok::<(), DataFusionError>(())
             })
         })?;
-        // continue recursion
-        Ok(true)
+        Ok(())
     }
 
     /// Return a logical plan with all placeholders/params (e.g $1 $2,
@@ -658,18 +543,18 @@ impl LogicalPlan {
     pub fn replace_params_with_values(
         &self,
         param_values: &[ScalarValue],
-    ) -> Result<LogicalPlan, DataFusionError> {
+    ) -> Result<LogicalPlan> {
         let new_exprs = self
             .expressions()
             .into_iter()
             .map(|e| Self::replace_placeholders_with_values(e, param_values))
-            .collect::<Result<Vec<_>, DataFusionError>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         let new_inputs_with_values = self
             .inputs()
             .into_iter()
             .map(|inp| inp.replace_params_with_values(param_values))
-            .collect::<Result<Vec<_>, DataFusionError>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         from_plan(self, &new_exprs, &new_inputs_with_values)
     }
@@ -678,65 +563,35 @@ impl LogicalPlan {
     pub fn get_parameter_types(
         &self,
     ) -> Result<HashMap<String, Option<DataType>>, DataFusionError> {
-        struct ParamTypeVisitor {
-            param_types: HashMap<String, Option<DataType>>,
-        }
+        let mut param_types: HashMap<String, Option<DataType>> = HashMap::new();
 
-        struct ExprParamTypeVisitor {
-            param_types: HashMap<String, Option<DataType>>,
-        }
-
-        impl ExpressionVisitor for ExprParamTypeVisitor {
-            fn pre_visit(
-                mut self,
-                expr: &Expr,
-            ) -> datafusion_common::Result<Recursion<Self>>
-            where
-                Self: ExpressionVisitor,
-            {
-                if let Expr::Placeholder { id, data_type } = expr {
-                    let prev = self.param_types.get(id);
-                    match (prev, data_type) {
-                        (Some(Some(prev)), Some(dt)) => {
-                            if prev != dt {
-                                Err(DataFusionError::Plan(format!(
-                                    "Conflicting types for {id}"
-                                )))?;
+        self.apply(&mut |plan| {
+            plan.inspect_expressions(|expr| {
+                expr.apply(&mut |expr| {
+                    if let Expr::Placeholder { id, data_type } = expr {
+                        let prev = param_types.get(id);
+                        match (prev, data_type) {
+                            (Some(Some(prev)), Some(dt)) => {
+                                if prev != dt {
+                                    Err(DataFusionError::Plan(format!(
+                                        "Conflicting types for {id}"
+                                    )))?;
+                                }
                             }
+                            (_, Some(dt)) => {
+                                param_types.insert(id.clone(), Some(dt.clone()));
+                            }
+                            _ => {}
                         }
-                        (_, Some(dt)) => {
-                            let _ = self.param_types.insert(id.clone(), Some(dt.clone()));
-                        }
-                        _ => {}
                     }
-                }
-                Ok(Recursion::Continue(self))
-            }
-        }
-
-        impl PlanVisitor for ParamTypeVisitor {
-            type Error = DataFusionError;
-
-            fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
-                let mut param_types = HashMap::new();
-                plan.inspect_expressions(|expr| {
-                    let mut visitor = ExprParamTypeVisitor {
-                        param_types: Default::default(),
-                    };
-                    visitor = expr.accept(visitor)?;
-                    param_types.extend(visitor.param_types);
-                    Ok(()) as Result<(), DataFusionError>
+                    Ok(VisitRecursion::Continue)
                 })?;
-                self.param_types.extend(param_types);
-                Ok(true)
-            }
-        }
+                Ok::<(), DataFusionError>(())
+            })?;
+            Ok(VisitRecursion::Continue)
+        })?;
 
-        let mut visitor = ParamTypeVisitor {
-            param_types: Default::default(),
-        };
-        self.accept(&mut visitor)?;
-        Ok(visitor.param_types)
+        Ok(param_types)
     }
 
     /// Return an Expr with all placeholders replaced with their
@@ -744,8 +599,8 @@ impl LogicalPlan {
     fn replace_placeholders_with_values(
         expr: Expr,
         param_values: &[ScalarValue],
-    ) -> Result<Expr, DataFusionError> {
-        rewrite_expr(expr, |expr| {
+    ) -> Result<Expr> {
+        expr.transform(&|expr| {
             match &expr {
                 Expr::Placeholder { id, data_type } => {
                     // convert id (in format $1, $2, ..) to idx (0, 1, ..)
@@ -769,17 +624,17 @@ impl LogicalPlan {
                         )));
                     }
                     // Replace the placeholder with the value
-                    Ok(Expr::Literal(value.clone()))
+                    Ok(Transformed::Yes(Expr::Literal(value.clone())))
                 }
                 Expr::ScalarSubquery(qry) => {
                     let subquery =
                         Arc::new(qry.subquery.replace_params_with_values(param_values)?);
-                    Ok(Expr::ScalarSubquery(plan::Subquery {
+                    Ok(Transformed::Yes(Expr::ScalarSubquery(plan::Subquery {
                         subquery,
                         outer_ref_columns: qry.outer_ref_columns.clone(),
-                    }))
+                    })))
                 }
-                _ => Ok(expr),
+                _ => Ok(Transformed::No(expr)),
             }
         })
     }
@@ -820,7 +675,7 @@ impl LogicalPlan {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let with_schema = false;
                 let mut visitor = IndentVisitor::new(f, with_schema);
-                match self.0.accept(&mut visitor) {
+                match self.0.visit(&mut visitor) {
                     Ok(_) => Ok(()),
                     Err(_) => Err(fmt::Error),
                 }
@@ -863,7 +718,7 @@ impl LogicalPlan {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let with_schema = true;
                 let mut visitor = IndentVisitor::new(f, with_schema);
-                match self.0.accept(&mut visitor) {
+                match self.0.visit(&mut visitor) {
                     Ok(_) => Ok(()),
                     Err(_) => Err(fmt::Error),
                 }
@@ -916,12 +771,12 @@ impl LogicalPlan {
                 let mut visitor = GraphvizVisitor::new(f);
 
                 visitor.pre_visit_plan("LogicalPlan")?;
-                self.0.accept(&mut visitor).map_err(|_| fmt::Error)?;
+                self.0.visit(&mut visitor).map_err(|_| fmt::Error)?;
                 visitor.post_visit_plan()?;
 
                 visitor.set_with_schema(true);
                 visitor.pre_visit_plan("Detailed LogicalPlan")?;
-                self.0.accept(&mut visitor).map_err(|_| fmt::Error)?;
+                self.0.visit(&mut visitor).map_err(|_| fmt::Error)?;
                 visitor.post_visit_plan()?;
 
                 writeln!(f, "}}")?;
@@ -1393,10 +1248,7 @@ pub struct Projection {
 
 impl Projection {
     /// Create a new Projection
-    pub fn try_new(
-        expr: Vec<Expr>,
-        input: Arc<LogicalPlan>,
-    ) -> Result<Self, DataFusionError> {
+    pub fn try_new(expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
         let schema = Arc::new(DFSchema::new_with_metadata(
             exprlist_to_fields(&expr, &input)?,
             input.schema().metadata().clone(),
@@ -1409,7 +1261,7 @@ impl Projection {
         expr: Vec<Expr>,
         input: Arc<LogicalPlan>,
         schema: DFSchemaRef,
-    ) -> Result<Self, DataFusionError> {
+    ) -> Result<Self> {
         if expr.len() != schema.fields().len() {
             return Err(DataFusionError::Plan(format!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len())));
         }
@@ -1435,7 +1287,7 @@ impl Projection {
         }
     }
 
-    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Projection> {
+    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Projection> {
         match plan {
             LogicalPlan::Projection(it) => Ok(it),
             _ => plan_err!("Could not coerce into Projection!"),
@@ -1457,10 +1309,7 @@ pub struct SubqueryAlias {
 }
 
 impl SubqueryAlias {
-    pub fn try_new(
-        plan: LogicalPlan,
-        alias: impl Into<String>,
-    ) -> datafusion_common::Result<Self> {
+    pub fn try_new(plan: LogicalPlan, alias: impl Into<String>) -> Result<Self> {
         let alias = alias.into();
         let table_ref = TableReference::bare(&alias);
         let schema: Schema = plan.schema().as_ref().clone().into();
@@ -1498,10 +1347,7 @@ pub struct Filter {
 
 impl Filter {
     /// Create a new filter operator.
-    pub fn try_new(
-        predicate: Expr,
-        input: Arc<LogicalPlan>,
-    ) -> datafusion_common::Result<Self> {
+    pub fn try_new(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
@@ -1526,7 +1372,7 @@ impl Filter {
         Ok(Self { predicate, input })
     }
 
-    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Filter> {
+    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Filter> {
         match plan {
             LogicalPlan::Filter(it) => Ok(it),
             _ => plan_err!("Could not coerce into Filter!"),
@@ -1826,7 +1672,8 @@ impl Aggregate {
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
-    ) -> datafusion_common::Result<Self> {
+    ) -> Result<Self> {
+        let group_expr = enumerate_grouping_sets(group_expr)?;
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
         let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
         validate_unique_names("Aggregations", all_expr.clone())?;
@@ -1847,7 +1694,7 @@ impl Aggregate {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
         schema: DFSchemaRef,
-    ) -> datafusion_common::Result<Self> {
+    ) -> Result<Self> {
         if group_expr.is_empty() && aggr_expr.is_empty() {
             return Err(DataFusionError::Plan(
                 "Aggregate requires at least one grouping or aggregate expression"
@@ -1870,7 +1717,7 @@ impl Aggregate {
         })
     }
 
-    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Aggregate> {
+    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Aggregate> {
         match plan {
             LogicalPlan::Aggregate(it) => Ok(it),
             _ => plan_err!("Could not coerce into Aggregate!"),
@@ -1917,7 +1764,7 @@ impl Join {
         left: Arc<LogicalPlan>,
         right: Arc<LogicalPlan>,
         column_on: (Vec<Column>, Vec<Column>),
-    ) -> Result<Self, DataFusionError> {
+    ) -> Result<Self> {
         let original_join = match original {
             LogicalPlan::Join(join) => join,
             _ => return plan_err!("Could not create join with project input"),
@@ -1955,11 +1802,18 @@ pub struct Subquery {
 }
 
 impl Subquery {
-    pub fn try_from_expr(plan: &Expr) -> datafusion_common::Result<&Subquery> {
+    pub fn try_from_expr(plan: &Expr) -> Result<&Subquery> {
         match plan {
             Expr::ScalarSubquery(it) => Ok(it),
             Expr::Cast(cast) => Subquery::try_from_expr(cast.expr.as_ref()),
             _ => plan_err!("Could not coerce into ScalarSubquery!"),
+        }
+    }
+
+    pub fn with_plan(&self, plan: Arc<LogicalPlan>) -> Subquery {
+        Subquery {
+            subquery: plan,
+            outer_ref_columns: self.outer_ref_columns.clone(),
         }
     }
 }
@@ -2076,8 +1930,8 @@ mod tests {
     use crate::logical_plan::table_scan;
     use crate::{col, exists, in_subquery, lit};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::tree_node::TreeNodeVisitor;
     use datafusion_common::DFSchema;
-    use datafusion_common::Result;
     use std::collections::HashMap;
 
     fn employee_schema() -> Schema {
@@ -2186,31 +2040,39 @@ mod tests {
         strings: Vec<String>,
     }
 
-    impl PlanVisitor for OkVisitor {
-        type Error = String;
+    impl TreeNodeVisitor for OkVisitor {
+        type N = LogicalPlan;
 
-        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
+        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "pre_visit Projection",
                 LogicalPlan::Filter { .. } => "pre_visit Filter",
                 LogicalPlan::TableScan { .. } => "pre_visit TableScan",
-                _ => unimplemented!("unknown plan type"),
+                _ => {
+                    return Err(DataFusionError::NotImplemented(
+                        "unknown plan type".to_string(),
+                    ))
+                }
             };
 
             self.strings.push(s.into());
-            Ok(true)
+            Ok(VisitRecursion::Continue)
         }
 
-        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
+        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "post_visit Projection",
                 LogicalPlan::Filter { .. } => "post_visit Filter",
                 LogicalPlan::TableScan { .. } => "post_visit TableScan",
-                _ => unimplemented!("unknown plan type"),
+                _ => {
+                    return Err(DataFusionError::NotImplemented(
+                        "unknown plan type".to_string(),
+                    ))
+                }
             };
 
             self.strings.push(s.into());
-            Ok(true)
+            Ok(VisitRecursion::Continue)
         }
     }
 
@@ -2218,7 +2080,7 @@ mod tests {
     fn visit_order() {
         let mut visitor = OkVisitor::default();
         let plan = test_plan();
-        let res = plan.accept(&mut visitor);
+        let res = plan.visit(&mut visitor);
         assert!(res.is_ok());
 
         assert_eq!(
@@ -2265,19 +2127,21 @@ mod tests {
         return_false_from_post_in: OptionalCounter,
     }
 
-    impl PlanVisitor for StoppingVisitor {
-        type Error = String;
+    impl TreeNodeVisitor for StoppingVisitor {
+        type N = LogicalPlan;
 
-        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
+        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             if self.return_false_from_pre_in.dec() {
-                return Ok(false);
+                return Ok(VisitRecursion::Stop);
             }
-            self.inner.pre_visit(plan)
+            self.inner.pre_visit(plan)?;
+
+            Ok(VisitRecursion::Continue)
         }
 
-        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
+        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             if self.return_false_from_post_in.dec() {
-                return Ok(false);
+                return Ok(VisitRecursion::Stop);
             }
 
             self.inner.post_visit(plan)
@@ -2292,7 +2156,7 @@ mod tests {
             ..Default::default()
         };
         let plan = test_plan();
-        let res = plan.accept(&mut visitor);
+        let res = plan.visit(&mut visitor);
         assert!(res.is_ok());
 
         assert_eq!(
@@ -2308,7 +2172,7 @@ mod tests {
             ..Default::default()
         };
         let plan = test_plan();
-        let res = plan.accept(&mut visitor);
+        let res = plan.visit(&mut visitor);
         assert!(res.is_ok());
 
         assert_eq!(
@@ -2332,20 +2196,24 @@ mod tests {
         return_error_from_post_in: OptionalCounter,
     }
 
-    impl PlanVisitor for ErrorVisitor {
-        type Error = String;
+    impl TreeNodeVisitor for ErrorVisitor {
+        type N = LogicalPlan;
 
-        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
+        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             if self.return_error_from_pre_in.dec() {
-                return Err("Error in pre_visit".into());
+                return Err(DataFusionError::NotImplemented(
+                    "Error in pre_visit".to_string(),
+                ));
             }
 
             self.inner.pre_visit(plan)
         }
 
-        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
+        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             if self.return_error_from_post_in.dec() {
-                return Err("Error in post_visit".into());
+                return Err(DataFusionError::NotImplemented(
+                    "Error in post_visit".to_string(),
+                ));
             }
 
             self.inner.post_visit(plan)
@@ -2359,9 +2227,9 @@ mod tests {
             ..Default::default()
         };
         let plan = test_plan();
-        let res = plan.accept(&mut visitor);
+        let res = plan.visit(&mut visitor);
 
-        if let Err(e) = res {
+        if let Err(DataFusionError::NotImplemented(e)) = res {
             assert_eq!("Error in pre_visit", e);
         } else {
             panic!("Expected an error");
@@ -2380,8 +2248,8 @@ mod tests {
             ..Default::default()
         };
         let plan = test_plan();
-        let res = plan.accept(&mut visitor);
-        if let Err(e) = res {
+        let res = plan.visit(&mut visitor);
+        if let Err(DataFusionError::NotImplemented(e)) = res {
             assert_eq!("Error in post_visit", e);
         } else {
             panic!("Expected an error");

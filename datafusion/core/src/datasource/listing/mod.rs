@@ -115,10 +115,13 @@ impl From<ObjectMeta> for PartitionedFile {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_execution::object_store::ObjectStoreRegistry;
+    use crate::datasource::listing::ListingTableUrl;
+    use datafusion_execution::object_store::{
+        DefaultObjectStoreRegistry, ObjectStoreRegistry,
+    };
     use object_store::local::LocalFileSystem;
-
-    use super::*;
+    use std::sync::Arc;
+    use url::Url;
 
     #[test]
     fn test_object_store_listing_url() {
@@ -132,32 +135,34 @@ mod tests {
     }
 
     #[test]
-    fn test_get_by_url_hdfs() {
-        let sut = ObjectStoreRegistry::default();
-        sut.register_store("hdfs", "localhost:8020", Arc::new(LocalFileSystem::new()));
+    fn test_get_store_hdfs() {
+        let sut = DefaultObjectStoreRegistry::default();
+        let url = Url::parse("hdfs://localhost:8020").unwrap();
+        sut.register_store(&url, Arc::new(LocalFileSystem::new()));
         let url = ListingTableUrl::parse("hdfs://localhost:8020/key").unwrap();
-        sut.get_by_url(&url).unwrap();
+        sut.get_store(url.as_ref()).unwrap();
     }
 
     #[test]
-    fn test_get_by_url_s3() {
-        let sut = ObjectStoreRegistry::default();
-        sut.register_store("s3", "bucket", Arc::new(LocalFileSystem::new()));
+    fn test_get_store_s3() {
+        let sut = DefaultObjectStoreRegistry::default();
+        let url = Url::parse("s3://bucket/key").unwrap();
+        sut.register_store(&url, Arc::new(LocalFileSystem::new()));
         let url = ListingTableUrl::parse("s3://bucket/key").unwrap();
-        sut.get_by_url(&url).unwrap();
+        sut.get_store(url.as_ref()).unwrap();
     }
 
     #[test]
-    fn test_get_by_url_file() {
-        let sut = ObjectStoreRegistry::default();
+    fn test_get_store_file() {
+        let sut = DefaultObjectStoreRegistry::default();
         let url = ListingTableUrl::parse("file:///bucket/key").unwrap();
-        sut.get_by_url(&url).unwrap();
+        sut.get_store(url.as_ref()).unwrap();
     }
 
     #[test]
-    fn test_get_by_url_local() {
-        let sut = ObjectStoreRegistry::default();
+    fn test_get_store_local() {
+        let sut = DefaultObjectStoreRegistry::default();
         let url = ListingTableUrl::parse("../").unwrap();
-        sut.get_by_url(&url).unwrap();
+        sut.get_store(url.as_ref()).unwrap();
     }
 }
