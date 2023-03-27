@@ -39,8 +39,8 @@ impl InlineTableScan {
 }
 
 impl AnalyzerRule for InlineTableScan {
-    fn analyze(&self, plan: &LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
-        plan.clone().transform_up(&analyze_internal)
+    fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
+        plan.transform_up(&analyze_internal)
     }
 
     fn name(&self) -> &str {
