@@ -42,7 +42,7 @@ use std::time::Instant;
 /// it the same result in some more optimal way.
 pub trait AnalyzerRule {
     /// Rewrite `plan`
-    fn analyze(&self, plan: &LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan>;
+    fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan>;
 
     /// A human readable name for this analyzer rule
     fn name(&self) -> &str;
@@ -87,7 +87,7 @@ impl Analyzer {
 
         // TODO add common rule executor for Analyzer and Optimizer
         for rule in &self.rules {
-            new_plan = rule.analyze(&new_plan, config)?;
+            new_plan = rule.analyze(new_plan, config)?;
         }
         check_plan(&new_plan)?;
         log_plan("Final analyzed plan", &new_plan);
