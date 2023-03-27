@@ -15,21 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod builder;
-pub mod display;
-mod extension;
-mod plan;
+//! This module provides common traits for visiting or rewriting tree nodes easily.
 
-pub use builder::{table_scan, LogicalPlanBuilder};
-pub use plan::{
-    Aggregate, Analyze, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
-    CreateMemoryTable, CreateView, CrossJoin, DescribeTable, Distinct, DmlStatement,
-    DropTable, DropView, EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint,
-    JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare, Projection,
-    Repartition, SetVariable, Sort, StringifiedPlan, Subquery, SubqueryAlias, TableScan,
-    ToStringifiedPlan, Union, Unnest, Values, Window, WriteOp,
-};
+use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion_common::tree_node::{DynTreeNode, Transformed};
+use datafusion_common::Result;
+use std::sync::Arc;
 
-pub use display::display_schema;
+impl DynTreeNode for dyn ExecutionPlan {
+    fn arc_children(&self) -> Vec<Arc<Self>> {
+        self.children()
+    }
 
-pub use extension::{UserDefinedLogicalNode, UserDefinedLogicalNodeCore};
+    fn with_new_arc_children(
+        &self,
+        arc_self: Arc<Self>,
+        new_children: Vec<Arc<Self>>,
+    ) -> Result<Arc<Self>> {
+        with_new_children_if_necessary(arc_self, new_children).map(Transformed::into)
+    }
+}

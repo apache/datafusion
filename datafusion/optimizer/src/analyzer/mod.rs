@@ -20,10 +20,11 @@ mod inline_table_scan;
 
 use crate::analyzer::count_wildcard_rule::CountWildcardRule;
 use crate::analyzer::inline_table_scan::InlineTableScan;
-use crate::rewrite::TreeNodeRewritable;
+
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::expr_visitor::inspect_expr_pre;
+use datafusion_expr::utils::inspect_expr_pre;
 use datafusion_expr::{Expr, LogicalPlan};
 use log::{debug, trace};
 use std::sync::Arc;
@@ -103,19 +104,23 @@ fn log_plan(description: &str, plan: &LogicalPlan) {
 
 /// Do necessary check and fail the invalid plan
 fn check_plan(plan: &LogicalPlan) -> Result<()> {
-    plan.for_each_up(&|plan: &LogicalPlan| {
-        plan.expressions().into_iter().try_for_each(|expr| {
+    plan.apply(&mut |plan: &LogicalPlan| {
+        for expr in plan.expressions().iter() {
             // recursively look for subqueries
-            inspect_expr_pre(&expr, |expr| match expr {
+            inspect_expr_pre(expr, |expr| match expr {
                 Expr::Exists { subquery, .. }
                 | Expr::InSubquery { subquery, .. }
                 | Expr::ScalarSubquery(subquery) => {
                     check_subquery_expr(plan, &subquery.subquery, expr)
                 }
                 _ => Ok(()),
-            })
-        })
-    })
+            })?;
+        }
+
+        Ok(VisitRecursion::Continue)
+    })?;
+
+    Ok(())
 }
 
 /// Do necessary check on subquery expressions and fail the invalid plan
@@ -188,19 +193,30 @@ fn check_correlations_in_subquery(
         | LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Limit(_)
         | LogicalPlan::Subquery(_)
-        | LogicalPlan::SubqueryAlias(_) => inner_plan.apply_children(|plan| {
-            check_correlations_in_subquery(outer_plan, plan, expr, can_contain_outer_ref)
-        }),
-        LogicalPlan::Join(_) => {
-            // TODO support correlation columns in the subquery join
-            inner_plan.apply_children(|plan| {
+        | LogicalPlan::SubqueryAlias(_) => {
+            inner_plan.apply_children(&mut |plan| {
                 check_correlations_in_subquery(
                     outer_plan,
                     plan,
                     expr,
                     can_contain_outer_ref,
-                )
-            })
+                )?;
+                Ok(VisitRecursion::Continue)
+            })?;
+            Ok(())
+        }
+        LogicalPlan::Join(_) => {
+            // TODO support correlation columns in the subquery join
+            inner_plan.apply_children(&mut |plan| {
+                check_correlations_in_subquery(
+                    outer_plan,
+                    plan,
+                    expr,
+                    can_contain_outer_ref,
+                )?;
+                Ok(VisitRecursion::Continue)
+            })?;
+            Ok(())
         }
         _ => Err(DataFusionError::Plan(
             "Unsupported operator in the subquery plan.".to_string(),

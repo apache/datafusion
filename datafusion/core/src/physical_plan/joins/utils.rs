@@ -38,7 +38,7 @@ use std::usize;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{ScalarValue, SharedResult};
 
-use datafusion_physical_expr::rewrite::TreeNodeRewritable;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
 
 use crate::error::{DataFusionError, Result};
@@ -133,11 +133,11 @@ pub fn adjust_right_output_partitioning(
                 .into_iter()
                 .map(|expr| {
                     expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
-                        Some(col) => Ok(Some(Arc::new(Column::new(
+                        Some(col) => Ok(Transformed::Yes(Arc::new(Column::new(
                             col.name(),
                             left_columns_len + col.index(),
                         )))),
-                        None => Ok(None),
+                        None => Ok(Transformed::No(e)),
                     })
                     .unwrap()
                 })

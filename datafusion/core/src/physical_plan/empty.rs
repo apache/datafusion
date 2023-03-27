@@ -198,11 +198,11 @@ mod tests {
         let empty = Arc::new(EmptyExec::new(false, schema.clone()));
         let empty_with_row = Arc::new(EmptyExec::new(true, schema));
 
-        let empty2 = with_new_children_if_necessary(empty.clone(), vec![])?;
+        let empty2 = with_new_children_if_necessary(empty.clone(), vec![])?.into();
         assert_eq!(empty.schema(), empty2.schema());
 
         let empty_with_row_2 =
-            with_new_children_if_necessary(empty_with_row.clone(), vec![])?;
+            with_new_children_if_necessary(empty_with_row.clone(), vec![])?.into();
         assert_eq!(empty_with_row.schema(), empty_with_row_2.schema());
 
         let too_many_kids = vec![empty2];

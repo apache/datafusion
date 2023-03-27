@@ -29,8 +29,8 @@ mod value;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::normalize_ident;
 use arrow_schema::DataType;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr_rewriter::rewrite_expr;
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
@@ -521,13 +521,13 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
 
 /// Find all [`Expr::PlaceHolder`] tokens in a logical plan, and try to infer their type from context
 fn infer_placeholder_types(expr: Expr, schema: &DFSchema) -> Result<Expr> {
-    rewrite_expr(expr, |mut expr| {
+    expr.transform(&|mut expr| {
         // Default to assuming the arguments are the same type
         if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = &mut expr {
             rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
             rewrite_placeholder(right.as_mut(), left.as_ref(), schema)?;
         };
-        Ok(expr)
+        Ok(Transformed::Yes(expr))
     })
 }
 
