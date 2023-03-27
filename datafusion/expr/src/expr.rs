@@ -21,7 +21,7 @@ use crate::aggregate_function;
 use crate::built_in_function;
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
-use crate::utils::{expr_to_columns, find_out_reference_exprs};
+use crate::utils::{expr_to_columns, find_hidden_columns, find_out_reference_exprs};
 use crate::window_frame;
 use crate::window_function;
 use crate::AggregateUDF;
@@ -223,8 +223,10 @@ pub enum Expr {
     /// A place holder which hold a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
     OuterReferenceColumn(DataType, Column),
-    /// A virtual column used by the system internally
-    VirtualColumn(DataType, String),
+    /// A hidden column used by the system internally
+    HiddenColumn(DataType, String),
+    /// A hidden expr pair used by the system internally, evaluated to a HiddenColumn
+    HiddenExpr(Box<Expr>, Box<Expr>),
 }
 
 /// Binary expression
@@ -507,19 +509,65 @@ impl GroupingSet {
     /// Return all distinct exprs in the grouping set. For `CUBE` and `ROLLUP` this
     /// is just the underlying list of exprs. For `GROUPING SET` we need to deduplicate
     /// the exprs in the underlying sets.
-    pub fn distinct_expr(&self) -> Vec<Expr> {
+    pub fn distinct_expr(&self, include_hidden: bool) -> Vec<Expr> {
         match self {
             GroupingSet::Rollup(exprs) => exprs.clone(),
             GroupingSet::Cube(exprs) => exprs.clone(),
             GroupingSet::GroupingSets(groups) => {
                 let mut exprs: Vec<Expr> = vec![];
                 for exp in groups.iter().flatten() {
-                    if !exprs.contains(exp) {
+                    if let Expr::HiddenExpr(_, second) = exp {
+                        if include_hidden && !exprs.contains(second) {
+                            exprs.push(*second.clone());
+                        }
+                    } else if !exprs.contains(exp) {
                         exprs.push(exp.clone());
                     }
                 }
                 exprs
             }
+        }
+    }
+
+    pub fn contains_duplicate_grouping(&self) -> bool {
+        match self {
+            GroupingSet::Rollup(_) => false,
+            GroupingSet::Cube(_) => false,
+            GroupingSet::GroupingSets(groups) => {
+                let exclude_hidden = groups
+                    .clone()
+                    .into_iter()
+                    .map(|group| {
+                        group
+                            .into_iter()
+                            .filter(|e| !matches!(e, Expr::HiddenExpr(_, _)))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                let exclude_hidden_len = exclude_hidden.len();
+                let distinct_set = exclude_hidden.into_iter().collect::<HashSet<_>>();
+                exclude_hidden_len != distinct_set.len()
+            }
+        }
+    }
+
+    pub fn contains_hidden_expr(&self) -> bool {
+        match self {
+            GroupingSet::Rollup(_) => false,
+            GroupingSet::Cube(_) => false,
+            GroupingSet::GroupingSets(groups) => groups
+                .iter()
+                .flatten()
+                .any(|e| matches!(e, Expr::HiddenExpr(_, _))),
+        }
+    }
+
+    /// Return the input exprs len in the grouping set
+    pub fn input_expr_len(&self) -> usize {
+        match self {
+            GroupingSet::Rollup(exprs) => exprs.len(),
+            GroupingSet::Cube(exprs) => exprs.len(),
+            GroupingSet::GroupingSets(groups) => groups.len(),
         }
     }
 }
@@ -602,7 +650,8 @@ impl Expr {
             Expr::TryCast { .. } => "TryCast",
             Expr::WindowFunction { .. } => "WindowFunction",
             Expr::Wildcard => "Wildcard",
-            Expr::VirtualColumn(..) => "VirtualColumn",
+            Expr::HiddenColumn(..) => "HiddenColumn",
+            Expr::HiddenExpr(..) => "HiddenExpr",
         }
     }
 
@@ -796,6 +845,11 @@ impl Expr {
     /// Return true when the expression contains out reference(correlated) expressions.
     pub fn contains_outer(&self) -> bool {
         !find_out_reference_exprs(self).is_empty()
+    }
+
+    /// Return true when the expression contains hidden columns.
+    pub fn contains_hidden_columns(&self) -> bool {
+        !find_hidden_columns(self).is_empty()
     }
 }
 
@@ -1084,7 +1138,8 @@ impl fmt::Debug for Expr {
                 }
             },
             Expr::Placeholder { id, .. } => write!(f, "{id}"),
-            Expr::VirtualColumn(_, c) => write!(f, "_virtual_{}", c),
+            Expr::HiddenColumn(_, c) => write!(f, "#{}", c),
+            Expr::HiddenExpr(first, _) => write!(f, "{}", first),
         }
     }
 }
@@ -1368,7 +1423,8 @@ fn create_name(e: &Expr) -> Result<String> {
             "Create name does not support qualified wildcard".to_string(),
         )),
         Expr::Placeholder { id, .. } => Ok((*id).to_string()),
-        Expr::VirtualColumn(_, c) => Ok(format!("_virtual_{}", c)),
+        Expr::HiddenColumn(_, c) => Ok(format!("#{}", c)),
+        Expr::HiddenExpr(first, _) => Ok(format!("#{}", first)),
     }
 }
 

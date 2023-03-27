@@ -118,7 +118,8 @@ impl ExprVisitable for Expr {
             | Expr::Cast(Cast { expr, .. })
             | Expr::TryCast(TryCast { expr, .. })
             | Expr::Sort(Sort { expr, .. })
-            | Expr::InSubquery { expr, .. } => expr.accept(visitor),
+            | Expr::InSubquery { expr, .. }
+            | Expr::HiddenExpr(expr, _) => expr.accept(visitor),
             Expr::GetIndexedField(GetIndexedField { expr, .. }) => expr.accept(visitor),
             Expr::GroupingSet(GroupingSet::Rollup(exprs)) => exprs
                 .iter()
@@ -136,7 +137,7 @@ impl ExprVisitable for Expr {
             Expr::Column(_)
             // Treat OuterReferenceColumn as a leaf expression
             | Expr::OuterReferenceColumn(_, _)
-            | Expr::VirtualColumn(_, _)
+            | Expr::HiddenColumn(_, _)
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_)
             | Expr::Exists { .. }

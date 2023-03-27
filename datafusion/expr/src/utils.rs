@@ -54,6 +54,11 @@ pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result
     Ok(())
 }
 
+/// Check whether the group_expr contains [Expr::GroupingSet].
+pub fn contains_grouping_set(group_expr: &[Expr]) -> bool {
+    group_expr.iter().any(|e| matches!(e, Expr::GroupingSet(_)))
+}
+
 /// Count the number of distinct exprs in a list of group by expressions. If the
 /// first element is a `GroupingSet` expression then it must be the only expr.
 pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
@@ -64,7 +69,7 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
                     .to_string(),
             ));
         }
-        Ok(grouping_set.distinct_expr().len())
+        Ok(grouping_set.distinct_expr(true).len())
     } else {
         Ok(group_expr.len())
     }
@@ -114,6 +119,17 @@ fn check_grouping_set_size_limit(size: usize) -> Result<()> {
     let max_grouping_set_size = 65535;
     if size > max_grouping_set_size {
         return Err(DataFusionError::Plan(format!("The number of group_expression in grouping_set exceeds the maximum limit {}, found {}", max_grouping_set_size, size)));
+    }
+
+    Ok(())
+}
+
+/// check the number of distinct expressions contained in the grouping_set when using group id
+fn check_grouping_set_distinct_expression_size_limit(size: usize) -> Result<()> {
+    // we use u32 to represent the grouping id
+    let max_expression_set_size = 32;
+    if size > max_expression_set_size {
+        return Err(DataFusionError::Plan(format!("The number of distinct group_expression in grouping_set exceeds the maximum limit {} when using group id, found {}", max_expression_set_size, size)));
     }
 
     Ok(())
@@ -192,14 +208,10 @@ fn cross_join_grouping_sets<T: Clone>(
 ///   (person.id, person.age, person.state),\
 ///   (person.id, person.age, person.state, person.birth_date)\
 /// )
-pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
-    let has_grouping_set = group_expr
-        .iter()
-        .any(|expr| matches!(expr, Expr::GroupingSet(_)));
-    if !has_grouping_set || group_expr.len() == 1 {
-        return Ok(group_expr);
+pub fn enumerate_grouping_sets(group_expr: &[Expr]) -> Result<Vec<Expr>> {
+    if !contains_grouping_set(group_expr) {
+        return Ok(group_expr.to_vec());
     }
-    // only process mix grouping sets
     let partial_sets = group_expr
         .iter()
         .map(|expr| {
@@ -246,20 +258,92 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
     ))])
 }
 
-/// Find all distinct exprs in a list of group by expressions. If the
-/// first element is a `GroupingSet` expression then it must be the only expr.
-pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<Expr>> {
-    if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first() {
-        if group_expr.len() > 1 {
-            return Err(DataFusionError::Plan(
-                "Invalid group by expressions, GroupingSet must be the only expression"
-                    .to_string(),
-            ));
+/// Generate the grouping ids for each group in this grouping set.
+/// Each group id represents the level of grouping which combines the GROUPING() function
+/// for several columns into one by assigning each column a bit.
+///
+/// For example, we have the Group By columns (person.id, person.age, person.salary),
+/// the the Grouping Set (person.id, person.age) will be represented as '001', the selected
+/// column is set to '0' and the unselected is set to '1'
+pub fn generate_grouping_ids(grouping_set: &GroupingSet) -> Result<Vec<u32>> {
+    match grouping_set {
+        GroupingSet::Rollup(_) => Ok(vec![]),
+        GroupingSet::Cube(_) => Ok(vec![]),
+        GroupingSet::GroupingSets(groups) => {
+            let distinct_exprs = grouping_set.distinct_expr(false);
+            check_grouping_set_distinct_expression_size_limit(distinct_exprs.len())?;
+            Ok(groups
+                .iter()
+                .map(|group| {
+                    let mut mask = 0u32;
+                    distinct_exprs.iter().for_each(|expr| {
+                        mask = (mask << 1) + (if !group.contains(expr) { 1 } else { 0 })
+                    });
+                    mask
+                })
+                .collect::<Vec<u32>>())
         }
-        Ok(grouping_set.distinct_expr())
-    } else {
-        Ok(group_expr.to_vec())
     }
+}
+
+/// Add hidden grouping set expression to each group in the grouping_set
+pub fn add_hidden_grouping_set_expr<F>(
+    grouping_set: &mut GroupingSet,
+    hidden_grouping_expr: F,
+) -> Result<()>
+where
+    F: Fn(usize) -> Expr,
+{
+    if let GroupingSet::GroupingSets(groups) = grouping_set {
+        groups
+            .iter_mut()
+            .enumerate()
+            .for_each(|(idx, expr)| expr.push(hidden_grouping_expr(idx)));
+    }
+    Ok(())
+}
+
+/// Find all distinct exprs in a list of group by expressions.
+pub fn distinct_group_exprs(group_expr: &[Expr], include_hidden: bool) -> Vec<Expr> {
+    let mut dedup_expr = Vec::new();
+    let mut dedup_set = HashSet::new();
+    let mut dedup_hidden_expr = Vec::new();
+    let mut dedup_hidden_set = HashSet::new();
+    group_expr.iter().for_each(|expr| match expr {
+        Expr::GroupingSet(grouping_set) => match grouping_set {
+            GroupingSet::Rollup(exprs) => exprs.iter().for_each(|e| {
+                if !dedup_set.contains(e) {
+                    dedup_expr.push(e.clone());
+                    dedup_set.insert(e.clone());
+                }
+            }),
+            GroupingSet::Cube(exprs) => exprs.iter().for_each(|e| {
+                if !dedup_set.contains(e) {
+                    dedup_expr.push(e.clone());
+                    dedup_set.insert(e.clone());
+                }
+            }),
+            GroupingSet::GroupingSets(groups) => groups.iter().flatten().for_each(|e| {
+                if let Expr::HiddenExpr(_, second) = e {
+                    if include_hidden && !dedup_hidden_set.contains(second.as_ref()) {
+                        dedup_hidden_expr.push(*second.clone());
+                        dedup_hidden_set.insert(*second.clone());
+                    }
+                } else if !dedup_set.contains(e) {
+                    dedup_expr.push(e.clone());
+                    dedup_set.insert(e.clone());
+                }
+            }),
+        },
+        _ => {
+            if !dedup_set.contains(expr) {
+                dedup_expr.push(expr.clone());
+                dedup_set.insert(expr.clone());
+            }
+        }
+    });
+    dedup_expr.append(&mut dedup_hidden_expr);
+    dedup_expr
 }
 
 /// Recursively walk an expression tree, collecting the unique set of columns
@@ -312,7 +396,8 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::GetIndexedField { .. }
             | Expr::Placeholder { .. }
             | Expr::OuterReferenceColumn { .. }
-            | Expr::VirtualColumn {..} => {}
+            | Expr::HiddenColumn { .. }
+            | Expr::HiddenExpr { .. } => {}
         }
         Ok(())
     })
@@ -565,6 +650,14 @@ pub fn find_window_exprs(exprs: &[Expr]) -> Vec<Expr> {
 pub fn find_out_reference_exprs(expr: &Expr) -> Vec<Expr> {
     find_exprs_in_expr(expr, &|nested_expr| {
         matches!(nested_expr, Expr::OuterReferenceColumn { .. })
+    })
+}
+
+/// Collect all deeply nested `Expr::OuterReferenceColumn`. They are returned in order of occurrence
+/// (depth first), with duplicates omitted.
+pub fn find_hidden_columns(expr: &Expr) -> Vec<Expr> {
+    find_exprs_in_expr(expr, &|nested_expr| {
+        matches!(nested_expr, Expr::HiddenColumn { .. })
     })
 }
 
@@ -1433,22 +1526,25 @@ mod tests {
         let grouping_set = grouping_set(vec![multi_cols]);
 
         // 1. col
-        let sets = enumerate_grouping_sets(vec![simple_col.clone()])?;
+        let sets = enumerate_grouping_sets(&vec![simple_col.clone()])?;
         let result = format!("{sets:?}");
         assert_eq!("[simple_col]", &result);
 
         // 2. cube
-        let sets = enumerate_grouping_sets(vec![cube.clone()])?;
+        let sets = enumerate_grouping_sets(&vec![cube.clone()])?;
         let result = format!("{sets:?}");
-        assert_eq!("[CUBE (col1, col2, col3)]", &result);
+        assert_eq!("[GROUPING SETS ((), (col1), (col2), (col1, col2), (col3), (col1, col3), (col2, col3), (col1, col2, col3))]", &result);
 
         // 3. rollup
-        let sets = enumerate_grouping_sets(vec![rollup.clone()])?;
+        let sets = enumerate_grouping_sets(&vec![rollup.clone()])?;
         let result = format!("{sets:?}");
-        assert_eq!("[ROLLUP (col1, col2, col3)]", &result);
+        assert_eq!(
+            "[GROUPING SETS ((), (col1), (col1, col2), (col1, col2, col3))]",
+            &result
+        );
 
         // 4. col + cube
-        let sets = enumerate_grouping_sets(vec![simple_col.clone(), cube.clone()])?;
+        let sets = enumerate_grouping_sets(&vec![simple_col.clone(), cube.clone()])?;
         let result = format!("{sets:?}");
         assert_eq!(
             "[GROUPING SETS (\
@@ -1464,7 +1560,7 @@ mod tests {
         );
 
         // 5. col + rollup
-        let sets = enumerate_grouping_sets(vec![simple_col.clone(), rollup.clone()])?;
+        let sets = enumerate_grouping_sets(&vec![simple_col.clone(), rollup.clone()])?;
         let result = format!("{sets:?}");
         assert_eq!(
             "[GROUPING SETS (\
@@ -1477,7 +1573,7 @@ mod tests {
 
         // 6. col + grouping_set
         let sets =
-            enumerate_grouping_sets(vec![simple_col.clone(), grouping_set.clone()])?;
+            enumerate_grouping_sets(&vec![simple_col.clone(), grouping_set.clone()])?;
         let result = format!("{sets:?}");
         assert_eq!(
             "[GROUPING SETS (\
@@ -1486,11 +1582,9 @@ mod tests {
         );
 
         // 7. col + grouping_set + rollup
-        let sets = enumerate_grouping_sets(vec![
-            simple_col.clone(),
-            grouping_set,
-            rollup.clone(),
-        ])?;
+        let sets = enumerate_grouping_sets(
+            vec![simple_col.clone(), grouping_set, rollup.clone()].as_slice(),
+        )?;
         let result = format!("{sets:?}");
         assert_eq!(
             "[GROUPING SETS (\
@@ -1502,7 +1596,7 @@ mod tests {
         );
 
         // 8. col + cube + rollup
-        let sets = enumerate_grouping_sets(vec![simple_col, cube, rollup])?;
+        let sets = enumerate_grouping_sets(&vec![simple_col, cube, rollup])?;
         let result = format!("{sets:?}");
         assert_eq!(
             "[GROUPING SETS (\
@@ -1540,6 +1634,43 @@ mod tests {
             (simple_col, col1, col2, col3, col1, col2, col3))]",
             &result
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_generate_grouping_ids() -> Result<()> {
+        // 001
+        let multi_cols1 = vec![col("col1"), col("col2")];
+        // 010
+        let multi_cols2 = vec![col("col1"), col("col3")];
+        // 100
+        let multi_cols3 = vec![col("col2"), col("col3")];
+        // 000
+        let multi_cols4 = vec![col("col1"), col("col2"), col("col3")];
+        // 011
+        let multi_cols5 = vec![col("col1")];
+        // 101
+        let multi_cols6 = vec![col("col2")];
+        // 110
+        let multi_cols7 = vec![col("col3")];
+        // 011
+        let multi_cols8 = vec![col("col1"), col("col1"), col("col1")];
+
+        let grouping_set = GroupingSet::GroupingSets(vec![
+            multi_cols1,
+            multi_cols2,
+            multi_cols3,
+            multi_cols4,
+            multi_cols5,
+            multi_cols6,
+            multi_cols7,
+            multi_cols8,
+        ]);
+
+        let grouping_id = generate_grouping_ids(&grouping_set)?;
+        let grouping_id_result = format!("{grouping_id:?}");
+        assert_eq!("[1, 2, 4, 0, 3, 5, 6, 3]", &grouping_id_result);
 
         Ok(())
     }

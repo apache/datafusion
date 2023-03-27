@@ -64,13 +64,18 @@ pub enum AggregateFunction {
     /// Grouping
     Grouping,
     /// GroupingID
-    GroupingID,
+    GroupingId,
 }
 
 impl fmt::Display for AggregateFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // uppercase of the debug.
-        write!(f, "{}", format!("{self:?}").to_uppercase())
+        match self {
+            AggregateFunction::GroupingId => {
+                write!(f, "GROUPING_ID")
+            }
+            _ => write!(f, "{}", format!("{self:?}").to_uppercase()),
+        }
     }
 }
 
@@ -103,7 +108,7 @@ impl FromStr for AggregateFunction {
             }
             "approx_median" => AggregateFunction::ApproxMedian,
             "grouping" => AggregateFunction::Grouping,
-            "grouping_id" => AggregateFunction::GroupingID,
+            "grouping_id" => AggregateFunction::GroupingId,
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in function named {name}"
@@ -160,8 +165,8 @@ pub fn return_type(
         AggregateFunction::ApproxMedian | AggregateFunction::Median => {
             Ok(coerced_data_types[0].clone())
         }
-        AggregateFunction::Grouping => Ok(DataType::Int32),
-        AggregateFunction::GroupingID => Ok(DataType::Int32),
+        AggregateFunction::Grouping => Ok(DataType::UInt8),
+        AggregateFunction::GroupingId => Ok(DataType::UInt32),
     }
 }
 
@@ -224,7 +229,7 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
                 .collect(),
             Volatility::Immutable,
         ),
-        AggregateFunction::GroupingID => Signature {
+        AggregateFunction::GroupingId => Signature {
             type_signature: TypeSignature::Arbitrary,
             volatility: Volatility::Immutable,
         },

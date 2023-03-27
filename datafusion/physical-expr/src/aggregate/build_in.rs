@@ -247,12 +247,12 @@ pub fn create_aggregate_expr(
         }
         (AggregateFunction::Grouping, _) => {
             return Err(DataFusionError::Plan(
-                "GROUPING() aggregations are not evaluable".to_string(),
+                "GROUPING() aggregations are not evaluable, should be converted by the Analyzer".to_string(),
             ));
         }
-        (AggregateFunction::GroupingID, _) => {
+        (AggregateFunction::GroupingId, _) => {
             return Err(DataFusionError::Plan(
-                "GROUPING_ID() aggregations are not evaluable".to_string(),
+                "GROUPING_ID() aggregations are not evaluable, should be converted by the Analyzer".to_string(),
             ));
         }
     })

@@ -18,7 +18,6 @@
 //! Eliminate common sub-expression.
 
 use std::collections::{BTreeSet, HashMap};
-use std::convert::identity;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
@@ -538,14 +537,8 @@ impl ExprRewriter for CommonSubexprRewriter<'_> {
         if self.curr_index >= self.id_array.len() {
             return Ok(expr);
         }
-        if matches!(expr, Expr::VirtualColumn(_, _)) {
-            return Ok(expr);
-        }
 
         let (series_number, id) = &self.id_array[self.curr_index];
-        if id.eq("_virtual_grouping_id") {
-            return Ok(expr);
-        }
         self.curr_index += 1;
         // Skip sub-node of a replaced tree, or without identifier, or is not repeated expr.
         let expr_set_item = self.expr_set.get(id).ok_or_else(|| {

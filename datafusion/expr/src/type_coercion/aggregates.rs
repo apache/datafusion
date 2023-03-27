@@ -217,7 +217,7 @@ pub fn coerce_types(
         }
         AggregateFunction::Median => Ok(input_types.to_vec()),
         AggregateFunction::Grouping => Ok(vec![input_types[0].clone()]),
-        AggregateFunction::GroupingID => Ok(input_types.to_vec()),
+        AggregateFunction::GroupingId => Ok(input_types.to_vec()),
     }
 }
 

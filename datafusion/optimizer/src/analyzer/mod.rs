@@ -16,11 +16,10 @@
 // under the License.
 
 mod count_wildcard_rule;
-mod replace_grouping_func;
-
+mod resolve_grouping_analytics;
 
 use crate::analyzer::count_wildcard_rule::CountWildcardRule;
-use crate::analyzer::replace_grouping_func::ReplaceGroupingFunc;
+use crate::analyzer::resolve_grouping_analytics::ResolveGroupingAnalytics;
 use crate::rewrite::TreeNodeRewritable;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
@@ -56,8 +55,8 @@ impl Analyzer {
     /// Create a new analyzer using the recommended list of rules
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn AnalyzerRule + Sync + Send>> = vec![
+            Arc::new(ResolveGroupingAnalytics::new()),
             Arc::new(CountWildcardRule::new()),
-            Arc::new(ReplaceGroupingFunc::new()),
         ];
         Self::with_rules(rules)
     }
