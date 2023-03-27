@@ -19,17 +19,15 @@
 //! such as DataFrames and Views and inlines the LogicalPlan.
 use std::sync::Arc;
 
+use crate::analyzer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::Result;
-use datafusion_expr::expr_rewriter::rewrite_expr;
 use datafusion_expr::{
     logical_plan::LogicalPlan, Expr, Filter, LogicalPlanBuilder, TableScan,
 };
 
-use crate::analyzer::AnalyzerRule;
-use crate::rewrite::TreeNodeRewritable;
-
-/// Analyzed rule that inlines TableScan that provide a [LogicalPlan]
+/// Analyzed rule that inlines TableScan that provide a [`LogicalPlan`]
 /// (DataFrame / ViewTable)
 #[derive(Default)]
 pub struct InlineTableScan;
@@ -50,56 +48,53 @@ impl AnalyzerRule for InlineTableScan {
     }
 }
 
-fn analyze_internal(plan: LogicalPlan) -> Result<Option<LogicalPlan>> {
-    match plan {
+fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    Ok(match plan {
         // Match only on scans without filter / projection / fetch
         // Views and DataFrames won't have those added
         // during the early stage of planning
         LogicalPlan::TableScan(TableScan {
-            source,
             table_name,
-            filters,
+            source,
             projection,
+            filters,
             ..
-        }) if filters.is_empty() => {
-            if let Some(sub_plan) = source.get_logical_plan() {
-                let projection_exprs = generate_projection_expr(&projection, sub_plan)?;
-                let plan = LogicalPlanBuilder::from(sub_plan.clone())
-                    .project(projection_exprs)?
-                    // Since this This is creating a subquery like:
-                    //```sql
-                    // ...
-                    // FROM <view definition> as "table_name"
-                    // ```
-                    //
-                    // it doesn't make sense to have a qualified
-                    // reference (e.g. "foo"."bar") -- this convert to
-                    // string
-                    .alias(table_name.to_string())?
-                    .build()?;
-                Ok(Some(plan))
-            } else {
-                Ok(None)
-            }
+        }) if filters.is_empty() && source.get_logical_plan().is_some() => {
+            let sub_plan = source.get_logical_plan().unwrap();
+            let projection_exprs = generate_projection_expr(&projection, sub_plan)?;
+            let plan = LogicalPlanBuilder::from(sub_plan.clone())
+                .project(projection_exprs)?
+                // Since this This is creating a subquery like:
+                //```sql
+                // ...
+                // FROM <view definition> as "table_name"
+                // ```
+                //
+                // it doesn't make sense to have a qualified
+                // reference (e.g. "foo"."bar") -- this convert to
+                // string
+                .alias(table_name.to_string())?
+                .build()?;
+            Transformed::Yes(plan)
         }
         LogicalPlan::Filter(filter) => {
-            let new_expr = rewrite_expr(filter.predicate.clone(), rewrite_subquery)?;
-            Ok(Some(LogicalPlan::Filter(Filter::try_new(
+            let new_expr = filter.predicate.transform(&rewrite_subquery)?;
+            Transformed::Yes(LogicalPlan::Filter(Filter::try_new(
                 new_expr,
                 filter.input,
-            )?)))
+            )?))
         }
-        _ => Ok(None),
-    }
+        _ => Transformed::No(plan),
+    })
 }
 
-fn rewrite_subquery(expr: Expr) -> Result<Expr> {
+fn rewrite_subquery(expr: Expr) -> Result<Transformed<Expr>> {
     match expr {
         Expr::Exists { subquery, negated } => {
             let plan = subquery.subquery.as_ref().clone();
             let new_plan = plan.transform_up(&analyze_internal)?;
             let subquery = subquery.with_plan(Arc::new(new_plan));
-            Ok(Expr::Exists { subquery, negated })
+            Ok(Transformed::Yes(Expr::Exists { subquery, negated }))
         }
         Expr::InSubquery {
             expr,
@@ -109,19 +104,19 @@ fn rewrite_subquery(expr: Expr) -> Result<Expr> {
             let plan = subquery.subquery.as_ref().clone();
             let new_plan = plan.transform_up(&analyze_internal)?;
             let subquery = subquery.with_plan(Arc::new(new_plan));
-            Ok(Expr::InSubquery {
+            Ok(Transformed::Yes(Expr::InSubquery {
                 expr,
                 subquery,
                 negated,
-            })
+            }))
         }
         Expr::ScalarSubquery(subquery) => {
             let plan = subquery.subquery.as_ref().clone();
             let new_plan = plan.transform_up(&analyze_internal)?;
             let subquery = subquery.with_plan(Arc::new(new_plan));
-            Ok(Expr::ScalarSubquery(subquery))
+            Ok(Transformed::Yes(Expr::ScalarSubquery(subquery)))
         }
-        _ => Ok(expr),
+        _ => Ok(Transformed::No(expr)),
     }
 }
 
