@@ -22,8 +22,8 @@
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::tree_node::TreeNodeRewritable;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use std::sync::Arc;
 
 /// The PipelineChecker rule rejects non-runnable query plans that use
@@ -78,7 +78,23 @@ impl PipelineStatePropagator {
     }
 }
 
-impl TreeNodeRewritable for PipelineStatePropagator {
+impl TreeNode for PipelineStatePropagator {
+    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    where
+        F: FnMut(&Self) -> Result<VisitRecursion>,
+    {
+        let children = self.plan.children();
+        for child in children {
+            match op(&PipelineStatePropagator::new(child))? {
+                VisitRecursion::Continue => {}
+                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+            }
+        }
+
+        Ok(VisitRecursion::Continue)
+    }
+
     fn map_children<F>(self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
@@ -99,7 +115,7 @@ impl TreeNodeRewritable for PipelineStatePropagator {
                 .map(|child| child.plan)
                 .collect::<Vec<_>>();
             Ok(PipelineStatePropagator {
-                plan: with_new_children_if_necessary(self.plan, children_plans)?,
+                plan: with_new_children_if_necessary(self.plan, children_plans)?.into(),
                 unbounded: self.unbounded,
                 children_unbounded,
             })
@@ -113,11 +129,11 @@ impl TreeNodeRewritable for PipelineStatePropagator {
 /// pipeline-breaking operators acting on infinite inputs.
 pub fn check_finiteness_requirements(
     input: PipelineStatePropagator,
-) -> Result<Option<PipelineStatePropagator>> {
+) -> Result<Transformed<PipelineStatePropagator>> {
     let plan = input.plan;
     let children = input.children_unbounded;
     plan.unbounded_output(&children).map(|value| {
-        Some(PipelineStatePropagator {
+        Transformed::Yes(PipelineStatePropagator {
             plan,
             unbounded: value,
             children_unbounded: children,

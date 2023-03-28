@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-examples"
 description = "DataFusion usage examples"
-keywords = [ "arrow", "query", "sql" ]
+keywords = ["arrow", "query", "sql"]
 publish = false
 version = { workspace = true }
 edition = { workspace = true }
@@ -36,7 +36,7 @@ required-features = ["datafusion/avro"]
 
 [dev-dependencies]
 arrow = { workspace = true }
-arrow-flight = { version = "36.0.0", features = ["flight-sql-experimental"] }
+arrow-flight = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = "0.1.41"
 dashmap = "5.4"

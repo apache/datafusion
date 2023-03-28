@@ -15,14 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Tree node visitable implementations
-
-use crate::physical_plan::tree_node::TreeNodeVisitable;
-use crate::physical_plan::ExecutionPlan;
+//! This module provides common traits for visiting or rewriting tree nodes easily.
+use crate::physical_expr::with_new_children_if_necessary;
+use crate::PhysicalExpr;
+use datafusion_common::tree_node::DynTreeNode;
+use datafusion_common::Result;
 use std::sync::Arc;
 
-impl TreeNodeVisitable for Arc<dyn ExecutionPlan> {
-    fn get_children(&self) -> Vec<Self> {
+impl DynTreeNode for dyn PhysicalExpr {
+    fn arc_children(&self) -> Vec<Arc<Self>> {
         self.children()
+    }
+
+    fn with_new_arc_children(
+        &self,
+        arc_self: Arc<Self>,
+        new_children: Vec<Arc<Self>>,
+    ) -> Result<Arc<Self>> {
+        with_new_children_if_necessary(arc_self, new_children)
     }
 }
