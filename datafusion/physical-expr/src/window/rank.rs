@@ -245,7 +245,7 @@ mod tests {
             .evaluate_with_rank(num_rows, &ranks)?;
         let result = as_float64_array(&result)?;
         let result = result.values();
-        assert_eq!(expected, result);
+        assert_eq!(expected, *result);
         Ok(())
     }
 
@@ -257,7 +257,7 @@ mod tests {
         let result = expr.create_evaluator()?.evaluate_with_rank(8, &ranks)?;
         let result = as_uint64_array(&result)?;
         let result = result.values();
-        assert_eq!(expected, result);
+        assert_eq!(expected, *result);
         Ok(())
     }
 

@@ -150,11 +150,11 @@ async fn main() -> Result<()> {
             let compression = match opt.compression.as_str() {
                 "none" => Compression::UNCOMPRESSED,
                 "snappy" => Compression::SNAPPY,
-                "brotli" => Compression::BROTLI,
-                "gzip" => Compression::GZIP,
+                "brotli" => Compression::BROTLI(Default::default()),
+                "gzip" => Compression::GZIP(Default::default()),
                 "lz4" => Compression::LZ4,
                 "lz0" => Compression::LZO,
-                "zstd" => Compression::ZSTD,
+                "zstd" => Compression::ZSTD(Default::default()),
                 other => {
                     return Err(DataFusionError::NotImplemented(format!(
                         "Invalid compression format: {other}"

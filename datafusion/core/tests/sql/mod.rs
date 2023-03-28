@@ -1301,15 +1301,11 @@ where
     A: ArrowTimestampType<Native = i64>,
 {
     let schema = Arc::new(Schema::new(vec![
-        Field::new(
-            "ts",
-            DataType::Timestamp(A::get_time_unit(), tz.clone()),
-            false,
-        ),
+        Field::new("ts", DataType::Timestamp(A::UNIT, tz.clone()), false),
         Field::new("value", DataType::Int32, true),
     ]));
 
-    let divisor = match A::get_time_unit() {
+    let divisor = match A::UNIT {
         TimeUnit::Nanosecond => 1,
         TimeUnit::Microsecond => 1000,
         TimeUnit::Millisecond => 1_000_000,
