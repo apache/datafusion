@@ -17,8 +17,8 @@
 use crate::optimizer::ApplyOrder;
 use crate::utils::{conjunction, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result};
-use datafusion_expr::expr_rewriter::rewrite_expr;
 use datafusion_expr::{
     and,
     expr_rewriter::replace_col,
@@ -797,15 +797,15 @@ pub fn replace_cols_by_name(
     e: Expr,
     replace_map: &HashMap<String, Expr>,
 ) -> Result<Expr> {
-    rewrite_expr(e, |expr| {
-        if let Expr::Column(c) = &expr {
+    e.transform_up(&|expr| {
+        Ok(if let Expr::Column(c) = &expr {
             match replace_map.get(&c.flat_name()) {
-                Some(new_c) => Ok(new_c.clone()),
-                None => Ok(expr),
+                Some(new_c) => Transformed::Yes(new_c.clone()),
+                None => Transformed::No(expr),
             }
         } else {
-            Ok(expr)
-        }
+            Transformed::No(expr)
+        })
     })
 }
 

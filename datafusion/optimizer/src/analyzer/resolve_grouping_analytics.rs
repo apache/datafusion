@@ -16,13 +16,13 @@
 // under the License.
 
 use crate::analyzer::AnalyzerRule;
-use crate::rewrite::TreeNodeRewritable;
 use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_expr::expr::AggregateFunction;
-use datafusion_expr::expr_rewriter::rewrite_expr;
 use datafusion_expr::utils::{
-    add_hidden_grouping_set_expr, contains_grouping_set, distinct_group_exprs,
+    add_hidden_grouping_set_expr,
+    contains_grouping_set_without_hidden_expr, distinct_group_exprs,
     enumerate_grouping_sets, generate_grouping_ids,
 };
 use datafusion_expr::{
@@ -51,83 +51,79 @@ const INTERNAL_GROUPING_SET_ID: &str = "grouping_set_id";
 impl AnalyzerRule for ResolveGroupingAnalytics {
     fn analyze(
         &self,
-        plan: &LogicalPlan,
+        plan: LogicalPlan,
         _config: &ConfigOptions,
     ) -> datafusion_common::Result<LogicalPlan> {
-        plan.clone().transform_down(&|plan| match plan {
+        plan.transform_down(&|plan| match plan {
             LogicalPlan::Aggregate(Aggregate {
                 input,
                 aggr_expr,
                 group_expr,
                 ..
-            }) if contains_grouping_set(&group_expr) => {
+            }) if contains_grouping_set_without_hidden_expr(&group_expr) => {
                 let mut expanded_grouping = enumerate_grouping_sets(&group_expr)?;
                 let mut new_project_exec = vec![];
                 if let [Expr::GroupingSet(ref mut grouping_set)] = expanded_grouping.as_mut_slice() {
-                    if !grouping_set.contains_hidden_expr() {
-                        let new_agg_expr = if contains_grouping_funcs_as_agg_expr(&aggr_expr) {
-                            let gid_column = Expr::HiddenColumn(
-                                DataType::UInt32,
-                                INTERNAL_GROUPING_ID.to_string(),
-                            );
-                            let hidden_name = gid_column.display_name()?;
-                            let grouping_ids = generate_grouping_ids(grouping_set)?;
-                            let hidden_grouping_expr = |group_set_idx: usize| Expr::HiddenExpr(Box::new(lit(grouping_ids[group_set_idx])
-                                .alias(hidden_name.clone())), Box::new(gid_column.clone()));
-                            add_hidden_grouping_set_expr(grouping_set, hidden_grouping_expr)?;
+                    let new_agg_expr = if contains_grouping_funcs_as_agg_expr(&aggr_expr) {
+                        let gid_column = Expr::HiddenColumn(
+                            DataType::UInt32,
+                            INTERNAL_GROUPING_ID.to_string(),
+                        );
+                        let hidden_name = gid_column.display_name()?;
+                        let grouping_ids = generate_grouping_ids(grouping_set)?;
+                        let hidden_grouping_expr = |group_set_idx: usize| Expr::HiddenExpr(Box::new(lit(grouping_ids[group_set_idx])
+                            .alias(hidden_name.clone())), Box::new(gid_column.clone()));
+                        add_hidden_grouping_set_expr(grouping_set, hidden_grouping_expr)?;
 
-                            let distinct_group_by = distinct_group_exprs(&group_expr, false);
-                            let mut new_agg_expr = vec![];
-                            aggr_expr.into_iter().try_for_each(|expr| {
-                                let new_expr = replace_grouping_func(
-                                    expr.clone(),
-                                    &distinct_group_by,
-                                    gid_column.clone(),
-                                )?;
-                                // The grouping func is rewrited to a normal expr, not the AggregateFunction anymore, remove it from the aggr_expr
-                                if new_expr.ne(&expr) {
-                                    new_project_exec.push(new_expr);
-                                } else {
-                                    new_agg_expr.push(new_expr);
-                                }
-                                Ok::<(), DataFusionError>(())
-                            })?;
-                            new_agg_expr
-                        } else {
-                            aggr_expr
-                        };
-                        if grouping_set.contains_duplicate_grouping() {
-                            let grouping_set_id_column = Expr::HiddenColumn(
-                                DataType::UInt32,
-                                INTERNAL_GROUPING_SET_ID.to_string(),
-                            );
-                            let hidden_name = grouping_set_id_column.display_name()?;
-                            let hidden_grouping_expr = |group_set_idx: usize| Expr::HiddenExpr(Box::new(lit((group_set_idx + 1) as u32)
-                                .alias(hidden_name.clone())), Box::new(grouping_set_id_column.clone()));
-                            add_hidden_grouping_set_expr(grouping_set, hidden_grouping_expr)?;
-                        }
-
-                        let aggregate =  Aggregate::try_new(
-                            input,
-                            vec![Expr::GroupingSet(grouping_set.clone())],
-                            new_agg_expr,
-                        )?;
-                        let agg_schema = aggregate.schema.clone();
-                        let new_agg = LogicalPlan::Aggregate(aggregate);
-                        if !new_project_exec.is_empty() {
-                            let mut expr: Vec<Expr> = agg_schema
-                                .fields()
-                                .iter()
-                                .map(|field| field.qualified_column())
-                                .map(Expr::Column)
-                                .collect();
-                            expr.append(&mut new_project_exec);
-                            Ok(Some(LogicalPlan::Projection(Projection::try_new(expr, Arc::new(new_agg))?)))
-                        } else {
-                            Ok(Some(new_agg))
-                        }
+                        let distinct_group_by = distinct_group_exprs(&group_expr, false);
+                        let mut new_agg_expr = vec![];
+                        aggr_expr.into_iter().try_for_each(|expr| {
+                            let new_expr = replace_grouping_func(
+                                expr.clone(),
+                                &distinct_group_by,
+                                gid_column.clone(),
+                            )?;
+                            // The grouping func is rewrited to a normal expr, not the AggregateFunction anymore, remove it from the aggr_expr
+                            if new_expr.ne(&expr) {
+                                new_project_exec.push(new_expr);
+                            } else {
+                                new_agg_expr.push(new_expr);
+                            }
+                            Ok::<(), DataFusionError>(())
+                        })?;
+                        new_agg_expr
                     } else {
-                        Ok(None)
+                        aggr_expr
+                    };
+                    if grouping_set.contains_duplicate_grouping() {
+                        let grouping_set_id_column = Expr::HiddenColumn(
+                            DataType::UInt32,
+                            INTERNAL_GROUPING_SET_ID.to_string(),
+                        );
+                        let hidden_name = grouping_set_id_column.display_name()?;
+                        let hidden_grouping_expr = |group_set_idx: usize| Expr::HiddenExpr(Box::new(lit((group_set_idx + 1) as u32)
+                            .alias(hidden_name.clone())), Box::new(grouping_set_id_column.clone()));
+                        add_hidden_grouping_set_expr(grouping_set, hidden_grouping_expr)?;
+                    }
+
+                    let aggregate = Aggregate::try_new(
+                        input,
+                        vec![Expr::GroupingSet(grouping_set.clone())],
+                        new_agg_expr,
+                    )?;
+                    let agg_schema = aggregate.schema.clone();
+                    let new_agg = LogicalPlan::Aggregate(aggregate);
+                    if !new_project_exec.is_empty() {
+                        let mut expr: Vec<Expr> = agg_schema
+                            .fields()
+                            .iter()
+                            .map(|field| field.qualified_column())
+                            .map(Expr::Column)
+                            .collect();
+                        expr.append(&mut new_project_exec);
+                        Ok(Transformed::Yes(LogicalPlan::Projection(Projection::try_new(expr, Arc::new(new_agg))?)))
+                    } else {
+                        Ok(Transformed::Yes(new_agg))
                     }
                 } else {
                     Err(DataFusionError::Plan(
@@ -136,7 +132,7 @@ impl AnalyzerRule for ResolveGroupingAnalytics {
                     ))
                 }
             }
-            _ => Ok(None),
+            _ => Ok(Transformed::No(plan)),
         })
     }
     fn name(&self) -> &str {
@@ -164,7 +160,7 @@ fn replace_grouping_func(
     group_by_exprs: &[Expr],
     gid_column: Expr,
 ) -> Result<Expr> {
-    rewrite_expr(expr, |expr| {
+    expr.transform(&|expr| {
         let display_name = expr.display_name()?;
         match expr {
             Expr::AggregateFunction(AggregateFunction {
@@ -174,7 +170,7 @@ fn replace_grouping_func(
             }) => {
                 let grouping_col = &args[0];
                 match group_by_exprs.iter().position(|e| e == grouping_col) {
-                    Some(idx) => Ok(cast(
+                    Some(idx) => Ok(Transformed::Yes(cast(
                         bitwise_and(
                             bitwise_shift_right(
                                 gid_column.clone(),
@@ -183,7 +179,7 @@ fn replace_grouping_func(
                             lit(1u32),
                         ),
                         DataType::UInt8,
-                    ).alias(display_name)),
+                    ).alias(display_name))),
                     None => Err(DataFusionError::Plan(format!(
                         "Column of GROUPING({:?}) can't be found in GROUP BY columns {:?}",
                         grouping_col, group_by_exprs
@@ -199,7 +195,7 @@ fn replace_grouping_func(
                     || (group_by_exprs.len() == args.len()
                         && group_by_exprs.iter().zip(args.iter()).all(|(g, a)| g == a))
                 {
-                    Ok(gid_column.clone().alias(display_name))
+                    Ok(Transformed::Yes(gid_column.clone().alias(display_name)))
                 } else {
                     Err(DataFusionError::Plan(format!(
                         "Columns of GROUPING_ID({:?}) does not match GROUP BY columns {:?}",
@@ -207,7 +203,7 @@ fn replace_grouping_func(
                     )))
                 }
             }
-            _ => Ok(expr),
+            _ => Ok(Transformed::No(expr)),
         }
     })
 }
