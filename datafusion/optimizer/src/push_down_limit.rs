@@ -17,14 +17,16 @@
 
 //! Optimizer rule to push down LIMIT in the query plan
 //! It will push down through projection, limits (taking the smaller limit)
-use crate::optimizer::ApplyOrder;
-use crate::{OptimizerConfig, OptimizerRule};
+use std::sync::Arc;
+
 use datafusion_common::Result;
 use datafusion_expr::{
-    logical_plan::{Join, JoinType, Limit, LogicalPlan, Sort, TableScan, Union},
     CrossJoin,
+    logical_plan::{Join, JoinType, Limit, LogicalPlan, Sort, TableScan, Union},
 };
-use std::sync::Arc;
+
+use crate::{OptimizerConfig, OptimizerRule};
+use crate::optimizer::ApplyOrder;
 
 /// Optimization rule that tries to push down LIMIT.
 #[derive(Default)]
@@ -104,18 +106,22 @@ impl OptimizerRule for PushDownLimit {
             };
         }
 
+
         let fetch = match limit.fetch {
             Some(fetch) => fetch,
             None => return Ok(None),
         };
+        println!("{fetch:?}");
         let skip = limit.skip;
         let child_plan = &*limit.input;
+        println!("{child_plan:?}");
 
         let plan = match child_plan {
             LogicalPlan::TableScan(scan) => {
                 let limit = if fetch != 0 { fetch + skip } else { 0 };
                 let new_fetch = scan.fetch.map(|x| min(x, limit)).or(Some(limit));
                 if new_fetch == scan.fetch {
+                    println!("here");
                     None
                 } else {
                     let new_input = LogicalPlan::TableScan(TableScan {
@@ -126,6 +132,7 @@ impl OptimizerRule for PushDownLimit {
                         fetch: scan.fetch.map(|x| min(x, limit)).or(Some(limit)),
                         projected_schema: scan.projected_schema.clone(),
                     });
+                    println!("new input");
                     Some(plan.with_new_inputs(&[new_input])?)
                 }
             }
@@ -275,13 +282,15 @@ fn push_down_join(join: &Join, limit: usize) -> Option<Join> {
 mod test {
     use std::vec;
 
-    use super::*;
-    use crate::test::*;
     use datafusion_expr::{
         col, exists,
         logical_plan::{builder::LogicalPlanBuilder, JoinType, LogicalPlan},
         max,
     };
+
+    use crate::test::*;
+
+    use super::*;
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(PushDownLimit::new()), plan, expected)

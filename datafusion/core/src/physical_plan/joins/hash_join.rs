@@ -18,8 +18,12 @@
 //! Defines the join plan for executing partitions in parallel and then joining the results
 //! into a set of partitions.
 
-use ahash::RandomState;
+use std::{any::Any, usize, vec};
+use std::fmt;
+use std::sync::Arc;
+use std::task::Poll;
 
+use ahash::RandomState;
 use arrow::{
     array::{
         ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
@@ -34,66 +38,56 @@ use arrow::{
     },
     util::bit_util,
 };
-use smallvec::{smallvec, SmallVec};
-use std::sync::Arc;
-use std::{any::Any, usize, vec};
-
-use futures::{ready, Stream, StreamExt, TryStreamExt};
-
-use arrow::array::Array;
-use arrow::datatypes::{ArrowNativeType, DataType};
-use arrow::datatypes::{Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
-
 use arrow::array::{
     Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
     StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
     UInt8Array,
 };
+use arrow::array::Array;
+use arrow::datatypes::{ArrowNativeType, DataType};
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
+use futures::{ready, Stream, StreamExt, TryStreamExt};
+use hashbrown::raw::RawTable;
+use smallvec::{smallvec, SmallVec};
 
 use datafusion_common::cast::{as_dictionary_array, as_string_array};
 
-use hashbrown::raw::RawTable;
-
-use crate::physical_plan::{
-    coalesce_batches::concat_batches,
-    coalesce_partitions::CoalescePartitionsExec,
-    expressions::Column,
-    expressions::PhysicalSortExpr,
-    hash_utils::create_hashes,
-    joins::utils::{
-        adjust_right_output_partitioning, build_join_schema, check_join_is_valid,
-        combine_join_equivalence_properties, estimate_join_statistics,
-        partitioned_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex,
-        JoinFilter, JoinOn,
-    },
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
-    PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
-};
-
-use crate::error::{DataFusionError, Result};
-use crate::logical_expr::JoinType;
-
 use crate::arrow::array::BooleanBufferBuilder;
 use crate::arrow::datatypes::TimeUnit;
+use crate::error::{DataFusionError, Result};
 use crate::execution::{
     context::TaskContext,
     memory_pool::{
         MemoryConsumer, SharedMemoryReservation, SharedOptionalMemoryReservation, TryGrow,
     },
 };
-
-use super::{
-    utils::{OnceAsync, OnceFut},
-    PartitionMode,
+use crate::logical_expr::JoinType;
+use crate::physical_plan::{
+    coalesce_batches::concat_batches,
+    coalesce_partitions::CoalescePartitionsExec,
+    DisplayFormatType,
+    Distribution,
+    EquivalenceProperties,
+    ExecutionPlan,
+    expressions::Column,
+    expressions::PhysicalSortExpr, hash_utils::create_hashes, joins::utils::{
+        adjust_right_output_partitioning, build_join_schema, BuildProbeJoinMetrics,
+        check_join_is_valid, ColumnIndex,
+        combine_join_equivalence_properties, estimate_join_statistics, JoinFilter,
+        JoinOn, partitioned_join_output_partitioning,
+    }, metrics::{ExecutionPlanMetricsSet, MetricsSet}, Partitioning,
+    PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::physical_plan::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
-    get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
+    get_final_indices_from_bit_map, JoinSide, need_produce_result_in_final,
 };
-use std::fmt;
-use std::task::Poll;
+
+use super::{
+    PartitionMode,
+    utils::{OnceAsync, OnceFut},
+};
 
 // Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 //
@@ -281,7 +275,7 @@ impl ExecutionPlan for HashJoinExec {
         // JoinType::Full, JoinType::RightAnti types.
         let breaking = left
             || (right
-                && matches!(
+            && matches!(
                     self.join_type,
                     JoinType::Left
                         | JoinType::Full
@@ -377,6 +371,11 @@ impl ExecutionPlan for HashJoinExec {
     ) -> Result<SendableRecordBatchStream> {
         let on_left = self.on.iter().map(|on| on.0.clone()).collect::<Vec<_>>();
         let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
+        if self.mode == PartitionMode::Partitioned && self.left.output_partitioning() != self.right.output_partitioning() {
+            return Err(DataFusionError::Plan(format!(
+                "Invalid HashJoinExec, partition count mismatch between children executors, consider using RepartitionExec",
+            )));
+        }
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
@@ -409,15 +408,17 @@ impl ExecutionPlan for HashJoinExec {
                     Arc::new(self.reservation.clone()),
                 )
             }),
-            PartitionMode::Partitioned => OnceFut::new(collect_left_input(
-                Some(partition),
-                self.random_state.clone(),
-                self.left.clone(),
-                on_left.clone(),
-                context.clone(),
-                join_metrics.clone(),
-                Arc::new(reservation.clone()),
-            )),
+            PartitionMode::Partitioned => {
+                OnceFut::new(collect_left_input(
+                    Some(partition),
+                    self.random_state.clone(),
+                    self.left.clone(),
+                    on_left.clone(),
+                    context.clone(),
+                    join_metrics.clone(),
+                    Arc::new(reservation.clone()),
+                ))
+            }
             PartitionMode::Auto => {
                 return Err(DataFusionError::Plan(format!(
                     "Invalid HashJoinExec, unsupported PartitionMode {:?} in execute()",
@@ -1287,10 +1288,14 @@ impl Stream for HashJoinStream {
 mod tests {
     use std::sync::Arc;
 
-    use super::*;
-    use crate::execution::context::SessionConfig;
-    use crate::physical_expr::expressions::BinaryExpr;
-    use crate::prelude::SessionContext;
+    use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use smallvec::smallvec;
+
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::Literal;
+
     use crate::{
         assert_batches_sorted_eq,
         common::assert_contains,
@@ -1303,16 +1308,14 @@ mod tests {
             memory::MemoryExec,
             repartition::RepartitionExec,
         },
-        test::exec::MockExec,
         test::{build_table_i32, columns},
+        test::exec::MockExec,
     };
-    use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_expr::Operator;
+    use crate::execution::context::SessionConfig;
+    use crate::physical_expr::expressions::BinaryExpr;
+    use crate::prelude::SessionContext;
 
-    use datafusion_common::ScalarValue;
-    use datafusion_physical_expr::expressions::Literal;
-    use smallvec::smallvec;
+    use super::*;
 
     fn build_table(
         a: (&str, &Vec<i32>),
@@ -1459,7 +1462,7 @@ mod tests {
             false,
             task_ctx,
         )
-        .await?;
+            .await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
@@ -1504,7 +1507,7 @@ mod tests {
             false,
             task_ctx,
         )
-        .await?;
+            .await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
@@ -1928,7 +1931,7 @@ mod tests {
             false,
             task_ctx,
         )
-        .await?;
+            .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         let expected = vec![
@@ -1972,7 +1975,7 @@ mod tests {
             false,
             task_ctx,
         )
-        .await?;
+            .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         let expected = vec![
@@ -3005,7 +3008,7 @@ mod tests {
                 &join_type,
                 false,
             )
-            .unwrap();
+                .unwrap();
             let session_ctx = SessionContext::new();
             let task_ctx = session_ctx.task_ctx();
 
@@ -3090,7 +3093,7 @@ mod tests {
                 left_batch.schema(),
                 None,
             )
-            .unwrap(),
+                .unwrap(),
         );
         let right_batch = build_table_i32(
             ("a2", &vec![10, 11]),
@@ -3103,7 +3106,7 @@ mod tests {
                 right_batch.schema(),
                 None,
             )
-            .unwrap(),
+                .unwrap(),
         );
         let on = vec![(
             Column::new_with_schema("b1", &left_batch.schema())?,
