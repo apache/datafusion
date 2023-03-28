@@ -1387,10 +1387,10 @@ as values
  ('2018-11-13T17:11:10.011375885995', 'Row 0'),
  ('2011-12-13T11:13:10.12345', 'Row 1'),
  (null, 'Row 2'),
- ('2021-1-1T05:11:10.432', 'Row 3');
+ ('2021-01-01T05:11:10.432', 'Row 3');
 
 
-statement error DataFusion error: Arrow error: Parser error: Error parsing timestamp from '2021-1-1T05:11:10.432': error parsing date
+statement ok
 create table t as
 select
   arrow_cast(column1, 'Timestamp(Nanosecond, None)') as nanos,
@@ -1401,38 +1401,49 @@ select
 from t_source;
 
 # Demonstate the contents
-query error DataFusion error: Error during planning: table 'datafusion.public.t' not found
+query PPPPT
 select * from t;
+----
+2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10 Row 0
+2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10 Row 1
+NULL NULL NULL NULL Row 2
+2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10 Row 3
 
 
 # aggregate_timestamps_sum
-statement error DataFusion error: Error during planning: table 'datafusion.public.t' not found
+statement error Error during planning: The function Sum does not support inputs of type Timestamp\(Nanosecond, None\)
 SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t;
 
 # aggregate_timestamps_count
-query error DataFusion error: Error during planning: table 'datafusion.public.t' not found
+query IIII
 SELECT count(nanos), count(micros), count(millis), count(secs) FROM t;
+----
+3 3 3 3
 
 
 # aggregate_timestamps_min
-query error DataFusion error: Error during planning: table 'datafusion.public.t' not found
+query PPPP
 SELECT min(nanos), min(micros), min(millis), min(secs) FROM t;
+----
+2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10
 
 # aggregate_timestamps_max
-query error DataFusion error: Error during planning: table 'datafusion.public.t' not found
+query PPPP
 SELECT max(nanos), max(micros), max(millis), max(secs) FROM t;
+----
+2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10
 
 
 
 # aggregate_timestamps_avg
-statement error DataFusion error: Error during planning: table 'datafusion.public.t' not found
+statement error Error during planning: The function Avg does not support inputs of type Timestamp\(Nanosecond, None\).
 SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t
 
 
 statement ok
 drop table t_source;
 
-statement error DataFusion error: Execution error: Table 't' doesn't exist.
+statement ok
 drop table t;
 
 # All supported time types
