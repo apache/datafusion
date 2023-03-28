@@ -1058,8 +1058,12 @@ pub fn build_join_schema(
             let right_fields_nullable: Vec<DFField> = right_fields
                 .iter()
                 .map(|f| {
-                    let ff = f.field().clone().with_nullable(true);
-                    DFField::from_qualified(f.qualifier().unwrap(), ff)
+                    let field = f.field().clone().with_nullable(true);
+                    if let Some(q) = f.qualifier() {
+                        DFField::from_qualified(q, field)
+                    } else {
+                        DFField::from(field)
+                    }
                 })
                 .collect();
             left_fields
