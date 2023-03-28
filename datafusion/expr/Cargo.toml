@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-expr"
 description = "Logical plan and expression representation for DataFusion query engine"
-keywords = [ "datafusion", "logical", "plan", "expressions" ]
+keywords = ["datafusion", "logical", "plan", "expressions"]
 version = { workspace = true }
 edition = { workspace = true }
 readme = { workspace = true }
@@ -36,7 +36,7 @@ path = "src/lib.rs"
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-arrow = { workspace = true, default-features = false }
+arrow = { workspace = true }
 datafusion-common = { path = "../common", version = "21.1.0" }
 sqlparser = "0.32"
 
