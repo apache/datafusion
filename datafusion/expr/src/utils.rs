@@ -58,7 +58,7 @@ pub fn contains_grouping_set(group_expr: &[Expr]) -> bool {
     group_expr.iter().any(|e| matches!(e, Expr::GroupingSet(_)))
 }
 
-/// Check whether the group_expr contains [Expr::GroupingSet] without any hidden exprs.
+/// Check whether the group_expr contains [Expr::GroupingSet] without any hidden expr.
 pub fn contains_grouping_set_without_hidden_expr(group_expr: &[Expr]) -> bool {
     group_expr.iter().any(|e| matches!(e, Expr::GroupingSet(grouping_set) if !grouping_set.contains_hidden_expr()))
 }

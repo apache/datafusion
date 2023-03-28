@@ -21,9 +21,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::utils::{
-    add_hidden_grouping_set_expr,
-    contains_grouping_set_without_hidden_expr, distinct_group_exprs,
-    enumerate_grouping_sets, generate_grouping_ids,
+    add_hidden_grouping_set_expr, contains_grouping_set_without_hidden_expr,
+    distinct_group_exprs, enumerate_grouping_sets, generate_grouping_ids,
 };
 use datafusion_expr::{
     aggregate_function, bitwise_and, bitwise_shift_right, cast, lit, Projection,
