@@ -2290,7 +2290,7 @@ mod tests {
         ))
     }
 
-    // Created a sorted parquet exec
+    // Created a sorted Csv exec
     fn csv_exec_sorted(
         schema: &SchemaRef,
         sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
