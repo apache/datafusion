@@ -17,7 +17,7 @@
 
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
-use arrow::array::{Array, ArrayRef};
+use arrow::array::{Array, ArrayData, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
 use arrow::compute::{binary, unary};
 use arrow::datatypes::{
     ArrowNativeTypeOp, DataType, Date32Type, Date64Type, IntervalDayTimeType,
@@ -26,7 +26,9 @@ use arrow::datatypes::{
     TimestampSecondType,
 };
 use arrow::record_batch::RecordBatch;
-use arrow_schema::IntervalUnit;
+use arrow::util::bit_mask::combine_option_bitmap;
+use arrow_buffer::Buffer;
+use arrow_schema::{ArrowError, IntervalUnit};
 use chrono::NaiveDateTime;
 use datafusion_common::cast::*;
 use datafusion_common::scalar::*;
@@ -253,26 +255,20 @@ macro_rules! ts_sub_op {
     ($lhs:ident, $rhs:ident, $lhs_tz:ident, $rhs_tz:ident, $coef:expr, $caster:expr, $op:expr, $ts_unit:expr, $mode:expr, $type_in:ty, $type_out:ty) => {{
         let prim_array_lhs = $caster(&$lhs)?;
         let prim_array_rhs = $caster(&$rhs)?;
-        let ret = Arc::new(binary::<$type_in, $type_in, _, $type_out>(
+        let ret = Arc::new(try_binary_op::<$type_in, $type_in, _, $type_out>(
             prim_array_lhs,
             prim_array_rhs,
             |ts1, ts2| {
-                $op(
-                    $ts_unit(
-                        &with_timezone_to_naive_datetime::<$mode>(
-                            ts1.mul_wrapping($coef),
-                            &$lhs_tz,
-                        )
-                        .expect("{ts1} timestamp cannot build a DateTime object"),
-                    ),
-                    $ts_unit(
-                        &with_timezone_to_naive_datetime::<$mode>(
-                            ts2.mul_wrapping($coef),
-                            &$rhs_tz,
-                        )
-                        .expect("{ts2} timestamp cannot build a DateTime object"),
-                    ),
-                )
+                Ok($op(
+                    $ts_unit(&with_timezone_to_naive_datetime::<$mode>(
+                        ts1.mul_wrapping($coef),
+                        &$lhs_tz,
+                    )?),
+                    $ts_unit(&with_timezone_to_naive_datetime::<$mode>(
+                        ts2.mul_wrapping($coef),
+                        &$rhs_tz,
+                    )?),
+                ))
             },
         )?) as ArrayRef;
         ret
@@ -348,6 +344,63 @@ pub fn evaluate_temporal_arrays(
         )))?,
     };
     Ok(ColumnarValue::Array(ret))
+}
+
+#[inline]
+unsafe fn build_primitive_array<O: ArrowPrimitiveType>(
+    len: usize,
+    buffer: Buffer,
+    null_count: usize,
+    null_buffer: Option<Buffer>,
+) -> PrimitiveArray<O> {
+    PrimitiveArray::from(ArrayData::new_unchecked(
+        O::DATA_TYPE,
+        len,
+        Some(null_count),
+        null_buffer,
+        0,
+        vec![buffer],
+        vec![],
+    ))
+}
+
+pub fn try_binary_op<A, B, F, O>(
+    a: &PrimitiveArray<A>,
+    b: &PrimitiveArray<B>,
+    op: F,
+) -> Result<PrimitiveArray<O>, ArrowError>
+where
+    A: ArrowPrimitiveType,
+    B: ArrowPrimitiveType,
+    O: ArrowPrimitiveType,
+    F: Fn(A::Native, B::Native) -> Result<O::Native, ArrowError>,
+{
+    if a.len() != b.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform binary operation on arrays of different length".to_string(),
+        ));
+    }
+    let len = a.len();
+
+    if a.is_empty() {
+        return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
+    }
+
+    let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len);
+    let null_count = null_buffer
+        .as_ref()
+        .map(|x| len - x.count_set_bits_offset(0, len))
+        .unwrap_or_default();
+
+    let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
+    // JUSTIFICATION
+    //  Benefit
+    //      ~60% speedup
+    //  Soundness
+    //      `values` is an iterator with a known size from a PrimitiveArray
+    let buffer = unsafe { Buffer::try_from_trusted_len_iter(values) }?;
+
+    Ok(unsafe { build_primitive_array(len, buffer, null_count, null_buffer) })
 }
 
 /// Performs a timestamp subtraction operation on two arrays and returns the resulting array.
