@@ -19,7 +19,6 @@
 //! queried by DataFusion. This allows data to be pre-loaded into memory and then
 //! repeatedly queried without incurring additional file I/O overhead.
 
-use datafusion_common::utils::equivalent_names_and_types;
 use futures::{StreamExt, TryStreamExt};
 use std::any::Any;
 use std::sync::Arc;
@@ -55,7 +54,7 @@ impl MemTable {
         if partitions
             .iter()
             .flatten()
-            .all(|batches| equivalent_names_and_types(&schema, batches.schema()))
+            .all(|batches| schema.contains(&batches.schema()))
         {
             Ok(Self {
                 schema,

@@ -1041,20 +1041,40 @@ pub fn build_join_schema(
     right: &DFSchema,
     join_type: &JoinType,
 ) -> Result<DFSchema> {
+    let right_fields = right.fields();
+    let left_fields = left.fields();
+
     let fields: Vec<DFField> = match join_type {
-        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            let right_fields = right.fields().iter();
-            let left_fields = left.fields().iter();
+        JoinType::Inner | JoinType::Full | JoinType::Right => {
             // left then right
-            left_fields.chain(right_fields).cloned().collect()
+            left_fields
+                .iter()
+                .chain(right_fields.iter())
+                .cloned()
+                .collect()
+        }
+        JoinType::Left => {
+            // left then right, right set to nullable in case of not matched scenario
+            let right_fields_nullable: Vec<DFField> = right_fields
+                .iter()
+                .map(|f| {
+                    let ff = f.field().clone().with_nullable(true);
+                    DFField::from_qualified(f.qualifier().unwrap(), ff)
+                })
+                .collect();
+            left_fields
+                .iter()
+                .chain(&right_fields_nullable)
+                .cloned()
+                .collect()
         }
         JoinType::LeftSemi | JoinType::LeftAnti => {
             // Only use the left side for the schema
-            left.fields().clone()
+            left_fields.clone()
         }
         JoinType::RightSemi | JoinType::RightAnti => {
             // Only use the right side for the schema
-            right.fields().clone()
+            right_fields.clone()
         }
     };
 
