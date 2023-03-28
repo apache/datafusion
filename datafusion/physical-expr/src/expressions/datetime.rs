@@ -259,14 +259,16 @@ macro_rules! ts_sub_op {
             prim_array_lhs,
             prim_array_rhs,
             |ts1, ts2| {
+                let (lhs_tz, rhs_tz) =
+                    (parse_timezones($lhs_tz), parse_timezones($rhs_tz));
                 Ok($op(
                     $ts_unit(&with_timezone_to_naive_datetime::<$mode>(
                         ts1.mul_wrapping($coef),
-                        &$lhs_tz,
+                        &lhs_tz,
                     )?),
                     $ts_unit(&with_timezone_to_naive_datetime::<$mode>(
                         ts2.mul_wrapping($coef),
-                        &$rhs_tz,
+                        &rhs_tz,
                     )?),
                 ))
             },
@@ -302,13 +304,10 @@ macro_rules! ts_interval_op {
     ($lhs:ident, $rhs:ident, $caster1:expr, $caster2:expr, $op:expr, $sign:ident, $type_in1:ty, $type_in2:ty) => {{
         let prim_array_lhs = $caster1(&$lhs)?;
         let prim_array_rhs = $caster2(&$rhs)?;
-        let ret = Arc::new(binary::<$type_in1, $type_in2, _, $type_in1>(
+        let ret = Arc::new(try_binary_op::<$type_in1, $type_in2, _, $type_in1>(
             prim_array_lhs,
             prim_array_rhs,
-            |ts, interval| {
-                $op(ts, interval as i128, $sign)
-                    .expect("error in {$sign} operation of interval with timestamp")
-            },
+            |ts, interval| Ok($op(ts, interval as i128, $sign)?),
         )?) as ArrayRef;
         ret
     }};

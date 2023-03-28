@@ -981,8 +981,11 @@ fn ts_sub_to_interval<const TIME_MOD: bool>(
     lhs_tz: &Option<String>,
     rhs_tz: &Option<String>,
 ) -> Result<ScalarValue> {
-    let lhs_dt = with_timezone_to_naive_datetime::<TIME_MOD>(lhs_ts, lhs_tz)?;
-    let rhs_dt = with_timezone_to_naive_datetime::<TIME_MOD>(rhs_ts, rhs_tz)?;
+    let (parsed_lhs_tz, parsed_rhs_tz) =
+        (parse_timezones(lhs_tz), parse_timezones(rhs_tz));
+
+    let lhs_dt = with_timezone_to_naive_datetime::<TIME_MOD>(lhs_ts, &parsed_lhs_tz)?;
+    let rhs_dt = with_timezone_to_naive_datetime::<TIME_MOD>(rhs_ts, &parsed_rhs_tz)?;
     let delta_secs = lhs_dt.signed_duration_since(rhs_dt);
 
     match TIME_MOD {
@@ -1008,12 +1011,27 @@ fn ts_sub_to_interval<const TIME_MOD: bool>(
     }
 }
 
+// This function parses the timezone from string to Tz.
+// If it cannot parse or timezone field is [`None`], it returns [`None`].
+pub fn parse_timezones(tz: &Option<String>) -> Option<Tz> {
+    if let Some(tz) = tz {
+        let parsed_tz: Option<Tz> = FromStr::from_str(tz)
+            .map_err(|_| {
+                DataFusionError::Execution("cannot parse given timezone".to_string())
+            })
+            .ok();
+        parsed_tz
+    } else {
+        None
+    }
+}
+
 /// This function creates the [`NaiveDateTime`] object corresponding to the
 /// given timestamp using the units (tick size) implied by argument `mode`.
 #[inline]
 pub fn with_timezone_to_naive_datetime<const TIME_MODE: bool>(
     ts: i64,
-    tz: &Option<String>,
+    tz: &Option<Tz>,
 ) -> Result<NaiveDateTime> {
     let datetime = if TIME_MODE == MILLISECOND_MODE {
         ticks_to_naive_datetime::<1_000_000>(ts)
@@ -1021,10 +1039,7 @@ pub fn with_timezone_to_naive_datetime<const TIME_MODE: bool>(
         ticks_to_naive_datetime::<1>(ts)
     }?;
 
-    if let Some(tz) = tz {
-        let parsed_tz: Tz = FromStr::from_str(tz).map_err(|_| {
-            DataFusionError::Execution("cannot parse given timezone".to_string())
-        })?;
+    if let Some(parsed_tz) = tz {
         let offset = parsed_tz
             .offset_from_local_datetime(&datetime)
             .single()
