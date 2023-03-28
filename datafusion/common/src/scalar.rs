@@ -961,40 +961,31 @@ macro_rules! get_sign {
     };
 }
 
-#[derive(Clone, Copy)]
-pub enum TimestampMode {
-    Milli,
-    Nano,
-}
-
-#[derive(Clone, Copy)]
-pub enum IntervalMode {
-    YM,
-    DT,
-    MDN,
-}
+pub const YM_MODE: i8 = 0;
+pub const DT_MODE: i8 = 1;
+pub const MDN_MODE: i8 = 2;
 
 pub const MILLISECOND_MODE: bool = false;
 pub const NANOSECOND_MODE: bool = true;
 /// This function computes subtracts `rhs_ts` from `lhs_ts`, taking timezones
 /// into account when given. Units of the resulting interval is specified by
-/// the constant `INTERVAL_MODE`.
+/// the constant `TIME_MODE`.
 /// The default behavior of Datafusion is the following:
 /// - When subtracting timestamps at seconds/milliseconds precision, the output
 ///   interval will have the type [`IntervalDayTimeType`].
 /// - When subtracting timestamps at microseconds/nanoseconds precision, the
 ///   output interval will have the type [`IntervalMonthDayNanoType`].
-fn ts_sub_to_interval<const INTERVAL_MODE: bool>(
+fn ts_sub_to_interval<const TIME_MOD: bool>(
     lhs_ts: i64,
     rhs_ts: i64,
     lhs_tz: &Option<String>,
     rhs_tz: &Option<String>,
 ) -> Result<ScalarValue> {
-    let lhs_dt = with_timezone_to_naive_datetime::<INTERVAL_MODE>(lhs_ts, lhs_tz)?;
-    let rhs_dt = with_timezone_to_naive_datetime::<INTERVAL_MODE>(rhs_ts, rhs_tz)?;
+    let lhs_dt = with_timezone_to_naive_datetime::<TIME_MOD>(lhs_ts, lhs_tz)?;
+    let rhs_dt = with_timezone_to_naive_datetime::<TIME_MOD>(rhs_ts, rhs_tz)?;
     let delta_secs = lhs_dt.signed_duration_since(rhs_dt);
 
-    match INTERVAL_MODE {
+    match TIME_MOD {
         MILLISECOND_MODE => {
             let as_millisecs = delta_secs.num_milliseconds();
             Ok(ScalarValue::new_interval_dt(
@@ -1020,11 +1011,11 @@ fn ts_sub_to_interval<const INTERVAL_MODE: bool>(
 /// This function creates the [`NaiveDateTime`] object corresponding to the
 /// given timestamp using the units (tick size) implied by argument `mode`.
 #[inline]
-pub fn with_timezone_to_naive_datetime<const INTERVAL_MODE: bool>(
+pub fn with_timezone_to_naive_datetime<const TIME_MODE: bool>(
     ts: i64,
     tz: &Option<String>,
 ) -> Result<NaiveDateTime> {
-    let datetime = if INTERVAL_MODE == MILLISECOND_MODE {
+    let datetime = if TIME_MODE == MILLISECOND_MODE {
         ticks_to_naive_datetime::<1_000_000>(ts)
     } else {
         ticks_to_naive_datetime::<1>(ts)
@@ -1084,13 +1075,12 @@ pub fn seconds_add(ts_s: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
 }
 
 #[inline]
-pub fn seconds_add_array(
+pub fn seconds_add_array<const INTERVAL_MODE: i8>(
     ts_s: i64,
     interval: i128,
     sign: i32,
-    interval_mode: IntervalMode,
 ) -> Result<i64> {
-    do_date_time_math_array(ts_s, 0, interval, sign, interval_mode)
+    do_date_time_math_array::<INTERVAL_MODE>(ts_s, 0, interval, sign)
         .map(|dt| dt.timestamp())
 }
 
@@ -1102,15 +1092,14 @@ pub fn milliseconds_add(ts_ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i
 }
 
 #[inline]
-pub fn milliseconds_add_array(
+pub fn milliseconds_add_array<const INTERVAL_MODE: i8>(
     ts_ms: i64,
     interval: i128,
     sign: i32,
-    interval_mode: IntervalMode,
 ) -> Result<i64> {
     let secs = ts_ms / 1000;
     let nsecs = ((ts_ms % 1000) * 1_000_000) as u32;
-    do_date_time_math_array(secs, nsecs, interval, sign, interval_mode)
+    do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs, interval, sign)
         .map(|dt| dt.timestamp_millis())
 }
 
@@ -1122,15 +1111,14 @@ pub fn microseconds_add(ts_us: i64, scalar: &ScalarValue, sign: i32) -> Result<i
 }
 
 #[inline]
-pub fn microseconds_add_array(
+pub fn microseconds_add_array<const INTERVAL_MODE: i8>(
     ts_us: i64,
     interval: i128,
     sign: i32,
-    interval_mode: IntervalMode,
 ) -> Result<i64> {
     let secs = ts_us / 1_000_000;
     let nsecs = ((ts_us % 1_000_000) * 1000) as u32;
-    do_date_time_math_array(secs, nsecs, interval, sign, interval_mode)
+    do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs, interval, sign)
         .map(|dt| dt.timestamp_nanos() / 1000)
 }
 
@@ -1142,15 +1130,14 @@ pub fn nanoseconds_add(ts_ns: i64, scalar: &ScalarValue, sign: i32) -> Result<i6
 }
 
 #[inline]
-pub fn nanoseconds_add_array(
+pub fn nanoseconds_add_array<const INTERVAL_MODE: i8>(
     ts_ns: i64,
     interval: i128,
     sign: i32,
-    interval_mode: IntervalMode,
 ) -> Result<i64> {
     let secs = ts_ns / 1_000_000_000;
     let nsecs = (ts_ns % 1_000_000_000) as u32;
-    do_date_time_math_array(secs, nsecs, interval, sign, interval_mode)
+    do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs, interval, sign)
         .map(|dt| dt.timestamp_nanos())
 }
 
@@ -1199,19 +1186,18 @@ fn do_date_time_math(
 }
 
 #[inline]
-fn do_date_time_math_array(
+fn do_date_time_math_array<const INTERVAL_MODE: i8>(
     secs: i64,
     nsecs: u32,
     interval: i128,
     sign: i32,
-    interval_mode: IntervalMode,
 ) -> Result<NaiveDateTime> {
     let prior = NaiveDateTime::from_timestamp_opt(secs, nsecs).ok_or_else(|| {
         DataFusionError::Internal(format!(
             "Could not conert to NaiveDateTime: secs {secs} nsecs {nsecs}"
         ))
     })?;
-    do_date_math_array(prior, interval, sign, interval_mode)
+    do_date_math_array::<_, INTERVAL_MODE>(prior, interval, sign)
 }
 
 fn do_date_math<D>(prior: D, scalar: &ScalarValue, sign: i32) -> Result<D>
@@ -1228,19 +1214,23 @@ where
     })
 }
 
-fn do_date_math_array<D>(
+fn do_date_math_array<D, const INTERVAL_MODE: i8>(
     prior: D,
     interval: i128,
     sign: i32,
-    interval_mode: IntervalMode,
 ) -> Result<D>
 where
     D: Datelike + Add<Duration, Output = D>,
 {
-    Ok(match interval_mode {
-        IntervalMode::DT => add_day_time(prior, interval as i64, sign),
-        IntervalMode::YM => shift_months(prior, interval as i32 * sign),
-        IntervalMode::MDN => add_m_d_nano(prior, interval, sign),
+    Ok(match INTERVAL_MODE {
+        YM_MODE => shift_months(prior, interval as i32 * sign),
+        DT_MODE => add_day_time(prior, interval as i64, sign),
+        MDN_MODE => add_m_d_nano(prior, interval, sign),
+        _ => {
+            return Err(DataFusionError::Internal(
+                "Undefined interval mode for interval calculations".to_string(),
+            ));
+        }
     })
 }
 

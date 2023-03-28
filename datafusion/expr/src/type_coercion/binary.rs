@@ -149,7 +149,7 @@ pub fn coerce_types(
     match result {
         None => Err(DataFusionError::Plan(
             format!(
-                "'{lhs_type:?} {op} {rhs_type:?}' can't be evaluated because there isn't a common type to coerce the types to"
+                "{lhs_type:?} {op} {rhs_type:?} can't be evaluated because there isn't a common type to coerce the types to"
             ),
         )),
         Some(t) => Ok(t)
@@ -235,10 +235,8 @@ pub fn temporal_add_sub_coercion(
         // if two date/timestamp are being added/subtracted, return an error indicating that the operation is not supported
         (lhs, rhs, _) if (is_date(lhs) || is_timestamp(lhs)) && (is_date(rhs) || is_timestamp(rhs)) => {
             Err(DataFusionError::Plan(format!(
-                "'{:?} {} {:?}' is an unsupported operation. \
-                addition/subtraction on dates/timestamps only supported with interval types
-        ",
-                lhs_type, op, rhs_type
+                "{:?} {:?} is an unsupported operation. addition/subtraction on dates/timestamps only supported with interval types",
+                lhs_type, rhs_type
             )))
         }
         // return None if no coercion is possible
@@ -830,7 +828,7 @@ mod tests {
             coerce_types(&DataType::Float32, &Operator::Plus, &DataType::Utf8);
 
         if let Err(DataFusionError::Plan(e)) = result_type {
-            assert_eq!(e, "'Float32 + Utf8' can't be evaluated because there isn't a common type to coerce the types to");
+            assert_eq!(e, "Float32 + Utf8 can't be evaluated because there isn't a common type to coerce the types to");
             Ok(())
         } else {
             Err(DataFusionError::Internal(
@@ -1011,7 +1009,7 @@ mod tests {
         let err = coerce_types(&DataType::Date32, &Operator::Plus, &DataType::Date64)
             .unwrap_err()
             .to_string();
-        assert_contains!(&err, "'Date32 + Date64' is an unsupported operation. addition/subtraction on dates/timestamps only supported with interval types");
+        assert_contains!(&err, "Date32 Date64 is an unsupported operation. addition/subtraction on dates/timestamps only supported with interval types");
 
         Ok(())
     }

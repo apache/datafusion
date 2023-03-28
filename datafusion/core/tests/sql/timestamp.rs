@@ -1692,6 +1692,7 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
     Ok(())
 }
 
+// Cannot remove to sqllogictest, timezone support is not ready there.
 #[tokio::test]
 async fn timestamp_sub_with_tz() -> Result<()> {
     let ctx = SessionContext::new();
@@ -1714,116 +1715,5 @@ async fn timestamp_sub_with_tz() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn interval_sub() -> Result<()> {
-    let ctx = SessionContext::new();
-    let table_a = make_ts_interval_table()?;
-    ctx.register_table("table_a", table_a)?;
-
-    let sql = "SELECT val, interval_dt1 - interval_dt2 AS interval_diff FROM table_a ORDER BY interval_dt2 - interval_dt1";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----+----------------------------------------------------+",
-        "| val | interval_diff                                      |",
-        "+-----+----------------------------------------------------+",
-        "| 3   | 0 years 0 mons 0 days 83 hours 20 mins 0.001 secs  |",
-        "| 2   | 0 years 0 mons 0 days 55 hours 33 mins 20.002 secs |",
-        "| 1   | 0 years 0 mons 0 days 27 hours 46 mins 40.003 secs |",
-        "+-----+----------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    let sql = "SELECT val, interval_ym1 - interval_ym2 AS interval_diff FROM table_a ORDER BY interval_dt2 - interval_dt1";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----+------------------------------------------------+",
-        "| val | interval_diff                                  |",
-        "+-----+------------------------------------------------+",
-        "| 3   | 1 years 6 mons 0 days 0 hours 0 mins 0.00 secs |",
-        "| 2   | 0 years 1 mons 0 days 0 hours 0 mins 0.00 secs |",
-        "| 1   | 0 years 8 mons 0 days 0 hours 0 mins 0.00 secs |",
-        "+-----+------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    let sql = "SELECT val, interval_mdn1 - interval_mdn2 AS interval_diff FROM table_a ORDER BY interval_dt2 - interval_dt1";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----+---------------------------------------------------------+",
-        "| val | interval_diff                                           |",
-        "+-----+---------------------------------------------------------+",
-        "| 3   | 0 years 0 mons 1 days 0 hours 0 mins -0.999999709 secs  |",
-        "| 2   | 0 years 5 mons 10 days 0 hours 0 mins -0.000999999 secs |",
-        "| 1   | 0 years 3 mons 14 days 0 hours 0 mins 0.000065435 secs  |",
-        "+-----+---------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    let sql = "SELECT val, interval_ym1 - interval_dt2 AS interval_diff FROM table_a ORDER BY interval_dt2 - interval_dt1";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----+----------------------------------------------------------+",
-        "| val | interval_diff                                            |",
-        "+-----+----------------------------------------------------------+",
-        "| 3   | 0 years 23 mons -1 days 0 hours 0 mins -2.000000000 secs |",
-        "| 2   | 0 years 8 mons -1 days 0 hours 0 mins -2.000000000 secs  |",
-        "| 1   | 0 years 11 mons -1 days 0 hours 0 mins -2.000000000 secs |",
-        "+-----+----------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn ts_interval_sub() -> Result<()> {
-    let ctx = SessionContext::new();
-    let table_a = make_ts_interval_table()?;
-    ctx.register_table("table_a", table_a)?;
-
-    let sql = "SELECT val, ts_millisec1 - interval_dt1 AS ts_interval_diff, 
-    ts_sec1 - interval_ym1 AS ts_interval_diff2,  
-    ts_sec1 - interval_mdn2 AS ts_interval_diff3, 
-    ts_nanosec1 - interval_dt2 AS ts_interval_diff4
-    FROM table_a ORDER BY ts_millisec1 - interval_dt1 DESC";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----+-------------------------+---------------------+---------------------+-------------------------------+",
-        "| val | ts_interval_diff        | ts_interval_diff2   | ts_interval_diff3   | ts_interval_diff4             |",
-        "+-----+-------------------------+---------------------+---------------------+-------------------------------+",
-        "| 3   | 2023-10-28T15:13:38.002 | 2021-12-02T03:23:40 | 2023-11-02T03:23:39 | 2023-11-01T02:33:38.003300003 |",
-        "| 2   | 2023-07-06T01:13:37.999 | 2022-11-09T09:20:20 | 2023-07-09T09:20:19 | 2023-07-08T08:46:58.001500004 |",
-        "| 1   | 2023-03-13T11:13:37.999 | 2022-04-15T15:17:00 | 2023-03-15T15:16:59 | 2023-03-14T15:00:18.002200002 |",
-        "+-----+-------------------------+---------------------+---------------------+-------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn interval_ts_add() -> Result<()> {
-    let ctx = SessionContext::new();
-    let table_a = make_ts_interval_table()?;
-    ctx.register_table("table_a", table_a)?;
-
-    let sql = "SELECT val, interval_dt1 + ts_millisec2 AS interval_sum_ts,
-    interval_ym2 + ts_sec1 AS interval_sum_ts2,
-    interval_mdn2 + ts_sec2 AS interval_sum_ts3,
-    interval_mdn1 + ts_nanosec1 AS interval_sum_ts4
-    FROM table_a ORDER BY interval_dt1 + ts_millisec2 DESC";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----+-------------------------+---------------------+---------------------+-------------------------------+",
-        "| val | interval_sum_ts         | interval_sum_ts2    | interval_sum_ts3    | interval_sum_ts4              |",
-        "+-----+-------------------------+---------------------+---------------------+-------------------------------+",
-        "| 3   | 2023-11-06T13:53:42.001 | 2024-04-02T03:23:40 | 2023-11-02T02:33:41 | 2023-11-03T02:33:40.003300294 |",
-        "| 2   | 2023-07-12T16:20:22.002 | 2024-02-09T09:20:20 | 2023-07-09T08:47:00 | 2023-12-19T08:47:00.001500005 |",
-        "| 1   | 2023-03-17T18:47:02.003 | 2023-06-15T15:17:00 | 2023-03-15T15:00:20 | 2023-06-29T15:00:20.002265537 |",
-        "+-----+-------------------------+---------------------+---------------------+-------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
     Ok(())
 }

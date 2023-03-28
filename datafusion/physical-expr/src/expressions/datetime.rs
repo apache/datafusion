@@ -299,13 +299,16 @@ macro_rules! interval_cross_op {
     }};
 }
 macro_rules! ts_interval_op {
-    ($lhs:ident, $rhs:ident, $caster1:expr, $caster2:expr, $op:expr, $sign:ident, $type_in1:ty, $type_in2:ty, $mode:expr) => {{
+    ($lhs:ident, $rhs:ident, $caster1:expr, $caster2:expr, $op:expr, $sign:ident, $type_in1:ty, $type_in2:ty) => {{
         let prim_array_lhs = $caster1(&$lhs)?;
         let prim_array_rhs = $caster2(&$rhs)?;
         let ret = Arc::new(binary::<$type_in1, $type_in2, _, $type_in1>(
             prim_array_lhs,
             prim_array_rhs,
-            |ts, interval| $op(ts, interval as i128, $sign, $mode).unwrap(),
+            |ts, interval| {
+                $op(ts, interval as i128, $sign)
+                    .expect("error in {$sign} operation of interval with timestamp")
+            },
         )?) as ArrayRef;
         ret
     }};
@@ -628,11 +631,10 @@ fn ts_interval_array_op(
             array_rhs,
             as_timestamp_second_array,
             as_interval_ym_array,
-            seconds_add_array,
+            seconds_add_array::<YM_MODE>,
             sign,
             TimestampSecondType,
-            IntervalYearMonthType,
-            IntervalMode::YM
+            IntervalYearMonthType
         )),
         (
             DataType::Timestamp(TimeUnit::Second, _),
@@ -642,11 +644,10 @@ fn ts_interval_array_op(
             array_rhs,
             as_timestamp_second_array,
             as_interval_dt_array,
-            seconds_add_array,
+            seconds_add_array::<DT_MODE>,
             sign,
             TimestampSecondType,
-            IntervalDayTimeType,
-            IntervalMode::DT
+            IntervalDayTimeType
         )),
         (
             DataType::Timestamp(TimeUnit::Second, _),
@@ -656,11 +657,10 @@ fn ts_interval_array_op(
             array_rhs,
             as_timestamp_second_array,
             as_interval_mdn_array,
-            seconds_add_array,
+            seconds_add_array::<MDN_MODE>,
             sign,
             TimestampSecondType,
-            IntervalMonthDayNanoType,
-            IntervalMode::MDN
+            IntervalMonthDayNanoType
         )),
         (
             DataType::Timestamp(TimeUnit::Millisecond, _),
@@ -670,11 +670,10 @@ fn ts_interval_array_op(
             array_rhs,
             as_timestamp_millisecond_array,
             as_interval_ym_array,
-            milliseconds_add_array,
+            milliseconds_add_array::<YM_MODE>,
             sign,
             TimestampMillisecondType,
-            IntervalYearMonthType,
-            IntervalMode::YM
+            IntervalYearMonthType
         )),
         (
             DataType::Timestamp(TimeUnit::Millisecond, _),
@@ -684,11 +683,10 @@ fn ts_interval_array_op(
             array_rhs,
             as_timestamp_millisecond_array,
             as_interval_dt_array,
-            milliseconds_add_array,
+            milliseconds_add_array::<DT_MODE>,
             sign,
             TimestampMillisecondType,
-            IntervalDayTimeType,
-            IntervalMode::DT
+            IntervalDayTimeType
         )),
         (
             DataType::Timestamp(TimeUnit::Millisecond, _),
@@ -698,11 +696,10 @@ fn ts_interval_array_op(
             array_rhs,
             as_timestamp_millisecond_array,
             as_interval_mdn_array,
-            milliseconds_add_array,
+            milliseconds_add_array::<MDN_MODE>,
             sign,
             TimestampMillisecondType,
-            IntervalMonthDayNanoType,
-            IntervalMode::MDN
+            IntervalMonthDayNanoType
         )),
         (
             DataType::Timestamp(TimeUnit::Microsecond, _),
@@ -712,11 +709,10 @@ fn ts_interval_array_op(
             array_rhs,
             as_timestamp_microsecond_array,
             as_interval_ym_array,
-            microseconds_add_array,
+            microseconds_add_array::<YM_MODE>,
             sign,
             TimestampMicrosecondType,
-            IntervalYearMonthType,
-            IntervalMode::YM
+            IntervalYearMonthType
         )),
         (
             DataType::Timestamp(TimeUnit::Microsecond, _),
@@ -726,11 +722,10 @@ fn ts_interval_array_op(
             array_rhs,
             as_timestamp_microsecond_array,
             as_interval_dt_array,
-            microseconds_add_array,
+            microseconds_add_array::<DT_MODE>,
             sign,
             TimestampMicrosecondType,
-            IntervalDayTimeType,
-            IntervalMode::DT
+            IntervalDayTimeType
         )),
         (
             DataType::Timestamp(TimeUnit::Microsecond, _),
@@ -740,11 +735,10 @@ fn ts_interval_array_op(
             array_rhs,
             as_timestamp_microsecond_array,
             as_interval_mdn_array,
-            microseconds_add_array,
+            microseconds_add_array::<MDN_MODE>,
             sign,
             TimestampMicrosecondType,
-            IntervalMonthDayNanoType,
-            IntervalMode::MDN
+            IntervalMonthDayNanoType
         )),
         (
             DataType::Timestamp(TimeUnit::Nanosecond, _),
@@ -754,11 +748,10 @@ fn ts_interval_array_op(
             array_rhs,
             as_timestamp_nanosecond_array,
             as_interval_ym_array,
-            nanoseconds_add_array,
+            nanoseconds_add_array::<YM_MODE>,
             sign,
             TimestampNanosecondType,
-            IntervalYearMonthType,
-            IntervalMode::YM
+            IntervalYearMonthType
         )),
         (
             DataType::Timestamp(TimeUnit::Nanosecond, _),
@@ -768,11 +761,10 @@ fn ts_interval_array_op(
             array_rhs,
             as_timestamp_nanosecond_array,
             as_interval_dt_array,
-            nanoseconds_add_array,
+            nanoseconds_add_array::<DT_MODE>,
             sign,
             TimestampNanosecondType,
-            IntervalDayTimeType,
-            IntervalMode::DT
+            IntervalDayTimeType
         )),
         (
             DataType::Timestamp(TimeUnit::Nanosecond, _),
@@ -782,11 +774,10 @@ fn ts_interval_array_op(
             array_rhs,
             as_timestamp_nanosecond_array,
             as_interval_mdn_array,
-            nanoseconds_add_array,
+            nanoseconds_add_array::<MDN_MODE>,
             sign,
             TimestampNanosecondType,
-            IntervalMonthDayNanoType,
-            IntervalMode::MDN
+            IntervalMonthDayNanoType
         )),
         (_, _) => Err(DataFusionError::Execution(format!(
             "Invalid array types for Timestamp Interval operation: {:?} {} {:?}",
