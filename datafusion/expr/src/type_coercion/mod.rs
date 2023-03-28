@@ -31,8 +31,12 @@
 //! i64. However, i64 -> i32 is never performed as there are i64
 //! values which can not be represented by i32 values.
 
-use arrow::datatypes::DataType;
+pub mod aggregates;
+pub mod binary;
+pub mod functions;
+pub mod other;
 
+use arrow::datatypes::DataType;
 /// Determine whether the given data type `dt` represents unsigned numeric values.
 pub fn is_signed_numeric(dt: &DataType) -> bool {
     matches!(
@@ -81,8 +85,3 @@ pub fn is_date(dt: &DataType) -> bool {
 pub fn is_utf8_or_large_utf8(dt: &DataType) -> bool {
     matches!(dt, DataType::Utf8 | DataType::LargeUtf8)
 }
-
-pub mod aggregates;
-pub mod binary;
-pub mod functions;
-pub mod other;

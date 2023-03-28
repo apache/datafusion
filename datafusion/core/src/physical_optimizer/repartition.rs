@@ -16,6 +16,7 @@
 // under the License.
 
 //! Repartition optimizer that introduces repartition nodes to increase the level of parallelism available
+use datafusion_common::tree_node::Transformed;
 use std::sync::Arc;
 
 use super::optimizer::PhysicalOptimizerRule;
@@ -170,12 +171,12 @@ fn optimize_partitions(
     would_benefit: bool,
     repartition_file_scans: bool,
     repartition_file_min_size: usize,
-) -> Result<Arc<dyn ExecutionPlan>> {
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     // Recurse into children bottom-up (attempt to repartition as
     // early as possible)
     let new_plan = if plan.children().is_empty() {
         // leaf node - don't replace children
-        plan
+        Transformed::No(plan)
     } else {
         let children = plan
             .children()
@@ -205,10 +206,13 @@ fn optimize_partitions(
                     repartition_file_scans,
                     repartition_file_min_size,
                 )
+                .map(Transformed::into)
             })
             .collect::<Result<_>>()?;
         with_new_children_if_necessary(plan, children)?
     };
+
+    let (new_plan, transformed) = new_plan.into_pair();
 
     // decide if we should bother trying to repartition the output of this plan
     let mut could_repartition = match new_plan.output_partitioning() {
@@ -236,24 +240,28 @@ fn optimize_partitions(
 
     // If repartition is not allowed - return plan as it is
     if !repartition_allowed {
-        return Ok(new_plan);
+        return Ok(if transformed {
+            Transformed::Yes(new_plan)
+        } else {
+            Transformed::No(new_plan)
+        });
     }
 
     // For ParquetExec return internally repartitioned version of the plan in case `repartition_file_scans` is set
     if let Some(parquet_exec) = new_plan.as_any().downcast_ref::<ParquetExec>() {
         if repartition_file_scans {
-            return Ok(Arc::new(
+            return Ok(Transformed::Yes(Arc::new(
                 parquet_exec
                     .get_repartitioned(target_partitions, repartition_file_min_size),
-            ));
+            )));
         }
     }
 
     // Otherwise - return plan wrapped up in RepartitionExec
-    Ok(Arc::new(RepartitionExec::try_new(
+    Ok(Transformed::Yes(Arc::new(RepartitionExec::try_new(
         new_plan,
         RoundRobinBatch(target_partitions),
-    )?))
+    )?)))
 }
 
 /// Returns true if `plan` requires any of inputs to be sorted in some
@@ -290,6 +298,7 @@ impl PhysicalOptimizerRule for Repartition {
                 repartition_file_scans,
                 repartition_file_min_size,
             )
+            .map(Transformed::into)
         }
     }
 

@@ -17,12 +17,9 @@
 
 //! Expression rewriter
 
-use crate::expr::{
-    AggregateFunction, Between, BinaryExpr, Case, Cast, GetIndexedField, GroupingSet,
-    Like, Sort, TryCast, WindowFunction,
-};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::Result;
 use datafusion_common::{Column, DFSchema};
 use std::collections::HashMap;
@@ -32,326 +29,18 @@ use std::sync::Arc;
 mod order_by;
 pub use order_by::rewrite_sort_cols_by_aggs;
 
-/// Controls how the [ExprRewriter] recursion should proceed.
-pub enum RewriteRecursion {
-    /// Continue rewrite / visit this expression.
-    Continue,
-    /// Call [ExprRewriter::mutate()] immediately and return.
-    Mutate,
-    /// Do not rewrite / visit the children of this expression.
-    Stop,
-    /// Keep recursive but skip mutate on this expression
-    Skip,
-}
-
-/// Trait for potentially recursively rewriting an [`Expr`] expression
-/// tree. When passed to `Expr::rewrite`, `ExpressionVisitor::mutate` is
-/// invoked recursively on all nodes of an expression tree.
-///
-/// Performs a depth first walk of an expression and its children
-/// to rewrite an expression, consuming `self` producing a new
-/// [`Expr`].
-///
-/// Implements a modified version of the [visitor
-/// pattern](https://en.wikipedia.org/wiki/Visitor_pattern) to
-/// separate algorithms from the structure of the `Expr` tree and
-/// make it easier to write new, efficient expression
-/// transformation algorithms.
-///
-/// For an expression tree such as
-/// ```text
-/// BinaryExpr (GT)
-///    left: Column("foo")
-///    right: Column("bar")
-/// ```
-///
-/// The nodes are visited using the following order
-/// ```text
-/// pre_visit(BinaryExpr(GT))
-/// pre_visit(Column("foo"))
-/// mutate(Column("foo"))
-/// pre_visit(Column("bar"))
-/// mutate(Column("bar"))
-/// mutate(BinaryExpr(GT))
-/// ```
-///
-/// If an `Err` result is returned, recursion is stopped immediately
-///
-/// If [`false`] is returned on a call to pre_visit, no
-/// children of that expression are visited, nor is mutate
-/// called on that expression
-///
-/// # See Also:
-/// * [`Expr::accept`] to drive a rewriter through an [`Expr`]
-/// * [`rewrite_expr`]: For rewriting an [`Expr`] using functions
-///
-/// [`Expr::accept`]: crate::expr_visitor::ExprVisitable::accept
-pub trait ExprRewriter<E: ExprRewritable = Expr>: Sized {
-    /// Invoked before any children of `expr` are rewritten /
-    /// visited. Default implementation returns `Ok(RewriteRecursion::Continue)`
-    fn pre_visit(&mut self, _expr: &E) -> Result<RewriteRecursion> {
-        Ok(RewriteRecursion::Continue)
-    }
-
-    /// Invoked after all children of `expr` have been mutated and
-    /// returns a potentially modified expr.
-    fn mutate(&mut self, expr: E) -> Result<E>;
-}
-
-/// A trait for marking types that are rewritable by [ExprRewriter]
-pub trait ExprRewritable: Sized {
-    /// Rewrite the expression tree using the given [ExprRewriter]
-    fn rewrite<R: ExprRewriter<Self>>(self, rewriter: &mut R) -> Result<Self>;
-}
-
-impl ExprRewritable for Expr {
-    /// See comments on [`ExprRewritable`] for details
-    fn rewrite<R>(self, rewriter: &mut R) -> Result<Self>
-    where
-        R: ExprRewriter<Self>,
-    {
-        let need_mutate = match rewriter.pre_visit(&self)? {
-            RewriteRecursion::Mutate => return rewriter.mutate(self),
-            RewriteRecursion::Stop => return Ok(self),
-            RewriteRecursion::Continue => true,
-            RewriteRecursion::Skip => false,
-        };
-
-        // recurse into all sub expressions(and cover all expression types)
-        let expr = match self {
-            Expr::Alias(expr, name) => Expr::Alias(rewrite_boxed(expr, rewriter)?, name),
-            Expr::Column(_) => self.clone(),
-            Expr::OuterReferenceColumn(_, _) => self.clone(),
-            Expr::Exists { .. } => self.clone(),
-            Expr::InSubquery {
-                expr,
-                subquery,
-                negated,
-            } => Expr::InSubquery {
-                expr: rewrite_boxed(expr, rewriter)?,
-                subquery,
-                negated,
-            },
-            Expr::ScalarSubquery(_) => self.clone(),
-            Expr::ScalarVariable(ty, names) => Expr::ScalarVariable(ty, names),
-            Expr::Literal(value) => Expr::Literal(value),
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                Expr::BinaryExpr(BinaryExpr::new(
-                    rewrite_boxed(left, rewriter)?,
-                    op,
-                    rewrite_boxed(right, rewriter)?,
-                ))
-            }
-            Expr::Like(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            }) => Expr::Like(Like::new(
-                negated,
-                rewrite_boxed(expr, rewriter)?,
-                rewrite_boxed(pattern, rewriter)?,
-                escape_char,
-            )),
-            Expr::ILike(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            }) => Expr::ILike(Like::new(
-                negated,
-                rewrite_boxed(expr, rewriter)?,
-                rewrite_boxed(pattern, rewriter)?,
-                escape_char,
-            )),
-            Expr::SimilarTo(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            }) => Expr::SimilarTo(Like::new(
-                negated,
-                rewrite_boxed(expr, rewriter)?,
-                rewrite_boxed(pattern, rewriter)?,
-                escape_char,
-            )),
-            Expr::Not(expr) => Expr::Not(rewrite_boxed(expr, rewriter)?),
-            Expr::IsNotNull(expr) => Expr::IsNotNull(rewrite_boxed(expr, rewriter)?),
-            Expr::IsNull(expr) => Expr::IsNull(rewrite_boxed(expr, rewriter)?),
-            Expr::IsTrue(expr) => Expr::IsTrue(rewrite_boxed(expr, rewriter)?),
-            Expr::IsFalse(expr) => Expr::IsFalse(rewrite_boxed(expr, rewriter)?),
-            Expr::IsUnknown(expr) => Expr::IsUnknown(rewrite_boxed(expr, rewriter)?),
-            Expr::IsNotTrue(expr) => Expr::IsNotTrue(rewrite_boxed(expr, rewriter)?),
-            Expr::IsNotFalse(expr) => Expr::IsNotFalse(rewrite_boxed(expr, rewriter)?),
-            Expr::IsNotUnknown(expr) => {
-                Expr::IsNotUnknown(rewrite_boxed(expr, rewriter)?)
-            }
-            Expr::Negative(expr) => Expr::Negative(rewrite_boxed(expr, rewriter)?),
-            Expr::Between(Between {
-                expr,
-                negated,
-                low,
-                high,
-            }) => Expr::Between(Between::new(
-                rewrite_boxed(expr, rewriter)?,
-                negated,
-                rewrite_boxed(low, rewriter)?,
-                rewrite_boxed(high, rewriter)?,
-            )),
-            Expr::Case(case) => {
-                let expr = rewrite_option_box(case.expr, rewriter)?;
-                let when_then_expr = case
-                    .when_then_expr
-                    .into_iter()
-                    .map(|(when, then)| {
-                        Ok((
-                            rewrite_boxed(when, rewriter)?,
-                            rewrite_boxed(then, rewriter)?,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                let else_expr = rewrite_option_box(case.else_expr, rewriter)?;
-
-                Expr::Case(Case::new(expr, when_then_expr, else_expr))
-            }
-            Expr::Cast(Cast { expr, data_type }) => {
-                Expr::Cast(Cast::new(rewrite_boxed(expr, rewriter)?, data_type))
-            }
-            Expr::TryCast(TryCast { expr, data_type }) => {
-                Expr::TryCast(TryCast::new(rewrite_boxed(expr, rewriter)?, data_type))
-            }
-            Expr::Sort(Sort {
-                expr,
-                asc,
-                nulls_first,
-            }) => Expr::Sort(Sort::new(rewrite_boxed(expr, rewriter)?, asc, nulls_first)),
-            Expr::ScalarFunction { args, fun } => Expr::ScalarFunction {
-                args: rewrite_vec(args, rewriter)?,
-                fun,
-            },
-            Expr::ScalarUDF { args, fun } => Expr::ScalarUDF {
-                args: rewrite_vec(args, rewriter)?,
-                fun,
-            },
-            Expr::WindowFunction(WindowFunction {
-                args,
-                fun,
-                partition_by,
-                order_by,
-                window_frame,
-            }) => Expr::WindowFunction(WindowFunction::new(
-                fun,
-                rewrite_vec(args, rewriter)?,
-                rewrite_vec(partition_by, rewriter)?,
-                rewrite_vec(order_by, rewriter)?,
-                window_frame,
-            )),
-            Expr::AggregateFunction(AggregateFunction {
-                args,
-                fun,
-                distinct,
-                filter,
-            }) => Expr::AggregateFunction(AggregateFunction::new(
-                fun,
-                rewrite_vec(args, rewriter)?,
-                distinct,
-                filter,
-            )),
-            Expr::GroupingSet(grouping_set) => match grouping_set {
-                GroupingSet::Rollup(exprs) => {
-                    Expr::GroupingSet(GroupingSet::Rollup(rewrite_vec(exprs, rewriter)?))
-                }
-                GroupingSet::Cube(exprs) => {
-                    Expr::GroupingSet(GroupingSet::Cube(rewrite_vec(exprs, rewriter)?))
-                }
-                GroupingSet::GroupingSets(lists_of_exprs) => {
-                    Expr::GroupingSet(GroupingSet::GroupingSets(
-                        lists_of_exprs
-                            .iter()
-                            .map(|exprs| rewrite_vec(exprs.clone(), rewriter))
-                            .collect::<Result<Vec<_>>>()?,
-                    ))
-                }
-            },
-            Expr::AggregateUDF { args, fun, filter } => Expr::AggregateUDF {
-                args: rewrite_vec(args, rewriter)?,
-                fun,
-                filter,
-            },
-            Expr::InList {
-                expr,
-                list,
-                negated,
-            } => Expr::InList {
-                expr: rewrite_boxed(expr, rewriter)?,
-                list: rewrite_vec(list, rewriter)?,
-                negated,
-            },
-            Expr::Wildcard => Expr::Wildcard,
-            Expr::QualifiedWildcard { qualifier } => {
-                Expr::QualifiedWildcard { qualifier }
-            }
-            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
-                Expr::GetIndexedField(GetIndexedField::new(
-                    rewrite_boxed(expr, rewriter)?,
-                    key,
-                ))
-            }
-            Expr::Placeholder { id, data_type } => Expr::Placeholder { id, data_type },
-        };
-
-        // now rewrite this expression itself
-        if need_mutate {
-            rewriter.mutate(expr)
-        } else {
-            Ok(expr)
-        }
-    }
-}
-
-#[allow(clippy::boxed_local)]
-fn rewrite_boxed<R>(boxed_expr: Box<Expr>, rewriter: &mut R) -> Result<Box<Expr>>
-where
-    R: ExprRewriter,
-{
-    // TODO: It might be possible to avoid an allocation (the
-    // Box::new) below by reusing the box.
-    let expr: Expr = *boxed_expr;
-    let rewritten_expr = expr.rewrite(rewriter)?;
-    Ok(Box::new(rewritten_expr))
-}
-
-fn rewrite_option_box<R>(
-    option_box: Option<Box<Expr>>,
-    rewriter: &mut R,
-) -> Result<Option<Box<Expr>>>
-where
-    R: ExprRewriter,
-{
-    option_box
-        .map(|expr| rewrite_boxed(expr, rewriter))
-        .transpose()
-}
-
-/// Rewrite a `Vec` of `Expr`s with the rewriter
-fn rewrite_vec<R>(v: Vec<Expr>, rewriter: &mut R) -> Result<Vec<Expr>>
-where
-    R: ExprRewriter,
-{
-    v.into_iter().map(|expr| expr.rewrite(rewriter)).collect()
-}
-
 /// Recursively call [`Column::normalize_with_schemas`] on all [`Column`] expressions
 /// in the `expr` expression tree.
 pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
-    rewrite_expr(expr, |expr| {
-        if let Expr::Column(c) = expr {
-            let col = LogicalPlanBuilder::normalize(plan, c)?;
-            Ok(Expr::Column(col))
-        } else {
-            Ok(expr)
-        }
+    expr.transform(&|expr| {
+        Ok({
+            if let Expr::Column(c) = expr {
+                let col = LogicalPlanBuilder::normalize(plan, c)?;
+                Transformed::Yes(Expr::Column(col))
+            } else {
+                Transformed::No(expr)
+            }
+        })
     })
 }
 
@@ -367,14 +56,15 @@ pub fn normalize_col_with_schemas(
     schemas: &[&Arc<DFSchema>],
     using_columns: &[HashSet<Column>],
 ) -> Result<Expr> {
-    rewrite_expr(expr, |expr| {
-        if let Expr::Column(c) = expr {
-            Ok(Expr::Column(
-                c.normalize_with_schemas(schemas, using_columns)?,
-            ))
-        } else {
-            Ok(expr)
-        }
+    expr.transform(&|expr| {
+        Ok({
+            if let Expr::Column(c) = expr {
+                let col = c.normalize_with_schemas(schemas, using_columns)?;
+                Transformed::Yes(Expr::Column(col))
+            } else {
+                Transformed::No(expr)
+            }
+        })
     })
 }
 
@@ -384,15 +74,16 @@ pub fn normalize_col_with_schemas_and_ambiguity_check(
     schemas: &[&[&DFSchema]],
     using_columns: &[HashSet<Column>],
 ) -> Result<Expr> {
-    rewrite_expr(expr, |expr| {
-        if let Expr::Column(c) = expr {
-            Ok(Expr::Column(c.normalize_with_schemas_and_ambiguity_check(
-                schemas,
-                using_columns,
-            )?))
-        } else {
-            Ok(expr)
-        }
+    expr.transform(&|expr| {
+        Ok({
+            if let Expr::Column(c) = expr {
+                let col =
+                    c.normalize_with_schemas_and_ambiguity_check(schemas, using_columns)?;
+                Transformed::Yes(Expr::Column(col))
+            } else {
+                Transformed::No(expr)
+            }
+        })
     })
 }
 
@@ -409,16 +100,18 @@ pub fn normalize_cols(
 
 /// Recursively replace all [`Column`] expressions in a given expression tree with
 /// `Column` expressions provided by the hash map argument.
-pub fn replace_col(e: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<Expr> {
-    rewrite_expr(e, |expr| {
-        if let Expr::Column(c) = &expr {
-            match replace_map.get(c) {
-                Some(new_c) => Ok(Expr::Column((*new_c).to_owned())),
-                None => Ok(expr),
+pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<Expr> {
+    expr.transform(&|expr| {
+        Ok({
+            if let Expr::Column(c) = &expr {
+                match replace_map.get(c) {
+                    Some(new_c) => Transformed::Yes(Expr::Column((*new_c).to_owned())),
+                    None => Transformed::No(expr),
+                }
+            } else {
+                Transformed::No(expr)
             }
-        } else {
-            Ok(expr)
-        }
+        })
     })
 }
 
@@ -428,15 +121,18 @@ pub fn replace_col(e: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<E
 /// For example, if there were expressions like `foo.bar` this would
 /// rewrite it to just `bar`.
 pub fn unnormalize_col(expr: Expr) -> Expr {
-    rewrite_expr(expr, |expr| {
-        if let Expr::Column(col) = expr {
-            Ok(Expr::Column(Column {
-                relation: None,
-                name: col.name,
-            }))
-        } else {
-            Ok(expr)
-        }
+    expr.transform(&|expr| {
+        Ok({
+            if let Expr::Column(c) = expr {
+                let col = Column {
+                    relation: None,
+                    name: c.name,
+                };
+                Transformed::Yes(Expr::Column(col))
+            } else {
+                Transformed::No(expr)
+            }
+        })
     })
     .expect("Unnormalize is infallable")
 }
@@ -450,59 +146,16 @@ pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
 /// Recursively remove all the ['OuterReferenceColumn'] and return the inside Column
 /// in the expression tree.
 pub fn strip_outer_reference(expr: Expr) -> Expr {
-    rewrite_expr(expr, |expr| {
-        if let Expr::OuterReferenceColumn(_, col) = expr {
-            Ok(Expr::Column(col))
-        } else {
-            Ok(expr)
-        }
+    expr.transform(&|expr| {
+        Ok({
+            if let Expr::OuterReferenceColumn(_, col) = expr {
+                Transformed::Yes(Expr::Column(col))
+            } else {
+                Transformed::No(expr)
+            }
+        })
     })
     .expect("strip_outer_reference is infallable")
-}
-
-/// Implementation of [`ExprRewriter`] that calls a function, for use
-/// with [`rewrite_expr`]
-struct RewriterAdapter<F> {
-    f: F,
-}
-
-impl<F> ExprRewriter for RewriterAdapter<F>
-where
-    F: FnMut(Expr) -> Result<Expr>,
-{
-    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        (self.f)(expr)
-    }
-}
-
-/// Recursively rewrite an [`Expr`] via a function.
-///
-/// Rewrites the expression bottom up by recursively calling `f(expr)`
-/// on `expr`'s children and then on `expr`. See [`ExprRewriter`]
-/// for more details and more options to control the walk.
-///
-/// # Example:
-/// ```
-/// # use datafusion_expr::*;
-/// # use datafusion_expr::expr_rewriter::rewrite_expr;
-/// let expr = col("a") + lit(1);
-///
-/// // rewrite all literals to 42
-/// let rewritten = rewrite_expr(expr, |e| {
-///   if let Expr::Literal(_) = e {
-///     Ok(lit(42))
-///   } else {
-///     Ok(e)
-///   }
-/// }).unwrap();
-///
-/// assert_eq!(rewritten, col("a") + lit(42));
-/// ```
-pub fn rewrite_expr<F>(expr: Expr, f: F) -> Result<Expr>
-where
-    F: FnMut(Expr) -> Result<Expr>,
-{
-    expr.rewrite(&mut RewriterAdapter { f })
 }
 
 /// Returns plan with expressions coerced to types compatible with
@@ -568,6 +221,7 @@ mod test {
     use super::*;
     use crate::{col, lit};
     use arrow::datatypes::DataType;
+    use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
     use datafusion_common::{DFField, DFSchema, ScalarValue};
 
     #[ctor::ctor]
@@ -580,36 +234,24 @@ mod test {
         v: Vec<String>,
     }
 
-    impl ExprRewriter for RecordingRewriter {
-        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-            self.v.push(format!("Mutated {expr:?}"));
-            Ok(expr)
-        }
+    impl TreeNodeRewriter for RecordingRewriter {
+        type N = Expr;
 
         fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
             self.v.push(format!("Previsited {expr:?}"));
             Ok(RewriteRecursion::Continue)
         }
+
+        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+            self.v.push(format!("Mutated {expr:?}"));
+            Ok(expr)
+        }
     }
 
     #[test]
     fn rewriter_rewrite() {
-        let mut rewriter = FooBarRewriter {};
-
-        // rewrites "foo" --> "bar"
-        let rewritten = col("state").eq(lit("foo")).rewrite(&mut rewriter).unwrap();
-        assert_eq!(rewritten, col("state").eq(lit("bar")));
-
-        // doesn't rewrite
-        let rewritten = col("state").eq(lit("baz")).rewrite(&mut rewriter).unwrap();
-        assert_eq!(rewritten, col("state").eq(lit("baz")));
-    }
-
-    /// rewrites all "foo" string literals to "bar"
-    struct FooBarRewriter {}
-
-    impl ExprRewriter for FooBarRewriter {
-        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+        // rewrites all "foo" string literals to "bar"
+        let transformer = |expr: Expr| -> Result<Transformed<Expr>> {
             match expr {
                 Expr::Literal(ScalarValue::Utf8(Some(utf8_val))) => {
                     let utf8_val = if utf8_val == "foo" {
@@ -617,12 +259,20 @@ mod test {
                     } else {
                         utf8_val
                     };
-                    Ok(lit(utf8_val))
+                    Ok(Transformed::Yes(lit(utf8_val)))
                 }
-                // otherwise, return the expression unchanged
-                expr => Ok(expr),
+                // otherwise, return None
+                _ => Ok(Transformed::No(expr)),
             }
-        }
+        };
+
+        // rewrites "foo" --> "bar"
+        let rewritten = col("state").eq(lit("foo")).transform(&transformer).unwrap();
+        assert_eq!(rewritten, col("state").eq(lit("bar")));
+
+        // doesn't rewrite
+        let rewritten = col("state").eq(lit("baz")).transform(&transformer).unwrap();
+        assert_eq!(rewritten, col("state").eq(lit("baz")));
     }
 
     #[test]

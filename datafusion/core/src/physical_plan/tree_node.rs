@@ -15,14 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion execution configuration and runtime structures
+//! This module provides common traits for visiting or rewriting tree nodes easily.
 
-pub mod config;
-pub mod disk_manager;
-pub mod memory_pool;
-pub mod object_store;
-pub mod registry;
-pub mod runtime_env;
-mod task;
+use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion_common::tree_node::{DynTreeNode, Transformed};
+use datafusion_common::Result;
+use std::sync::Arc;
 
-pub use task::TaskContext;
+impl DynTreeNode for dyn ExecutionPlan {
+    fn arc_children(&self) -> Vec<Arc<Self>> {
+        self.children()
+    }
+
+    fn with_new_arc_children(
+        &self,
+        arc_self: Arc<Self>,
+        new_children: Vec<Arc<Self>>,
+    ) -> Result<Arc<Self>> {
+        with_new_children_if_necessary(arc_self, new_children).map(Transformed::into)
+    }
+}

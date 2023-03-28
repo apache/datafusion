@@ -24,10 +24,10 @@ use std::usize;
 
 use arrow::datatypes::SchemaRef;
 
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::Interval;
-use datafusion_physical_expr::rewrite::TreeNodeRewritable;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
@@ -113,8 +113,14 @@ pub fn convert_sort_expr_with_filter_schema(
     if all_columns_are_included {
         // Since we are sure that one to one column mapping includes all columns, we convert
         // the sort expression into a filter expression.
-        let converted_filter_expr =
-            expr.transform_up(&|p| convert_filter_columns(p, &column_map))?;
+        let converted_filter_expr = expr.transform_up(&|p| {
+            convert_filter_columns(p.as_ref(), &column_map).map(|transformed| {
+                match transformed {
+                    Some(transformed) => Transformed::Yes(transformed),
+                    None => Transformed::No(p),
+                }
+            })
+        })?;
         // Search the converted `PhysicalExpr` in filter expression; if an exact
         // match is found, use this sorted expression in graph traversals.
         if check_filter_expr_contains_sort_information(
@@ -156,7 +162,7 @@ pub fn build_filter_input_order(
 /// Convert a physical expression into a filter expression using the given
 /// column mapping information.
 fn convert_filter_columns(
-    input: Arc<dyn PhysicalExpr>,
+    input: &dyn PhysicalExpr,
     column_map: &HashMap<Column, Column>,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     // Attempt to downcast the input expression to a Column type.
@@ -165,7 +171,7 @@ fn convert_filter_columns(
         column_map.get(col).map(|c| Arc::new(c.clone()) as _)
     } else {
         // If the downcast fails, return the input expression as is.
-        Some(input)
+        None
     })
 }
 

@@ -29,6 +29,7 @@ pub mod scalar;
 pub mod stats;
 mod table_reference;
 pub mod test_util;
+pub mod tree_node;
 pub mod utils;
 
 pub use column::Column;
