@@ -1006,6 +1006,9 @@ mod tests {
             &left_decimal_type,
             &right_decimal_type,
         );
+        assert_eq!(DataType::Decimal128(20, 4), result.unwrap());
+        let result =
+            decimal_op_mathematics_type(&op, &left_decimal_type, &right_decimal_type);
         assert_eq!(DataType::Decimal128(31, 7), result.unwrap());
         let op = Operator::Divide;
         let result = coercion_decimal_mathematics_type(
@@ -1013,6 +1016,9 @@ mod tests {
             &left_decimal_type,
             &right_decimal_type,
         );
+        assert_eq!(DataType::Decimal128(20, 4), result.unwrap());
+        let result =
+            decimal_op_mathematics_type(&op, &left_decimal_type, &right_decimal_type);
         assert_eq!(DataType::Decimal128(35, 24), result.unwrap());
         let op = Operator::Modulo;
         let result = coercion_decimal_mathematics_type(
@@ -1020,6 +1026,9 @@ mod tests {
             &left_decimal_type,
             &right_decimal_type,
         );
+        assert_eq!(DataType::Decimal128(20, 4), result.unwrap());
+        let result =
+            decimal_op_mathematics_type(&op, &left_decimal_type, &right_decimal_type);
         assert_eq!(DataType::Decimal128(11, 4), result.unwrap());
     }
 
@@ -1299,19 +1308,19 @@ mod tests {
             DataType::Int32,
             DataType::Decimal128(10, 2),
             Operator::Multiply,
-            DataType::Decimal128(21, 2)
+            DataType::Decimal128(12, 2)
         );
         test_coercion_binary_rule!(
             DataType::Int32,
             DataType::Decimal128(10, 2),
             Operator::Divide,
-            DataType::Decimal128(23, 11)
+            DataType::Decimal128(12, 2)
         );
         test_coercion_binary_rule!(
             DataType::Int32,
             DataType::Decimal128(10, 2),
             Operator::Modulo,
-            DataType::Decimal128(10, 2)
+            DataType::Decimal128(12, 2)
         );
         // TODO add other data type
         Ok(())
