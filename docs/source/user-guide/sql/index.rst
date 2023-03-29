@@ -28,5 +28,6 @@ SQL Reference
    explain
    information_schema
    aggregate_functions
+   selector_functions
    scalar_functions
    sql_status

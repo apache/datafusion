@@ -19,50 +19,293 @@
 
 # Aggregate Functions
 
-Aggregate functions operate on a set of values to compute a single result. Please refer to [PostgreSQL](https://www.postgresql.org/docs/current/functions-aggregate.html) for usage of standard SQL functions.
+Aggregate functions operate on a set of values to compute a single result.
 
 ## General
 
-- min
-- max
-- count
-- avg
-- sum
-- array_agg
+- [avg](#avg)
+- [count](#count)
+- [max](#max)
+- [mean](#mean)
+- [min](#min)
+- [sum](#sum)
+- [array_agg](#array_agg)
+
+### `avg`
+
+Returns the average of numeric values in the specified column.
+
+```sql
+avg(expression)
+```
+
+#### Arguments
+
+- **expression**: Column to operate on.
+
+#### Aliases
+
+- `mean`
+
+### `count`
+
+Returns the number of rows in the specified column.
+
+Count includes _null_ values in the total count.
+To exclude _null_ values from the total count, include `<column> IS NOT NULL`
+in the `WHERE` clause.
+
+```sql
+count(expression)
+```
+
+#### Arguments
+
+- **expression**: Column to operate on.
+
+### `max`
+
+Returns the maximum value in the specified column.
+
+```sql
+max(expression)
+```
+
+#### Arguments
+
+- **expression**: Column to operate on.
+
+### `mean`
+
+_Alias of [avg](#avg)._
+
+### `min`
+
+Returns the minimum value in the specified column.
+
+```sql
+min(expression)
+```
+
+#### Arguments
+
+- **expression**: Column to operate on.
+
+### `sum`
+
+Returns the sum of all values in the specified column.
+
+```sql
+sum(expression)
+```
+
+#### Arguments
+
+- **expression**: Column to operate on.
+
+### `array_agg`
+
+<!-- TODO: Add array_agg documentation -->
 
 ## Statistical
 
-- var / var_samp / var_pop
-- stddev / stddev_samp / stddev_pop
-- covar / covar_samp / covar_pop
-- corr
+- [corr](#corr)
+- [covar](#covar)
+- [covar_pop](#covar_pop)
+- [covar_samp](#covar_samp)
+- [stddev](#stddev)
+- [stddev_pop](#stddev_pop)
+- [stddev_samp](#stddev_samp)
+- [var](#var)
+- [var_pop](#var_pop)
+- [var_samp](#var_samp)
+
+### `corr`
+
+Returns the coefficient of correlation between two numeric values.
+
+```sql
+corr(expression1, expression2)
+```
+
+#### Arguments
+
+- **expression1**: First column or literal value to operate on.
+- **expression2**: Second column or literal value to operate on.
+
+### `covar`
+
+Returns the covariance of a set of number pairs.
+
+```sql
+covar(expression1, expression2)
+```
+
+#### Arguments
+
+- **expression1**: First column or literal value to operate on.
+- **expression2**: Second column or literal value to operate on.
+
+### `covar_pop`
+
+Returns the population covariance of a set of number pairs.
+
+```sql
+covar_pop(expression1, expression2)
+```
+
+#### Arguments
+
+- **expression1**: First column or literal value to operate on.
+- **expression2**: Second column or literal value to operate on.
+
+### `covar_samp`
+
+Returns the sample covariance of a set of number pairs.
+
+```sql
+covar_samp(expression1, expression2)
+```
+
+#### Arguments
+
+- **expression1**: First column or literal value to operate on.
+- **expression2**: Second column or literal value to operate on.
+
+### `stddev`
+
+Returns the standard deviation of a set of numbers.
+
+```sql
+stddev(expression)
+```
+
+#### Arguments
+
+- **expression**: Column or literal value to operate on.
+
+### `stddev_pop`
+
+Returns the population standard deviation of a set of numbers.
+
+```sql
+stddev_pop(expression)
+```
+
+#### Arguments
+
+- **expression**: Column or literal value to operate on.
+
+### `stddev_samp`
+
+Returns the sample standard deviation of a set of numbers.
+
+```sql
+stddev_samp(expression)
+```
+
+#### Arguments
+
+- **expression**: Column or literal value to operate on.
+
+### `var`
+
+Returns the statistical variance of a set of numbers.
+
+```sql
+var(expression)
+```
+
+#### Arguments
+
+- **expression**: Column or literal value to operate on.
+
+### `var_pop`
+
+Returns the statistical population variance of a set of numbers.
+
+```sql
+var_pop(expression)
+```
+
+#### Arguments
+
+- **expression**: Column or literal value to operate on.
+
+### `var_samp`
+
+Returns the statistical sample variance of a set of numbers.
+
+```sql
+var_samp(expression)
+```
+
+#### Arguments
+
+- **expression**: Column or literal value to operate on.
 
 ## Approximate
 
-### approx_distinct
+- [approx_distinct](#approx_distinct)
+- [approx_median](#approx_median)
+- [approx_percentile_cont](#approx_percentile_cont)
+- [approx_percentile_cont_with_weight](#approx_percentile_cont_with_weight)
 
-`approx_distinct(x) -> uint64` returns the approximate number (HyperLogLog) of distinct input values
+### `approx_distinct`
 
-### approx_median
+Returns the approximate number of distinct input values calculated using the
+HyperLogLog algorithm.
 
-`approx_median(x) -> x` returns the approximate median of input values. it is an alias of `approx_percentile_cont(x, 0.5)`.
+```sql
+approx_distinct(expression)
+```
 
-### approx_percentile_cont
+#### Arguments
 
-`approx_percentile_cont(x, p) -> x` return the approximate percentile (TDigest) of input values, where `p` is a float64 between 0 and 1 (inclusive).
+- **expression**: Column or literal value to operate on.
 
-It supports raw data as input and build Tdigest sketches during query time, and is approximately equal to `approx_percentile_cont_with_weight(x, 1, p)`.
+### `approx_median`
 
-`approx_percentile_cont(x, p, n) -> x` return the approximate percentile (TDigest) of input values, where `p` is a float64 between 0 and 1 (inclusive),
+Returns the approximate median (50th percentile) of input values.
+It is an alias of `approx_percentile_cont(x, 0.5)`.
 
-and `n` (default 100) is the number of centroids in Tdigest which means that if there are `n` or fewer unique values in `x`, you can expect an exact result.
+```sql
+approx_median(expression)
+```
 
-A higher value of `n` results in a more accurate approximation and the cost of higher memory usage.
+#### Arguments
 
-### approx_percentile_cont_with_weight
+- **expression**: Column or literal value to operate on.
 
-`approx_percentile_cont_with_weight(x, w, p) -> x` returns the approximate percentile (TDigest) of input values with weight, where `w` is weight column expression and `p` is a float64 between 0 and 1 (inclusive).
+### `approx_percentile_cont`
 
-It supports raw data as input or pre-aggregated TDigest sketches, then builds or merges Tdigest sketches during query time. TDigest sketches are a list of centroid `(x, w)`, where `x` stands for mean and `w` stands for weight.
+Returns the approximate percentile of input values using the t-digest algorithm.
 
-It is suitable for low latency OLAP system where a streaming compute engine (e.g. Spark Streaming/Flink) pre-aggregates data to a data store, then queries using Datafusion.
+```sql
+approx_percentile_cont(expression, percentile, centroids)
+```
+
+#### Arguments
+
+- **expression**: Column or literal value to operate on.
+- **percentile**: Percentile to compute. Must be a float value between 0 and 1 (inclusive).
+- **centroids**: Number of centroids to use in the t-digest algorithm. _Default is 100_.
+
+  If there are this number or fewer unique values, you can expect an exact result.
+  A higher number of centroids results in a more accurate approximation, but
+  requires more memory to compute.
+
+### `approx_percentile_cont_with_weight`
+
+Returns the weighted approximate percentile of input values using the
+t-digest algorithm.
+
+```sql
+approx_percentile_cont_with_weight(expression, weight, percentile)
+```
+
+#### Arguments
+
+- **expression**: Column or literal value to operate on.
+- **weight**: Column or literal value to use as weight.
+- **percentile**: Percentile to compute. Must be a float value between 0 and 1 (inclusive).

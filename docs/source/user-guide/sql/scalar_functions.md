@@ -21,290 +21,1114 @@
 
 ## Math Functions
 
-### `abs(x)`
+- [abs](#abs)
+- [acos](#acos)
+- [asin](#asin)
+- [atan](#atan)
+- [atan2](#atan2)
+- [ceil](#ceil)
+- [cos](#cos)
+- [exp](#exp)
+- [floor](#floor)
+- [ln](#ln)
+- [log10](#log10)
+- [log2](#log2)
+- [power](#power)
+- [random](#random)
+- [round](#round)
+- [signum](#signum)
+- [sin](#sin)
+- [sqrt](#sqrt)
+- [tan](#tan)
+- [trunc](#trunc)
 
-absolute value
+### `abs`
 
-### `acos(x)`
+Returns the absolute value of a number.
 
-inverse cosine
+```sql
+abs(numeric_expression)
+```
 
-### `asin(x)`
+#### Arguments
 
-inverse sine
+- **numeric_expression**: Numeric column or literal value to operate on.
 
-### `atan(x)`
+### `acos`
 
-inverse tangent
+Returns the arc cosine or inverse cosine of a number.
 
-### `atan2(y, x)`
+```sql
+acos(numeric_expression)
+```
 
-inverse tangent of y / x
+#### Arguments
 
-### `ceil(x)`
+- **numeric_expression**: Numeric column or literal value to operate on.
 
-nearest integer greater than or equal to argument
+### `asin`
 
-### `cos(x)`
+Returns the arc sine or inverse sine of a number.
 
-cosine
+```sql
+asin(numeric_expression)
+```
 
-### `exp(x)`
+#### Arguments
 
-exponential
+- **numeric_expression**: Numeric column or literal value to operate on.
 
-### `floor(x)`
+### `atan`
 
-nearest integer less than or equal to argument
+Returns the arc tangent or inverse tangent of a number.
 
-### `ln(x)`
+```sql
+atan(numeric_expression)
+```
 
-natural logarithm
+#### Arguments
 
-### `log10(x)`
+- **numeric_expression**: Numeric column or literal value to operate on.
 
-base 10 logarithm
+### `atan2`
 
-### `log2(x)`
+Returns the arc tangent or inverse tangent of `expression_y / expression_x`.
 
-base 2 logarithm
+```sql
+atan2(expression_y / expression_x)
+```
 
-### `power(base, exponent)`
+#### Arguments
 
-base raised to the power of exponent
+- **expression_y**: First numeric column or literal value to operate on.
+- **expression_x**: Second numeric column or literal value to operate on.
 
-### `round(x)`
+### `ceil`
 
-round to nearest integer
+Returns the nearest integer greater than or equal to a number.
 
-### `signum(x)`
+```sql
+ceil(numeric_expression)
+```
 
-sign of the argument (-1, 0, +1)
+#### Arguments
 
-### `sin(x)`
+- **numeric_expression**: Numeric column or literal value to operate on.
 
-sine
+### `cos`
 
-### `sqrt(x)`
+Returns the cosine of a number.
 
-square root
+```sql
+cos(numeric_expression)
+```
 
-### `tan(x)`
+#### Arguments
 
-tangent
+- **numeric_expression**: Numeric column or literal value to operate on.
 
-### `trunc(x)`
+### `exp`
 
-truncate toward zero
+Returns the base-e exponential of a number.
+
+```sql
+exp(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric column or literal value to use as the exponent.
+
+### `floor`
+
+Returns the nearest integer less than or equal to a number.
+
+```sql
+floor(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric column or literal value to operate on.
+
+### `ln`
+
+Returns the natural logarithm of a number.
+
+```sql
+ln(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric column or literal value to operate on.
+
+### `log10`
+
+Returns the base-10 logarithm of a number.
+
+```sql
+log10(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric column or literal value to operate on.
+
+### `log2`
+
+Returns the base-2 logarithm or a number.
+
+```sql
+log2(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric column or literal value to operate on.
+
+### `power`
+
+Returns a base number raised to the power of an exponent.
+
+```sql
+power(base, exponent)
+```
+
+#### Arguments
+
+- **power**: Base numeric column or literal value to operate on.
+- **exponent**: Exponent numeric column or literal value to operate on.
+
+### `random`
+
+Returns a random float value between 0 and 1.
+The random seed is unique to each row.
+
+```sql
+random()
+```
+
+### `round`
+
+Rounds a number to the nearest integer.
+
+```sql
+round(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric column or literal value to operate on.
+
+### `signum`
+
+Returns the sign of a number.
+Negative numbers return `-1`.
+Zero and positive numbers return `1`.
+
+```sql
+signum(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric column or literal value to operate on.
+
+### `sin`
+
+Returns the sine of a number.
+
+```sql
+sin(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric column or literal value to operate on.
+
+### `sqrt`
+
+Returns the square root of a number.
+
+```sql
+sqrt(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric column or literal value to operate on.
+
+### `tan`
+
+Returns the tangent of a number.
+
+```sql
+tan(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric column or literal value to operate on.
+
+### `trunc`
+
+Truncates a number toward zero (at the decimal point).
+
+```sql
+trunc(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric column or literal value to operate on.
 
 ## Conditional Functions
 
+- [coalesce](#coalesce)
+- [nullif](#nullif)
+
 ### `coalesce`
 
-Returns the first of its arguments that is not null. Null is returned only if all arguments are null. It is often used to substitute a default value for null values when data is retrieved for display.
+Returns the first of its arguments that is not _null_.
+Returns _null_ if all arguments are _null_.
+This function is often used to substitute a default value for _null_ values.
+
+```sql
+coalesce(expression1[, ..., expression_n])
+```
+
+#### Arguments
+
+- **expression1, expression_n**:
+  Column or literal value to use if previous expressions are _null_.
+  Pass as many expression arguments as necessary. 
 
 ### `nullif`
 
-Returns a null value if value1 equals value2; otherwise it returns value1. This can be used to perform the inverse operation of the `coalesce` expression. |
+Returns _null_ if _expression1_ equals _expression2_; otherwise it returns _expression1_.
+This can be used to perform the inverse operation of [`coalesce`](#coalesce).
+
+```sql
+nullif(expression1, expression2)
+```
+
+#### Arguments
+
+- **expression1**: Column or literal value to compare and return if equal to expression2.
+- **expression2**: Column or literal value to compare to expression1.
 
 ## String Functions
 
+- [ascii](#ascii)
+- [bit_length](#bit_length)
+- [btrim](#btrim)
+- [char_length](#char_length)
+- [character_length](#character_length)
+- [concat](#concat)
+- [concat_ws](#concat_ws)
+- [chr](#chr)
+- [initcap](#initcap)
+- [left](#left)
+- [length](#length)
+- [lower](#lower)
+- [lpad](#lpad)
+- [ltrim](#ltrim)
+- [octet_length](#octet_length)
+- [repeat](#repeat)
+- [replace](#replace)
+- [reverse](#reverse)
+- [right](#right)
+- [rpad](#rpad)
+- [rtrim](#rtrim)
+- [split_part](#split_part)
+- [starts_with](#starts_with)
+- [strpos](#strpos)
+- [substr](#substr)
+- [to_hex](#to_hex)
+- [translate](#translate)
+- [trim](#trim)
+- [upper](#upper)
+
 ### `ascii`
+
+Returns the ASCII value of the first character in a string.
+
+```sql
+ascii(str)
+```
+
+#### Arguments
+
+- **str**: String column or literal string to operate on.
+
+**Related functions**:
+[chr](#chr)
 
 ### `bit_length`
 
+Returns the bit length of a string.
+
+```sql
+bit_length(str)
+```
+
+#### Arguments
+
+- **str**: String column or literal string to operate on.
+
+**Related functions**:
+[length](#length),
+[octet_length](#octet_length)
+
 ### `btrim`
+
+Trims the specified trim string from the start and end of a string.
+If no trim string is provided, all whitespace is removed from the start and end
+of the input string.
+
+```sql
+btrim(str[, trim_str])
+```
+
+#### Arguments
+
+- **str**: String column or literal string to operate on.
+- **trim_str**: String column or literal string to trim from the beginning and
+  end of the input string. _Default is whitespace characters_.
+
+**Related functions**:
+[ltrim](#ltrim),
+[rtrim](#rtrim),
+[trim](#trim)
 
 ### `char_length`
 
+_Alias of [length](#length)._
+
 ### `character_length`
+
+_Alias of [length](#length)._
 
 ### `concat`
 
+Concatenates multiple strings together.
+
+```sql
+concat(str[, ..., str_n])
+```
+
+#### Arguments
+
+- **str**: String column or literal string to concatenate.
+- **str_n**: Subsequent string column or literal string to concatenate.
+
+**Related functions**:
+[contcat_ws](#contcat_ws)
+
 ### `concat_ws`
+
+Concatenates multiple strings together with a specified separator.
+
+```sql
+concat(separator, str[, ..., str_n])
+```
+
+#### Arguments
+
+- **separator**: Separator to insert between concatenated strings.
+- **str**: String column or literal string to concatenate.
+- **str_n**: Subsequent string column or literal string to concatenate.
+
+**Related functions**:
+[concat](#concat)
 
 ### `chr`
 
+Returns the character with the specified ASCII code value.
+
+```sql
+chr(acsii)
+```
+
+#### Arguments
+
+- **ascii**: ASCII code value to operate on.
+
+**Related functions**:
+[ascii](#ascii)
+
 ### `initcap`
+
+Capitalizes the first character in each word in the input string.
+Words are delimited by non-alphanumeric characters.
+
+```sql
+initcap(str)
+```
+
+#### Arguments
+
+- **str**: String column or literal string to operate on.
+
+**Related functions**:
+[lower](#lower),
+[upper](#upper)
 
 ### `left`
 
+Returns a specified number of characters from the left side of a string.
+
+```sql
+left(str, n)
+```
+
+#### Arguments
+
+- **str**: String column or literal string to operate on.
+- **n**: Number of characters to return.
+
+**Related functions**:
+[right](#right)
+
 ### `length`
+
+Returns the number of characters in a string.
+
+```sql
+length(str)
+```
+
+#### Arguments
+
+- **str**: String column or literal string to operate on.
+
+#### Aliases
+
+- char\_length
+- character\_length
+
+**Related functions**:
+[bit_length](#bit_length),
+[octet_length](#octet_length)
 
 ### `lower`
 
+Converts a string to lower-case.
+
+```sql
+lower(str)
+```
+
+#### Arguments
+
+- **str**: String column or literal string to operate on.
+
+**Related functions**:
+[initcap](#initcap),
+[upper](#upper)
+
 ### `lpad`
+
+Pads the left side a string with another string to a specified string length.
+
+```sql
+lpad(str, n[, padding_str])
+```
+
+#### Arguments
+
+- **str**: String column or literal string to operate on.
+- **n**: String length to pad to.
+- **padding_str**: String column or literal string to pad with.
+  _Default is a space._
+
+**Related functions**:
+[rpad](#rpad)
 
 ### `ltrim`
 
-### `md5`
+Removes leading spaces from a string.
+
+```sql
+ltrim(str)
+```
+
+#### Arguments
+
+- **str**: String column or literal string to operate on.
+
+**Related functions**:
+[btrim](#btrim),
+[rtrim](#rtrim),
+[trim](#trim)
+
+#### Arguments
+
+- **str**: String column or literal string to operate on.
 
 ### `octet_length`
 
+Returns the length of a string in bytes.
+
+```sql
+octet_length(str)
+```
+
+#### Arguments
+
+- **str**: String column or literal string to operate on.
+
+**Related functions**:
+[bit_length](#bit_length),
+[length](#length)
+
 ### `repeat`
+
+Returns a string with an input string repeated a specified number.
+
+```sql
+repeat(str, n)
+```
+
+#### Arguments
+
+- **str**: String column or literal string to repeat.
+- **n**: Number of times to repeat the input string.
 
 ### `replace`
 
+Replaces all occurrences of a specified substring in a string with a new substring.
+
+```sql
+replace(str, substr, replacement)
+```
+
+#### Arguments
+
+- **str**: String column or literal string to repeat.
+- **substr**: Substring to replace in the input string.
+- **replacement**: Replacement substring.
+
 ### `reverse`
+
+Reverses the character order of a string.
+
+```sql
+reverse(str)
+```
+
+#### Arguments
+
+- **str**: String column or literal string to repeat.
 
 ### `right`
 
+Returns a specified number of characters from the right side of a string.
+
+```sql
+right(str, n)
+```
+
+#### Arguments
+
+- **str**: String column or literal string to operate on.
+- **n**: Number of characters to return.
+
+**Related functions**:
+[left](#left)
+
 ### `rpad`
+right side a string with another string to a specified string length.
+
+```sql
+rpad(str, n[, padding_str])
+```
+
+#### Arguments
+
+- **str**: String column or literal string to operate on.
+- **n**: String length to pad to.
+- **padding_str**: String column or literal string to pad with.
+  _Default is a space._
+
+**Related functions**:
+[lpad](#lpad)
 
 ### `rtrim`
 
-### `digest`
+Removes trailing spaces from a string.
+
+```sql
+rtrim(str)
+```
+
+#### Arguments
+
+- **str**: String column or literal string to operate on.
+
+**Related functions**:
+[btrim](#btrim),
+[ltrim](#ltrim),
+[trim](#trim)
 
 ### `split_part`
 
+Splits a string based on a specified delimiter and returns the substring a the
+specified position.
+
+```sql
+split_part(str, delimiter, pos)
+```
+
+#### Arguments
+
+- **str**: String column or literal string to spit.
+- **delimiter**: String or character to split on.
+- **pos**: Position of the part to return.
+
 ### `starts_with`
+
+Tests if a string starts with a substring.
+
+```sql
+starts_with(str, substr)
+```
+
+#### Arguments
+
+- **str**: String column or literal string to test.
+- **substr**: Substring to test for.
 
 ### `strpos`
 
+Returns the starting position of a specified substring in a string.
+Positions begin at 1.
+If the substring does not exist in the string, the function returns 0.
+
+```sql
+strpos(str, substr)
+```
+
+#### Arguments
+
+- **str**: String column or literal string to operate on.
+- **substr**: Substring to search for.
+
 ### `substr`
+
+Extracts a substring of a specified number of characters from a specific
+starting position in a string.
+
+```sql
+substr(str, start_pos[, length])
+```
+
+#### Arguments
+
+- **str**: String column or literal string to operate on.
+- **start_pos**: Character position to start the substring at.
+  The first character in the string has a position of 1.
+- **length**: Number of characters to extract.
+  If not specified, returns the rest of the string after the start position.
 
 ### `translate`
 
+Translates characters in a string to specified translation characters.
+
+```sql
+translate(str, chars, translation)
+```
+
+- **str**: String column or literal string to operate on.
+- **chars**: Characters to translate.
+- **translation**: Translation characters. Translation characters replace only
+  characters at the same position in the **chars** string.
+
+### `to_hex`
+
+Converts an integer to a hexadecimal string.
+
+```sql
+to_hex(int)
+```
+
+#### Arguments
+
+- **int**: Integer column or literal integer to convert.
+
 ### `trim`
+
+Removes leading and trailing spaces from a string.
+
+```sql
+trim(str)
+```
+
+#### Arguments
+
+- **str**: String column or literal string to operate on.
+
+**Related functions**:
+[btrim](#btrim),
+[ltrim](#ltrim),
+[rtrim](#rtrim)
 
 ### `upper`
 
+Converts a string to upper-case.
+
+```sql
+upper(str)
+```
+
+#### Arguments
+
+- **str**: String column or literal string to operate on.
+
+**Related functions**:
+[initcap](#initcap),
+[lower](#lower)
+
 ## Regular Expression Functions
 
-### regexp_match
+Apache DataFusion uses the POSIX regular expression syntax and
+supports the following regular expression functions:
 
-### regexp_replace
+- [regexp_match](#regexp_match)
+- [regexp_replace](#regexp_replace)
 
-## Temporal Functions
+### `regexp_match`
 
-### `to_timestamp`
+Returns a list of regular expression matches in a string.
 
-`to_timestamp()` is similar to the standard SQL function. It performs conversions to type `Timestamp(Nanoseconds, None)`, from:
+```sql
+regexp_match(str, regexp)
+```
 
-- Timestamp strings
-  - `1997-01-31T09:26:56.123Z` # RCF3339
-  - `1997-01-31T09:26:56.123-05:00` # RCF3339
-  - `1997-01-31 09:26:56.123-05:00` # close to RCF3339 but with a space er than T
-  - `1997-01-31T09:26:56.123` # close to RCF3339 but no timezone et specified
-  - `1997-01-31 09:26:56.123` # close to RCF3339 but uses a space and timezone offset
-  - `1997-01-31 09:26:56` # close to RCF3339, no fractional seconds
-- An Int64 array/column, values are nanoseconds since Epoch UTC
-- Other Timestamp() columns or values
+#### Arguments
 
-Note that conversions from other Timestamp and Int64 types can also be performed using `CAST(.. AS Timestamp)`. However, the conversion functionality here is present for consistency with the other `to_timestamp_xx()` functions.
+- **str**: String column or literal string to operate on.
+- **regexp**: Regular expression to match against.
 
-### `to_timestamp_millis`
+### `regexp_replace`
 
-`to_timestamp_millis()` does conversions to type `Timestamp(Milliseconds, None)`, from:
+Replaces substrings in a string that match a regular expression.
 
-- Timestamp strings, the same as supported by the regular timestamp() function (except the output is a timestamp of Milliseconds resolution)
-  - `1997-01-31T09:26:56.123Z` # RCF3339
-  - `1997-01-31T09:26:56.123-05:00` # RCF3339
-  - `1997-01-31 09:26:56.123-05:00` # close to RCF3339 but with a space er than T
-  - `1997-01-31T09:26:56.123` # close to RCF3339 but no timezone et specified
-  - `1997-01-31 09:26:56.123` # close to RCF3339 but uses a space and timezone offset
-  - `1997-01-31 09:26:56` # close to RCF3339, no fractional seconds
-- An Int64 array/column, values are milliseconds since Epoch UTC
-- Other Timestamp() columns or values
+```sql
+regexp_replace(str, regexp, replacement, flags)
+```
 
-Note that `CAST(.. AS Timestamp)` converts to Timestamps with Nanosecond resolution; this function is the only way to convert/cast to millisecond resolution.
+#### Arguments
 
-### `to_timestamp_micros`
+- **str**: String column or literal string to operate on.
+- **regexp**: Regular expression to match against.
+- **replacement**: Replacement string.
+- **flags**: Regular expression flags that control the behavior of the
+  regular expression. The following flags are supported.
+  - **g**: (global) Search globally and don't return after the first match.
+  - **i**: (insensitive) Ignore case when matching.
 
-`to_timestamp_micros()` does conversions to type `Timestamp(Microseconds, None)`, from:
+## Time and Date Functions
 
-- Timestamp strings, the same as supported by the regular timestamp() function (except the output is a timestamp of microseconds resolution)
-  - `1997-01-31T09:26:56.123Z` # RCF3339
-  - `1997-01-31T09:26:56.123-05:00` # RCF3339
-  - `1997-01-31 09:26:56.123-05:00` # close to RCF3339 but with a space er than T
-  - `1997-01-31T09:26:56.123` # close to RCF3339 but no timezone et specified
-  - `1997-01-31 09:26:56.123` # close to RCF3339 but uses a space and timezone offset
-  - `1997-01-31 09:26:56` # close to RCF3339, no fractional seconds
-- An Int64 array/column, values are microseconds since Epoch UTC
-- Other Timestamp() columns or values
-
-Note that `CAST(.. AS Timestamp)` converts to Timestamps with Nanosecond resolution; this function is the only way to convert/cast to microsecond resolution.
-
-### `to_timestamp_seconds`
-
-`to_timestamp_seconds()` does conversions to type `Timestamp(Seconds, None)`, from:
-
-- Timestamp strings, the same as supported by the regular timestamp() function (except the output is a timestamp of secondseconds resolution)
-  - `1997-01-31T09:26:56.123Z` # RCF3339
-  - `1997-01-31T09:26:56.123-05:00` # RCF3339
-  - `1997-01-31 09:26:56.123-05:00` # close to RCF3339 but with a space er than T
-  - `1997-01-31T09:26:56.123` # close to RCF3339 but no timezone et specified
-  - `1997-01-31 09:26:56.123` # close to RCF3339 but uses a space and timezone offset
-  - `1997-01-31 09:26:56` # close to RCF3339, no fractional seconds
-- An Int64 array/column, values are seconds since Epoch UTC
-- Other Timestamp() columns or values
-
-Note that `CAST(.. AS Timestamp)` converts to Timestamps with Nanosecond resolution; this function is the only way to convert/cast to seconds resolution.
-
-### `extract`
-
-`extract(field FROM source)`
-
-- The `extract` function retrieves subfields such as year or hour from date/time values.
-  `source` must be a value expression of type timestamp, Date32, or Date64. `field` is an identifier that selects what field to extract from the source value.
-  The `extract` function returns values of type u32.
-  - `year` :`extract(year FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 2020`
-  - `month`:`extract(month FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 9`
-  - `week` :`extract(week FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 37`
-  - `day`: `extract(day FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 8`
-  - `hour`: `extract(hour FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 12`
-  - `minute`: `extract(minute FROM to_timestamp('2020-09-08T12:01:00+00:00')) -> 1`
-  - `second`: `extract(second FROM to_timestamp('2020-09-08T12:00:03+00:00')) -> 3`
-
-### `date_part`
-
-`date_part('field', source)`
-
-- The `date_part` function is modeled on the postgres equivalent to the SQL-standard function `extract`.
-  Note that here the field parameter needs to be a string value, not a name.
-  The valid field names for `date_part` are the same as for `extract`.
-  - `date_part('second', to_timestamp('2020-09-08T12:00:12+00:00')) -> 12`
-
-### `date_trunc`
-
-### `date_bin`
-
-### `from_unixtime`
+- [now](#now)
+- [date_bin](#date_bin)
+- [date_trunc](#date_trunc)  
+- [date_part](#date_part)
+- [extract](#extract)
+- [to_timestamp](#to_timestamp)
+- [to_timestamp_millis](#to_timestamp_millis)
+- [to_timestamp_micros](#to_timestamp_micros)
+- [to_timestamp_seconds](#to_timestamp_seconds)
+- [from_unixtime](#from_unixtime)
 
 ### `now`
 
-Returns current time as `Timestamp(Nanoseconds, UTC)`. Returns same value for the function
-wherever it appears in the statement, using a value chosen at planning time.
+Returns the current UTC timestamp.
+
+The `now()` return value is determined at query time and will return the same timestamp,
+no matter when in the query plan the function executes.
+
+```sql 
+now()
+```
+
+### `date_bin`
+
+Calculates time intervals and returns the start of the interval nearest to the specified timestamp.
+Use `date_bin` to downsample time series data by grouping rows into time-based "bins" or "windows"
+and applying an aggregate or selector function to each window.
+
+For example, if you "bin" or "window" data into 15 minute intervals, an input
+timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15
+minute bin it is in: `2023-01-01T18:15:00Z`.
+
+```sql
+date_bin(interval, expression, origin-timestamp)
+```
+
+#### Arguments
+
+- **interval**: Bin interval.
+- **expression**: Column or timestamp literal to operate on.  
+- **timestamp**: Starting point used to determine bin boundaries.
+
+The following intervals are supported:
+
+- nanoseconds
+- microseconds
+- milliseconds
+- seconds
+- minutes
+- hours 
+- days 
+- weeks
+- months 
+- years
+- century
+
+### `date_trunc`
+
+Truncates a timestamp value to a specified precision.  
+
+```sql
+date_trunc(precision, expression) 
+```
+
+#### Arguments
+
+- **precision**: Time precision to truncate to.
+  The following precisions are supported:  
+
+    - year
+    - month
+    - week
+    - day
+    - hour
+    - minute
+    - second
+    
+- **expression**: Column or timestamp literal to operate on.  
+
+### `date_part`
+
+Returns the specified part of the date as an integer.
+
+```sql
+date_part(part, expression)
+```
+
+#### Arguments
+
+- **part**: Part of the date to return.
+  The follow date parts are supported:
+
+    - year
+    - month
+    - week _(week of the year)_
+    - day _(day of the month)_
+    - hour
+    - minute
+    - second
+    - millisecond 
+    - microsecond
+    - nanosecond
+    - dow _(day of the week)_
+    - doy _(day of the year)_
+    
+- **expression**: Column or timestamp literal to operate on.
+
+### `extract`
+
+Returns a sub-field from a time value as an integer.
+Similar to `date_part`, but with different arguments. 
+
+```sql
+extract(field FROM source)
+```
+
+### `to_timestamp`
+
+Converts a value to RFC3339 nanosecond timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`).
+Supports timestamp, integer, and unsigned integer types as input.
+Integers and unsigned integers are parsed as Unix nanosecond timestamps and
+return the corresponding RFC3339 nanosecond timestamp.
+
+```sql
+to_timestamp(expression)
+```
+
+#### Arguments
+
+- **expression**: Column or literal value to operate on.
+
+### `to_timestamp_millis`
+
+Converts a value to RFC3339 millisecond timestamp format (`YYYY-MM-DDT00:00:00.000Z`).
+Supports timestamp, integer, and unsigned integer types as input.
+Integers and unsigned integers are parsed as Unix nanosecond timestamps and
+return the corresponding RFC3339 timestamp.
+
+```sql
+to_timestamp_millis(expression) 
+```
+
+#### Arguments
+
+- **expression**: Column or literal value to operate on.
+
+### `to_timestamp_micros`
+
+Converts a value to RFC3339 microsecond timestamp format (`YYYY-MM-DDT00:00:00.000000Z`).
+Supports timestamp, integer, and unsigned integer types as input.
+Integers and unsigned integers are parsed as Unix nanosecond timestamps and
+return the corresponding RFC3339 timestamp.
+
+```sql
+to_timestamp_micros(expression)
+```
+
+#### Arguments
+
+- **expression**: Column or literal value to operate on.
+
+### `to_timestamp_seconds`
+
+Converts a value to RFC3339 second timestamp format (`YYYY-MM-DDT00:00:00Z`).
+Supports timestamp, integer, and unsigned integer types as input.
+Integers and unsigned integers are parsed as Unix nanosecond timestamps and
+return the corresponding RFC3339 timestamp.
+
+```sql
+to_timestamp_seconds(expression) 
+```
+
+#### Arguments
+
+- **expression**: Column or literal value to operate on.
+
+### `from_unixtime`
+
+Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`).
+Input is parsed as a Unix nanosecond timestamp and returns the corresponding
+RFC3339 timestamp.
+
+```sql
+from_unixtime(expression)
+```
+
+#### Arguments
+
+- **expression**: Column or integer literal to operate on.
+
+## Hashing Functions
+
+- [md5](#md5)
+- [sha224](#sha224)
+- [sha256](#sha256)
+- [sha384](#sha384)
+- [sha512](#sha512)
+
+### `md5`
+
+Computes an MD5 128-bit checksum for a string expression.
+
+```sql
+md5(expression)
+```
+
+#### Arguments
+
+- **expression**: Column or string literal to operate on.
+
+### `sha224`
+
+Computes the SHA-224 hash of a binary string.
+
+```sql
+sha224(expression)
+```
+
+#### Arguments
+
+- **expression**: Column or string literal to operate on.
+
+### `sha256`
+
+Computes the SHA-256 hash of a binary string.
+
+```sql
+sha256(expression)
+```
+
+#### Arguments
+
+- **expression**: Column or string literal to operate on.
+
+### `sha384`
+
+Computes the SHA-384 hash of a binary string.
+
+```sql
+sha384(expression)
+```
+
+#### Arguments
+
+- **expression**: Column or string literal to operate on.
+
+### `sha512`
+
+Computes the SHA-512 hash of a binary string.
+
+```sql
+sha512(expression)
+```
+
+#### Arguments
+
+- **expression**: Column or string literal to operate on.
 
 ## Other Functions
 
+- [array](#array)
+- [arrow_typeof](#arrow_typeof)
+- [struct](#struct)
+
 ### `array`
+
+Returns an Arrow array using the specified input expressions.
+
+```sql
+array(expression1[, ..., expression_n])
+```
+
+#### Arguments
+
+- **expression_n**: Column or literal value to include in the output array.
 
 ### `arrow_typeof`
 
 Returns the underlying Arrow type of the the expression:
 
 ```sql
-❯ select arrow_typeof(4 + 4.3);
-+--------------------------------------+
-| arrowtypeof(Int64(4) + Float64(4.3)) |
-+--------------------------------------+
-| Float64                              |
-+--------------------------------------+
+arrow_typeof(expression)
 ```
 
-### `in_list`
+#### Arguments
 
-### `random`
-
-### `sha224`
-
-### `sha256`
-
-### `sha384`
-
-### `sha512`
+- **expression**: Column or literal value to evaluate.
 
 ### `struct`
 
-### `to_hex`
+Returns an Arrow struct using the specified input expressions.
+Fields in the returned struct use the `cN` naming convention.
+For example: `c0`, `c1`, `c2`, etc.
+
+```sql
+struct(expression1[, ..., expression_n])
+```
+
+#### Arguments
+
+- **expression_n**: Column or literal value to include in the output struct.
