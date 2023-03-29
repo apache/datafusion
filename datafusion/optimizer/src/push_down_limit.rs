@@ -17,16 +17,14 @@
 
 //! Optimizer rule to push down LIMIT in the query plan
 //! It will push down through projection, limits (taking the smaller limit)
-use std::sync::Arc;
-
+use crate::optimizer::ApplyOrder;
+use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::{
     logical_plan::{Join, JoinType, Limit, LogicalPlan, Sort, TableScan, Union},
     CrossJoin,
 };
-
-use crate::optimizer::ApplyOrder;
-use crate::{OptimizerConfig, OptimizerRule};
+use std::sync::Arc;
 
 /// Optimization rule that tries to push down LIMIT.
 #[derive(Default)]
@@ -277,15 +275,13 @@ fn push_down_join(join: &Join, limit: usize) -> Option<Join> {
 mod test {
     use std::vec;
 
+    use super::*;
+    use crate::test::*;
     use datafusion_expr::{
         col, exists,
         logical_plan::{builder::LogicalPlanBuilder, JoinType, LogicalPlan},
         max,
     };
-
-    use crate::test::*;
-
-    use super::*;
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(PushDownLimit::new()), plan, expected)
