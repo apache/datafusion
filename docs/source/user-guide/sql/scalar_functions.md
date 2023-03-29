@@ -302,7 +302,7 @@ coalesce(expression1[, ..., expression_n])
 
 - **expression1, expression_n**:
   Column or literal value to use if previous expressions are _null_.
-  Pass as many expression arguments as necessary. 
+  Pass as many expression arguments as necessary.
 
 ### `nullif`
 
@@ -505,8 +505,8 @@ length(str)
 
 #### Aliases
 
-- char\_length
-- character\_length
+- char_length
+- character_length
 
 **Related functions**:
 [bit_length](#bit_length),
@@ -639,6 +639,7 @@ right(str, n)
 [left](#left)
 
 ### `rpad`
+
 right side a string with another string to a specified string length.
 
 ```
@@ -833,7 +834,7 @@ regexp_replace(str, regexp, replacement, flags)
 
 - [now](#now)
 - [date_bin](#date_bin)
-- [date_trunc](#date_trunc)  
+- [date_trunc](#date_trunc)
 - [date_part](#date_part)
 - [extract](#extract)
 - [to_timestamp](#to_timestamp)
@@ -849,7 +850,7 @@ Returns the current UTC timestamp.
 The `now()` return value is determined at query time and will return the same timestamp,
 no matter when in the query plan the function executes.
 
-``` 
+```
 now()
 ```
 
@@ -870,7 +871,7 @@ date_bin(interval, expression, origin-timestamp)
 #### Arguments
 
 - **interval**: Bin interval.
-- **expression**: Column or timestamp literal to operate on.  
+- **expression**: Column or timestamp literal to operate on.
 - **timestamp**: Starting point used to determine bin boundaries.
 
 The following intervals are supported:
@@ -880,35 +881,35 @@ The following intervals are supported:
 - milliseconds
 - seconds
 - minutes
-- hours 
-- days 
+- hours
+- days
 - weeks
-- months 
+- months
 - years
 - century
 
 ### `date_trunc`
 
-Truncates a timestamp value to a specified precision.  
+Truncates a timestamp value to a specified precision.
 
 ```
-date_trunc(precision, expression) 
+date_trunc(precision, expression)
 ```
 
 #### Arguments
 
 - **precision**: Time precision to truncate to.
-  The following precisions are supported:  
+  The following precisions are supported:
 
-    - year
-    - month
-    - week
-    - day
-    - hour
-    - minute
-    - second
-    
-- **expression**: Column or timestamp literal to operate on.  
+  - year
+  - month
+  - week
+  - day
+  - hour
+  - minute
+  - second
+
+- **expression**: Column or timestamp literal to operate on.
 
 ### `date_part`
 
@@ -923,25 +924,25 @@ date_part(part, expression)
 - **part**: Part of the date to return.
   The follow date parts are supported:
 
-    - year
-    - month
-    - week _(week of the year)_
-    - day _(day of the month)_
-    - hour
-    - minute
-    - second
-    - millisecond 
-    - microsecond
-    - nanosecond
-    - dow _(day of the week)_
-    - doy _(day of the year)_
-    
+  - year
+  - month
+  - week _(week of the year)_
+  - day _(day of the month)_
+  - hour
+  - minute
+  - second
+  - millisecond
+  - microsecond
+  - nanosecond
+  - dow _(day of the week)_
+  - doy _(day of the year)_
+
 - **expression**: Column or timestamp literal to operate on.
 
 ### `extract`
 
 Returns a sub-field from a time value as an integer.
-Similar to `date_part`, but with different arguments. 
+Similar to `date_part`, but with different arguments.
 
 ```
 extract(field FROM source)
@@ -970,7 +971,7 @@ Integers and unsigned integers are parsed as Unix nanosecond timestamps and
 return the corresponding RFC3339 timestamp.
 
 ```
-to_timestamp_millis(expression) 
+to_timestamp_millis(expression)
 ```
 
 #### Arguments
@@ -1000,7 +1001,7 @@ Integers and unsigned integers are parsed as Unix nanosecond timestamps and
 return the corresponding RFC3339 timestamp.
 
 ```
-to_timestamp_seconds(expression) 
+to_timestamp_seconds(expression)
 ```
 
 #### Arguments
