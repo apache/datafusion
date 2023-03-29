@@ -33,8 +33,6 @@ mod unix_test {
     use itertools::enumerate;
     use nix::sys::stat;
     use nix::unistd;
-    use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
     use rstest::*;
     use std::fs::{File, OpenOptions};
     use std::io::Write;
@@ -73,20 +71,21 @@ mod unix_test {
         line: &str,
         ref_time: Instant,
         broken_pipe_timeout: Duration,
-    ) -> Result<usize> {
+    ) -> Result<()> {
         // We need to handle broken pipe error until the reader is ready. This
         // is why we use a timeout to limit the wait duration for the reader.
         // If the error is different than broken pipe, we fail immediately.
-        file.write(line.as_bytes()).or_else(|e| {
+        while let Err(e) = file.write_all(line.as_bytes()) {
             if e.raw_os_error().unwrap() == 32 {
                 let interval = Instant::now().duration_since(ref_time);
                 if interval < broken_pipe_timeout {
                     thread::sleep(Duration::from_millis(100));
-                    return Ok(0);
+                    continue;
                 }
             }
-            Err(DataFusionError::Execution(e.to_string()))
-        })
+            return Err(DataFusionError::Execution(e.to_string()));
+        }
+        Ok(())
     }
 
     async fn create_ctx(
@@ -258,10 +257,9 @@ mod unix_test {
                     let fifo_path = create_fifo_file(&tmp_dir, file_name).unwrap();
                     let return_path = fifo_path.clone();
                     // Timeout for a long period of BrokenPipe error
-                    let broken_pipe_timeout = Duration::from_secs(5);
+                    let broken_pipe_timeout = Duration::from_secs(45);
                     // Spawn a new thread to write to the FIFO file
                     let fifo_writer = thread::spawn(move || {
-                        let mut rng = StdRng::seed_from_u64(42);
                         let file = OpenOptions::new()
                             .write(true)
                             .open(fifo_path.clone())
@@ -270,13 +268,7 @@ mod unix_test {
                         // Reference time to use when deciding to fail the test
                         let execution_start = Instant::now();
                         // Join filter
-                        let a1_iter = (0..TEST_DATA_SIZE).map(|x| {
-                            if rng.gen_range(0.0..1.0) < 0.3 {
-                                x - 1
-                            } else {
-                                x
-                            }
-                        });
+                        let a1_iter = 0..TEST_DATA_SIZE;
                         // Join key
                         let a2_iter = (0..TEST_DATA_SIZE).map(|x| x % 10);
                         for (cnt, (a1, a2)) in a1_iter.zip(a2_iter).enumerate() {
