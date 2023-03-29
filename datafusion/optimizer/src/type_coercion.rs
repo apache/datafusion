@@ -260,7 +260,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                         ) =>
                     {
                         if !matches!(left.as_ref(), &Expr::PromotePrecision(_))
-                            && !matches!(left.as_ref(), &Expr::PromotePrecision(_))
+                            && !matches!(right.as_ref(), &Expr::PromotePrecision(_))
                         {
                             // Promote decimal types if they are not already promoted
                             let coerced_type =

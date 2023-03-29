@@ -315,10 +315,16 @@ impl ExprSchemable for Expr {
         promote_to_type: &DataType,
         schema: &S,
     ) -> Result<Expr> {
-        let casted = self.cast_to(promote_to_type, schema)?;
-        Ok(Expr::PromotePrecision(PromotePrecision::new(Box::new(
-            casted,
-        ))))
+        let this_type = self.get_type(schema)?;
+        if can_cast_types(&this_type, promote_to_type) {
+            Ok(Expr::PromotePrecision(PromotePrecision::new(Box::new(
+                Expr::Cast(Cast::new(Box::new(self), promote_to_type.clone())),
+            ))))
+        } else {
+            Err(DataFusionError::Plan(format!(
+                "Cannot automatically convert {this_type:?} to {promote_to_type:?}"
+            )))
+        }
     }
 }
 
