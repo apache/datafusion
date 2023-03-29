@@ -316,6 +316,18 @@ impl ExprSchemable for Expr {
         schema: &S,
     ) -> Result<Expr> {
         let this_type = self.get_type(schema)?;
+
+        match self {
+            Expr::Cast(_) if this_type == *promote_to_type => return Ok(self),
+            Expr::PromotePrecision(_) => {
+                return Err(DataFusionError::Plan(
+                    "Cannot promote precision of a promote precision expression"
+                        .to_string(),
+                ))
+            }
+            _ => {}
+        }
+
         if can_cast_types(&this_type, promote_to_type) {
             Ok(Expr::PromotePrecision(PromotePrecision::new(Box::new(
                 Expr::Cast(Cast::new(Box::new(self), promote_to_type.clone())),

@@ -358,13 +358,17 @@ message LogicalExprNode {
     SimilarToNode similar_to = 33;
 
     PlaceholderNode placeholder = 34;
-
+    PromotePrecisionNode promote_precision = 35;
   }
 }
 
 message PlaceholderNode {
   string id = 1;
   ArrowType data_type = 2;
+}
+
+message PromotePrecisionNode {
+  LogicalExprNode expr = 1;
 }
 
 message LogicalExprList {

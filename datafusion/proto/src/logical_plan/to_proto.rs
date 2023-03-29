@@ -35,7 +35,8 @@ use arrow::datatypes::{
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, OwnedTableReference, ScalarValue};
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, Sort,
+    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like,
+    PromotePrecision, Sort,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
@@ -464,7 +465,9 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Literal(pb_value)),
                 }
             }
-            Expr::BinaryExpr(BinaryExpr { left, op, right, .. }) => {
+            Expr::BinaryExpr(BinaryExpr {
+                left, op, right, ..
+            }) => {
                 // Try to linerize a nested binary expression tree of the same operator
                 // into a flat vector of expressions.
                 let mut exprs = vec![right.as_ref()];
@@ -945,9 +948,16 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     })),
                 }
             }
-
-            Expr::QualifiedWildcard { .. } | Expr::PromotePrecision { .. } => return Err(Error::General(
-                "Proto serialization error: Expr::QualifiedWildcard { .. }  | Expr::PromotePrecision { .. } not supported"
+            Expr::PromotePrecision(PromotePrecision { expr }) => {
+                let expr = Box::new(protobuf::PromotePrecisionNode {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                });
+                Self {
+                    expr_type: Some(ExprType::PromotePrecision(expr)),
+                }
+            }
+            Expr::QualifiedWildcard { .. } => return Err(Error::General(
+                "Proto serialization error: Expr::QualifiedWildcard { .. } not supported"
                     .to_string(),
             )),
         };

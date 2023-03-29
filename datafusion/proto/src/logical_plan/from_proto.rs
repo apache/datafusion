@@ -32,6 +32,7 @@ use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
     ScalarValue,
 };
+use datafusion_expr::expr::PromotePrecision;
 use datafusion_expr::{
     abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
@@ -1378,6 +1379,14 @@ pub fn parse_expr(
                 data_type: Some(data_type.try_into()?),
             }),
         },
+        ExprType::PromotePrecision(promote) => {
+            let expr = Box::new(parse_required_expr(
+                promote.expr.as_deref(),
+                registry,
+                "expr",
+            )?);
+            Ok(Expr::PromotePrecision(PromotePrecision::new(expr)))
+        }
     }
 }
 
