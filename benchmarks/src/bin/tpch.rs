@@ -1106,7 +1106,7 @@ mod ci {
             let actual_row = &actual_vec[i];
             assert_eq!(expected_row.len(), actual_row.len());
 
-            for j in 0..expected.len() {
+            for j in 0..expected_row.len() {
                 match (&expected_row[j], &actual_row[j]) {
                     (ScalarValue::Float64(Some(l)), ScalarValue::Float64(Some(r))) => {
                         // allow for rounding errors until we move to decimal types
