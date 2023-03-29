@@ -1510,7 +1510,7 @@ mod tests {
     use arrow::array::{Int32Array, TimestampNanosecondArray};
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::util::pretty::{pretty_format_batches, print_batches};
+    use arrow::util::pretty::pretty_format_batches;
     use rstest::*;
     use tempfile::TempDir;
 
@@ -1523,7 +1523,7 @@ mod tests {
         hash_join_utils::tests::complicated_filter, HashJoinExec, PartitionMode,
     };
     use crate::physical_plan::{
-        collect, common, memory::MemoryExec, repartition::RepartitionExec,
+        common, memory::MemoryExec, repartition::RepartitionExec,
     };
     use crate::prelude::{CsvReadOptions, SessionConfig, SessionContext};
     use crate::test_util;
@@ -2248,7 +2248,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn join_change_in_planner_without_sort() -> Result<()> {
-        let config = SessionConfig::new();
+        let config = SessionConfig::new().with_target_partitions(8);
         let ctx = SessionContext::with_config(config);
         let tmp_dir = TempDir::new()?;
         let left_file_path = tmp_dir.path().join("left.csv");
@@ -2303,8 +2303,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn join_change_in_planner_without_sort_not_allowed() -> Result<()> {
-        let config =
-            SessionConfig::new().with_allow_symmetric_joins_without_pruning(false);
+        let config = SessionConfig::new()
+            .with_target_partitions(8)
+            .with_allow_symmetric_joins_without_pruning(false);
         let ctx = SessionContext::with_config(config);
         let tmp_dir = TempDir::new()?;
         let left_file_path = tmp_dir.path().join("left.csv");
