@@ -41,7 +41,7 @@ use apache_avro::{
     AvroResult, Error as AvroError, Reader as AvroReader,
 };
 use arrow::array::{BinaryArray, GenericListArray};
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Fields, SchemaRef};
 use arrow::error::ArrowError::SchemaError;
 use arrow::error::Result as ArrowResult;
 use num_traits::NumCast;
@@ -112,8 +112,8 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
         let projection = self.projection.clone().unwrap_or_default();
         let arrays =
             self.build_struct_array(rows.as_slice(), self.schema.fields(), &projection);
-        let projected_fields: Vec<Field> = if projection.is_empty() {
-            self.schema.fields().to_vec()
+        let projected_fields = if projection.is_empty() {
+            self.schema.fields().clone()
         } else {
             projection
                 .iter()
@@ -545,8 +545,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                     })
                     .collect();
                 let rows = rows.iter().collect::<Vec<&Vec<(String, Value)>>>();
-                let arrays =
-                    self.build_struct_array(rows.as_slice(), fields.as_slice(), &[])?;
+                let arrays = self.build_struct_array(rows.as_slice(), fields, &[])?;
                 let data_type = DataType::Struct(fields.clone());
                 ArrayDataBuilder::new(data_type)
                     .len(rows.len())
@@ -583,7 +582,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
     fn build_struct_array(
         &self,
         rows: RecordSlice,
-        struct_fields: &[Field],
+        struct_fields: &Fields,
         projection: &[String],
     ) -> ArrowResult<Vec<ArrayRef>> {
         let arrays: ArrowResult<Vec<ArrayRef>> = struct_fields

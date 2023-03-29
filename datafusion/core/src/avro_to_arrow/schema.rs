@@ -109,7 +109,7 @@ fn schema_to_field_with_props(
             }
         }
         AvroSchema::Record { name, fields, .. } => {
-            let fields: Result<Vec<Field>> = fields
+            let fields: Result<_> = fields
                 .iter()
                 .map(|field| {
                     let mut props = HashMap::new();
