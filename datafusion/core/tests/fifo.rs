@@ -38,6 +38,7 @@ mod unix_test {
     use std::io::Write;
     use std::path::Path;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
     use std::sync::mpsc::{Receiver, Sender};
     use std::sync::{Arc, Mutex};
@@ -146,7 +147,7 @@ mod unix_test {
     async fn unbounded_file_with_swapped_join(
         #[values(true, false)] unbounded_file: bool,
     ) -> Result<()> {
-        tokio::time::timeout(Duration::from_secs(45),  async {
+        let result = tokio::time::timeout(Duration::from_secs(45),  async {
         // To make unbounded deterministic
         let waiting = Arc::new(Mutex::new(unbounded_file));
         let waiting_thread = waiting.clone();
@@ -225,8 +226,9 @@ mod unix_test {
         let result = result_collector.join().unwrap();
         assert_eq!(interleave(&result), unbounded_file);
             Ok::<(), DataFusionError>(())
-        }).await.expect("Timeout test.")?;
-        Ok(())
+        }).await;
+        assert!(result.is_ok(), "Test did not timeout as expected.");
+        result.unwrap()
     }
 
     #[derive(Debug, PartialEq)]
@@ -239,11 +241,11 @@ mod unix_test {
     // This test provides a relatively realistic end-to-end scenario where
     // we change the join into a [SymmetricHashJoin] to accommodate two
     // unbounded (FIFO) sources.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 12)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn unbounded_file_with_symmetric_join() -> Result<()> {
         let result = tokio::time::timeout(Duration::from_secs(360),  async {
             // To make unbounded deterministic
-            let waiting = Arc::new(Mutex::new(true));
+            let waiting = Arc::new(AtomicBool::new(true));
             let thread_bools = vec![waiting.clone(), waiting.clone()];
             // Create a new temporary FIFO file
             let tmp_dir = TempDir::new()?;
@@ -252,8 +254,8 @@ mod unix_test {
             let (threads, file_paths): (Vec<JoinHandle<()>>, Vec<PathBuf>) = file_names
                 .iter()
                 .zip(thread_bools.iter())
-                .map(|(file_name, lock)| {
-                    let waiting_thread = lock.clone();
+                .map(|(file_name, atomic_bool)| {
+                    let waiting_thread = atomic_bool.clone();
                     let fifo_path = create_fifo_file(&tmp_dir, file_name).unwrap();
                     let return_path = fifo_path.clone();
                     // Timeout for a long period of BrokenPipe error
@@ -271,17 +273,17 @@ mod unix_test {
                         let a1_iter = 0..TEST_DATA_SIZE;
                         // Join key
                         let a2_iter = (0..TEST_DATA_SIZE).map(|x| x % 10);
-                        for (cnt, (a1, a2)) in a1_iter.zip(a2_iter).enumerate() {
+                        for (a1, a2) in a1_iter.zip(a2_iter) {
                             // Wait a reading sign for unbounded execution
                             // After first batch FIFO reading, we will wait for a batch created.
-                            while *waiting_thread.lock().unwrap() && TEST_BATCH_SIZE + 1 < cnt
-                            {
-                                log::debug!("Waiting.");
-                                thread::sleep(Duration::from_millis(200));
-                            }
                             let line = format!("{a1},{a2}\n").to_owned();
                             write_to_fifo(&file, &line, execution_start, broken_pipe_timeout)
                                 .unwrap();
+                        }
+                        while waiting_thread.load(Ordering::SeqCst)
+                        {
+                            log::debug!("Waiting.");
+                            thread::sleep(Duration::from_millis(200));
                         }
                         drop(file);
                         log::debug!("File at {:?} finished.", fifo_path);
@@ -301,8 +303,7 @@ mod unix_test {
             let mut stream = df.execute_stream().await?;
             let mut operations = vec![];
             while let Some(Ok(batch)) = stream.next().await {
-                log::debug!("Test gets the batch");
-                *waiting.lock().unwrap() = false;
+                waiting.store(false, Ordering::SeqCst);
                 let op = if batch.column(0).null_count() > 0 {
                     log::debug!("Test gets the LeftUnmatched");
                     JoinOperation::LeftUnmatched
