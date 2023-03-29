@@ -3,6 +3,7 @@ on:
     branches:
       - main
     paths:
+      - .asf.yaml
       - .github/workflows/docs.yaml
       - docs/**
 

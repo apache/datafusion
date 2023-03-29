@@ -83,3 +83,8 @@ where d3_date > d2_date + INTERVAL '5 days'
 d
 g
 h
+
+## Plan error when compare Utf8 and timestamp in where clause
+statement error DataFusion error: Error during planning: The type of Timestamp\(Nanosecond, Some\("\+00:00"\)\) Plus Utf8 of binary physical should be same
+select i_item_desc from test
+where d3_date > now() + '5 days';

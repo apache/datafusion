@@ -27,11 +27,10 @@ use arrow::{
     error::ArrowError,
     record_batch::RecordBatch,
 };
+use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    and,
-    expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
-    lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Volatility,
+    and, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
@@ -168,7 +167,9 @@ struct ConstEvaluator<'a> {
     input_batch: RecordBatch,
 }
 
-impl<'a> ExprRewriter for ConstEvaluator<'a> {
+impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
+    type N = Expr;
+
     fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
         // Default to being able to evaluate this node
         self.can_evaluate.push(true);
@@ -338,7 +339,9 @@ impl<'a, S> Simplifier<'a, S> {
     }
 }
 
-impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
+impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
+    type N = Expr;
+
     /// rewrite the expression simplifying any constant expressions
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         use datafusion_expr::Operator::{

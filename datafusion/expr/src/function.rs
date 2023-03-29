@@ -456,7 +456,16 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
                     DataType::Timestamp(TimeUnit::Nanosecond, None),
                 ]),
                 TypeSignature::Exact(vec![
+                    DataType::Interval(IntervalUnit::MonthDayNano),
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                ]),
+                TypeSignature::Exact(vec![
                     DataType::Interval(IntervalUnit::DayTime),
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Interval(IntervalUnit::MonthDayNano),
                     DataType::Timestamp(TimeUnit::Nanosecond, None),
                 ]),
             ],
