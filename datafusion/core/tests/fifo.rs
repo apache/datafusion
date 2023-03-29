@@ -44,7 +44,6 @@ mod unix_test {
     use std::thread;
     use std::thread::JoinHandle;
     use std::time::{Duration, Instant};
-    use arrow::util::pretty::print_batches;
     use tempfile::TempDir;
 
     // !  For the sake of the test, do not alter the numbers. !
