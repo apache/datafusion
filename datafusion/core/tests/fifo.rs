@@ -239,7 +239,7 @@ mod unix_test {
     // This test provides a relatively realistic end-to-end scenario where
     // we change the join into a [SymmetricHashJoin] to accommodate two
     // unbounded (FIFO) sources.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 12)]
     async fn unbounded_file_with_symmetric_join() -> Result<()> {
         let result = tokio::time::timeout(Duration::from_secs(360),  async {
             // To make unbounded deterministic
