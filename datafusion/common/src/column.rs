@@ -112,13 +112,15 @@ impl Column {
 
     /// Serialize column into a quoted flat name string
     pub fn quoted_flat_name(&self) -> String {
-        // TODO: quote identifiers only when special characters present
-        // see: https://github.com/apache/arrow-datafusion/issues/5523
         match &self.relation {
             Some(r) => {
-                format!("{}.{}", r.to_quoted_string(), quote_identifier(&self.name))
+                format!(
+                    "{}.{}",
+                    r.to_quoted_string(),
+                    quote_identifier(self.name.as_str())
+                )
             }
-            None => quote_identifier(&self.name),
+            None => quote_identifier(&self.name).to_string(),
         }
     }
 
@@ -405,7 +407,7 @@ mod tests {
                 &[],
             )
             .expect_err("should've failed to find field");
-        let expected = r#"Schema error: No field named "z". Valid fields are "t1"."a", "t1"."b", "t2"."c", "t2"."d", "t3"."a", "t3"."b", "t3"."c", "t3"."d", "t3"."e"."#;
+        let expected = r#"Schema error: No field named z. Valid fields are t1.a, t1.b, t2.c, t2.d, t3.a, t3.b, t3.c, t3.d, t3.e."#;
         assert_eq!(err.to_string(), expected);
 
         // ambiguous column reference
@@ -416,7 +418,7 @@ mod tests {
                 &[],
             )
             .expect_err("should've found ambiguous field");
-        let expected = "Schema error: Ambiguous reference to unqualified field \"a\"";
+        let expected = "Schema error: Ambiguous reference to unqualified field a";
         assert_eq!(err.to_string(), expected);
 
         Ok(())

@@ -272,14 +272,14 @@ impl<'a> TableReference<'a> {
     /// ```
     /// # use datafusion_common::TableReference;
     /// let table_reference = TableReference::partial("myschema", "mytable");
-    /// assert_eq!(table_reference.to_quoted_string(), r#""myschema"."mytable""#);
+    /// assert_eq!(table_reference.to_quoted_string(), r#"myschema.mytable"#);
     ///
     /// let table_reference = TableReference::partial("MySchema", "MyTable");
     /// assert_eq!(table_reference.to_quoted_string(), r#""MySchema"."MyTable""#);
     /// ```
     pub fn to_quoted_string(&self) -> String {
         match self {
-            TableReference::Bare { table } => quote_identifier(table),
+            TableReference::Bare { table } => quote_identifier(table).to_string(),
             TableReference::Partial { schema, table } => {
                 format!("{}.{}", quote_identifier(schema), quote_identifier(table))
             }
