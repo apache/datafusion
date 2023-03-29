@@ -384,6 +384,7 @@ impl AggregateExec {
                     context,
                     partition,
                     self.ordered_indices.clone(),
+                    self.out_ordering.clone(),
                 )?,
             ))
         }

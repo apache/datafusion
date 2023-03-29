@@ -19,12 +19,13 @@
 
 use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::ArrayRef;
-use arrow::compute::SortOptions;
+use arrow::compute::{lexicographical_partition_ranges, SortColumn, SortOptions};
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::{Token, TokenWithLocation};
 use std::cmp::Ordering;
+use std::ops::Range;
 
 /// Given column vectors, returns row at `idx`.
 pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValue>> {
@@ -256,6 +257,22 @@ pub fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Vec<T> {
         result.push(searched[*idx].clone());
     }
     result
+}
+
+/// evaluate the partition points given the sort columns; if the sort columns are
+/// empty then the result will be a single element vec of the whole column rows.
+pub fn evaluate_partition_points(
+    num_rows: usize,
+    partition_columns: &[SortColumn],
+) -> Result<Vec<Range<usize>>> {
+    Ok(if partition_columns.is_empty() {
+        vec![Range {
+            start: 0,
+            end: num_rows,
+        }]
+    } else {
+        lexicographical_partition_ranges(partition_columns)?.collect()
+    })
 }
 
 #[cfg(test)]

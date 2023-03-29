@@ -692,12 +692,12 @@ mod tests {
         // Source is ordered by low_card_col1, low_card_col2, inc_col
         let schema = &record_batch.schema();
         let ordering = try_create_output_ordering(&ordering, schema)?;
-        let batches = split_record_batch(record_batch, 100);
+        // let batches = split_record_batch(record_batch, 100);
+        let batches = split_record_batch(record_batch, 1);
         let memory_exec = MemoryExec::try_new(&[batches], schema.clone(), None)?
             .with_sort_information(ordering);
 
         let input = Arc::new(memory_exec) as Arc<dyn ExecutionPlan>;
-        // let schema = input.schema();
         let aggregate_expr =
             vec![
                 Arc::new(Sum::new(col("inc_col", schema)?, "sum1", DataType::Int64))
@@ -707,8 +707,6 @@ mod tests {
         // let expr = vec![(col("unsorted_col", &schema)?, "unsorted_col".to_string())];
         let group_by = PhysicalGroupBy::new_single(expr);
         let mode = AggregateMode::Partial;
-        // let mode = AggregateMode::Final;
-        // let mode = AggregateMode::FinalPartitioned;
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             mode,
             group_by,

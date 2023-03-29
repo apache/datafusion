@@ -51,7 +51,7 @@ mod tests {
             vec!["d", "c", "a"],
             vec!["d", "c", "b", "a"],
         ];
-        let n = 100;
+        let n = 300;
         let distincts = vec![10, 20];
         for distinct in distincts {
             let mut handles = Vec::new();

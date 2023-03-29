@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use ahash::RandomState;
-use arrow::row::{OwnedRow, RowConverter, SortField};
+use arrow::row::{OwnedRow, RowConverter, Rows, SortField};
 use datafusion_physical_expr::hash_utils::create_hashes;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
@@ -42,13 +42,15 @@ use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use arrow::array::{new_null_array, PrimitiveArray};
 use arrow::array::{Array, UInt32Builder};
-use arrow::compute::cast;
+use arrow::compute::{cast, SortColumn};
 use arrow::datatypes::{DataType, Schema, UInt32Type};
 use arrow::{array::ArrayRef, compute};
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_common::utils::get_row_at_idx;
+use datafusion_common::utils::{evaluate_partition_points, get_row_at_idx};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
+use datafusion_physical_expr::window::PartitionKey;
+use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_row::accessor::RowAccessor;
 use datafusion_row::layout::RowLayout;
 use datafusion_row::reader::{read_row, RowReader};
@@ -102,7 +104,9 @@ pub(crate) struct GroupedHashAggregateStream {
     /// second element in the array corresponds to row accumulators
     indices: [Vec<Range<usize>>; 2],
     ordered_indices: Vec<usize>,
+    ordering: Vec<PhysicalSortExpr>,
     is_end: bool,
+    is_fully_sorted: bool,
 }
 
 #[derive(Debug)]
@@ -135,6 +139,7 @@ impl GroupedHashAggregateStream {
         context: Arc<TaskContext>,
         partition: usize,
         ordered_indices: Vec<usize>,
+        ordering: Vec<PhysicalSortExpr>,
     ) -> Result<Self> {
         let timer = baseline_metrics.elapsed_compute().timer();
         let mut start_idx = group_by.expr.len();
@@ -201,6 +206,7 @@ impl GroupedHashAggregateStream {
 
         let exec_state = ExecutionState::ReadingInput;
 
+        let is_fully_sorted = ordered_indices.len() == group_by.expr.len();
         Ok(GroupedHashAggregateStream {
             schema: Arc::clone(&schema),
             mode,
@@ -222,6 +228,8 @@ impl GroupedHashAggregateStream {
             indices: [normal_agg_indices, row_agg_indices],
             ordered_indices,
             is_end: false,
+            ordering,
+            is_fully_sorted,
         })
     }
 }
@@ -306,6 +314,62 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 }
 
 impl GroupedHashAggregateStream {
+    fn get_per_partition_indices(
+        &self,
+        group_rows: &Rows,
+        group_values: &[ArrayRef],
+    ) -> Result<Vec<(PartitionKey, u64, Vec<u32>)>> {
+        let n_rows = group_rows.num_rows();
+        // 1.1 Calculate the group keys for the group values
+        let mut batch_hashes = vec![0; n_rows];
+        create_hashes(group_values, &self.random_state, &mut batch_hashes)?;
+        let mut res: Vec<(PartitionKey, u64, Vec<u32>)> = vec![];
+        if self.is_fully_sorted {
+            let sort_column = self
+                .ordered_indices
+                .iter()
+                .enumerate()
+                .map(|(idx, cur_idx)| SortColumn {
+                    values: group_values[*cur_idx].clone(),
+                    options: Some(self.ordering[idx].options),
+                })
+                .collect::<Vec<_>>();
+            let n_rows = group_rows.num_rows();
+            let ranges = evaluate_partition_points(n_rows, &sort_column)?;
+            for range in ranges {
+                let row = get_row_at_idx(group_values, range.start)?;
+                let indices = (range.start as u32..range.end as u32).collect::<Vec<_>>();
+                res.push((row, batch_hashes[range.start], indices))
+            }
+        } else {
+            let mut row_map: RawTable<(u64, usize)> = RawTable::with_capacity(n_rows);
+            for (hash, row_idx) in batch_hashes.into_iter().zip(0u32..) {
+                let entry = row_map.get_mut(hash, |(_hash, group_idx)| {
+                    // In case of hash collusion. Get the partition where PartitionKey is same.
+                    // We can safely get first index of the partition indices (During initialization one partition indices has size 1)
+                    let row = get_row_at_idx(group_values, row_idx as usize).unwrap();
+                    row.eq(&res[*group_idx].0)
+                    // equal_rows(row_idx, res[*group_idx].1[0], columns, columns, true).unwrap()
+                });
+                match entry {
+                    // Existing partition. Update indices for the corresponding partition.
+                    Some((_hash, group_idx)) => res[*group_idx].2.push(row_idx),
+                    None => {
+                        row_map.insert(
+                            hash,
+                            (hash, res.len()),
+                            |(hash, _group_index)| *hash,
+                        );
+                        let row = get_row_at_idx(group_values, row_idx as usize)?;
+                        // This is a new partition its only index is row_idx for now.
+                        res.push((row, hash, vec![row_idx]));
+                    }
+                }
+            }
+        }
+        Ok(res)
+    }
+
     /// Perform group-by aggregation for the given [`RecordBatch`].
     ///
     /// If successful, this returns the additional number of bytes that were allocated during this process.
@@ -315,11 +379,6 @@ impl GroupedHashAggregateStream {
         let group_by_values = evaluate_group_by(&self.group_by, &batch)?;
         // Keep track of memory allocated:
         let mut allocated = 0usize;
-        let RowAggregationState {
-            map: row_map,
-            group_states: row_group_states,
-            ..
-        } = &mut self.row_aggr_state;
 
         // Evaluate the aggregation expressions.
         // We could evaluate them after the `take`, but since we need to evaluate all
@@ -340,19 +399,28 @@ impl GroupedHashAggregateStream {
             // track which entries in `aggr_state` have rows in this batch to aggregate
             let mut groups_with_rows = vec![];
 
+            let n_rows = group_rows.num_rows();
             // 1.1 Calculate the group keys for the group values
-            let mut batch_hashes = vec![0; batch.num_rows()];
+            let mut batch_hashes = vec![0; n_rows];
             create_hashes(group_values, &self.random_state, &mut batch_hashes)?;
+            let per_partition_indices =
+                self.get_per_partition_indices(&group_rows, group_values)?;
 
-            for (row, hash) in batch_hashes.into_iter().enumerate() {
+            let RowAggregationState {
+                map: row_map,
+                group_states: row_group_states,
+                ..
+            } = &mut self.row_aggr_state;
+
+            for (row, hash, indices) in per_partition_indices {
                 let entry = row_map.get_mut(hash, |(_hash, group_idx)| {
                     // verify that a group that we are inserting with hash is
                     // actually the same key value as the group in
                     // existing_idx  (aka group_values @ row)
                     let group_state = &row_group_states[*group_idx];
-                    group_rows.row(row) == group_state.group_by_values.row()
+                    group_rows.row(indices[0] as usize)
+                        == group_state.group_by_values.row()
                 });
-
                 match entry {
                     // Existing entry for this group value
                     Some((_, group_idx)) => {
@@ -362,24 +430,23 @@ impl GroupedHashAggregateStream {
                         if group_state.indices.is_empty() {
                             groups_with_rows.push(*group_idx);
                         };
-
-                        group_state
-                            .indices
-                            .push_accounted(row as u32, &mut allocated); // remember this row
+                        for row in indices {
+                            group_state.indices.push_accounted(row, &mut allocated);
+                            // remember this row
+                        }
                     }
                     //  1.2 Need to create new entry
                     None => {
                         let accumulator_set =
                             aggregates::create_accumulators(&self.normal_aggr_expr)?;
-                        let group_by_values = get_row_at_idx(group_values, row)?;
                         let ordered_columns = self
                             .ordered_indices
                             .iter()
-                            .map(|idx| group_by_values[*idx].clone())
+                            .map(|idx| row[*idx].clone())
                             .collect::<Vec<_>>();
                         // Add new entry to group_states and save newly created index
                         let group_state = RowGroupState {
-                            group_by_values: group_rows.row(row).owned(),
+                            group_by_values: group_rows.row(indices[0] as usize).owned(),
                             ordered_columns,
                             emit_status: GroupStatus::CanEmit(false),
                             hash,
@@ -389,7 +456,7 @@ impl GroupedHashAggregateStream {
                                     .fixed_part_width()
                             ],
                             accumulator_set,
-                            indices: vec![row as u32], // 1.3
+                            indices, // 1.3
                         };
                         let group_idx = row_group_states.len();
 
@@ -425,19 +492,41 @@ impl GroupedHashAggregateStream {
                 };
             }
 
+            let RowAggregationState {
+                group_states: row_group_states,
+                ..
+            } = &mut self.row_aggr_state;
+
             // Collect all indices + offsets based on keys in this vec
             let mut batch_indices: UInt32Builder = UInt32Builder::with_capacity(0);
             let mut offsets = vec![0];
             let mut offset_so_far = 0;
-            for &group_idx in groups_with_rows.iter() {
-                let indices = &row_group_states[group_idx].indices;
-                batch_indices.append_slice(indices);
-                offset_so_far += indices.len();
-                offsets.push(offset_so_far);
-            }
-            let batch_indices = batch_indices.finish();
-            let row_values = get_at_indices(&row_aggr_input_values, &batch_indices);
-            let normal_values = get_at_indices(&normal_aggr_input_values, &batch_indices);
+
+            let (row_values, normal_values) = if self.is_fully_sorted {
+                for &group_idx in groups_with_rows.iter() {
+                    let indices = &row_group_states[group_idx].indices;
+                    let start = indices[0];
+                    // Contains at least 1 element.
+                    let end = indices[indices.len() - 1] + 1;
+                    offset_so_far += (end - start) as usize;
+                    offsets.push(offset_so_far);
+                }
+                let row_values = row_aggr_input_values.clone();
+                let normal_values = normal_aggr_input_values.clone();
+                (row_values, normal_values)
+            } else {
+                for &group_idx in groups_with_rows.iter() {
+                    let indices = &row_group_states[group_idx].indices;
+                    batch_indices.append_slice(indices);
+                    offset_so_far += indices.len();
+                    offsets.push(offset_so_far);
+                }
+                let batch_indices = batch_indices.finish();
+                let row_values = get_at_indices(&row_aggr_input_values, &batch_indices);
+                let normal_values =
+                    get_at_indices(&normal_aggr_input_values, &batch_indices);
+                (row_values, normal_values)
+            };
 
             // 2.1 for each key in this batch
             // 2.2 for each aggregation
@@ -796,9 +885,9 @@ fn read_as_batch(rows: &[Vec<u8>], schema: &Schema, row_type: RowType) -> Vec<Ar
 }
 
 fn get_at_indices(
-    input_values: &[Vec<Arc<dyn Array>>],
+    input_values: &[Vec<ArrayRef>],
     batch_indices: &PrimitiveArray<UInt32Type>,
-) -> Vec<Vec<Arc<dyn Array>>> {
+) -> Vec<Vec<ArrayRef>> {
     input_values
         .iter()
         .map(|array| {
