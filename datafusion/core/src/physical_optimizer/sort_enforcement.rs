@@ -47,7 +47,10 @@ use crate::physical_plan::{with_new_children_if_necessary, Distribution, Executi
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{reverse_sort_options, DataFusionError};
-use datafusion_physical_expr::utils::{ordering_satisfy, ordering_satisfy_concrete};
+use datafusion_physical_expr::utils::{
+    make_sort_exprs_from_requirements, ordering_satisfy,
+    ordering_satisfy_requirement_concrete,
+};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use itertools::{concat, izip};
 use std::iter::zip;
@@ -471,17 +474,20 @@ fn ensure_sorting(
         let physical_ordering = child.output_ordering();
         match (required_ordering, physical_ordering) {
             (Some(required_ordering), Some(physical_ordering)) => {
-                let is_ordering_satisfied = ordering_satisfy_concrete(
+                if !ordering_satisfy_requirement_concrete(
                     physical_ordering,
-                    required_ordering,
+                    &required_ordering,
                     || child.equivalence_properties(),
-                );
-                if !is_ordering_satisfied {
+                ) {
                     // Make sure we preserve the ordering requirements:
                     update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
-                    let sort_expr = required_ordering.to_vec();
+                    let sort_expr = make_sort_exprs_from_requirements(&required_ordering);
                     add_sort_above(child, sort_expr)?;
-                    *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
+                    if is_sort(child) {
+                        *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
+                    } else {
+                        *sort_onwards = None;
+                    }
                 }
                 if let Some(tree) = sort_onwards {
                     // For window expressions, we can remove some sorts when we can
@@ -497,7 +503,8 @@ fn ensure_sorting(
             }
             (Some(required), None) => {
                 // Ordering requirement is not met, we should add a `SortExec` to the plan.
-                add_sort_above(child, required.to_vec())?;
+                let sort_expr = make_sort_exprs_from_requirements(&required);
+                add_sort_above(child, sort_expr)?;
                 *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
             }
             (None, Some(_)) => {
@@ -664,7 +671,6 @@ fn analyze_window_sort_removal(
                 new_child,
                 new_schema,
                 partition_keys.to_vec(),
-                Some(physical_ordering_common),
             )?) as _
         } else {
             Arc::new(WindowAggExec::try_new(
@@ -672,7 +678,6 @@ fn analyze_window_sort_removal(
                 new_child,
                 new_schema,
                 partition_keys.to_vec(),
-                Some(physical_ordering_common),
             )?) as _
         };
         return Ok(Some(PlanWithCorrespondingSort::new(new_plan)));
@@ -1889,7 +1894,6 @@ mod tests {
                 input.clone(),
                 input.schema(),
                 vec![],
-                Some(sort_exprs),
             )
             .unwrap(),
         )
