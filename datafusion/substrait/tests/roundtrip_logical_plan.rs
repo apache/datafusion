@@ -21,7 +21,7 @@ use datafusion_substrait::logical_plan::{consumer, producer};
 mod tests {
 
     use crate::{consumer::from_substrait_plan, producer::to_substrait_plan};
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion::error::Result;
     use datafusion::prelude::*;
     use substrait::proto::extensions::simple_extension_declaration::MappingType;
@@ -265,6 +265,24 @@ mod tests {
         roundtrip("SELECT * FROM datafusion.public.data;").await
     }
 
+    #[tokio::test]
+    async fn read_all_types() -> Result<()> {
+        let mut ctx = create_all_type_context().await?;
+        let df = ctx.sql("SELECT * FROM data;").await?;
+        let plan = df.into_optimized_plan()?;
+        let proto = to_substrait_plan(&plan)?;
+        let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+        let plan2 = ctx.state().optimize(&plan2)?;
+
+        println!("{plan:#?}");
+        println!("{plan2:#?}");
+
+        let plan1str = format!("{plan:?}");
+        let plan2str = format!("{plan2:?}");
+        assert_eq!(plan1str, plan2str);
+        Ok(())
+    }
+
     async fn assert_expected_plan(sql: &str, expected_plan_str: &str) -> Result<()> {
         let mut ctx = create_context().await?;
         let df = ctx.sql(sql).await?;
@@ -371,6 +389,54 @@ mod tests {
             .await?;
         ctx.register_csv("data2", "tests/testdata/data.csv", CsvReadOptions::new())
             .await?;
+        Ok(ctx)
+    }
+
+    /// Cover all supported types
+    async fn create_all_type_context() -> Result<SessionContext> {
+        let ctx = SessionContext::new();
+        let mut explicit_options = CsvReadOptions::new();
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Boolean, true),
+            Field::new("b", DataType::Int8, true),
+            Field::new("c", DataType::UInt8, true),
+            Field::new("d", DataType::Int16, true),
+            Field::new("e", DataType::UInt16, true),
+            Field::new("f", DataType::Int32, true),
+            Field::new("g", DataType::UInt32, true),
+            Field::new("h", DataType::Int64, true),
+            Field::new("i", DataType::UInt64, true),
+            Field::new("j", DataType::Float32, true),
+            Field::new("k", DataType::Float64, true),
+            Field::new("l", DataType::Timestamp(TimeUnit::Second, None), true),
+            Field::new("m", DataType::Timestamp(TimeUnit::Millisecond, None), true),
+            Field::new("n", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+            Field::new("o", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+            Field::new("p", DataType::Date32, true),
+            Field::new("q", DataType::Date64, true),
+            Field::new("r", DataType::Binary, true),
+            Field::new("s", DataType::LargeBinary, true),
+            Field::new("t", DataType::FixedSizeBinary(42), true),
+            Field::new("u", DataType::Utf8, true),
+            Field::new("v", DataType::LargeUtf8, true),
+            Field::new(
+                "w",
+                DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
+                true,
+            ),
+            Field::new(
+                "x",
+                DataType::LargeList(Box::new(Field::new("item", DataType::Int64, true))),
+                true,
+            ),
+            Field::new("y", DataType::Decimal128(12, 34), true),
+            Field::new("z", DataType::Decimal256(12, 34), true),
+        ]);
+        explicit_options.schema = Some(&schema);
+        explicit_options.has_header = false;
+        ctx.register_csv("data", "tests/testdata/empty.csv", explicit_options)
+            .await?;
+
         Ok(ctx)
     }
 }

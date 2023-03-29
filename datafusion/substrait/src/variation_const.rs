@@ -15,10 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod logical_plan;
-pub mod physical_plan;
-pub mod serializer;
-mod variation_const;
+//! Type variation constants
 
-// Re-export substrait crate
-pub use substrait;
+pub const DEFAULT_TYPE_REF: u32 = 0;
+pub const UNSIGNED_INTEGER_TYPE_REF: u32 = 1;
+pub const TIMESTAMP_SECOND_TYPE_REF: u32 = 0;
+pub const TIMESTAMP_MILLI_TYPE_REF: u32 = 1;
+pub const TIMESTAMP_MICRO_TYPE_REF: u32 = 2;
+pub const TIMESTAMP_NANO_TYPE_REF: u32 = 3;
+pub const DATE_32_TYPE_REF: u32 = 0;
+pub const DATE_64_TYPE_REF: u32 = 1;
+pub const DEFAULT_CONTAINER_TYPE_REF: u32 = 0;
+pub const LARGE_CONTAINER_TYPE_REF: u32 = 1;
+pub const DECIMAL_128_TYPE_REF: u32 = 0;
+pub const DECIMAL_256_TYPE_REF: u32 = 1;

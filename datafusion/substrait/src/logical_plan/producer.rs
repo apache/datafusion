@@ -18,7 +18,7 @@
 use std::{collections::HashMap, mem, sync::Arc};
 
 use datafusion::{
-    arrow::datatypes::DataType,
+    arrow::datatypes::{DataType, TimeUnit},
     error::{DataFusionError, Result},
     logical_expr::{WindowFrame, WindowFrameBound},
     prelude::JoinType,
@@ -61,6 +61,13 @@ use substrait::{
         ReadRel, Rel, RelRoot, SortField, SortRel,
     },
     version,
+};
+
+use crate::variation_const::{
+    DATE_32_TYPE_REF, DATE_64_TYPE_REF, DECIMAL_128_TYPE_REF, DECIMAL_256_TYPE_REF,
+    DEFAULT_CONTAINER_TYPE_REF, DEFAULT_TYPE_REF, LARGE_CONTAINER_TYPE_REF,
+    TIMESTAMP_MICRO_TYPE_REF, TIMESTAMP_MILLI_TYPE_REF, TIMESTAMP_NANO_TYPE_REF,
+    TIMESTAMP_SECOND_TYPE_REF, UNSIGNED_INTEGER_TYPE_REF,
 };
 
 /// Convert DataFusion LogicalPlan to Substrait Plan
@@ -728,7 +735,6 @@ pub fn to_substrait_rex(
 }
 
 fn to_substrait_type(dt: &DataType) -> Result<substrait::proto::Type> {
-    let default_type_ref = 0;
     let default_nullability = r#type::Nullability::Required as i32;
     match dt {
         DataType::Null => Err(DataFusionError::Internal(
@@ -736,37 +742,173 @@ fn to_substrait_type(dt: &DataType) -> Result<substrait::proto::Type> {
         )),
         DataType::Boolean => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Bool(r#type::Boolean {
-                type_variation_reference: default_type_ref,
+                type_variation_reference: DEFAULT_TYPE_REF,
                 nullability: default_nullability,
             })),
         }),
         DataType::Int8 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I8(r#type::I8 {
-                type_variation_reference: default_type_ref,
+                type_variation_reference: DEFAULT_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        }),
+        DataType::UInt8 => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::I8(r#type::I8 {
+                type_variation_reference: UNSIGNED_INTEGER_TYPE_REF,
                 nullability: default_nullability,
             })),
         }),
         DataType::Int16 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I16(r#type::I16 {
-                type_variation_reference: default_type_ref,
+                type_variation_reference: DEFAULT_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        }),
+        DataType::UInt16 => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::I16(r#type::I16 {
+                type_variation_reference: UNSIGNED_INTEGER_TYPE_REF,
                 nullability: default_nullability,
             })),
         }),
         DataType::Int32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I32(r#type::I32 {
-                type_variation_reference: default_type_ref,
+                type_variation_reference: DEFAULT_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        }),
+        DataType::UInt32 => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::I32(r#type::I32 {
+                type_variation_reference: UNSIGNED_INTEGER_TYPE_REF,
                 nullability: default_nullability,
             })),
         }),
         DataType::Int64 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::I64(r#type::I64 {
-                type_variation_reference: default_type_ref,
+                type_variation_reference: DEFAULT_TYPE_REF,
                 nullability: default_nullability,
             })),
         }),
+        DataType::UInt64 => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::I64(r#type::I64 {
+                type_variation_reference: UNSIGNED_INTEGER_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        }),
+        // Float16 is not supported in Substrait
+        DataType::Float32 => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::Fp32(r#type::Fp32 {
+                type_variation_reference: DEFAULT_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        }),
+        DataType::Float64 => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::Fp64(r#type::Fp64 {
+                type_variation_reference: DEFAULT_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        }),
+        // Timezone is ignored.
+        DataType::Timestamp(unit, _) => {
+            let type_variation_reference = match unit {
+                TimeUnit::Second => TIMESTAMP_SECOND_TYPE_REF,
+                TimeUnit::Millisecond => TIMESTAMP_MILLI_TYPE_REF,
+                TimeUnit::Microsecond => TIMESTAMP_MICRO_TYPE_REF,
+                TimeUnit::Nanosecond => TIMESTAMP_NANO_TYPE_REF,
+            };
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::Timestamp(r#type::Timestamp {
+                    type_variation_reference,
+                    nullability: default_nullability,
+                })),
+            })
+        }
+        DataType::Date32 => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::Date(r#type::Date {
+                type_variation_reference: DATE_32_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        }),
+        DataType::Date64 => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::Date(r#type::Date {
+                type_variation_reference: DATE_64_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        }),
+        DataType::Binary => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::Binary(r#type::Binary {
+                type_variation_reference: DEFAULT_CONTAINER_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        }),
+        DataType::FixedSizeBinary(length) => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::FixedBinary(r#type::FixedBinary {
+                length: *length,
+                type_variation_reference: DEFAULT_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        }),
+        DataType::LargeBinary => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::Binary(r#type::Binary {
+                type_variation_reference: LARGE_CONTAINER_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        }),
+        DataType::Utf8 => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::String(r#type::String {
+                type_variation_reference: DEFAULT_CONTAINER_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        }),
+        DataType::LargeUtf8 => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::String(r#type::String {
+                type_variation_reference: LARGE_CONTAINER_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        }),
+        DataType::List(inner) => {
+            let inner_type = to_substrait_type(inner.data_type())?;
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::List(Box::new(r#type::List {
+                    r#type: Some(Box::new(inner_type)),
+                    type_variation_reference: DEFAULT_CONTAINER_TYPE_REF,
+                    nullability: default_nullability,
+                }))),
+            })
+        }
+        DataType::LargeList(inner) => {
+            let inner_type = to_substrait_type(inner.data_type())?;
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::List(Box::new(r#type::List {
+                    r#type: Some(Box::new(inner_type)),
+                    type_variation_reference: LARGE_CONTAINER_TYPE_REF,
+                    nullability: default_nullability,
+                }))),
+            })
+        }
+        DataType::Struct(fields) => {
+            let field_types = fields
+                .iter()
+                .map(|field| to_substrait_type(field.data_type()))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::Struct(r#type::Struct {
+                    types: field_types,
+                    type_variation_reference: DEFAULT_TYPE_REF,
+                    nullability: default_nullability,
+                })),
+            })
+        }
         DataType::Decimal128(p, s) => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Decimal(r#type::Decimal {
-                type_variation_reference: default_type_ref,
+                type_variation_reference: DECIMAL_128_TYPE_REF,
+                nullability: default_nullability,
+                scale: *s as i32,
+                precision: *p as i32,
+            })),
+        }),
+        DataType::Decimal256(p, s) => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::Decimal(r#type::Decimal {
+                type_variation_reference: DECIMAL_256_TYPE_REF,
                 nullability: default_nullability,
                 scale: *s as i32,
                 precision: *p as i32,
