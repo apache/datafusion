@@ -21,12 +21,12 @@ use std::sync::Arc;
 
 use datafusion_common::Result;
 use datafusion_expr::{
-    CrossJoin,
     logical_plan::{Join, JoinType, Limit, LogicalPlan, Sort, TableScan, Union},
+    CrossJoin,
 };
 
-use crate::{OptimizerConfig, OptimizerRule};
 use crate::optimizer::ApplyOrder;
+use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimization rule that tries to push down LIMIT.
 #[derive(Default)]
@@ -106,22 +106,18 @@ impl OptimizerRule for PushDownLimit {
             };
         }
 
-
         let fetch = match limit.fetch {
             Some(fetch) => fetch,
             None => return Ok(None),
         };
-        println!("{fetch:?}");
         let skip = limit.skip;
         let child_plan = &*limit.input;
-        println!("{child_plan:?}");
 
         let plan = match child_plan {
             LogicalPlan::TableScan(scan) => {
                 let limit = if fetch != 0 { fetch + skip } else { 0 };
                 let new_fetch = scan.fetch.map(|x| min(x, limit)).or(Some(limit));
                 if new_fetch == scan.fetch {
-                    println!("here");
                     None
                 } else {
                     let new_input = LogicalPlan::TableScan(TableScan {
@@ -132,7 +128,6 @@ impl OptimizerRule for PushDownLimit {
                         fetch: scan.fetch.map(|x| min(x, limit)).or(Some(limit)),
                         projected_schema: scan.projected_schema.clone(),
                     });
-                    println!("new input");
                     Some(plan.with_new_inputs(&[new_input])?)
                 }
             }
