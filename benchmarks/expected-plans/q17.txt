@@ -1,7 +1,7 @@
 +---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | plan_type     | plan                                                                                                                                                                            |
 +---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| logical_plan  | Projection: CAST(SUM(lineitem.l_extendedprice) AS Float64) / Float64(7) AS avg_yearly                                                                                           |
+| logical_plan  | Projection: PROMOTE_PRECISION(CAST(SUM(lineitem.l_extendedprice) AS Float64)) / Float64(7) AS avg_yearly                                                                        |
 |               |   Aggregate: groupBy=[[]], aggr=[[SUM(lineitem.l_extendedprice)]]                                                                                                               |
 |               |     Projection: lineitem.l_extendedprice                                                                                                                                        |
 |               |       Filter: CAST(lineitem.l_quantity AS Decimal128(30, 15)) < CAST(__scalar_sq_1.__value AS Decimal128(30, 15)) AND __scalar_sq_1.l_partkey = lineitem.l_partkey              |
@@ -14,10 +14,10 @@
 |               |                   Filter: part.p_brand = Utf8("Brand#23") AND part.p_container = Utf8("MED BOX")                                                                                |
 |               |                     TableScan: part projection=[p_partkey, p_brand, p_container]                                                                                                |
 |               |             SubqueryAlias: __scalar_sq_1                                                                                                                                        |
-|               |               Projection: lineitem.l_partkey, Float64(0.2) * CAST(AVG(lineitem.l_quantity) AS Float64) AS __value                                                               |
+|               |               Projection: lineitem.l_partkey, Float64(0.2) * PROMOTE_PRECISION(CAST(AVG(lineitem.l_quantity) AS Float64)) AS __value                                            |
 |               |                 Aggregate: groupBy=[[lineitem.l_partkey]], aggr=[[AVG(lineitem.l_quantity)]]                                                                                    |
 |               |                   TableScan: lineitem projection=[l_partkey, l_quantity]                                                                                                        |
-| physical_plan | ProjectionExec: expr=[CAST(SUM(lineitem.l_extendedprice)@0 AS Float64) / 7 as avg_yearly]                                                                                       |
+| physical_plan | ProjectionExec: expr=[PROMOTE_PRECISION(CAST(SUM(lineitem.l_extendedprice)@0 AS Float64)) / 7 as avg_yearly]                                                                    |
 |               |   AggregateExec: mode=Final, gby=[], aggr=[SUM(lineitem.l_extendedprice)]                                                                                                       |
 |               |     CoalescePartitionsExec                                                                                                                                                      |
 |               |       AggregateExec: mode=Partial, gby=[], aggr=[SUM(lineitem.l_extendedprice)]                                                                                                 |
@@ -44,7 +44,7 @@
 |               |                                           CoalesceBatchesExec: target_batch_size=8192                                                                                           |
 |               |                                             FilterExec: p_brand@1 = Brand#23 AND p_container@2 = MED BOX                                                                        |
 |               |                                               MemoryExec: partitions=0, partition_sizes=[]                                                                                      |
-|               |                     ProjectionExec: expr=[l_partkey@0 as l_partkey, 0.2 * CAST(AVG(lineitem.l_quantity)@1 AS Float64) as __value]                                               |
+|               |                     ProjectionExec: expr=[l_partkey@0 as l_partkey, 0.2 * PROMOTE_PRECISION(CAST(AVG(lineitem.l_quantity)@1 AS Float64)) as __value]                            |
 |               |                       AggregateExec: mode=FinalPartitioned, gby=[l_partkey@0 as l_partkey], aggr=[AVG(lineitem.l_quantity)]                                                     |
 |               |                         CoalesceBatchesExec: target_batch_size=8192                                                                                                             |
 |               |                           RepartitionExec: partitioning=Hash([Column { name: "l_partkey", index: 0 }], 2), input_partitions=2                                                   |
