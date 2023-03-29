@@ -35,7 +35,7 @@ Aggregate functions operate on a set of values to compute a single result.
 
 Returns the average of numeric values in the specified column.
 
-```sql
+```
 avg(expression)
 ```
 
@@ -55,7 +55,7 @@ Count includes _null_ values in the total count.
 To exclude _null_ values from the total count, include `<column> IS NOT NULL`
 in the `WHERE` clause.
 
-```sql
+```
 count(expression)
 ```
 
@@ -67,7 +67,7 @@ count(expression)
 
 Returns the maximum value in the specified column.
 
-```sql
+```
 max(expression)
 ```
 
@@ -83,7 +83,7 @@ _Alias of [avg](#avg)._
 
 Returns the minimum value in the specified column.
 
-```sql
+```
 min(expression)
 ```
 
@@ -95,7 +95,7 @@ min(expression)
 
 Returns the sum of all values in the specified column.
 
-```sql
+```
 sum(expression)
 ```
 
@@ -124,7 +124,7 @@ sum(expression)
 
 Returns the coefficient of correlation between two numeric values.
 
-```sql
+```
 corr(expression1, expression2)
 ```
 
@@ -137,7 +137,7 @@ corr(expression1, expression2)
 
 Returns the covariance of a set of number pairs.
 
-```sql
+```
 covar(expression1, expression2)
 ```
 
@@ -150,7 +150,7 @@ covar(expression1, expression2)
 
 Returns the population covariance of a set of number pairs.
 
-```sql
+```
 covar_pop(expression1, expression2)
 ```
 
@@ -163,7 +163,7 @@ covar_pop(expression1, expression2)
 
 Returns the sample covariance of a set of number pairs.
 
-```sql
+```
 covar_samp(expression1, expression2)
 ```
 
@@ -176,7 +176,7 @@ covar_samp(expression1, expression2)
 
 Returns the standard deviation of a set of numbers.
 
-```sql
+```
 stddev(expression)
 ```
 
@@ -188,7 +188,7 @@ stddev(expression)
 
 Returns the population standard deviation of a set of numbers.
 
-```sql
+```
 stddev_pop(expression)
 ```
 
@@ -200,7 +200,7 @@ stddev_pop(expression)
 
 Returns the sample standard deviation of a set of numbers.
 
-```sql
+```
 stddev_samp(expression)
 ```
 
@@ -212,7 +212,7 @@ stddev_samp(expression)
 
 Returns the statistical variance of a set of numbers.
 
-```sql
+```
 var(expression)
 ```
 
@@ -224,7 +224,7 @@ var(expression)
 
 Returns the statistical population variance of a set of numbers.
 
-```sql
+```
 var_pop(expression)
 ```
 
@@ -236,7 +236,7 @@ var_pop(expression)
 
 Returns the statistical sample variance of a set of numbers.
 
-```sql
+```
 var_samp(expression)
 ```
 
@@ -256,7 +256,7 @@ var_samp(expression)
 Returns the approximate number of distinct input values calculated using the
 HyperLogLog algorithm.
 
-```sql
+```
 approx_distinct(expression)
 ```
 
@@ -269,7 +269,7 @@ approx_distinct(expression)
 Returns the approximate median (50th percentile) of input values.
 It is an alias of `approx_percentile_cont(x, 0.5)`.
 
-```sql
+```
 approx_median(expression)
 ```
 
@@ -281,7 +281,7 @@ approx_median(expression)
 
 Returns the approximate percentile of input values using the t-digest algorithm.
 
-```sql
+```
 approx_percentile_cont(expression, percentile, centroids)
 ```
 
@@ -300,7 +300,7 @@ approx_percentile_cont(expression, percentile, centroids)
 Returns the weighted approximate percentile of input values using the
 t-digest algorithm.
 
-```sql
+```
 approx_percentile_cont_with_weight(expression, weight, percentile)
 ```
 

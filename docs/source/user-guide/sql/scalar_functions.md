@@ -46,7 +46,7 @@
 
 Returns the absolute value of a number.
 
-```sql
+```
 abs(numeric_expression)
 ```
 
@@ -58,7 +58,7 @@ abs(numeric_expression)
 
 Returns the arc cosine or inverse cosine of a number.
 
-```sql
+```
 acos(numeric_expression)
 ```
 
@@ -70,7 +70,7 @@ acos(numeric_expression)
 
 Returns the arc sine or inverse sine of a number.
 
-```sql
+```
 asin(numeric_expression)
 ```
 
@@ -82,7 +82,7 @@ asin(numeric_expression)
 
 Returns the arc tangent or inverse tangent of a number.
 
-```sql
+```
 atan(numeric_expression)
 ```
 
@@ -94,7 +94,7 @@ atan(numeric_expression)
 
 Returns the arc tangent or inverse tangent of `expression_y / expression_x`.
 
-```sql
+```
 atan2(expression_y / expression_x)
 ```
 
@@ -107,7 +107,7 @@ atan2(expression_y / expression_x)
 
 Returns the nearest integer greater than or equal to a number.
 
-```sql
+```
 ceil(numeric_expression)
 ```
 
@@ -119,7 +119,7 @@ ceil(numeric_expression)
 
 Returns the cosine of a number.
 
-```sql
+```
 cos(numeric_expression)
 ```
 
@@ -131,7 +131,7 @@ cos(numeric_expression)
 
 Returns the base-e exponential of a number.
 
-```sql
+```
 exp(numeric_expression)
 ```
 
@@ -143,7 +143,7 @@ exp(numeric_expression)
 
 Returns the nearest integer less than or equal to a number.
 
-```sql
+```
 floor(numeric_expression)
 ```
 
@@ -155,7 +155,7 @@ floor(numeric_expression)
 
 Returns the natural logarithm of a number.
 
-```sql
+```
 ln(numeric_expression)
 ```
 
@@ -167,7 +167,7 @@ ln(numeric_expression)
 
 Returns the base-10 logarithm of a number.
 
-```sql
+```
 log10(numeric_expression)
 ```
 
@@ -179,7 +179,7 @@ log10(numeric_expression)
 
 Returns the base-2 logarithm or a number.
 
-```sql
+```
 log2(numeric_expression)
 ```
 
@@ -191,7 +191,7 @@ log2(numeric_expression)
 
 Returns a base number raised to the power of an exponent.
 
-```sql
+```
 power(base, exponent)
 ```
 
@@ -205,7 +205,7 @@ power(base, exponent)
 Returns a random float value between 0 and 1.
 The random seed is unique to each row.
 
-```sql
+```
 random()
 ```
 
@@ -213,7 +213,7 @@ random()
 
 Rounds a number to the nearest integer.
 
-```sql
+```
 round(numeric_expression)
 ```
 
@@ -227,7 +227,7 @@ Returns the sign of a number.
 Negative numbers return `-1`.
 Zero and positive numbers return `1`.
 
-```sql
+```
 signum(numeric_expression)
 ```
 
@@ -239,7 +239,7 @@ signum(numeric_expression)
 
 Returns the sine of a number.
 
-```sql
+```
 sin(numeric_expression)
 ```
 
@@ -251,7 +251,7 @@ sin(numeric_expression)
 
 Returns the square root of a number.
 
-```sql
+```
 sqrt(numeric_expression)
 ```
 
@@ -263,7 +263,7 @@ sqrt(numeric_expression)
 
 Returns the tangent of a number.
 
-```sql
+```
 tan(numeric_expression)
 ```
 
@@ -275,7 +275,7 @@ tan(numeric_expression)
 
 Truncates a number toward zero (at the decimal point).
 
-```sql
+```
 trunc(numeric_expression)
 ```
 
@@ -294,7 +294,7 @@ Returns the first of its arguments that is not _null_.
 Returns _null_ if all arguments are _null_.
 This function is often used to substitute a default value for _null_ values.
 
-```sql
+```
 coalesce(expression1[, ..., expression_n])
 ```
 
@@ -309,7 +309,7 @@ coalesce(expression1[, ..., expression_n])
 Returns _null_ if _expression1_ equals _expression2_; otherwise it returns _expression1_.
 This can be used to perform the inverse operation of [`coalesce`](#coalesce).
 
-```sql
+```
 nullif(expression1, expression2)
 ```
 
@@ -354,7 +354,7 @@ nullif(expression1, expression2)
 
 Returns the ASCII value of the first character in a string.
 
-```sql
+```
 ascii(str)
 ```
 
@@ -369,7 +369,7 @@ ascii(str)
 
 Returns the bit length of a string.
 
-```sql
+```
 bit_length(str)
 ```
 
@@ -387,7 +387,7 @@ Trims the specified trim string from the start and end of a string.
 If no trim string is provided, all whitespace is removed from the start and end
 of the input string.
 
-```sql
+```
 btrim(str[, trim_str])
 ```
 
@@ -414,7 +414,7 @@ _Alias of [length](#length)._
 
 Concatenates multiple strings together.
 
-```sql
+```
 concat(str[, ..., str_n])
 ```
 
@@ -430,7 +430,7 @@ concat(str[, ..., str_n])
 
 Concatenates multiple strings together with a specified separator.
 
-```sql
+```
 concat(separator, str[, ..., str_n])
 ```
 
@@ -447,7 +447,7 @@ concat(separator, str[, ..., str_n])
 
 Returns the character with the specified ASCII code value.
 
-```sql
+```
 chr(acsii)
 ```
 
@@ -463,7 +463,7 @@ chr(acsii)
 Capitalizes the first character in each word in the input string.
 Words are delimited by non-alphanumeric characters.
 
-```sql
+```
 initcap(str)
 ```
 
@@ -479,7 +479,7 @@ initcap(str)
 
 Returns a specified number of characters from the left side of a string.
 
-```sql
+```
 left(str, n)
 ```
 
@@ -495,7 +495,7 @@ left(str, n)
 
 Returns the number of characters in a string.
 
-```sql
+```
 length(str)
 ```
 
@@ -516,7 +516,7 @@ length(str)
 
 Converts a string to lower-case.
 
-```sql
+```
 lower(str)
 ```
 
@@ -532,7 +532,7 @@ lower(str)
 
 Pads the left side a string with another string to a specified string length.
 
-```sql
+```
 lpad(str, n[, padding_str])
 ```
 
@@ -550,7 +550,7 @@ lpad(str, n[, padding_str])
 
 Removes leading spaces from a string.
 
-```sql
+```
 ltrim(str)
 ```
 
@@ -571,7 +571,7 @@ ltrim(str)
 
 Returns the length of a string in bytes.
 
-```sql
+```
 octet_length(str)
 ```
 
@@ -587,7 +587,7 @@ octet_length(str)
 
 Returns a string with an input string repeated a specified number.
 
-```sql
+```
 repeat(str, n)
 ```
 
@@ -600,7 +600,7 @@ repeat(str, n)
 
 Replaces all occurrences of a specified substring in a string with a new substring.
 
-```sql
+```
 replace(str, substr, replacement)
 ```
 
@@ -614,7 +614,7 @@ replace(str, substr, replacement)
 
 Reverses the character order of a string.
 
-```sql
+```
 reverse(str)
 ```
 
@@ -626,7 +626,7 @@ reverse(str)
 
 Returns a specified number of characters from the right side of a string.
 
-```sql
+```
 right(str, n)
 ```
 
@@ -641,7 +641,7 @@ right(str, n)
 ### `rpad`
 right side a string with another string to a specified string length.
 
-```sql
+```
 rpad(str, n[, padding_str])
 ```
 
@@ -659,7 +659,7 @@ rpad(str, n[, padding_str])
 
 Removes trailing spaces from a string.
 
-```sql
+```
 rtrim(str)
 ```
 
@@ -677,7 +677,7 @@ rtrim(str)
 Splits a string based on a specified delimiter and returns the substring a the
 specified position.
 
-```sql
+```
 split_part(str, delimiter, pos)
 ```
 
@@ -691,7 +691,7 @@ split_part(str, delimiter, pos)
 
 Tests if a string starts with a substring.
 
-```sql
+```
 starts_with(str, substr)
 ```
 
@@ -706,7 +706,7 @@ Returns the starting position of a specified substring in a string.
 Positions begin at 1.
 If the substring does not exist in the string, the function returns 0.
 
-```sql
+```
 strpos(str, substr)
 ```
 
@@ -720,7 +720,7 @@ strpos(str, substr)
 Extracts a substring of a specified number of characters from a specific
 starting position in a string.
 
-```sql
+```
 substr(str, start_pos[, length])
 ```
 
@@ -736,7 +736,7 @@ substr(str, start_pos[, length])
 
 Translates characters in a string to specified translation characters.
 
-```sql
+```
 translate(str, chars, translation)
 ```
 
@@ -749,7 +749,7 @@ translate(str, chars, translation)
 
 Converts an integer to a hexadecimal string.
 
-```sql
+```
 to_hex(int)
 ```
 
@@ -761,7 +761,7 @@ to_hex(int)
 
 Removes leading and trailing spaces from a string.
 
-```sql
+```
 trim(str)
 ```
 
@@ -778,7 +778,7 @@ trim(str)
 
 Converts a string to upper-case.
 
-```sql
+```
 upper(str)
 ```
 
@@ -802,7 +802,7 @@ supports the following regular expression functions:
 
 Returns a list of regular expression matches in a string.
 
-```sql
+```
 regexp_match(str, regexp)
 ```
 
@@ -815,7 +815,7 @@ regexp_match(str, regexp)
 
 Replaces substrings in a string that match a regular expression.
 
-```sql
+```
 regexp_replace(str, regexp, replacement, flags)
 ```
 
@@ -849,7 +849,7 @@ Returns the current UTC timestamp.
 The `now()` return value is determined at query time and will return the same timestamp,
 no matter when in the query plan the function executes.
 
-```sql 
+``` 
 now()
 ```
 
@@ -863,7 +863,7 @@ For example, if you "bin" or "window" data into 15 minute intervals, an input
 timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15
 minute bin it is in: `2023-01-01T18:15:00Z`.
 
-```sql
+```
 date_bin(interval, expression, origin-timestamp)
 ```
 
@@ -891,7 +891,7 @@ The following intervals are supported:
 
 Truncates a timestamp value to a specified precision.  
 
-```sql
+```
 date_trunc(precision, expression) 
 ```
 
@@ -914,7 +914,7 @@ date_trunc(precision, expression)
 
 Returns the specified part of the date as an integer.
 
-```sql
+```
 date_part(part, expression)
 ```
 
@@ -943,7 +943,7 @@ date_part(part, expression)
 Returns a sub-field from a time value as an integer.
 Similar to `date_part`, but with different arguments. 
 
-```sql
+```
 extract(field FROM source)
 ```
 
@@ -954,7 +954,7 @@ Supports timestamp, integer, and unsigned integer types as input.
 Integers and unsigned integers are parsed as Unix nanosecond timestamps and
 return the corresponding RFC3339 nanosecond timestamp.
 
-```sql
+```
 to_timestamp(expression)
 ```
 
@@ -969,7 +969,7 @@ Supports timestamp, integer, and unsigned integer types as input.
 Integers and unsigned integers are parsed as Unix nanosecond timestamps and
 return the corresponding RFC3339 timestamp.
 
-```sql
+```
 to_timestamp_millis(expression) 
 ```
 
@@ -984,7 +984,7 @@ Supports timestamp, integer, and unsigned integer types as input.
 Integers and unsigned integers are parsed as Unix nanosecond timestamps and
 return the corresponding RFC3339 timestamp.
 
-```sql
+```
 to_timestamp_micros(expression)
 ```
 
@@ -999,7 +999,7 @@ Supports timestamp, integer, and unsigned integer types as input.
 Integers and unsigned integers are parsed as Unix nanosecond timestamps and
 return the corresponding RFC3339 timestamp.
 
-```sql
+```
 to_timestamp_seconds(expression) 
 ```
 
@@ -1013,7 +1013,7 @@ Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z
 Input is parsed as a Unix nanosecond timestamp and returns the corresponding
 RFC3339 timestamp.
 
-```sql
+```
 from_unixtime(expression)
 ```
 
@@ -1033,7 +1033,7 @@ from_unixtime(expression)
 
 Computes an MD5 128-bit checksum for a string expression.
 
-```sql
+```
 md5(expression)
 ```
 
@@ -1045,7 +1045,7 @@ md5(expression)
 
 Computes the SHA-224 hash of a binary string.
 
-```sql
+```
 sha224(expression)
 ```
 
@@ -1057,7 +1057,7 @@ sha224(expression)
 
 Computes the SHA-256 hash of a binary string.
 
-```sql
+```
 sha256(expression)
 ```
 
@@ -1069,7 +1069,7 @@ sha256(expression)
 
 Computes the SHA-384 hash of a binary string.
 
-```sql
+```
 sha384(expression)
 ```
 
@@ -1081,7 +1081,7 @@ sha384(expression)
 
 Computes the SHA-512 hash of a binary string.
 
-```sql
+```
 sha512(expression)
 ```
 
@@ -1099,7 +1099,7 @@ sha512(expression)
 
 Returns an Arrow array using the specified input expressions.
 
-```sql
+```
 array(expression1[, ..., expression_n])
 ```
 
@@ -1111,7 +1111,7 @@ array(expression1[, ..., expression_n])
 
 Returns the underlying Arrow type of the the expression:
 
-```sql
+```
 arrow_typeof(expression)
 ```
 
@@ -1125,7 +1125,7 @@ Returns an Arrow struct using the specified input expressions.
 Fields in the returned struct use the `cN` naming convention.
 For example: `c0`, `c1`, `c2`, etc.
 
-```sql
+```
 struct(expression1[, ..., expression_n])
 ```
 

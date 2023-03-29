@@ -62,7 +62,7 @@ GROUP BY room
 
 Returns the smallest value of a selected column and a timestamp.
 
-```sql
+```
 selector_min(expression, timestamp)
 ```
 
@@ -75,7 +75,7 @@ selector_min(expression, timestamp)
 
 Returns the largest value of a selected column and a timestamp.
 
-```sql
+```
 selector_max(expression, timestamp)
 ```
 
@@ -88,7 +88,7 @@ selector_max(expression, timestamp)
 
 Returns the first value ordered by time ascending.
 
-```sql
+```
 selector_first(expression, timestamp)
 ```
 
@@ -101,7 +101,7 @@ selector_first(expression, timestamp)
 
 Returns the last value ordered by time ascending.
 
-```sql
+```
 selector_last(expression, timestamp)
 ```
 
