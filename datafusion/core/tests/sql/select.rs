@@ -385,7 +385,7 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
     let struct_fields = vec![Field::new("bar", nested_dt.clone(), true)];
     let schema = Arc::new(Schema::new(vec![Field::new(
         "some_struct",
-        DataType::Struct(struct_fields.clone()),
+        DataType::Struct(struct_fields.clone().into()),
         false,
     )]));
 

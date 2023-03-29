@@ -24,7 +24,7 @@ use crate::{
     array_expressions, conditional_expressions, struct_expressions, Accumulator,
     BuiltinScalarFunction, Signature, TypeSignature,
 };
-use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
+use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::{DataFusionError, Result};
 use std::sync::Arc;
 
@@ -248,7 +248,7 @@ pub fn return_type(
             _ => Ok(DataType::Float64),
         },
 
-        BuiltinScalarFunction::Struct => Ok(DataType::Struct(vec![])),
+        BuiltinScalarFunction::Struct => Ok(DataType::Struct(Fields::empty())),
 
         BuiltinScalarFunction::Atan2 => match &input_expr_types[0] {
             DataType::Float32 => Ok(DataType::Float32),

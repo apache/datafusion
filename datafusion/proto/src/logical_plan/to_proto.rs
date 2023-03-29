@@ -188,7 +188,7 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::Struct(struct_fields) => Self::Struct(protobuf::Struct {
                 sub_field_types: struct_fields
                     .iter()
-                    .map(|field| field.try_into())
+                    .map(|field| field.as_ref().try_into())
                     .collect::<Result<Vec<_>, Error>>()?,
             }),
             DataType::Union(union_types, type_ids, union_mode) => {
@@ -262,7 +262,7 @@ impl TryFrom<&Schema> for protobuf::Schema {
             columns: schema
                 .fields()
                 .iter()
-                .map(protobuf::Field::try_from)
+                .map(|f| f.as_ref().try_into())
                 .collect::<Result<Vec<_>, Error>>()?,
         })
     }
@@ -276,7 +276,7 @@ impl TryFrom<SchemaRef> for protobuf::Schema {
             columns: schema
                 .fields()
                 .iter()
-                .map(protobuf::Field::try_from)
+                .map(|f| f.as_ref().try_into())
                 .collect::<Result<Vec<_>, Error>>()?,
         })
     }
@@ -287,7 +287,7 @@ impl TryFrom<&DFField> for protobuf::DfField {
 
     fn try_from(f: &DFField) -> Result<Self, Self::Error> {
         Ok(Self {
-            field: Some(f.field().try_into()?),
+            field: Some(f.field().as_ref().try_into()?),
             qualifier: f.qualifier().map(|r| protobuf::ColumnRelation {
                 relation: r.to_string(),
             }),
@@ -1219,7 +1219,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
 
                 let fields = fields
                     .iter()
-                    .map(|f| f.try_into())
+                    .map(|f| f.as_ref().try_into())
                     .collect::<Result<Vec<protobuf::Field>, _>>()?;
 
                 Ok(protobuf::ScalarValue {

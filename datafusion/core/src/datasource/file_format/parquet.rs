@@ -20,8 +20,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Fields, Schema};
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use datafusion_common::DataFusionError;
@@ -38,7 +38,7 @@ use super::FileScanConfig;
 use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
 };
-use crate::arrow::datatypes::{DataType, Field};
+use crate::arrow::datatypes::DataType;
 use crate::config::ConfigOptions;
 
 use crate::datasource::{create_max_min_accs, get_col_stats};
@@ -132,9 +132,9 @@ fn clear_metadata(
             .fields()
             .iter()
             .map(|field| {
-                field.clone().with_metadata(Default::default()) // clear meta
+                field.as_ref().clone().with_metadata(Default::default()) // clear meta
             })
-            .collect::<Vec<_>>();
+            .collect::<Fields>();
         Schema::new(fields)
     })
 }
@@ -209,7 +209,7 @@ impl FileFormat for ParquetFormat {
 fn summarize_min_max(
     max_values: &mut [Option<MaxAccumulator>],
     min_values: &mut [Option<MinAccumulator>],
-    fields: &[Field],
+    fields: &Fields,
     i: usize,
     stat: &ParquetStatistics,
 ) {
@@ -468,7 +468,7 @@ async fn fetch_statistics(
     )?;
 
     let num_fields = table_schema.fields().len();
-    let fields = table_schema.fields().to_vec();
+    let fields = table_schema.fields();
 
     let mut num_rows = 0;
     let mut total_byte_size = 0;

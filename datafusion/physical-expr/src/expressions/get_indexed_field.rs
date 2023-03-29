@@ -337,7 +337,7 @@ mod tests {
         ];
         let schema = Schema::new(vec![Field::new(
             struct_col,
-            DataType::Struct(fields.clone()),
+            DataType::Struct(fields.clone().into()),
             true,
         )]);
         let struct_col = build_struct(fields, list_of_tuples.clone());

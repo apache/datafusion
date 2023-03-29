@@ -1058,7 +1058,7 @@ pub fn build_join_schema(
             let right_fields_nullable: Vec<DFField> = right_fields
                 .iter()
                 .map(|f| {
-                    let field = f.field().clone().with_nullable(true);
+                    let field = f.field().as_ref().clone().with_nullable(true);
                     if let Some(q) = f.qualifier() {
                         DFField::from_qualified(q, field)
                     } else {
@@ -1868,10 +1868,13 @@ mod tests {
         // Create a schema with a scalar field, a list of strings, and a list of structs.
         let struct_field = Box::new(Field::new(
             "item",
-            DataType::Struct(vec![
-                Field::new("a", DataType::UInt32, false),
-                Field::new("b", DataType::UInt32, false),
-            ]),
+            DataType::Struct(
+                vec![
+                    Field::new("a", DataType::UInt32, false),
+                    Field::new("b", DataType::UInt32, false),
+                ]
+                .into(),
+            ),
             false,
         ));
         let string_field = Box::new(Field::new("item", DataType::Utf8, false));

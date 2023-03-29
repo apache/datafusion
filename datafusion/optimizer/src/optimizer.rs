@@ -594,7 +594,7 @@ mod tests {
                 let metadata =
                     [("key".into(), format!("value {i}"))].into_iter().collect();
 
-                let new_arrow_field = f.field().clone().with_metadata(metadata);
+                let new_arrow_field = f.field().as_ref().clone().with_metadata(metadata);
                 if let Some(qualifier) = f.qualifier() {
                     DFField::from_qualified(qualifier.clone(), new_arrow_field)
                 } else {

@@ -32,6 +32,7 @@ use crate::physical_plan::{
 use arrow::compute::{
     concat, concat_batches, lexicographical_partition_ranges, SortColumn,
 };
+use arrow::datatypes::SchemaBuilder;
 use arrow::error::ArrowError;
 use arrow::{
     array::ArrayRef,
@@ -275,13 +276,14 @@ fn create_schema(
     input_schema: &Schema,
     window_expr: &[Arc<dyn WindowExpr>],
 ) -> Result<Schema> {
-    let mut fields = Vec::with_capacity(input_schema.fields().len() + window_expr.len());
-    fields.extend_from_slice(input_schema.fields());
+    let capacity = input_schema.fields().len() + window_expr.len();
+    let mut builder = SchemaBuilder::with_capacity(capacity);
+    builder.extend(input_schema.fields().iter().cloned());
     // append results to the schema
     for expr in window_expr {
-        fields.push(expr.field()?);
+        builder.push(expr.field()?);
     }
-    Ok(Schema::new(fields))
+    Ok(builder.finish())
 }
 
 /// Compute the window aggregate columns

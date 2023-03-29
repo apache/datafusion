@@ -1382,7 +1382,7 @@ mod roundtrip_tests {
         logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
     };
     use crate::logical_plan::LogicalExtensionCodec;
-    use arrow::datatypes::{Schema, SchemaRef};
+    use arrow::datatypes::{Fields, Schema, SchemaRef};
     use arrow::{
         array::ArrayRef,
         datatypes::{
@@ -1796,7 +1796,7 @@ mod roundtrip_tests {
             // Should fail due to empty values
             ScalarValue::Struct(
                 Some(vec![]),
-                Box::new(vec![Field::new("item", DataType::Int16, true)]),
+                vec![Field::new("item", DataType::Int16, true)].into(),
             ),
             // Should fail due to inconsistent types in the list
             ScalarValue::new_list(
@@ -2017,14 +2017,14 @@ mod roundtrip_tests {
                     ScalarValue::Int32(Some(23)),
                     ScalarValue::Boolean(Some(false)),
                 ]),
-                Box::new(vec![
+                Fields::from(vec![
                     Field::new("a", DataType::Int32, true),
                     Field::new("b", DataType::Boolean, false),
                 ]),
             ),
             ScalarValue::Struct(
                 None,
-                Box::new(vec![
+                Fields::from(vec![
                     Field::new("a", DataType::Int32, true),
                     Field::new("a", DataType::Boolean, false),
                 ]),
@@ -2161,25 +2161,25 @@ mod roundtrip_tests {
                 41,
             ),
             // Struct Testing
-            DataType::Struct(vec![
+            DataType::Struct(Fields::from(vec![
                 Field::new("nullable", DataType::Boolean, false),
                 Field::new("name", DataType::Utf8, false),
                 Field::new("datatype", DataType::Binary, false),
-            ]),
-            DataType::Struct(vec![
+            ])),
+            DataType::Struct(Fields::from(vec![
                 Field::new("nullable", DataType::Boolean, false),
                 Field::new("name", DataType::Utf8, false),
                 Field::new("datatype", DataType::Binary, false),
                 Field::new(
                     "nested_struct",
-                    DataType::Struct(vec![
+                    DataType::Struct(Fields::from(vec![
                         Field::new("nullable", DataType::Boolean, false),
                         Field::new("name", DataType::Utf8, false),
                         Field::new("datatype", DataType::Binary, false),
-                    ]),
+                    ])),
                     true,
                 ),
-            ]),
+            ])),
             DataType::Union(
                 vec![
                     Field::new("nullable", DataType::Boolean, false),
@@ -2196,11 +2196,11 @@ mod roundtrip_tests {
                     Field::new("datatype", DataType::Binary, false),
                     Field::new(
                         "nested_struct",
-                        DataType::Struct(vec![
+                        DataType::Struct(Fields::from(vec![
                             Field::new("nullable", DataType::Boolean, false),
                             Field::new("name", DataType::Utf8, false),
                             Field::new("datatype", DataType::Binary, false),
-                        ]),
+                        ])),
                         true,
                     ),
                 ],
@@ -2209,11 +2209,11 @@ mod roundtrip_tests {
             ),
             DataType::Dictionary(
                 Box::new(DataType::Utf8),
-                Box::new(DataType::Struct(vec![
+                Box::new(DataType::Struct(Fields::from(vec![
                     Field::new("nullable", DataType::Boolean, false),
                     Field::new("name", DataType::Utf8, false),
                     Field::new("datatype", DataType::Binary, false),
-                ])),
+                ]))),
             ),
             DataType::Dictionary(
                 Box::new(DataType::Decimal128(10, 50)),
@@ -2225,10 +2225,10 @@ mod roundtrip_tests {
             DataType::Map(
                 new_box_field(
                     "entries",
-                    DataType::Struct(vec![
+                    DataType::Struct(Fields::from(vec![
                         Field::new("keys", DataType::Utf8, false),
                         Field::new("values", DataType::Int32, true),
-                    ]),
+                    ])),
                     true,
                 ),
                 false,

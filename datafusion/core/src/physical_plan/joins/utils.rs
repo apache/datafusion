@@ -22,7 +22,7 @@ use arrow::array::{
     UInt32Builder, UInt64Array,
 };
 use arrow::compute;
-use arrow::datatypes::{Field, Schema};
+use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
@@ -351,7 +351,7 @@ pub fn build_join_schema(
     right: &Schema,
     join_type: &JoinType,
 ) -> (Schema, Vec<ColumnIndex>) {
-    let (fields, column_indices): (Vec<Field>, Vec<ColumnIndex>) = match join_type {
+    let (fields, column_indices): (SchemaBuilder, Vec<ColumnIndex>) = match join_type {
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
             let left_fields = left
                 .fields()
@@ -417,7 +417,7 @@ pub fn build_join_schema(
             .unzip(),
     };
 
-    (Schema::new(fields), column_indices)
+    (fields.finish(), column_indices)
 }
 
 /// A [`OnceAsync`] can be used to run an async closure once, with subsequent calls
@@ -1066,6 +1066,7 @@ impl BuildProbeJoinMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::datatypes::Fields;
     use arrow::error::Result as ArrowResult;
     use arrow::{datatypes::DataType, error::ArrowError};
     use datafusion_common::ScalarValue;
@@ -1202,7 +1203,7 @@ mod tests {
                 .iter()
                 .cloned()
                 .chain(right_out.fields().iter().cloned())
-                .collect();
+                .collect::<Fields>();
 
             let expected_schema = Schema::new(expected_fields);
             assert_eq!(

@@ -31,6 +31,7 @@ use crate::cast::{
 };
 use crate::delta::shift_months;
 use crate::error::{DataFusionError, Result};
+use arrow::datatypes::{Fields, SchemaBuilder};
 use arrow::{
     array::*,
     compute::kernels::cast::{cast, cast_with_options, CastOptions},
@@ -128,7 +129,7 @@ pub enum ScalarValue {
     /// Nanoseconds is encoded as a 64-bit signed integer (no leap seconds).
     IntervalMonthDayNano(Option<i128>),
     /// struct of nested ScalarValue
-    Struct(Option<Vec<ScalarValue>>, Box<Vec<Field>>),
+    Struct(Option<Vec<ScalarValue>>, Fields),
     /// Dictionary type: index type and value
     Dictionary(Box<DataType>, Box<ScalarValue>),
 }
@@ -1494,7 +1495,7 @@ impl ScalarValue {
             ScalarValue::IntervalMonthDayNano(_) => {
                 DataType::Interval(IntervalUnit::MonthDayNano)
             }
-            ScalarValue::Struct(_, fields) => DataType::Struct(fields.as_ref().clone()),
+            ScalarValue::Struct(_, fields) => DataType::Struct(fields.clone()),
             ScalarValue::Dictionary(k, v) => {
                 DataType::Dictionary(k.clone(), Box::new(v.get_datatype()))
             }
@@ -1952,7 +1953,7 @@ impl ScalarValue {
                     .iter()
                     .zip(columns)
                     .map(|(field, column)| -> Result<(Field, ArrayRef)> {
-                        Ok((field.clone(), Self::iter_to_array(column)?))
+                        Ok((field.as_ref().clone(), Self::iter_to_array(column)?))
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -2353,7 +2354,7 @@ impl ScalarValue {
                         .iter()
                         .zip(values.iter())
                         .map(|(field, value)| {
-                            (field.clone(), value.to_array_of_size(size))
+                            (field.as_ref().clone(), value.to_array_of_size(size))
                         })
                         .collect();
 
@@ -2365,7 +2366,7 @@ impl ScalarValue {
                         .map(|field| {
                             let none_field = Self::try_from(field.data_type())
                                 .expect("Failed to construct null ScalarValue from Struct field type");
-                            (field.clone(), none_field.to_array_of_size(size))
+                            (field.as_ref().clone(), none_field.to_array_of_size(size))
                         })
                         .collect();
 
@@ -2535,7 +2536,7 @@ impl ScalarValue {
                     let col_scalar = ScalarValue::try_from_array(col_array, index)?;
                     field_values.push(col_scalar);
                 }
-                Self::Struct(Some(field_values), Box::new(fields.clone()))
+                Self::Struct(Some(field_values), fields.clone())
             }
             DataType::FixedSizeList(nested_type, _len) => {
                 let list_array = as_fixed_size_list_array(array)?;
@@ -2786,7 +2787,7 @@ impl ScalarValue {
                         .unwrap_or_default()
                         // `fields` is boxed, so it is NOT already included in `self`
                         + std::mem::size_of_val(fields)
-                        + (std::mem::size_of::<Field>() * fields.capacity())
+                        + (std::mem::size_of::<Field>() * fields.len())
                         + fields.iter().map(|field| field.size() - std::mem::size_of_val(field)).sum::<usize>()
                 }
                 ScalarValue::Dictionary(dt, sv) => {
@@ -2872,14 +2873,14 @@ impl FromStr for ScalarValue {
 
 impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
     fn from(value: Vec<(&str, ScalarValue)>) -> Self {
-        let (fields, scalars): (Vec<_>, Vec<_>) = value
+        let (fields, scalars): (SchemaBuilder, Vec<_>) = value
             .into_iter()
             .map(|(name, scalar)| {
                 (Field::new(name, scalar.get_datatype(), false), scalar)
             })
             .unzip();
 
-        Self::Struct(Some(scalars), Box::new(fields))
+        Self::Struct(Some(scalars), fields.finish().fields)
     }
 }
 
@@ -3043,9 +3044,7 @@ impl TryFrom<&DataType> for ScalarValue {
             DataType::List(ref nested_type) => {
                 ScalarValue::new_list(None, nested_type.data_type().clone())
             }
-            DataType::Struct(fields) => {
-                ScalarValue::Struct(None, Box::new(fields.clone()))
-            }
+            DataType::Struct(fields) => ScalarValue::Struct(None, fields.clone()),
             DataType::Null => ScalarValue::Null,
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
@@ -4129,7 +4128,7 @@ mod tests {
         let field_f = Field::new("f", DataType::Int64, false);
         let field_d = Field::new(
             "D",
-            DataType::Struct(vec![field_e.clone(), field_f.clone()]),
+            DataType::Struct(vec![field_e.clone(), field_f.clone()].into()),
             false,
         );
 
@@ -4143,12 +4142,13 @@ mod tests {
                     ("f", ScalarValue::from(3i64)),
                 ]),
             ]),
-            Box::new(vec![
+            vec![
                 field_a.clone(),
                 field_b.clone(),
                 field_c.clone(),
                 field_d.clone(),
-            ]),
+            ]
+            .into(),
         );
 
         // Check Display

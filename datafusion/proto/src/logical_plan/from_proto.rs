@@ -184,7 +184,7 @@ impl TryFrom<&protobuf::DfField> for DFField {
     type Error = Error;
 
     fn try_from(df_field: &protobuf::DfField) -> Result<Self, Self::Error> {
-        let field = df_field.field.as_ref().required("field")?;
+        let field: Field = df_field.field.as_ref().required("field")?;
 
         Ok(match &df_field.qualifier {
             Some(q) => DFField::from_qualified(q.relation.clone(), field),
@@ -315,8 +315,8 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 strct
                     .sub_field_types
                     .iter()
-                    .map(|field| field.try_into())
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .map(|field| Field::try_from(field))
+                    .collect::<Result<_, _>>()?,
             ),
             arrow_type::ArrowTypeEnum::Union(union) => {
                 let union_mode = protobuf::UnionMode::from_i32(union.union_mode)
@@ -695,10 +695,10 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 let fields = v
                     .fields
                     .iter()
-                    .map(|f| f.try_into())
-                    .collect::<Result<Vec<Field>, _>>()?;
+                    .map(Field::try_from)
+                    .collect::<Result<_, _>>()?;
 
-                Self::Struct(values, Box::new(fields))
+                Self::Struct(values, fields)
             }
             Value::FixedSizeBinaryValue(v) => {
                 Self::FixedSizeBinary(v.length, Some(v.clone().values))

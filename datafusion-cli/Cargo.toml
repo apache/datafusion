@@ -41,3 +41,10 @@ parking_lot = { version = "0.12" }
 rustyline = "10.0"
 tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
 url = "2.2"
+
+[patch.crates-io]
+arrow = { git = "https://github.com/tustvold/arrow-rs.git", rev = "bc70e09575272f8dde20b06c19756180434ef158" }
+arrow-array = { git = "https://github.com/tustvold/arrow-rs.git", rev = "bc70e09575272f8dde20b06c19756180434ef158" }
+arrow-buffer = { git = "https://github.com/tustvold/arrow-rs.git", rev = "bc70e09575272f8dde20b06c19756180434ef158" }
+arrow-schema = { git = "https://github.com/tustvold/arrow-rs.git", rev = "bc70e09575272f8dde20b06c19756180434ef158" }
+parquet = { git = "https://github.com/tustvold/arrow-rs.git", rev = "bc70e09575272f8dde20b06c19756180434ef158" }

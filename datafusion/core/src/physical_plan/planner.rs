@@ -2205,7 +2205,7 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
     fn struct_literal() -> Expr {
         let struct_literal = ScalarValue::Struct(
             None,
-            Box::new(vec![Field::new("foo", DataType::Boolean, false)]),
+            vec![Field::new("foo", DataType::Boolean, false)].into(),
         );
         lit(struct_literal)
     }

@@ -28,7 +28,7 @@ use crate::utils::quote_identifier;
 use crate::{field_not_found, Column, OwnedTableReference, TableReference};
 
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use std::fmt::{Display, Formatter};
 
 /// A reference-counted reference to a `DFSchema`.
@@ -428,14 +428,22 @@ impl DFSchema {
             | (DataType::Map(f1, _), DataType::Map(f2, _)) => {
                 Self::field_is_semantically_equal(f1, f2)
             }
-            (DataType::Struct(fields1), DataType::Struct(fields2))
-            | (DataType::Union(fields1, _, _), DataType::Union(fields2, _, _)) => {
+            (DataType::Struct(fields1), DataType::Struct(fields2)) => {
                 let iter1 = fields1.iter();
                 let iter2 = fields2.iter();
                 fields1.len() == fields2.len() &&
                         // all fields have to be the same
                     iter1
                     .zip(iter2)
+                        .all(|(f1, f2)| Self::field_is_semantically_equal(f1, f2))
+            }
+            (DataType::Union(fields1, _, _), DataType::Union(fields2, _, _)) => {
+                let iter1 = fields1.iter();
+                let iter2 = fields2.iter();
+                fields1.len() == fields2.len() &&
+                    // all fields have to be the same
+                    iter1
+                        .zip(iter2)
                         .all(|(f1, f2)| Self::field_is_semantically_equal(f1, f2))
             }
             _ => dt1 == dt2,
@@ -489,20 +497,16 @@ impl DFSchema {
 impl From<DFSchema> for Schema {
     /// Convert DFSchema into a Schema
     fn from(df_schema: DFSchema) -> Self {
-        Schema::new_with_metadata(
-            df_schema.fields.into_iter().map(|f| f.field).collect(),
-            df_schema.metadata,
-        )
+        let fields: Fields = df_schema.fields.into_iter().map(|f| f.field).collect();
+        Schema::new_with_metadata(fields, df_schema.metadata)
     }
 }
 
 impl From<&DFSchema> for Schema {
     /// Convert DFSchema reference into a Schema
     fn from(df_schema: &DFSchema) -> Self {
-        Schema::new_with_metadata(
-            df_schema.fields.iter().map(|f| f.field.clone()).collect(),
-            df_schema.metadata.clone(),
-        )
+        let fields: Fields = df_schema.fields.iter().map(|f| f.field.clone()).collect();
+        Schema::new_with_metadata(fields, df_schema.metadata.clone())
     }
 }
 
@@ -632,7 +636,7 @@ pub struct DFField {
     /// Optional qualifier (usually a table or relation name)
     qualifier: Option<OwnedTableReference>,
     /// Arrow field definition
-    field: Field,
+    field: FieldRef,
 }
 
 impl DFField {
@@ -645,7 +649,7 @@ impl DFField {
     ) -> Self {
         DFField {
             qualifier: qualifier.map(|s| s.into()),
-            field: Field::new(name, data_type, nullable),
+            field: Arc::new(Field::new(name, data_type, nullable)),
         }
     }
 
@@ -653,26 +657,18 @@ impl DFField {
     pub fn new_unqualified(name: &str, data_type: DataType, nullable: bool) -> Self {
         DFField {
             qualifier: None,
-            field: Field::new(name, data_type, nullable),
-        }
-    }
-
-    /// Create an unqualified field from an existing Arrow field
-    pub fn from(field: Field) -> Self {
-        Self {
-            qualifier: None,
-            field,
+            field: Arc::new(Field::new(name, data_type, nullable)),
         }
     }
 
     /// Create a qualified field from an existing Arrow field
     pub fn from_qualified<'a>(
         qualifier: impl Into<TableReference<'a>>,
-        field: Field,
+        field: impl Into<FieldRef>,
     ) -> Self {
         Self {
             qualifier: Some(qualifier.into().to_owned_reference()),
-            field,
+            field: field.into(),
         }
     }
 
@@ -722,7 +718,7 @@ impl DFField {
     }
 
     /// Get the arrow field
-    pub fn field(&self) -> &Field {
+    pub fn field(&self) -> &FieldRef {
         &self.field
     }
 
@@ -730,6 +726,21 @@ impl DFField {
     pub fn strip_qualifier(mut self) -> Self {
         self.qualifier = None;
         self
+    }
+}
+
+impl From<FieldRef> for DFField {
+    fn from(value: FieldRef) -> Self {
+        Self {
+            qualifier: None,
+            field: value,
+        }
+    }
+}
+
+impl From<Field> for DFField {
+    fn from(value: Field) -> Self {
+        Self::from(Arc::new(value))
     }
 }
 
@@ -930,13 +941,11 @@ mod tests {
 
     #[test]
     fn equivalent_names_and_types() {
-        let field1_i16_t = DFField::from(Field::new("f1", DataType::Int16, true));
-        let field1_i16_t_meta = DFField::from(
-            field1_i16_t
-                .field()
-                .clone()
-                .with_metadata(test_metadata_n(2)),
-        );
+        let arrow_field1 = Field::new("f1", DataType::Int16, true);
+        let arrow_field1_meta = arrow_field1.clone().with_metadata(test_metadata_n(2));
+
+        let field1_i16_t = DFField::from(arrow_field1);
+        let field1_i16_t_meta = DFField::from(arrow_field1_meta);
         let field1_i16_t_qualified =
             DFField::from_qualified("foo", field1_i16_t.field().clone());
         let field1_i16_f = DFField::from(Field::new("f1", DataType::Int16, false));
@@ -951,41 +960,41 @@ mod tests {
 
         let list_t = DFField::from(Field::new(
             "f_list",
-            DataType::List(Box::new(field1_i16_t.field().clone())),
+            DataType::List(Box::new(field1_i16_t.field().as_ref().clone())),
             true,
         ));
         let list_f = DFField::from(Field::new(
             "f_list",
-            DataType::List(Box::new(field1_i16_f.field().clone())),
+            DataType::List(Box::new(field1_i16_f.field().as_ref().clone())),
             false,
         ));
 
         let list_f_name = DFField::from(Field::new(
             "f_list",
-            DataType::List(Box::new(field2_i16_t.field().clone())),
+            DataType::List(Box::new(field2_i16_t.field().as_ref().clone())),
             false,
         ));
 
         let struct_t = DFField::from(Field::new(
             "f_struct",
-            DataType::Struct(vec![field1_i16_t.field().clone()]),
+            DataType::Struct(vec![field1_i16_t.field().clone()].into()),
             true,
         ));
         let struct_f = DFField::from(Field::new(
             "f_struct",
-            DataType::Struct(vec![field1_i16_f.field().clone()]),
+            DataType::Struct(vec![field1_i16_f.field().clone()].into()),
             false,
         ));
 
         let struct_f_meta = DFField::from(Field::new(
             "f_struct",
-            DataType::Struct(vec![field1_i16_t_meta.field().clone()]),
+            DataType::Struct(vec![field1_i16_t_meta.field().clone()].into()),
             false,
         ));
 
         let struct_f_type = DFField::from(Field::new(
             "f_struct",
-            DataType::Struct(vec![field1_i32_t.field().clone()]),
+            DataType::Struct(vec![field1_i32_t.field().clone()].into()),
             false,
         ));
 
@@ -1193,14 +1202,16 @@ mod tests {
     }
     #[test]
     fn test_dfschema_to_schema_convertion() {
-        let mut a: DFField = DFField::new(Some("table1"), "a", DataType::Int64, false);
-        let mut b: DFField = DFField::new(Some("table1"), "b", DataType::Int64, false);
         let mut a_metadata = HashMap::new();
         a_metadata.insert("key".to_string(), "value".to_string());
-        a.field.set_metadata(a_metadata);
+        let a_field = Field::new("a", DataType::Int64, false).with_metadata(a_metadata);
+
         let mut b_metadata = HashMap::new();
         b_metadata.insert("key".to_string(), "value".to_string());
-        b.field.set_metadata(b_metadata);
+        let b_field = Field::new("b", DataType::Int64, false).with_metadata(b_metadata);
+
+        let a: DFField = DFField::from_qualified("table1", a_field);
+        let b: DFField = DFField::from_qualified("table1", b_field);
 
         let df_schema = Arc::new(
             DFSchema::new_with_metadata([a, b].to_vec(), HashMap::new()).unwrap(),
