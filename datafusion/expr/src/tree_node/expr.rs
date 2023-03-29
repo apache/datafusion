@@ -19,7 +19,7 @@
 
 use crate::expr::{
     AggregateFunction, Between, BinaryExpr, Case, Cast, GetIndexedField, GroupingSet,
-    Like, Sort, TryCast, WindowFunction,
+    Like, PromotePrecision, Sort, TryCast, WindowFunction,
 };
 use crate::Expr;
 use datafusion_common::tree_node::VisitRecursion;
@@ -44,6 +44,7 @@ impl TreeNode for Expr {
             | Expr::Negative(expr)
             | Expr::Cast(Cast { expr, .. })
             | Expr::TryCast(TryCast { expr, .. })
+            | Expr::PromotePrecision(PromotePrecision { expr, .. })
             | Expr::Sort(Sort { expr, .. })
             | Expr::InSubquery { expr, .. } => vec![expr.as_ref().clone()],
             Expr::GetIndexedField(GetIndexedField { expr, .. }) => {
@@ -161,13 +162,17 @@ impl TreeNode for Expr {
             Expr::ScalarSubquery(_) => self,
             Expr::ScalarVariable(ty, names) => Expr::ScalarVariable(ty, names),
             Expr::Literal(value) => Expr::Literal(value),
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                Expr::BinaryExpr(BinaryExpr::new(
-                    transform_boxed(left, &mut transform)?,
-                    op,
-                    transform_boxed(right, &mut transform)?,
-                ))
-            }
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op,
+                right,
+                data_type,
+            }) => Expr::BinaryExpr(BinaryExpr::new_with_data_type(
+                transform_boxed(left, &mut transform)?,
+                op,
+                transform_boxed(right, &mut transform)?,
+                data_type,
+            )),
             Expr::Like(Like {
                 negated,
                 expr,
@@ -258,6 +263,9 @@ impl TreeNode for Expr {
                 transform_boxed(expr, &mut transform)?,
                 data_type,
             )),
+            Expr::PromotePrecision(PromotePrecision { expr }) => Expr::PromotePrecision(
+                PromotePrecision::new(transform_boxed(expr, &mut transform)?),
+            ),
             Expr::Sort(Sort {
                 expr,
                 asc,
