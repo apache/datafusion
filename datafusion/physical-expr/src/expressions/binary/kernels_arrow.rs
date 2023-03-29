@@ -349,10 +349,23 @@ pub(crate) fn multiply_decimal_dyn_scalar(
     result_type: &Option<DataType>,
 ) -> Result<ArrayRef> {
     let (precision, scale) = get_precision_scale(&result_type.clone().unwrap())?;
+
+    let op_type = binary_operator_data_type(
+        left.data_type(),
+        &Operator::Multiply,
+        left.data_type(),
+    )?;
+    let (_, op_scale) = get_precision_scale(&op_type)?;
+
     let array = multiply_scalar_dyn::<Decimal128Type>(left, right)?;
-    let divide = 10_i128.pow(scale as u32);
-    let array = divide_scalar_dyn::<Decimal128Type>(&array, divide)?;
-    decimal_array_with_precision_scale(array, precision, scale)
+
+    if op_scale > scale {
+        let div = 10_i128.pow((op_scale - scale) as u32);
+        let array = divide_scalar_dyn::<Decimal128Type>(&array, div)?;
+        decimal_array_with_precision_scale(array, precision, scale)
+    } else {
+        decimal_array_with_precision_scale(array, precision, scale)
+    }
 }
 
 pub(crate) fn divide_decimal_dyn_scalar(
@@ -544,12 +557,12 @@ mod tests {
             add_dyn_decimal(&left_decimal_array, &right_decimal_array, &result_type)?;
         let result = as_decimal128_array(&result)?;
         let expect =
-            create_decimal_array(&[Some(246), None, Some(245), Some(247)], 25, 3);
+            create_decimal_array(&[Some(246), None, Some(245), Some(247)], 26, 3);
         assert_eq!(&expect, result);
         let result = add_decimal_dyn_scalar(&left_decimal_array, 10, &result_type)?;
         let result = as_decimal128_array(&result)?;
         let expect =
-            create_decimal_array(&[Some(133), None, Some(132), Some(134)], 25, 3);
+            create_decimal_array(&[Some(133), None, Some(132), Some(134)], 26, 3);
         assert_eq!(&expect, result);
         // subtract
         let result_type = Some(
@@ -566,12 +579,12 @@ mod tests {
             &result_type,
         )?;
         let result = as_decimal128_array(&result)?;
-        let expect = create_decimal_array(&[Some(0), None, Some(-1), Some(1)], 25, 3);
+        let expect = create_decimal_array(&[Some(0), None, Some(-1), Some(1)], 26, 3);
         assert_eq!(&expect, result);
         let result = subtract_decimal_dyn_scalar(&left_decimal_array, 10, &result_type)?;
         let result = as_decimal128_array(&result)?;
         let expect =
-            create_decimal_array(&[Some(113), None, Some(112), Some(114)], 25, 3);
+            create_decimal_array(&[Some(113), None, Some(112), Some(114)], 26, 3);
         assert_eq!(&expect, result);
         // multiply
         let result_type = Some(
@@ -593,7 +606,8 @@ mod tests {
         assert_eq!(&expect, result);
         let result = multiply_decimal_dyn_scalar(&left_decimal_array, 10, &result_type)?;
         let result = as_decimal128_array(&result)?;
-        let expect = create_decimal_array(&[Some(1), None, Some(1), Some(1)], 25, 3);
+        let expect =
+            create_decimal_array(&[Some(1230), None, Some(1220), Some(1240)], 38, 6);
         assert_eq!(&expect, result);
         // divide
         let left_decimal_array = create_decimal_array(
@@ -627,23 +641,29 @@ mod tests {
         )?;
         let result = as_decimal128_array(&result)?;
         let expect = create_decimal_array(
-            &[Some(123456700), None, Some(22446672), Some(-10037130), None],
-            25,
-            3,
+            &[
+                Some(12345670000000000000000000000000000),
+                None,
+                Some(2244667272727272727272727272727272),
+                Some(-1003713008130081300813008130081300),
+                None,
+            ],
+            38,
+            29,
         );
         assert_eq!(&expect, result);
         let result = divide_decimal_dyn_scalar(&left_decimal_array, 10, &result_type)?;
         let result = as_decimal128_array(&result)?;
         let expect = create_decimal_array(
             &[
-                Some(123456700),
+                Some(12345670000000000000000000000000000),
                 None,
-                Some(123456700),
-                Some(123456700),
-                Some(123456700),
+                Some(12345670000000000000000000000000000),
+                Some(12345670000000000000000000000000000),
+                Some(12345670000000000000000000000000000),
             ],
-            25,
-            3,
+            38,
+            29,
         );
         assert_eq!(&expect, result);
         // modulus
