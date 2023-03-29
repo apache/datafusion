@@ -1,14 +1,14 @@
 select
     o_year,
-    sum(case
+    cast(cast(sum(case
             when nation = 'BRAZIL' then volume
             else 0
-        end) / sum(volume) as mkt_share
+        end) as decimal(12,2)) / cast(sum(volume) as decimal(12,2)) as decimal(15,2)) as mkt_share
 from
     (
         select
             extract(year from o_orderdate) as o_year,
-            cast(l_extendedprice as decimal(12,2)) * (1 - l_discount) as volume,
+            l_extendedprice * (1 - l_discount) as volume,
             n2.n_name as nation
         from
             part,
