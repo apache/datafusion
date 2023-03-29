@@ -356,8 +356,6 @@ impl AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<StreamType> {
-        // let ordered_indices = self.get_ordered_indices();
-
         let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, Arc::clone(&context))?;
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -435,11 +433,10 @@ impl ExecutionPlan for AggregateExec {
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
             if self.ordered_indices.is_empty() {
-                // Cannot stream
+                // Cannot run without breaking pipeline.
                 Err(DataFusionError::Plan(
                     "Aggregate Error: `GROUP BY` clause (including the more general GROUPING SET) is not supported for unbounded inputs.".to_string(),
                 ))
-                // Ok(true)
             } else {
                 Ok(true)
             }
@@ -1028,7 +1025,6 @@ mod tests {
 
         let result =
             common::collect(partial_aggregate.execute(0, task_ctx.clone())?).await?;
-        print_batches(&result)?;
 
         let expected = vec![
             "+---+-----+-----------------+",

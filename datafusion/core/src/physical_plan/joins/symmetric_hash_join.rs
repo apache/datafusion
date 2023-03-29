@@ -274,6 +274,13 @@ impl SymmetricHashJoinExec {
         // Create an expression DAG for the join filter:
         let mut physical_expr_graph =
             ExprIntervalGraph::try_new(filter.expression().clone())?;
+
+        // Interval calculations require each column to exhibit monotonicity
+        // independently. However, a `PhysicalSortExpr` object defines a
+        // lexicographical ordering, so we can only use their first elements.
+        // when deducing column monotonicities.
+        // TODO: Extend the `PhysicalSortExpr` mechanism to express independent
+        //       (i.e. simultaneous) ordering properties of columns.
         let (left_ordering, right_ordering) = match (
             left.output_ordering(),
             right.output_ordering(),

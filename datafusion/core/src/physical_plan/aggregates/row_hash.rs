@@ -277,7 +277,6 @@ impl Stream for GroupedHashAggregateStream {
                 ExecutionState::ProducingOutput => {
                     let timer = elapsed_compute.timer();
                     let result = self.create_batch_from_map();
-                    // println!("ProducingOutput result:{:?}", result);
 
                     timer.done();
 
@@ -285,7 +284,6 @@ impl Stream for GroupedHashAggregateStream {
                         // made output
                         Ok(Some(result)) => {
                             let batch = result.record_output(&self.baseline_metrics);
-                            // println!("ReadingInput Mode.");
                             self.row_group_skip_position += batch.num_rows();
                             self.exec_state = ExecutionState::ReadingInput;
                             if !self.ordered_indices.is_empty() {
@@ -637,7 +635,6 @@ impl GroupedHashAggregateStream {
             }
         }
         if new_result {
-            // println!("ProducingOutput mode");
             self.exec_state = ExecutionState::ProducingOutput;
         }
 
