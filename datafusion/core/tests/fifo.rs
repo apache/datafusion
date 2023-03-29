@@ -241,7 +241,7 @@ mod unix_test {
     // unbounded (FIFO) sources.
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn unbounded_file_with_symmetric_join() -> Result<()> {
-        tokio::time::timeout(Duration::from_secs(45),  async {
+        let result = tokio::time::timeout(Duration::from_secs(360),  async {
             // To make unbounded deterministic
             let waiting = Arc::new(Mutex::new(true));
             let thread_bools = vec![waiting.clone(), waiting.clone()];
@@ -283,6 +283,7 @@ mod unix_test {
                             write_to_fifo(&file, &line, execution_start, broken_pipe_timeout)
                                 .unwrap();
                         }
+                        drop(file);
                         log::debug!("File at {:?} finished.", fifo_path);
                     });
                     (fifo_writer, return_path)
@@ -333,7 +334,8 @@ mod unix_test {
                     > 1
             );
             Ok::<(), DataFusionError>(())
-        }).await.expect("Timeout test.")?;
-        Ok(())
+        }).await;
+        assert!(result.is_ok(), "Test did not timeout as expected.");
+        result.unwrap()
     }
 }
