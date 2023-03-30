@@ -268,7 +268,6 @@ mod unix_test {
                             .write(true)
                             .open(fifo_path.clone())
                             .unwrap();
-                        log::debug!("File at {:?} opened.", fifo_path);
                         // Reference time to use when deciding to fail the test
                         let execution_start = Instant::now();
                         // Join filter
@@ -277,10 +276,9 @@ mod unix_test {
                         let a2_iter = (0..TEST_DATA_SIZE).map(|x| x % 10);
                         for (cnt, (a1, a2)) in a1_iter.zip(a2_iter).enumerate() {
                             // Wait a reading sign for unbounded execution
-                            // After first batch FIFO reading, we will wait for a batch created.
-                            while waiting_thread.load(Ordering::SeqCst) && TEST_BATCH_SIZE + 1 < cnt
+                            // After first 2 batch FIFO reading in both sides, we will wait for a batch created.
+                            while waiting_thread.load(Ordering::SeqCst) && (TEST_BATCH_SIZE * 2) + 1 < cnt
                             {
-                                log::debug!("Waiting.");
                                 thread::sleep(Duration::from_millis(200));
                             }
                             let line = format!("{a1},{a2}\n").to_owned();
@@ -288,7 +286,6 @@ mod unix_test {
                                 .unwrap();
                         }
                         drop(file);
-                        log::debug!("File at {:?} finished.", fifo_path);
                     });
                     (fifo_writer, return_path)
                 })
@@ -306,19 +303,17 @@ mod unix_test {
             let mut operations = vec![];
             while let Some(Ok(batch)) = stream.next().await {
                 waiting.store(false, Ordering::SeqCst);
-                let op = if batch.column(0).null_count() > 0 {
-                    log::debug!("Test gets the LeftUnmatched");
-                    JoinOperation::LeftUnmatched
-                } else if batch.column(2).null_count() > 0 {
-                    log::debug!("Test gets the RightUnmatched");
+                let left_unmatched = batch.column(2).null_count();
+                let right_unmatched = batch.column(0).null_count();
+                let op = if left_unmatched == 0 && right_unmatched == 0 {
+                    JoinOperation::Equal
+                } else if right_unmatched > left_unmatched {
                     JoinOperation::RightUnmatched
                 } else {
-                    log::debug!("Test gets the Equal");
-                    JoinOperation::Equal
+                    JoinOperation::LeftUnmatched
                 };
                 operations.push(op);
             }
-            log::debug!("Stream is finished");
             threads.into_iter().for_each(|j| j.join().unwrap());
             // The SymmetricHashJoin executor produces FULL join results at every
             // pruning, which happens before it reaches the end of input and more
