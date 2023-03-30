@@ -424,7 +424,7 @@ pub fn object_name_to_qualifier(
         .join(" AND ")
 }
 
-fn normalize_ident(id: Ident, enable_normalization: bool) -> String {
+pub fn normalize_ident(id: Ident, enable_normalization: bool) -> String {
     if enable_normalization {
         return crate::utils::normalize_ident(id);
     }

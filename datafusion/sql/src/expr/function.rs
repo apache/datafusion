@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use crate::utils::normalize_ident;
+use crate::planner::{normalize_ident, ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{DFSchema, DataFusionError, Result};
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::window_frame::regularize;
@@ -43,7 +42,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // (e.g. "foo.bar") for function names yet
             function.name.to_string()
         } else {
-            normalize_ident(function.name.0[0].clone())
+            normalize_ident(
+                function.name.0[0].clone(),
+                self.options.enable_ident_normalization,
+            )
         };
 
         // next, scalar built-in

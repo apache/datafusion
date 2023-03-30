@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{normalize_ident, ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::{
-    check_columns_satisfy_exprs, extract_aliases, normalize_ident, rebase_expr,
-    resolve_aliases_to_exprs, resolve_columns, resolve_positions_to_exprs,
+    check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
+    resolve_columns, resolve_positions_to_exprs,
 };
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::expr_rewriter::{
@@ -332,7 +332,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
-                let expr = Alias(Box::new(col), normalize_ident(alias));
+                let expr = Alias(
+                    Box::new(col),
+                    normalize_ident(alias, self.options.enable_ident_normalization),
+                );
                 Ok(vec![expr])
             }
             SelectItem::Wildcard(options) => {

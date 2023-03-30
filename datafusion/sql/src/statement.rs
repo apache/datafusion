@@ -19,7 +19,8 @@ use crate::parser::{
     CreateExternalTable, DFParser, DescribeTableStmt, Statement as DFStatement,
 };
 use crate::planner::{
-    object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
+    normalize_ident as planner_normalize_ident, object_name_to_qualifier,
+    ContextProvider, PlannerContext, SqlToRel,
 };
 use crate::utils::normalize_ident;
 use arrow_schema::DataType;
@@ -860,7 +861,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .iter()
                 .map(|c| {
                     Ok(table_schema
-                        .field_with_unqualified_name(&normalize_ident(c.clone()))?
+                        .field_with_unqualified_name(&planner_normalize_ident(
+                            c.clone(),
+                            self.options.enable_ident_normalization,
+                        ))?
                         .clone())
                 })
                 .collect::<Result<Vec<DFField>>>()?;
