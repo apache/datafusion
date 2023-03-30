@@ -577,33 +577,6 @@ impl DefaultPhysicalPlanner {
 
                     let logical_input_schema = input.schema();
 
-                    let physical_sort_keys = if sort_keys.is_empty() {
-                        None
-                    } else {
-                        let physical_input_schema = input_exec.schema();
-                        let sort_keys = sort_keys
-                            .iter()
-                            .map(|(e, _)| match e {
-                                Expr::Sort(expr::Sort {
-                                    expr,
-                                    asc,
-                                    nulls_first,
-                                }) => create_physical_sort_expr(
-                                    expr,
-                                    logical_input_schema,
-                                    &physical_input_schema,
-                                    SortOptions {
-                                        descending: !*asc,
-                                        nulls_first: *nulls_first,
-                                    },
-                                    session_state.execution_props(),
-                                ),
-                                _ => unreachable!(),
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-                        Some(sort_keys)
-                    };
-
                     let physical_input_schema = input_exec.schema();
                     let window_expr = window_expr
                         .iter()
@@ -628,7 +601,6 @@ impl DefaultPhysicalPlanner {
                             input_exec,
                             physical_input_schema,
                             physical_partition_keys,
-                            physical_sort_keys,
                         )?)
                     } else {
                         Arc::new(WindowAggExec::try_new(
@@ -636,7 +608,6 @@ impl DefaultPhysicalPlanner {
                             input_exec,
                             physical_input_schema,
                             physical_partition_keys,
-                            physical_sort_keys,
                         )?)
                     })
                 }
