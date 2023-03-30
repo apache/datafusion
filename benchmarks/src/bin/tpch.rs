@@ -1118,6 +1118,20 @@ mod ci {
                             )
                         }
                     }
+                    (
+                        ScalarValue::Decimal128(Some(l), _, s),
+                        ScalarValue::Decimal128(Some(r), _, _),
+                    ) => {
+                        let tolerance = 0.1;
+                        if ((l - r) as f64 / 10_i32.pow(*s as u32) as f64).abs()
+                            > tolerance
+                        {
+                            panic!(
+                                "Expected: {}; Actual: {}; Tolerance: {}",
+                                l, r, tolerance
+                            )
+                        }
+                    }
                     (l, r) => assert_eq!(format!("{:?}", l), format!("{:?}", r)),
                 }
             }
