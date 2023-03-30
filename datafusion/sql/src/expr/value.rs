@@ -97,6 +97,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Parse the placeholder as a number because it is the only support from sqlparser and postgres
         let index = param[1..].parse::<usize>();
         let idx = match index {
+            Ok(0) => {
+                return Err(DataFusionError::Plan(format!(
+                    "Invalid placeholder, zero is not a valid index: {param}"
+                )));
+            }
             Ok(index) => index - 1,
             Err(_) => {
                 return Err(DataFusionError::Plan(format!(
