@@ -51,7 +51,7 @@ pub fn create_physical_expr(
     if input_schema.fields.len() != input_dfschema.fields().len() {
         return Err(DataFusionError::Internal(format!(
             "create_physical_expr expected same number of fields, got \
-                     got Arrow schema with {}  and DataFusion schema with {}",
+                     Arrow schema with {}  and DataFusion schema with {}",
             input_schema.fields.len(),
             input_dfschema.fields().len()
         )));

@@ -21,11 +21,11 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, IntervalUnit};
 
+use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{
     parse_interval, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{self, Between, BinaryExpr, Case, Like, WindowFunction};
-use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     coerce_types, comparison_coercion, like_coercion,
@@ -118,7 +118,9 @@ pub(crate) struct TypeCoercionRewriter {
     pub(crate) schema: DFSchemaRef,
 }
 
-impl ExprRewriter for TypeCoercionRewriter {
+impl TreeNodeRewriter for TypeCoercionRewriter {
+    type N = Expr;
+
     fn pre_visit(&mut self, _expr: &Expr) -> Result<RewriteRecursion> {
         Ok(RewriteRecursion::Continue)
     }
@@ -642,9 +644,9 @@ mod test {
 
     use arrow::datatypes::DataType;
 
+    use datafusion_common::tree_node::TreeNode;
     use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
     use datafusion_expr::expr::{self, Like};
-    use datafusion_expr::expr_rewriter::ExprRewritable;
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true,
         AccumulatorFunctionImplementation, AggregateFunction, AggregateUDF,

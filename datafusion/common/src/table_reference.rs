@@ -317,6 +317,25 @@ impl<'a> TableReference<'a> {
             _ => Self::Bare { table: s.into() },
         }
     }
+
+    /// Decompose a [`TableReference`] to separate parts. The result vector contains
+    /// at most three elements in the following sequence:
+    /// ```no_rust
+    /// [<catalog>, <schema>, table]
+    /// ```
+    pub fn to_vec(&self) -> Vec<String> {
+        match self {
+            TableReference::Bare { table } => vec![table.to_string()],
+            TableReference::Partial { schema, table } => {
+                vec![schema.to_string(), table.to_string()]
+            }
+            TableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => vec![catalog.to_string(), schema.to_string(), table.to_string()],
+        }
+    }
 }
 
 /// Parse a `String` into a OwnedTableReference as a multipart SQL identifier.
@@ -407,5 +426,27 @@ mod tests {
         };
         let actual = TableReference::from("TABLE()");
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_table_reference_to_vector() {
+        let table_reference = TableReference::parse_str("table");
+        assert_eq!(vec!["table".to_string()], table_reference.to_vec());
+
+        let table_reference = TableReference::parse_str("schema.table");
+        assert_eq!(
+            vec!["schema".to_string(), "table".to_string()],
+            table_reference.to_vec()
+        );
+
+        let table_reference = TableReference::parse_str("catalog.schema.table");
+        assert_eq!(
+            vec![
+                "catalog".to_string(),
+                "schema".to_string(),
+                "table".to_string()
+            ],
+            table_reference.to_vec()
+        );
     }
 }

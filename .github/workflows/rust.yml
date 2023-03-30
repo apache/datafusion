@@ -248,11 +248,11 @@ jobs:
           rustup toolchain install stable
           rustup default stable
           rustup component add rustfmt
-      - name: Run tests
+      - name: Run tests (excluding doctests)
         shell: bash
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test
+          cargo test --lib --tests --bins --features avro,jit,scheduler,json,dictionary_expressions
         env:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: "-C debuginfo=0"
@@ -282,10 +282,10 @@ jobs:
           rustup toolchain install stable
           rustup default stable
           rustup component add rustfmt
-      - name: Run tests
+      - name: Run tests (excluding doctests)
         shell: bash
         run: |
-          cargo test
+          cargo test --lib --tests --bins --features avro,jit,scheduler,json,dictionary_expressions
         env:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: "-C debuginfo=0"
@@ -320,6 +320,20 @@ jobs:
       - name: Run datafusion-common tests
         run: cargo test -p datafusion-common --features=pyarrow
 
+  vendor:
+    name: Verify Vendored Code
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Run gen
+        run: ./regen.sh
+        working-directory: ./datafusion/proto
+      - name: Verify workspace clean (if this fails, run ./datafusion/proto/regen.sh and check in results)
+        run: git diff --exit-code
 
   check-fmt:
     name: Check cargo fmt

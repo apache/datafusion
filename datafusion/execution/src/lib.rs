@@ -23,3 +23,6 @@ pub mod memory_pool;
 pub mod object_store;
 pub mod registry;
 pub mod runtime_env;
+mod task;
+
+pub use task::TaskContext;
