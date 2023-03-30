@@ -2198,7 +2198,8 @@ mod tests {
 
     #[tokio::test]
     async fn join_change_in_planner() -> Result<()> {
-        let ctx = SessionContext::new();
+        let config = SessionConfig::new().with_target_partitions(8);
+        let ctx = SessionContext::with_config(config);
         let tmp_dir = TempDir::new().unwrap();
         let left_file_path = tmp_dir.path().join("left.csv");
         File::create(left_file_path.clone()).unwrap();
