@@ -136,9 +136,7 @@ struct FileStreamMetrics {
     /// Time elapsed for file opening
     pub time_opening: StartableTime,
     /// Time elapsed for file scanning + first record batch of decompression + decoding
-    pub time_scanning_until_data: StartableTime,
-    /// Total elapsed time for for scanning + record batch decompression / decoding
-    pub time_scanning_total: StartableTime,
+    pub time_scanning: StartableTime,
     /// Time elapsed for data decompression + decoding
     pub time_processing: StartableTime,
 }
@@ -151,15 +149,9 @@ impl FileStreamMetrics {
             start: None,
         };
 
-        let time_scanning_until_data = StartableTime {
+        let time_scanning = StartableTime {
             metrics: MetricBuilder::new(metrics)
-                .subset_time("time_elapsed_scanning_until_data", partition),
-            start: None,
-        };
-
-        let time_scanning_total = StartableTime {
-            metrics: MetricBuilder::new(metrics)
-                .subset_time("time_elapsed_scanning_total", partition),
+                .subset_time("time_elapsed_scanning", partition),
             start: None,
         };
 
@@ -171,8 +163,7 @@ impl FileStreamMetrics {
 
         Self {
             time_opening,
-            time_scanning_until_data,
-            time_scanning_total,
+            time_scanning,
             time_processing,
         }
     }
@@ -232,23 +223,20 @@ impl<F: FileOpener> FileStream<F> {
     fn poll_inner(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<RecordBatch>>> {
         loop {
             match &mut self.state {
-                FileStreamState::Idle => {
-                    self.file_stream_metrics.time_opening.start();
-
-                    match self.start_next_file().transpose() {
-                        Ok(Some((future, partition_values))) => {
-                            self.state = FileStreamState::Open {
-                                future,
-                                partition_values,
-                            }
-                        }
-                        Ok(None) => return Poll::Ready(None),
-                        Err(e) => {
-                            self.state = FileStreamState::Error;
-                            return Poll::Ready(Some(Err(e)));
+                FileStreamState::Idle => match self.start_next_file().transpose() {
+                    Ok(Some((future, partition_values))) => {
+                        self.file_stream_metrics.time_opening.start();
+                        self.state = FileStreamState::Open {
+                            future,
+                            partition_values,
                         }
                     }
-                }
+                    Ok(None) => return Poll::Ready(None),
+                    Err(e) => {
+                        self.state = FileStreamState::Error;
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                },
                 FileStreamState::Open {
                     future,
                     partition_values,
@@ -259,8 +247,7 @@ impl<F: FileOpener> FileStream<F> {
                         let next = self.start_next_file().transpose();
 
                         self.file_stream_metrics.time_opening.stop();
-                        self.file_stream_metrics.time_scanning_until_data.start();
-                        self.file_stream_metrics.time_scanning_total.start();
+                        self.file_stream_metrics.time_scanning.start();
 
                         match next {
                             Ok(Some((next_future, next_partition_values))) => {
@@ -294,8 +281,7 @@ impl<F: FileOpener> FileStream<F> {
                     next,
                 } => match ready!(reader.poll_next_unpin(cx)) {
                     Some(result) => {
-                        self.file_stream_metrics.time_scanning_until_data.stop();
-                        self.file_stream_metrics.time_scanning_total.stop();
+                        self.file_stream_metrics.time_scanning.stop();
                         let result = result
                             .and_then(|b| {
                                 self.pc_projector
@@ -320,12 +306,10 @@ impl<F: FileOpener> FileStream<F> {
                         if result.is_err() {
                             self.state = FileStreamState::Error
                         }
-                        self.file_stream_metrics.time_scanning_total.start();
                         return Poll::Ready(Some(result.map_err(Into::into)));
                     }
                     None => {
-                        self.file_stream_metrics.time_scanning_until_data.stop();
-                        self.file_stream_metrics.time_scanning_total.stop();
+                        self.file_stream_metrics.time_scanning.stop();
 
                         match mem::take(next) {
                             Some((future, partition_values)) => {
