@@ -17,7 +17,7 @@
 
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
-use arrow::array::{Array, ArrayData, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
+use arrow::array::{Array, ArrayRef, PrimitiveArray};
 use arrow::compute::{binary, unary};
 use arrow::datatypes::{
     ArrowNativeTypeOp, DataType, Date32Type, Date64Type, IntervalDayTimeType,
@@ -26,9 +26,7 @@ use arrow::datatypes::{
     TimestampSecondType,
 };
 use arrow::record_batch::RecordBatch;
-use arrow::util::bit_mask::combine_option_bitmap;
-use arrow_buffer::Buffer;
-use arrow_schema::{ArrowError, IntervalUnit};
+use arrow_schema::IntervalUnit;
 use chrono::NaiveDateTime;
 use datafusion_common::cast::*;
 use datafusion_common::scalar::*;
@@ -252,28 +250,22 @@ pub fn evaluate_array(
 }
 
 macro_rules! ts_sub_op {
-    ($lhs:ident, $rhs:ident, $lhs_tz:ident, $rhs_tz:ident, $coef:expr, $caster:expr, $op:expr, $ts_unit:expr, $mode:expr, $type_in:ty, $type_out:ty) => {{
+    ($lhs:ident, $rhs:ident, $lhs_tz:ident, $rhs_tz:ident, $coef:expr, $caster:expr, $op:expr, $ts_unit:expr, $mode:expr, $type_out:ty) => {{
         let prim_array_lhs = $caster(&$lhs)?;
         let prim_array_rhs = $caster(&$rhs)?;
-        let ret = Arc::new(try_binary_op::<$type_in, $type_in, _, $type_out>(
-            prim_array_lhs,
-            prim_array_rhs,
-            |ts1, ts2| {
-                let (lhs_tz, rhs_tz) =
-                    (parse_timezones($lhs_tz), parse_timezones($rhs_tz));
-                Ok($op(
-                    $ts_unit(&with_timezone_to_naive_datetime::<$mode>(
-                        ts1.mul_wrapping($coef),
-                        &lhs_tz,
-                    )?),
-                    $ts_unit(&with_timezone_to_naive_datetime::<$mode>(
-                        ts2.mul_wrapping($coef),
-                        &rhs_tz,
-                    )?),
-                ))
-            },
-        )?) as ArrayRef;
-        ret
+        let ret: PrimitiveArray<$type_out> =
+            arrow::compute::try_binary(prim_array_lhs, prim_array_rhs, |ts1, ts2| {
+                let (parsed_lhs_tz, parsed_rhs_tz) =
+                    (parse_timezones($lhs_tz)?, parse_timezones($rhs_tz)?);
+                let (naive_lhs, naive_rhs) = calculate_naives::<$mode>(
+                    ts1.mul_wrapping($coef),
+                    parsed_lhs_tz,
+                    ts2.mul_wrapping($coef),
+                    parsed_rhs_tz,
+                )?;
+                Ok($op($ts_unit(&naive_lhs), $ts_unit(&naive_rhs)))
+            })?;
+        Arc::new(ret) as ArrayRef
     }};
 }
 macro_rules! interval_op {
@@ -301,15 +293,15 @@ macro_rules! interval_cross_op {
     }};
 }
 macro_rules! ts_interval_op {
-    ($lhs:ident, $rhs:ident, $caster1:expr, $caster2:expr, $op:expr, $sign:ident, $type_in1:ty, $type_in2:ty) => {{
+    ($lhs:ident, $rhs:ident, $tz:ident, $caster1:expr, $caster2:expr, $op:expr, $sign:ident, $type_in1:ty, $type_in2:ty) => {{
         let prim_array_lhs = $caster1(&$lhs)?;
         let prim_array_rhs = $caster2(&$rhs)?;
-        let ret = Arc::new(try_binary_op::<$type_in1, $type_in2, _, $type_in1>(
+        let ret: PrimitiveArray<$type_in1> = arrow::compute::try_binary(
             prim_array_lhs,
             prim_array_rhs,
             |ts, interval| Ok($op(ts, interval as i128, $sign)?),
-        )?) as ArrayRef;
-        ret
+        )?;
+        Arc::new(ret.with_timezone_opt($tz.clone())) as ArrayRef
     }};
 }
 // This function evaluates temporal array operations, such as timestamp - timestamp, interval + interval,
@@ -348,63 +340,6 @@ pub fn evaluate_temporal_arrays(
     Ok(ColumnarValue::Array(ret))
 }
 
-#[inline]
-unsafe fn build_primitive_array<O: ArrowPrimitiveType>(
-    len: usize,
-    buffer: Buffer,
-    null_count: usize,
-    null_buffer: Option<Buffer>,
-) -> PrimitiveArray<O> {
-    PrimitiveArray::from(ArrayData::new_unchecked(
-        O::DATA_TYPE,
-        len,
-        Some(null_count),
-        null_buffer,
-        0,
-        vec![buffer],
-        vec![],
-    ))
-}
-
-pub fn try_binary_op<A, B, F, O>(
-    a: &PrimitiveArray<A>,
-    b: &PrimitiveArray<B>,
-    op: F,
-) -> Result<PrimitiveArray<O>, ArrowError>
-where
-    A: ArrowPrimitiveType,
-    B: ArrowPrimitiveType,
-    O: ArrowPrimitiveType,
-    F: Fn(A::Native, B::Native) -> Result<O::Native, ArrowError>,
-{
-    if a.len() != b.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform binary operation on arrays of different length".to_string(),
-        ));
-    }
-    let len = a.len();
-
-    if a.is_empty() {
-        return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
-    }
-
-    let null_buffer = combine_option_bitmap(&[a.data(), b.data()], len);
-    let null_count = null_buffer
-        .as_ref()
-        .map(|x| len - x.count_set_bits_offset(0, len))
-        .unwrap_or_default();
-
-    let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
-    // JUSTIFICATION
-    //  Benefit
-    //      ~60% speedup
-    //  Soundness
-    //      `values` is an iterator with a known size from a PrimitiveArray
-    let buffer = unsafe { Buffer::try_from_trusted_len_iter(values) }?;
-
-    Ok(unsafe { build_primitive_array(len, buffer, null_count, null_buffer) })
-}
-
 /// Performs a timestamp subtraction operation on two arrays and returns the resulting array.
 fn ts_array_op(array_lhs: &ArrayRef, array_rhs: &ArrayRef) -> Result<ArrayRef> {
     match (array_lhs.data_type(), array_rhs.data_type()) {
@@ -421,7 +356,6 @@ fn ts_array_op(array_lhs: &ArrayRef, array_rhs: &ArrayRef) -> Result<ArrayRef> {
             seconds_sub,
             NaiveDateTime::timestamp,
             MILLISECOND_MODE,
-            TimestampSecondType,
             IntervalDayTimeType
         )),
         (
@@ -437,7 +371,6 @@ fn ts_array_op(array_lhs: &ArrayRef, array_rhs: &ArrayRef) -> Result<ArrayRef> {
             milliseconds_sub,
             NaiveDateTime::timestamp_millis,
             MILLISECOND_MODE,
-            TimestampMillisecondType,
             IntervalDayTimeType
         )),
         (
@@ -453,7 +386,6 @@ fn ts_array_op(array_lhs: &ArrayRef, array_rhs: &ArrayRef) -> Result<ArrayRef> {
             microseconds_sub,
             NaiveDateTime::timestamp_micros,
             NANOSECOND_MODE,
-            TimestampMicrosecondType,
             IntervalMonthDayNanoType
         )),
         (
@@ -469,7 +401,6 @@ fn ts_array_op(array_lhs: &ArrayRef, array_rhs: &ArrayRef) -> Result<ArrayRef> {
             nanoseconds_sub,
             NaiveDateTime::timestamp_nanos,
             NANOSECOND_MODE,
-            TimestampNanosecondType,
             IntervalMonthDayNanoType
         )),
         (_, _) => Err(DataFusionError::Execution(format!(
@@ -623,11 +554,12 @@ fn ts_interval_array_op(
 ) -> Result<ArrayRef> {
     match (array_lhs.data_type(), array_rhs.data_type()) {
         (
-            DataType::Timestamp(TimeUnit::Second, _),
+            DataType::Timestamp(TimeUnit::Second, tz),
             DataType::Interval(IntervalUnit::YearMonth),
         ) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
+            tz,
             as_timestamp_second_array,
             as_interval_ym_array,
             seconds_add_array::<YM_MODE>,
@@ -636,11 +568,12 @@ fn ts_interval_array_op(
             IntervalYearMonthType
         )),
         (
-            DataType::Timestamp(TimeUnit::Second, _),
+            DataType::Timestamp(TimeUnit::Second, tz),
             DataType::Interval(IntervalUnit::DayTime),
         ) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
+            tz,
             as_timestamp_second_array,
             as_interval_dt_array,
             seconds_add_array::<DT_MODE>,
@@ -649,11 +582,12 @@ fn ts_interval_array_op(
             IntervalDayTimeType
         )),
         (
-            DataType::Timestamp(TimeUnit::Second, _),
+            DataType::Timestamp(TimeUnit::Second, tz),
             DataType::Interval(IntervalUnit::MonthDayNano),
         ) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
+            tz,
             as_timestamp_second_array,
             as_interval_mdn_array,
             seconds_add_array::<MDN_MODE>,
@@ -662,11 +596,12 @@ fn ts_interval_array_op(
             IntervalMonthDayNanoType
         )),
         (
-            DataType::Timestamp(TimeUnit::Millisecond, _),
+            DataType::Timestamp(TimeUnit::Millisecond, tz),
             DataType::Interval(IntervalUnit::YearMonth),
         ) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
+            tz,
             as_timestamp_millisecond_array,
             as_interval_ym_array,
             milliseconds_add_array::<YM_MODE>,
@@ -675,11 +610,12 @@ fn ts_interval_array_op(
             IntervalYearMonthType
         )),
         (
-            DataType::Timestamp(TimeUnit::Millisecond, _),
+            DataType::Timestamp(TimeUnit::Millisecond, tz),
             DataType::Interval(IntervalUnit::DayTime),
         ) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
+            tz,
             as_timestamp_millisecond_array,
             as_interval_dt_array,
             milliseconds_add_array::<DT_MODE>,
@@ -688,11 +624,12 @@ fn ts_interval_array_op(
             IntervalDayTimeType
         )),
         (
-            DataType::Timestamp(TimeUnit::Millisecond, _),
+            DataType::Timestamp(TimeUnit::Millisecond, tz),
             DataType::Interval(IntervalUnit::MonthDayNano),
         ) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
+            tz,
             as_timestamp_millisecond_array,
             as_interval_mdn_array,
             milliseconds_add_array::<MDN_MODE>,
@@ -701,11 +638,12 @@ fn ts_interval_array_op(
             IntervalMonthDayNanoType
         )),
         (
-            DataType::Timestamp(TimeUnit::Microsecond, _),
+            DataType::Timestamp(TimeUnit::Microsecond, tz),
             DataType::Interval(IntervalUnit::YearMonth),
         ) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
+            tz,
             as_timestamp_microsecond_array,
             as_interval_ym_array,
             microseconds_add_array::<YM_MODE>,
@@ -714,11 +652,12 @@ fn ts_interval_array_op(
             IntervalYearMonthType
         )),
         (
-            DataType::Timestamp(TimeUnit::Microsecond, _),
+            DataType::Timestamp(TimeUnit::Microsecond, tz),
             DataType::Interval(IntervalUnit::DayTime),
         ) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
+            tz,
             as_timestamp_microsecond_array,
             as_interval_dt_array,
             microseconds_add_array::<DT_MODE>,
@@ -727,11 +666,12 @@ fn ts_interval_array_op(
             IntervalDayTimeType
         )),
         (
-            DataType::Timestamp(TimeUnit::Microsecond, _),
+            DataType::Timestamp(TimeUnit::Microsecond, tz),
             DataType::Interval(IntervalUnit::MonthDayNano),
         ) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
+            tz,
             as_timestamp_microsecond_array,
             as_interval_mdn_array,
             microseconds_add_array::<MDN_MODE>,
@@ -740,11 +680,12 @@ fn ts_interval_array_op(
             IntervalMonthDayNanoType
         )),
         (
-            DataType::Timestamp(TimeUnit::Nanosecond, _),
+            DataType::Timestamp(TimeUnit::Nanosecond, tz),
             DataType::Interval(IntervalUnit::YearMonth),
         ) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
+            tz,
             as_timestamp_nanosecond_array,
             as_interval_ym_array,
             nanoseconds_add_array::<YM_MODE>,
@@ -753,11 +694,12 @@ fn ts_interval_array_op(
             IntervalYearMonthType
         )),
         (
-            DataType::Timestamp(TimeUnit::Nanosecond, _),
+            DataType::Timestamp(TimeUnit::Nanosecond, tz),
             DataType::Interval(IntervalUnit::DayTime),
         ) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
+            tz,
             as_timestamp_nanosecond_array,
             as_interval_dt_array,
             nanoseconds_add_array::<DT_MODE>,
@@ -766,11 +708,12 @@ fn ts_interval_array_op(
             IntervalDayTimeType
         )),
         (
-            DataType::Timestamp(TimeUnit::Nanosecond, _),
+            DataType::Timestamp(TimeUnit::Nanosecond, tz),
             DataType::Interval(IntervalUnit::MonthDayNano),
         ) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
+            tz,
             as_timestamp_nanosecond_array,
             as_interval_mdn_array,
             nanoseconds_add_array::<MDN_MODE>,

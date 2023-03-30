@@ -975,20 +975,20 @@ pub const NANOSECOND_MODE: bool = true;
 ///   interval will have the type [`IntervalDayTimeType`].
 /// - When subtracting timestamps at microseconds/nanoseconds precision, the
 ///   output interval will have the type [`IntervalMonthDayNanoType`].
-fn ts_sub_to_interval<const TIME_MOD: bool>(
+fn ts_sub_to_interval<const TIME_MODE: bool>(
     lhs_ts: i64,
     rhs_ts: i64,
     lhs_tz: &Option<String>,
     rhs_tz: &Option<String>,
 ) -> Result<ScalarValue> {
-    let (parsed_lhs_tz, parsed_rhs_tz) =
-        (parse_timezones(lhs_tz), parse_timezones(rhs_tz));
+    let parsed_lhs_tz = parse_timezones(lhs_tz)?;
+    let parsed_rhs_tz = parse_timezones(rhs_tz)?;
 
-    let lhs_dt = with_timezone_to_naive_datetime::<TIME_MOD>(lhs_ts, &parsed_lhs_tz)?;
-    let rhs_dt = with_timezone_to_naive_datetime::<TIME_MOD>(rhs_ts, &parsed_rhs_tz)?;
-    let delta_secs = lhs_dt.signed_duration_since(rhs_dt);
+    let (naive_lhs, naive_rhs) =
+        calculate_naives::<TIME_MODE>(lhs_ts, parsed_lhs_tz, rhs_ts, parsed_rhs_tz)?;
+    let delta_secs = naive_lhs.signed_duration_since(naive_rhs);
 
-    match TIME_MOD {
+    match TIME_MODE {
         MILLISECOND_MODE => {
             let as_millisecs = delta_secs.num_milliseconds();
             Ok(ScalarValue::new_interval_dt(
@@ -1011,18 +1011,82 @@ fn ts_sub_to_interval<const TIME_MOD: bool>(
     }
 }
 
-// This function parses the timezone from string to Tz.
-// If it cannot parse or timezone field is [`None`], it returns [`None`].
-pub fn parse_timezones(tz: &Option<String>) -> Option<Tz> {
+/// This function parses the timezone from string to Tz.
+/// If it cannot parse or timezone field is [`None`], it returns [`None`].
+pub fn parse_timezones(tz: &Option<String>) -> Result<Option<Tz>> {
     if let Some(tz) = tz {
-        let parsed_tz: Option<Tz> = FromStr::from_str(tz)
-            .map_err(|_| {
-                DataFusionError::Execution("cannot parse given timezone".to_string())
-            })
-            .ok();
-        parsed_tz
+        let parsed_tz: Tz = FromStr::from_str(tz).map_err(|_| {
+            DataFusionError::Execution("cannot parse given timezone".to_string())
+        })?;
+        Ok(Some(parsed_tz))
     } else {
-        None
+        Ok(None)
+    }
+}
+
+/// This function takes two timestamps with an optional timezone,
+/// and returns the duration between them. If one of the timestamps
+/// has a [`None`] timezone, the other one is also treated as having [`None`].
+pub fn calculate_naives<const TIME_MODE: bool>(
+    lhs_ts: i64,
+    parsed_lhs_tz: Option<Tz>,
+    rhs_ts: i64,
+    parsed_rhs_tz: Option<Tz>,
+) -> Result<(NaiveDateTime, NaiveDateTime)> {
+    let err = || {
+        DataFusionError::Execution(String::from(
+            "error while converting Int64 to DateTime in timestamp subtraction",
+        ))
+    };
+    match (parsed_lhs_tz, parsed_rhs_tz, TIME_MODE) {
+        (Some(lhs_tz), Some(rhs_tz), MILLISECOND_MODE) => {
+            let lhs = arrow_array::temporal_conversions::as_datetime_with_timezone::<
+                arrow_array::types::TimestampMillisecondType,
+            >(lhs_ts, rhs_tz)
+            .ok_or_else(err)?
+            .naive_local();
+            let rhs = arrow_array::temporal_conversions::as_datetime_with_timezone::<
+                arrow_array::types::TimestampMillisecondType,
+            >(rhs_ts, lhs_tz)
+            .ok_or_else(err)?
+            .naive_local();
+            Ok((lhs, rhs))
+        }
+        (Some(lhs_tz), Some(rhs_tz), NANOSECOND_MODE) => {
+            let lhs = arrow_array::temporal_conversions::as_datetime_with_timezone::<
+                arrow_array::types::TimestampNanosecondType,
+            >(lhs_ts, rhs_tz)
+            .ok_or_else(err)?
+            .naive_local();
+            let rhs = arrow_array::temporal_conversions::as_datetime_with_timezone::<
+                arrow_array::types::TimestampNanosecondType,
+            >(rhs_ts, lhs_tz)
+            .ok_or_else(err)?
+            .naive_local();
+            Ok((lhs, rhs))
+        }
+        (_, _, MILLISECOND_MODE) => {
+            let lhs = arrow_array::temporal_conversions::as_datetime::<
+                arrow_array::types::TimestampMillisecondType,
+            >(lhs_ts)
+            .ok_or_else(err)?;
+            let rhs = arrow_array::temporal_conversions::as_datetime::<
+                arrow_array::types::TimestampMillisecondType,
+            >(rhs_ts)
+            .ok_or_else(err)?;
+            Ok((lhs, rhs))
+        }
+        (_, _, NANOSECOND_MODE) => {
+            let lhs = arrow_array::temporal_conversions::as_datetime::<
+                arrow_array::types::TimestampNanosecondType,
+            >(lhs_ts)
+            .ok_or_else(err)?;
+            let rhs = arrow_array::temporal_conversions::as_datetime::<
+                arrow_array::types::TimestampNanosecondType,
+            >(rhs_ts)
+            .ok_or_else(err)?;
+            Ok((lhs, rhs))
+        }
     }
 }
 
@@ -1112,9 +1176,13 @@ pub fn milliseconds_add_array<const INTERVAL_MODE: i8>(
     interval: i128,
     sign: i32,
 ) -> Result<i64> {
-    let secs = ts_ms / 1000;
-    let nsecs = ((ts_ms % 1000) * 1_000_000) as u32;
-    do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs, interval, sign)
+    let mut secs = ts_ms / 1000;
+    let mut nsecs = ((ts_ms % 1000) * 1_000_000) as i32;
+    if nsecs < 0 {
+        secs -= 1;
+        nsecs += 1_000_000_000;
+    }
+    do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs as u32, interval, sign)
         .map(|dt| dt.timestamp_millis())
 }
 
@@ -1131,9 +1199,13 @@ pub fn microseconds_add_array<const INTERVAL_MODE: i8>(
     interval: i128,
     sign: i32,
 ) -> Result<i64> {
-    let secs = ts_us / 1_000_000;
-    let nsecs = ((ts_us % 1_000_000) * 1000) as u32;
-    do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs, interval, sign)
+    let mut secs = ts_us / 1_000_000;
+    let mut nsecs = ((ts_us % 1_000_000) * 1000) as i32;
+    if nsecs < 0 {
+        secs -= 1;
+        nsecs += 1_000_000_000;
+    }
+    do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs as u32, interval, sign)
         .map(|dt| dt.timestamp_nanos() / 1000)
 }
 
@@ -1150,9 +1222,13 @@ pub fn nanoseconds_add_array<const INTERVAL_MODE: i8>(
     interval: i128,
     sign: i32,
 ) -> Result<i64> {
-    let secs = ts_ns / 1_000_000_000;
-    let nsecs = (ts_ns % 1_000_000_000) as u32;
-    do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs, interval, sign)
+    let mut secs = ts_ns / 1_000_000_000;
+    let mut nsecs = (ts_ns % 1_000_000_000) as i32;
+    if nsecs < 0 {
+        secs -= 1;
+        nsecs += 1_000_000_000;
+    }
+    do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs as u32, interval, sign)
         .map(|dt| dt.timestamp_nanos())
 }
 
