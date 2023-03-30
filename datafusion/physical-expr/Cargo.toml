@@ -57,6 +57,7 @@ hashbrown = { version = "0.13", features = ["raw"] }
 indexmap = "1.9.2"
 itertools = { version = "0.10", features = ["use_std"] }
 lazy_static = { version = "^1.4.0" }
+libc = "0.2.140"
 md-5 = { version = "^0.10.0", optional = true }
 paste = "^1.0"
 petgraph = "0.6.2"

@@ -16,17 +16,16 @@
 // under the License.
 
 //! Interval arithmetic library
-
 use std::borrow::Borrow;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
+use crate::aggregate::min_max::{max, min};
+use crate::intervals::alter_round_mode_for_float_operation;
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Operator;
-
-use crate::aggregate::min_max::{max, min};
 
 /// This type represents an interval, which is used to calculate reliable
 /// bounds for expressions. Currently, we only support addition and
@@ -204,12 +203,30 @@ impl Interval {
         let lower = if self.lower.is_null() || rhs.lower.is_null() {
             ScalarValue::try_from(self.lower.get_datatype())
         } else {
-            self.lower.add(&rhs.lower)
+            match self.get_datatype() {
+                DataType::Float64 | DataType::Float32 => {
+                    alter_round_mode_for_float_operation::<false>(
+                        &self.lower,
+                        &rhs.lower,
+                        Box::new(|lhs, rhs| lhs.add(rhs)),
+                    )
+                }
+                _ => self.lower.add(&rhs.lower),
+            }
         }?;
         let upper = if self.upper.is_null() || rhs.upper.is_null() {
             ScalarValue::try_from(self.upper.get_datatype())
         } else {
-            self.upper.add(&rhs.upper)
+            match self.get_datatype() {
+                DataType::Float64 | DataType::Float32 => {
+                    alter_round_mode_for_float_operation::<true>(
+                        &self.upper,
+                        &rhs.upper,
+                        Box::new(|lhs, rhs| lhs.add(rhs)),
+                    )
+                }
+                _ => self.upper.add(&rhs.upper),
+            }
         }?;
         Ok(Interval { lower, upper })
     }
@@ -223,12 +240,30 @@ impl Interval {
         let lower = if self.lower.is_null() || rhs.upper.is_null() {
             ScalarValue::try_from(self.lower.get_datatype())
         } else {
-            self.lower.sub(&rhs.upper)
+            match self.get_datatype() {
+                DataType::Float64 | DataType::Float32 => {
+                    alter_round_mode_for_float_operation::<false>(
+                        &self.lower,
+                        &rhs.upper,
+                        Box::new(|lhs, rhs| lhs.sub(rhs)),
+                    )
+                }
+                _ => self.lower.sub(&rhs.upper),
+            }
         }?;
         let upper = if self.upper.is_null() || rhs.lower.is_null() {
             ScalarValue::try_from(self.upper.get_datatype())
         } else {
-            self.upper.sub(&rhs.lower)
+            match self.get_datatype() {
+                DataType::Float64 | DataType::Float32 => {
+                    alter_round_mode_for_float_operation::<true>(
+                        &self.upper,
+                        &rhs.lower,
+                        Box::new(|lhs, rhs| lhs.sub(rhs)),
+                    )
+                }
+                _ => self.upper.sub(&rhs.lower),
+            }
         }?;
         Ok(Interval { lower, upper })
     }
@@ -258,6 +293,8 @@ pub fn is_datatype_supported(data_type: &DataType) -> bool {
             | &DataType::UInt32
             | &DataType::UInt16
             | &DataType::UInt8
+            | &DataType::Float64
+            | &DataType::Float32
     )
 }
 
@@ -529,5 +566,223 @@ mod tests {
             )
         }
         Ok(())
+    }
+
+    fn create_f32_interval(lower: f32, upper: f32) -> Interval {
+        Interval {
+            lower: ScalarValue::Float32(Some(lower)),
+            upper: ScalarValue::Float32(Some(upper)),
+        }
+    }
+
+    fn create_f64_interval(lower: f64, upper: f64) -> Interval {
+        Interval {
+            lower: ScalarValue::Float64(Some(lower)),
+            upper: ScalarValue::Float64(Some(upper)),
+        }
+    }
+
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[test]
+    fn test_add_intervals_lower_affected_f32() {
+        let lower = f32::from_bits(1073741887);
+        let upper = f32::from_bits(1098907651);
+        let interval1 = create_f32_interval(lower, upper);
+        let interval2 = create_f32_interval(upper, lower);
+        let result = interval1.add(&interval2).unwrap();
+        match (result, create_f32_interval(lower + upper, lower + upper)) {
+            (
+                Interval {
+                    lower: ScalarValue::Float32(Some(result_lower)),
+                    ..
+                },
+                Interval {
+                    lower: ScalarValue::Float32(Some(without_fe_lower)),
+                    ..
+                },
+            ) => {
+                assert!(result_lower < without_fe_lower);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[test]
+    fn test_add_intervals_upper_affected_f32() {
+        let lower = f32::from_bits(1072693248);
+        let upper = f32::from_bits(715827883);
+        let interval1 = create_f32_interval(lower, upper);
+        let interval2 = create_f32_interval(upper, lower);
+        let result = interval1.add(&interval2).unwrap();
+        match (result, create_f32_interval(lower + upper, lower + upper)) {
+            (
+                Interval {
+                    upper: ScalarValue::Float32(Some(result_upper)),
+                    ..
+                },
+                Interval {
+                    upper: ScalarValue::Float32(Some(without_fe_upper)),
+                    ..
+                },
+            ) => {
+                assert!(result_upper > without_fe_upper);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[test]
+    fn test_add_intervals_lower_affected_f64() {
+        let lower = 1.0;
+        let upper = 0.3;
+        let interval1 = create_f64_interval(lower, upper);
+        let interval2 = create_f64_interval(upper, lower);
+        let result = interval1.add(&interval2).unwrap();
+        match (result, create_f64_interval(lower + upper, lower + upper)) {
+            (
+                Interval {
+                    lower: ScalarValue::Float64(Some(result_lower)),
+                    ..
+                },
+                Interval {
+                    lower: ScalarValue::Float64(Some(without_fe_lower)),
+                    ..
+                },
+            ) => {
+                assert!(result_lower < without_fe_lower);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[test]
+    fn test_add_intervals_upper_affected_f64() {
+        let lower = 1.4999999999999998;
+        let upper = 0.000000000000000022044604925031308;
+        let interval1 = create_f64_interval(lower, upper);
+        let interval2 = create_f64_interval(upper, lower);
+        let result = interval1.add(&interval2).unwrap();
+        match (result, create_f64_interval(lower + upper, lower + upper)) {
+            (
+                Interval {
+                    upper: ScalarValue::Float64(Some(result_upper)),
+                    ..
+                },
+                Interval {
+                    upper: ScalarValue::Float64(Some(without_fe_upper)),
+                    ..
+                },
+            ) => {
+                assert!(result_upper > without_fe_upper);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[test]
+    fn test_next_impl_add_intervals_f64() {
+        let lower = 1.5;
+        let upper = 1.5;
+        let interval1 = create_f64_interval(lower, upper);
+        let interval2 = create_f64_interval(upper, lower);
+        let result = interval1.add(&interval2).unwrap();
+        match (result, create_f64_interval(lower + upper, lower + upper)) {
+            (
+                Interval {
+                    lower: ScalarValue::Float64(Some(result_lower)),
+                    upper: ScalarValue::Float64(Some(result_upper)),
+                },
+                Interval {
+                    lower: ScalarValue::Float64(Some(without_fe_lower)),
+                    upper: ScalarValue::Float64(Some(without_fe_upper)),
+                },
+            ) => {
+                assert!(result_lower < without_fe_lower);
+                assert!(result_upper > without_fe_upper);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[test]
+    fn test_next_impl_sub_intervals_f64() {
+        let lower = 2.5;
+        let upper = 1.5;
+        let interval1 = create_f64_interval(lower, upper);
+        let interval2 = create_f64_interval(upper, lower);
+        let result = interval1.sub(&interval2).unwrap();
+        match (result, create_f64_interval(lower - upper, upper - lower)) {
+            (
+                Interval {
+                    lower: ScalarValue::Float64(Some(result_lower)),
+                    upper: ScalarValue::Float64(Some(result_upper)),
+                },
+                Interval {
+                    lower: ScalarValue::Float64(Some(without_fe_lower)),
+                    upper: ScalarValue::Float64(Some(without_fe_upper)),
+                },
+            ) => {
+                assert!(result_lower < without_fe_lower);
+                assert!(result_upper > without_fe_upper);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[test]
+    fn test_next_impl_add_intervals_f32() {
+        let lower = 1.5;
+        let upper = 1.5;
+        let interval1 = create_f32_interval(lower, upper);
+        let interval2 = create_f32_interval(upper, lower);
+        let result = interval1.add(&interval2).unwrap();
+        match (result, create_f32_interval(lower + upper, lower + upper)) {
+            (
+                Interval {
+                    lower: ScalarValue::Float32(Some(result_lower)),
+                    upper: ScalarValue::Float32(Some(result_upper)),
+                },
+                Interval {
+                    lower: ScalarValue::Float32(Some(without_fe_lower)),
+                    upper: ScalarValue::Float32(Some(without_fe_upper)),
+                },
+            ) => {
+                assert!(result_lower < without_fe_lower);
+                assert!(result_upper > without_fe_upper);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[test]
+    fn test_next_impl_sub_intervals_f32() {
+        let lower = 2.5;
+        let upper = 1.5;
+        let interval1 = create_f32_interval(lower, upper);
+        let interval2 = create_f32_interval(lower, upper);
+        let result = interval1.sub(&interval2).unwrap();
+        match (result, create_f32_interval(lower - upper, upper - lower)) {
+            (
+                Interval {
+                    lower: ScalarValue::Float32(Some(result_lower)),
+                    upper: ScalarValue::Float32(Some(result_upper)),
+                },
+                Interval {
+                    lower: ScalarValue::Float32(Some(without_fe_lower)),
+                    upper: ScalarValue::Float32(Some(without_fe_upper)),
+                },
+            ) => {
+                assert!(result_lower < without_fe_lower);
+                assert!(result_upper > without_fe_upper);
+            }
+            _ => unreachable!(),
+        }
     }
 }

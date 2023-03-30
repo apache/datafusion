@@ -524,7 +524,7 @@ impl ExprIntervalGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intervals::test_utils::gen_conjunctive_numeric_expr;
+    use crate::intervals::test_utils::{gen_conjunctive_float64_expr, gen_conjunctive_numeric_expr};
     use itertools::Itertools;
 
     use crate::expressions::{BinaryExpr, Column};
@@ -657,6 +657,130 @@ mod tests {
         Ok(())
     }
 
+    fn experiment_float(
+        expr: Arc<dyn PhysicalExpr>,
+        exprs_with_interval: (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>),
+        left_interval: (Option<f64>, Option<f64>),
+        right_interval: (Option<f64>, Option<f64>),
+        left_waited: (Option<f64>, Option<f64>),
+        right_waited: (Option<f64>, Option<f64>),
+        result: PropagationResult,
+    ) -> Result<()> {
+        let col_stats = vec![
+            (
+                exprs_with_interval.0.clone(),
+                Interval {
+                    lower: ScalarValue::Float64(left_interval.0),
+                    upper: ScalarValue::Float64(left_interval.1),
+                },
+            ),
+            (
+                exprs_with_interval.1.clone(),
+                Interval {
+                    lower: ScalarValue::Float64(right_interval.0),
+                    upper: ScalarValue::Float64(right_interval.1),
+                },
+            ),
+        ];
+        let expected = vec![
+            (
+                exprs_with_interval.0.clone(),
+                Interval {
+                    lower: ScalarValue::Float64(left_waited.0),
+                    upper: ScalarValue::Float64(left_waited.1),
+                },
+            ),
+            (
+                exprs_with_interval.1.clone(),
+                Interval {
+                    lower: ScalarValue::Float64(right_waited.0),
+                    upper: ScalarValue::Float64(right_waited.1),
+                },
+            ),
+        ];
+        let mut graph = ExprIntervalGraph::try_new(expr)?;
+        let expr_indexes = graph
+            .gather_node_indices(&col_stats.iter().map(|(e, _)| e.clone()).collect_vec());
+
+        let mut col_stat_nodes = col_stats
+            .iter()
+            .zip(expr_indexes.iter())
+            .map(|((_, interval), (_, index))| (*index, interval.clone()))
+            .collect_vec();
+        let expected_nodes = expected
+            .iter()
+            .zip(expr_indexes.iter())
+            .map(|((_, interval), (_, index))| (*index, interval.clone()))
+            .collect_vec();
+
+        let exp_result = graph.update_ranges(&mut col_stat_nodes[..])?;
+        assert_eq!(exp_result, result);
+        col_stat_nodes
+            .iter()
+            .zip(expected_nodes.iter())
+            .for_each(|((_, res), (_, expected))| assert_eq!(res, expected));
+        Ok(())
+    }
+
+    fn generate_float_case<const ASC: bool>(
+        expr: Arc<dyn PhysicalExpr>,
+        left_col: Arc<dyn PhysicalExpr>,
+        right_col: Arc<dyn PhysicalExpr>,
+        seed: u64,
+        expr_left: f64,
+        expr_right: f64,
+    ) -> Result<()> {
+        let mut r = StdRng::seed_from_u64(seed);
+
+        let (left_interval, right_interval, left_waited, right_waited) = if ASC {
+            let left = (Some(r.gen_range(0.0..1000.0)), None);
+            let right = (Some(r.gen_range(0.0..1000.0)), None);
+            (
+                left,
+                right,
+                (
+                    Some(f64::max(left.0.unwrap(), right.0.unwrap() + expr_left)),
+                    None,
+                ),
+                (
+                    Some(f64::max(
+                        right.0.unwrap(),
+                        left.0.unwrap() + expr_right,
+                    )),
+                    None,
+                ),
+            )
+        } else {
+            let left = (None, Some(r.gen_range(0.0..1000.0)));
+            let right = (None, Some(r.gen_range(0.0..1000.0)));
+            (
+                left,
+                right,
+                (
+                    None,
+                    Some(f64::min(left.1.unwrap(), right.1.unwrap() + expr_left)),
+                ),
+                (
+                    None,
+                    Some(f64::min(
+                        right.1.unwrap(),
+                        left.1.unwrap() + expr_right,
+                    )),
+                ),
+            )
+        };
+        experiment_float(
+            expr,
+            (left_col, right_col),
+            left_interval,
+            right_interval,
+            left_waited,
+            right_waited,
+            PropagationResult::Success,
+        )?;
+        Ok(())
+    }
+
     #[test]
     fn testing_not_possible() -> Result<()> {
         let left_col = Arc::new(Column::new("left_watermark", 0));
@@ -720,6 +844,44 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn case_1_float() -> Result<()> {
+        let left_col = Arc::new(Column::new("left_watermark", 0));
+        let right_col = Arc::new(Column::new("right_watermark", 0));
+        // left_watermark + 1 > right_watermark + 11 AND left_watermark + 3 < right_watermark + 33
+        let expr = gen_conjunctive_float64_expr(
+            left_col.clone(),
+            right_col.clone(),
+            Operator::Plus,
+            Operator::Plus,
+            Operator::Plus,
+            Operator::Plus,
+            1.0,
+            11.0,
+            3.0,
+            33.0,
+        );
+        // l > r + 10 AND r > l - 30
+        let l_gt_r = 10.0;
+        let r_gt_l = -30.0;
+        generate_float_case::<true>(
+            expr.clone(),
+            left_col.clone(),
+            right_col.clone(),
+            1,
+            l_gt_r,
+            r_gt_l,
+        )?;
+        // Descending tests
+        // r < l - 10 AND l < r + 30
+        let r_lt_l = -l_gt_r;
+        let l_lt_r = -r_gt_l;
+        generate_float_case::<false>(expr, left_col, right_col, 1, l_lt_r, r_lt_l)?;
+
+        Ok(())
+    }
+
     #[rstest]
     #[test]
     fn case_2(
