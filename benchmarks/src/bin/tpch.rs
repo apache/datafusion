@@ -1106,11 +1106,11 @@ mod ci {
             let actual_row = &actual_vec[i];
             assert_eq!(expected_row.len(), actual_row.len());
 
+            let tolerance = 0.1;
             for j in 0..expected_row.len() {
                 match (&expected_row[j], &actual_row[j]) {
                     (ScalarValue::Float64(Some(l)), ScalarValue::Float64(Some(r))) => {
                         // allow for rounding errors until we move to decimal types
-                        let tolerance = 0.1;
                         if (l - r).abs() > tolerance {
                             panic!(
                                 "Expected: {}; Actual: {}; Tolerance: {}",
@@ -1122,7 +1122,6 @@ mod ci {
                         ScalarValue::Decimal128(Some(l), _, s),
                         ScalarValue::Decimal128(Some(r), _, _),
                     ) => {
-                        let tolerance = 0.1;
                         if ((l - r) as f64 / 10_i32.pow(*s as u32) as f64).abs()
                             > tolerance
                         {
