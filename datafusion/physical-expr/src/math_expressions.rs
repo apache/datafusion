@@ -17,7 +17,7 @@
 
 //! Math expressions
 
-use arrow::array::{ArrayRef, Int32Array};
+use arrow::array::ArrayRef;
 use arrow::array::{Float32Array, Float64Array, Int64Array};
 use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
@@ -169,7 +169,7 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 
     let mut decimal_places =
-        &(Arc::new(Int32Array::from_value(0, args[0].len())) as ArrayRef);
+        &(Arc::new(Int64Array::from_value(0, args[0].len())) as ArrayRef);
 
     if args.len() == 2 {
         decimal_places = &args[1];
@@ -182,11 +182,11 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
             "value",
             "decimal_places",
             Float64Array,
-            Int32Array,
+            Int64Array,
             {
-                |value: f64, decimal_places: i32| {
-                    (value * 10.0_f64.powi(decimal_places)).round()
-                        / 10.0_f64.powi(decimal_places)
+                |value: f64, decimal_places: i64| {
+                    (value * 10.0_f64.powi(decimal_places.try_into().unwrap())).round()
+                        / 10.0_f64.powi(decimal_places.try_into().unwrap())
                 }
             }
         )) as ArrayRef),
@@ -197,11 +197,11 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
             "value",
             "decimal_places",
             Float32Array,
-            Int32Array,
+            Int64Array,
             {
-                |value: f32, decimal_places: i32| {
-                    (value * 10.0_f32.powi(decimal_places)).round()
-                        / 10.0_f32.powi(decimal_places)
+                |value: f32, decimal_places: i64| {
+                    (value * 10.0_f32.powi(decimal_places.try_into().unwrap())).round()
+                        / 10.0_f32.powi(decimal_places.try_into().unwrap())
                 }
             }
         )) as ArrayRef),
@@ -433,7 +433,7 @@ mod tests {
     fn test_round_f32() {
         let args: Vec<ArrayRef> = vec![
             Arc::new(Float32Array::from(vec![125.2345; 10])), // input
-            Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, -1, -2, -3, -4])), // decimal_places
+            Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4, 5, -1, -2, -3, -4])), // decimal_places
         ];
 
         let result = round(&args).expect("failed to initialize function round");
@@ -451,7 +451,7 @@ mod tests {
     fn test_round_f64() {
         let args: Vec<ArrayRef> = vec![
             Arc::new(Float64Array::from(vec![125.2345; 10])), // input
-            Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, -1, -2, -3, -4])), // decimal_places
+            Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4, 5, -1, -2, -3, -4])), // decimal_places
         ];
 
         let result = round(&args).expect("failed to initialize function round");

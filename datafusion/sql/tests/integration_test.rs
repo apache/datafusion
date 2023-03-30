@@ -23,7 +23,8 @@ use arrow_schema::*;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
 use datafusion_common::{
-    assert_contains, config::ConfigOptions, DataFusionError, Result, ScalarValue, TableReference,
+    assert_contains, config::ConfigOptions, DataFusionError, Result, ScalarValue,
+    TableReference,
 };
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
@@ -200,7 +201,8 @@ fn cast_to_invalid_decimal_type() {
 
 #[test]
 fn plan_insert() {
-    let sql = "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
+    let sql =
+        "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
     let plan = r#"
 Dml: op=[Insert] table=[person]
   Projection: CAST(column1 AS UInt32) AS id, column2 AS first_name, column3 AS last_name
@@ -273,7 +275,9 @@ Dml: op=[Update] table=[person]
 #[rstest]
 #[case::missing_assignement_target("UPDATE person SET doesnotexist = true")]
 #[case::missing_assignement_expression("UPDATE person SET age = doesnotexist + 42")]
-#[case::missing_selection_expression("UPDATE person SET age = 42 WHERE doesnotexist = true")]
+#[case::missing_selection_expression(
+    "UPDATE person SET age = 42 WHERE doesnotexist = true"
+)]
 #[test]
 fn update_column_does_not_exist(#[case] sql: &str) {
     let err = logical_plan(sql).expect_err("query should have failed");
@@ -602,7 +606,8 @@ fn using_join_multiple_keys() {
 
 #[test]
 fn using_join_multiple_keys_subquery() {
-    let sql = "SELECT age FROM (SELECT * FROM person a join person b using (id, age, state))";
+    let sql =
+        "SELECT age FROM (SELECT * FROM person a join person b using (id, age, state))";
     let expected = "Projection: a.age\
                         \n  Projection: a.id, a.first_name, a.last_name, a.age, a.state, a.salary, a.birth_date, a.😀, \
         b.first_name, b.last_name, b.salary, b.birth_date, b.😀\
@@ -838,7 +843,8 @@ fn select_aggregate_with_group_by_with_having_using_column_by_alias() {
 }
 
 #[test]
-fn select_aggregate_with_group_by_with_having_using_columns_with_and_without_their_aliases() {
+fn select_aggregate_with_group_by_with_having_using_columns_with_and_without_their_aliases(
+) {
     let sql = "SELECT first_name AS fn, MAX(age) AS max_age
                    FROM person
                    GROUP BY first_name
@@ -905,7 +911,8 @@ fn select_aggregate_with_group_by_with_having_using_aggreagate_not_in_select() {
 }
 
 #[test]
-fn select_aggregate_aliased_with_group_by_with_having_referencing_aggregate_by_its_alias() {
+fn select_aggregate_aliased_with_group_by_with_having_referencing_aggregate_by_its_alias()
+{
     let sql = "SELECT first_name, MAX(age) AS max_age
                    FROM person
                    GROUP BY first_name
@@ -932,7 +939,8 @@ fn select_aggregate_compound_aliased_with_group_by_with_having_referencing_compo
 }
 
 #[test]
-fn select_aggregate_with_group_by_with_having_using_derived_column_aggreagate_not_in_select() {
+fn select_aggregate_with_group_by_with_having_using_derived_column_aggreagate_not_in_select(
+) {
     let sql = "SELECT first_name, MAX(age)
                    FROM person
                    GROUP BY first_name
@@ -1283,7 +1291,8 @@ fn select_simple_aggregate_with_groupby_non_column_expression_nested_and_resolva
 }
 
 #[test]
-fn select_simple_aggregate_with_groupby_non_column_expression_nested_and_not_resolvable() {
+fn select_simple_aggregate_with_groupby_non_column_expression_nested_and_not_resolvable()
+{
     // The query should fail, because age + 9 is not in the group by.
     let sql = "SELECT ((age + 1) / 2) * (age + 9), MIN(first_name) FROM person GROUP BY age + 1";
     let err = logical_plan(sql).expect_err("query should have failed");
@@ -2223,7 +2232,8 @@ fn over_order_by_sort_keys_sorting_global_order_compacting() {
 /// ```
 #[test]
 fn over_partition_by_order_by() {
-    let sql = "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id ORDER BY qty) from orders";
+    let sql =
+        "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id ORDER BY qty) from orders";
     let expected = "\
         Projection: orders.order_id, MAX(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
         \n  WindowAggr: windowExpr=[[MAX(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
@@ -2300,7 +2310,8 @@ fn over_partition_by_order_by_mix_up_prefix() {
 
 #[test]
 fn approx_median_window() {
-    let sql = "SELECT order_id, APPROX_MEDIAN(qty) OVER(PARTITION BY order_id) from orders";
+    let sql =
+        "SELECT order_id, APPROX_MEDIAN(qty) OVER(PARTITION BY order_id) from orders";
     let expected = "\
         Projection: orders.order_id, APPROXMEDIAN(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
         \n  WindowAggr: windowExpr=[[APPROXMEDIAN(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
@@ -2328,7 +2339,8 @@ fn select_typed_date_string() {
 #[test]
 fn select_typed_time_string() {
     let sql = "SELECT TIME '08:09:10.123' AS time";
-    let expected = "Projection: CAST(Utf8(\"08:09:10.123\") AS Time64(Nanosecond)) AS time\
+    let expected =
+        "Projection: CAST(Utf8(\"08:09:10.123\") AS Time64(Nanosecond)) AS time\
             \n  EmptyRelation";
     quick_test(sql, expected);
 }
@@ -2565,7 +2577,8 @@ fn select_partially_qualified_column() {
 
 #[test]
 fn cross_join_not_to_inner_join() {
-    let sql = "select person.id from person, orders, lineitem where person.id = person.age;";
+    let sql =
+        "select person.id from person, orders, lineitem where person.id = person.age;";
     let expected = "Projection: person.id\
                                     \n  Filter: person.id = person.age\
                                     \n    CrossJoin:\
@@ -2590,8 +2603,10 @@ fn join_with_aliases() {
 
 #[test]
 fn cte_use_same_name_multiple_times() {
-    let sql = "with a as (select * from person), a as (select * from orders) select * from a;";
-    let expected = "SQL error: ParserError(\"WITH query name \\\"a\\\" specified more than once\")";
+    let sql =
+        "with a as (select * from person), a as (select * from orders) select * from a;";
+    let expected =
+        "SQL error: ParserError(\"WITH query name \\\"a\\\" specified more than once\")";
     let result = logical_plan(sql).err().unwrap();
     assert_eq!(result.to_string(), expected);
 }
@@ -2836,7 +2851,8 @@ fn cte_unbalanced_number_of_columns() {
 
 #[test]
 fn aggregate_with_rollup() {
-    let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, ROLLUP (state, age)";
+    let sql =
+        "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, ROLLUP (state, age)";
     let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
     \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[COUNT(UInt8(1))]]\
     \n    TableScan: person";
@@ -2877,7 +2893,8 @@ fn rank_partition_grouping() {
 
 #[test]
 fn aggregate_with_cube() {
-    let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, CUBE (state, age)";
+    let sql =
+        "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, CUBE (state, age)";
     let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
     \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.age), (person.id, person.state, person.age))]], aggr=[[COUNT(UInt8(1))]]\
     \n    TableScan: person";
@@ -2886,8 +2903,8 @@ fn aggregate_with_cube() {
 
 #[test]
 fn round_decimal() {
-    let sql = "SELECT round(price/3, CAST(2 AS INT)) FROM test_decimal";
-    let expected = "Projection: round(test_decimal.price / Int64(3), CAST(Int64(2) AS Int32))\
+    let sql = "SELECT round(price/3, 2) FROM test_decimal";
+    let expected = "Projection: round(test_decimal.price / Int64(3), Int64(2))\
         \n  TableScan: test_decimal";
     quick_test(sql, expected);
 }
@@ -2943,7 +2960,8 @@ fn order_by_unaliased_name() {
     // https://github.com/apache/arrow-datafusion/issues/3160
     // This query was failing with:
     // SchemaError(FieldNotFound { qualifier: Some("p"), name: "state", valid_fields: ["z", "q"] })
-    let sql = "select p.state z, sum(age) q from person p group by p.state order by p.state";
+    let sql =
+        "select p.state z, sum(age) q from person p group by p.state order by p.state";
     let expected = "Projection: z, q\
         \n  Sort: p.state ASC NULLS LAST\
         \n    Projection: p.state AS z, SUM(p.age) AS q, p.state\
@@ -3495,7 +3513,8 @@ fn test_prepare_statement_to_plan_params_as_constants() {
 
 #[test]
 fn test_prepare_statement_infer_types_from_join() {
-    let sql = "SELECT id, order_id FROM person JOIN orders ON id = customer_id and age = $1";
+    let sql =
+        "SELECT id, order_id FROM person JOIN orders ON id = customer_id and age = $1";
 
     let expected_plan = r#"
 Projection: person.id, orders.order_id
