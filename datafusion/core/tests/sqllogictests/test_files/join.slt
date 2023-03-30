@@ -530,6 +530,13 @@ FROM t1
 ----
 11 a 55
 
+# test create table from query with LEFT join
+statement ok
+create table temp as 
+with t1 as (select 1 as col1, 'asd' as col2), 
+     t2 as (select 1 as col3, 'sdf' as col4)
+select col2, col4 from t1 left join t2 on col1 = col3
+
 statement ok
 drop table IF EXISTS t1;
 

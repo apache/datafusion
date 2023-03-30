@@ -1238,30 +1238,6 @@ fn populate_csv_partitions(
     Ok(schema)
 }
 
-/// Return a new table which provide this decimal column
-pub fn table_with_decimal() -> Arc<dyn TableProvider> {
-    let batch_decimal = make_decimal();
-    let schema = batch_decimal.schema();
-    let partitions = vec![vec![batch_decimal]];
-    Arc::new(MemTable::try_new(schema, partitions).unwrap())
-}
-
-fn make_decimal() -> RecordBatch {
-    let mut decimal_builder = Decimal128Builder::with_capacity(20);
-    for i in 110000..110010 {
-        decimal_builder.append_value(i as i128);
-    }
-    for i in 100000..100010 {
-        decimal_builder.append_value(-i as i128);
-    }
-    let array = decimal_builder
-        .finish()
-        .with_precision_and_scale(10, 3)
-        .unwrap();
-    let schema = Schema::new(vec![Field::new("c1", array.data_type().clone(), true)]);
-    RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
-}
-
 /// Return a RecordBatch with a single Int32 array with values (0..sz)
 pub fn make_partition(sz: i32) -> RecordBatch {
     let seq_start = 0;
@@ -1325,15 +1301,11 @@ where
     A: ArrowTimestampType<Native = i64>,
 {
     let schema = Arc::new(Schema::new(vec![
-        Field::new(
-            "ts",
-            DataType::Timestamp(A::get_time_unit(), tz.clone()),
-            false,
-        ),
+        Field::new("ts", DataType::Timestamp(A::UNIT, tz.clone()), false),
         Field::new("value", DataType::Int32, true),
     ]));
 
-    let divisor = match A::get_time_unit() {
+    let divisor = match A::UNIT {
         TimeUnit::Nanosecond => 1,
         TimeUnit::Microsecond => 1000,
         TimeUnit::Millisecond => 1_000_000,
@@ -1352,6 +1324,54 @@ where
         schema.clone(),
         vec![
             Arc::new(array),
+            Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+        ],
+    )?;
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+    Ok(Arc::new(table))
+}
+
+fn make_timestamp_tz_sub_table<A>(
+    tz1: Option<String>,
+    tz2: Option<String>,
+) -> Result<Arc<MemTable>>
+where
+    A: ArrowTimestampType<Native = i64>,
+{
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("ts1", DataType::Timestamp(A::UNIT, tz1.clone()), false),
+        Field::new("ts2", DataType::Timestamp(A::UNIT, tz2.clone()), false),
+        Field::new("val", DataType::Int32, true),
+    ]));
+
+    let divisor = match A::UNIT {
+        TimeUnit::Nanosecond => 1,
+        TimeUnit::Microsecond => 1000,
+        TimeUnit::Millisecond => 1_000_000,
+        TimeUnit::Second => 1_000_000_000,
+    };
+
+    let timestamps1 = vec![
+        1_678_892_420_000_000_000i64 / divisor, //2023-03-15T15:00:20.000_000_000
+        1_678_892_410_000_000_000i64 / divisor, //2023-03-15T15:00:10.000_000_000
+        1_678_892_430_000_000_000i64 / divisor, //2023-03-15T15:00:30.000_000_000
+    ];
+    let timestamps2 = vec![
+        1_678_892_400_000_000_000i64 / divisor, //2023-03-15T15:00:00.000_000_000
+        1_678_892_400_000_000_000i64 / divisor, //2023-03-15T15:00:00.000_000_000
+        1_678_892_400_000_000_000i64 / divisor, //2023-03-15T15:00:00.000_000_000
+    ];
+
+    let array1 =
+        PrimitiveArray::<A>::from_iter_values(timestamps1).with_timezone_opt(tz1);
+    let array2 =
+        PrimitiveArray::<A>::from_iter_values(timestamps2).with_timezone_opt(tz2);
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(array1),
+            Arc::new(array2),
             Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
         ],
     )?;

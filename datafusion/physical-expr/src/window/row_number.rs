@@ -121,7 +121,7 @@ mod tests {
             .evaluate(&values, batch.num_rows())?;
         let result = as_uint64_array(&result)?;
         let result = result.values();
-        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], result);
+        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], *result);
         Ok(())
     }
 
@@ -139,7 +139,7 @@ mod tests {
             .evaluate(&values, batch.num_rows())?;
         let result = as_uint64_array(&result)?;
         let result = result.values();
-        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], result);
+        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], *result);
         Ok(())
     }
 }
