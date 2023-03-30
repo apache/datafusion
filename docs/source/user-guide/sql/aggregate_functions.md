@@ -41,7 +41,8 @@ avg(expression)
 
 #### Arguments
 
-- **expression**: Column to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 #### Aliases
 
@@ -61,7 +62,8 @@ count(expression)
 
 #### Arguments
 
-- **expression**: Column to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `max`
 
@@ -73,7 +75,8 @@ max(expression)
 
 #### Arguments
 
-- **expression**: Column to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `mean`
 
@@ -89,7 +92,8 @@ min(expression)
 
 #### Arguments
 
-- **expression**: Column to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `sum`
 
@@ -101,7 +105,8 @@ sum(expression)
 
 #### Arguments
 
-- **expression**: Column to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `array_agg`
 
@@ -130,8 +135,10 @@ corr(expression1, expression2)
 
 #### Arguments
 
-- **expression1**: First column or literal value to operate on.
-- **expression2**: Second column or literal value to operate on.
+- **expression1**: First expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression2**: Second expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `covar`
 
@@ -143,8 +150,10 @@ covar(expression1, expression2)
 
 #### Arguments
 
-- **expression1**: First column or literal value to operate on.
-- **expression2**: Second column or literal value to operate on.
+- **expression1**: First expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression2**: Second expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `covar_pop`
 
@@ -156,8 +165,10 @@ covar_pop(expression1, expression2)
 
 #### Arguments
 
-- **expression1**: First column or literal value to operate on.
-- **expression2**: Second column or literal value to operate on.
+- **expression1**: First expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression2**: Second expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `covar_samp`
 
@@ -169,8 +180,10 @@ covar_samp(expression1, expression2)
 
 #### Arguments
 
-- **expression1**: First column or literal value to operate on.
-- **expression2**: Second column or literal value to operate on.
+- **expression1**: First expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression2**: Second expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `stddev`
 
@@ -182,7 +195,8 @@ stddev(expression)
 
 #### Arguments
 
-- **expression**: Column or literal value to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `stddev_pop`
 
@@ -194,7 +208,8 @@ stddev_pop(expression)
 
 #### Arguments
 
-- **expression**: Column or literal value to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `stddev_samp`
 
@@ -206,7 +221,8 @@ stddev_samp(expression)
 
 #### Arguments
 
-- **expression**: Column or literal value to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `var`
 
@@ -218,7 +234,8 @@ var(expression)
 
 #### Arguments
 
-- **expression**: Column or literal value to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `var_pop`
 
@@ -230,7 +247,8 @@ var_pop(expression)
 
 #### Arguments
 
-- **expression**: Column or literal value to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `var_samp`
 
@@ -242,7 +260,8 @@ var_samp(expression)
 
 #### Arguments
 
-- **expression**: Column or literal value to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ## Approximate
 
@@ -262,7 +281,8 @@ approx_distinct(expression)
 
 #### Arguments
 
-- **expression**: Column or literal value to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `approx_median`
 
@@ -275,7 +295,8 @@ approx_median(expression)
 
 #### Arguments
 
-- **expression**: Column or literal value to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `approx_percentile_cont`
 
@@ -287,7 +308,8 @@ approx_percentile_cont(expression, percentile, centroids)
 
 #### Arguments
 
-- **expression**: Column or literal value to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 - **percentile**: Percentile to compute. Must be a float value between 0 and 1 (inclusive).
 - **centroids**: Number of centroids to use in the t-digest algorithm. _Default is 100_.
 
@@ -306,6 +328,8 @@ approx_percentile_cont_with_weight(expression, weight, percentile)
 
 #### Arguments
 
-- **expression**: Column or literal value to operate on.
-- **weight**: Column or literal value to use as weight.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **weight**: Expression to use as weight.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 - **percentile**: Percentile to compute. Must be a float value between 0 and 1 (inclusive).

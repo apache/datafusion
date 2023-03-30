@@ -52,7 +52,8 @@ abs(numeric_expression)
 
 #### Arguments
 
-- **numeric_expression**: Numeric column or literal value to operate on.
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `acos`
 
@@ -64,7 +65,8 @@ acos(numeric_expression)
 
 #### Arguments
 
-- **numeric_expression**: Numeric column or literal value to operate on.
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `asin`
 
@@ -76,7 +78,8 @@ asin(numeric_expression)
 
 #### Arguments
 
-- **numeric_expression**: Numeric column or literal value to operate on.
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `atan`
 
@@ -88,20 +91,23 @@ atan(numeric_expression)
 
 #### Arguments
 
-- **numeric_expression**: Numeric column or literal value to operate on.
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `atan2`
 
 Returns the arc tangent or inverse tangent of `expression_y / expression_x`.
 
 ```
-atan2(expression_y / expression_x)
+atan2(expression_y, expression_x)
 ```
 
 #### Arguments
 
-- **expression_y**: First numeric column or literal value to operate on.
-- **expression_x**: Second numeric column or literal value to operate on.
+- **expression_y**: First numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression_x**: Second numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `ceil`
 
@@ -113,7 +119,8 @@ ceil(numeric_expression)
 
 #### Arguments
 
-- **numeric_expression**: Numeric column or literal value to operate on.
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `cos`
 
@@ -125,7 +132,8 @@ cos(numeric_expression)
 
 #### Arguments
 
-- **numeric_expression**: Numeric column or literal value to operate on.
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `exp`
 
@@ -137,7 +145,8 @@ exp(numeric_expression)
 
 #### Arguments
 
-- **numeric_expression**: Numeric column or literal value to use as the exponent.
+- **numeric_expression**: Numeric expression to use as the exponent.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `floor`
 
@@ -149,7 +158,8 @@ floor(numeric_expression)
 
 #### Arguments
 
-- **numeric_expression**: Numeric column or literal value to operate on.
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `ln`
 
@@ -161,7 +171,8 @@ ln(numeric_expression)
 
 #### Arguments
 
-- **numeric_expression**: Numeric column or literal value to operate on.
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `log10`
 
@@ -173,7 +184,8 @@ log10(numeric_expression)
 
 #### Arguments
 
-- **numeric_expression**: Numeric column or literal value to operate on.
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `log2`
 
@@ -185,7 +197,8 @@ log2(numeric_expression)
 
 #### Arguments
 
-- **numeric_expression**: Numeric column or literal value to operate on.
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `power`
 
@@ -197,8 +210,10 @@ power(base, exponent)
 
 #### Arguments
 
-- **power**: Base numeric column or literal value to operate on.
-- **exponent**: Exponent numeric column or literal value to operate on.
+- **power**: Base numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **exponent**: Exponent numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `random`
 
@@ -219,7 +234,8 @@ round(numeric_expression)
 
 #### Arguments
 
-- **numeric_expression**: Numeric column or literal value to operate on.
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `signum`
 
@@ -233,7 +249,8 @@ signum(numeric_expression)
 
 #### Arguments
 
-- **numeric_expression**: Numeric column or literal value to operate on.
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `sin`
 
@@ -245,7 +262,8 @@ sin(numeric_expression)
 
 #### Arguments
 
-- **numeric_expression**: Numeric column or literal value to operate on.
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `sqrt`
 
@@ -257,7 +275,8 @@ sqrt(numeric_expression)
 
 #### Arguments
 
-- **numeric_expression**: Numeric column or literal value to operate on.
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `tan`
 
@@ -269,7 +288,8 @@ tan(numeric_expression)
 
 #### Arguments
 
-- **numeric_expression**: Numeric column or literal value to operate on.
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `trunc`
 
@@ -281,7 +301,8 @@ trunc(numeric_expression)
 
 #### Arguments
 
-- **numeric_expression**: Numeric column or literal value to operate on.
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ## Conditional Functions
 
@@ -301,7 +322,8 @@ coalesce(expression1[, ..., expression_n])
 #### Arguments
 
 - **expression1, expression_n**:
-  Column or literal value to use if previous expressions are _null_.
+  Expression to use if previous expressions are _null_.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
   Pass as many expression arguments as necessary.
 
 ### `nullif`
@@ -315,8 +337,10 @@ nullif(expression1, expression2)
 
 #### Arguments
 
-- **expression1**: Column or literal value to compare and return if equal to expression2.
-- **expression2**: Column or literal value to compare to expression1.
+- **expression1**: Expression to compare and return if equal to expression2.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression2**: Expression to compare to expression1.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ## String Functions
 
@@ -360,7 +384,8 @@ ascii(str)
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 
 **Related functions**:
 [chr](#chr)
@@ -375,7 +400,8 @@ bit_length(str)
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 
 **Related functions**:
 [length](#length),
@@ -393,9 +419,11 @@ btrim(str[, trim_str])
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
-- **trim_str**: String column or literal string to trim from the beginning and
-  end of the input string. _Default is whitespace characters_.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
+- **trim_str**: String expression to trim from the beginning and end of the input string.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+  _Default is whitespace characters_.
 
 **Related functions**:
 [ltrim](#ltrim),
@@ -420,7 +448,8 @@ concat(str[, ..., str_n])
 
 #### Arguments
 
-- **str**: String column or literal string to concatenate.
+- **str**: String expression to concatenate.
+  Can be a constant, column, or function, and any combination of string operators.
 - **str_n**: Subsequent string column or literal string to concatenate.
 
 **Related functions**:
@@ -437,7 +466,8 @@ concat(separator, str[, ..., str_n])
 #### Arguments
 
 - **separator**: Separator to insert between concatenated strings.
-- **str**: String column or literal string to concatenate.
+- **str**: String expression to concatenate.
+  Can be a constant, column, or function, and any combination of string operators.
 - **str_n**: Subsequent string column or literal string to concatenate.
 
 **Related functions**:
@@ -453,7 +483,8 @@ chr(acsii)
 
 #### Arguments
 
-- **ascii**: ASCII code value to operate on.
+- **ascii**: Expression containing the ASCII code value to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 
 **Related functions**:
 [ascii](#ascii)
@@ -469,7 +500,8 @@ initcap(str)
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 
 **Related functions**:
 [lower](#lower),
@@ -485,7 +517,8 @@ left(str, n)
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 - **n**: Number of characters to return.
 
 **Related functions**:
@@ -501,7 +534,8 @@ length(str)
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 
 #### Aliases
 
@@ -522,7 +556,8 @@ lower(str)
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 
 **Related functions**:
 [initcap](#initcap),
@@ -538,9 +573,11 @@ lpad(str, n[, padding_str])
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 - **n**: String length to pad to.
-- **padding_str**: String column or literal string to pad with.
+- **padding_str**: String expression to pad with.
+  Can be a constant, column, or function, and any combination of string operators.
   _Default is a space._
 
 **Related functions**:
@@ -556,7 +593,8 @@ ltrim(str)
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 
 **Related functions**:
 [btrim](#btrim),
@@ -565,7 +603,8 @@ ltrim(str)
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 
 ### `octet_length`
 
@@ -577,7 +616,8 @@ octet_length(str)
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 
 **Related functions**:
 [bit_length](#bit_length),
@@ -593,7 +633,8 @@ repeat(str, n)
 
 #### Arguments
 
-- **str**: String column or literal string to repeat.
+- **str**: String expression to repeat.
+  Can be a constant, column, or function, and any combination of string operators.
 - **n**: Number of times to repeat the input string.
 
 ### `replace`
@@ -606,9 +647,12 @@ replace(str, substr, replacement)
 
 #### Arguments
 
-- **str**: String column or literal string to repeat.
-- **substr**: Substring to replace in the input string.
-- **replacement**: Replacement substring.
+- **str**: String expression to repeat.
+  Can be a constant, column, or function, and any combination of string operators.
+- **substr**: Substring expression to replace in the input string.
+  Can be a constant, column, or function, and any combination of string operators.
+- **replacement**: Replacement substring expression.
+  Can be a constant, column, or function, and any combination of string operators.
 
 ### `reverse`
 
@@ -620,7 +664,8 @@ reverse(str)
 
 #### Arguments
 
-- **str**: String column or literal string to repeat.
+- **str**: String expression to repeat.
+  Can be a constant, column, or function, and any combination of string operators.
 
 ### `right`
 
@@ -632,7 +677,8 @@ right(str, n)
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 - **n**: Number of characters to return.
 
 **Related functions**:
@@ -648,9 +694,11 @@ rpad(str, n[, padding_str])
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 - **n**: String length to pad to.
-- **padding_str**: String column or literal string to pad with.
+- **padding_str**: String expression to pad with.
+  Can be a constant, column, or function, and any combination of string operators.
   _Default is a space._
 
 **Related functions**:
@@ -666,7 +714,8 @@ rtrim(str)
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 
 **Related functions**:
 [btrim](#btrim),
@@ -684,7 +733,8 @@ split_part(str, delimiter, pos)
 
 #### Arguments
 
-- **str**: String column or literal string to spit.
+- **str**: String expression to spit.
+  Can be a constant, column, or function, and any combination of string operators.
 - **delimiter**: String or character to split on.
 - **pos**: Position of the part to return.
 
@@ -698,7 +748,8 @@ starts_with(str, substr)
 
 #### Arguments
 
-- **str**: String column or literal string to test.
+- **str**: String expression to test.
+  Can be a constant, column, or function, and any combination of string operators.
 - **substr**: Substring to test for.
 
 ### `strpos`
@@ -713,8 +764,10 @@ strpos(str, substr)
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
-- **substr**: Substring to search for.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
+- **substr**: Substring expression to search for.
+  Can be a constant, column, or function, and any combination of string operators.
 
 ### `substr`
 
@@ -727,7 +780,8 @@ substr(str, start_pos[, length])
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 - **start_pos**: Character position to start the substring at.
   The first character in the string has a position of 1.
 - **length**: Number of characters to extract.
@@ -741,7 +795,8 @@ Translates characters in a string to specified translation characters.
 translate(str, chars, translation)
 ```
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 - **chars**: Characters to translate.
 - **translation**: Translation characters. Translation characters replace only
   characters at the same position in the **chars** string.
@@ -756,7 +811,8 @@ to_hex(int)
 
 #### Arguments
 
-- **int**: Integer column or literal integer to convert.
+- **int**: Integer expression to convert.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `trim`
 
@@ -768,7 +824,8 @@ trim(str)
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 
 **Related functions**:
 [btrim](#btrim),
@@ -785,7 +842,8 @@ upper(str)
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 
 **Related functions**:
 [initcap](#initcap),
@@ -809,8 +867,10 @@ regexp_match(str, regexp)
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 - **regexp**: Regular expression to match against.
+  Can be a constant, column, or function.
 
 ### `regexp_replace`
 
@@ -822,9 +882,12 @@ regexp_replace(str, regexp, replacement, flags)
 
 #### Arguments
 
-- **str**: String column or literal string to operate on.
+- **str**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 - **regexp**: Regular expression to match against.
-- **replacement**: Replacement string.
+  Can be a constant, column, or function.
+- **replacement**: Replacement string expression.
+  Can be a constant, column, or function, and any combination of string operators.
 - **flags**: Regular expression flags that control the behavior of the
   regular expression. The following flags are supported.
   - **g**: (global) Search globally and don't return after the first match.
@@ -871,7 +934,8 @@ date_bin(interval, expression, origin-timestamp)
 #### Arguments
 
 - **interval**: Bin interval.
-- **expression**: Column or timestamp literal to operate on.
+- **expression**: Time expression to operate on.
+  Can be a constant, column, or function.
 - **timestamp**: Starting point used to determine bin boundaries.
 
 The following intervals are supported:
@@ -909,7 +973,8 @@ date_trunc(precision, expression)
   - minute
   - second
 
-- **expression**: Column or timestamp literal to operate on.
+- **expression**: Time expression to operate on.
+  Can be a constant, column, or function.
 
 ### `date_part`
 
@@ -922,7 +987,7 @@ date_part(part, expression)
 #### Arguments
 
 - **part**: Part of the date to return.
-  The follow date parts are supported:
+  The following date parts are supported:
 
   - year
   - month
@@ -937,7 +1002,8 @@ date_part(part, expression)
   - dow _(day of the week)_
   - doy _(day of the year)_
 
-- **expression**: Column or timestamp literal to operate on.
+- **expression**: Time expression to operate on.
+  Can be a constant, column, or function.
 
 ### `extract`
 
@@ -947,6 +1013,27 @@ Similar to `date_part`, but with different arguments.
 ```
 extract(field FROM source)
 ```
+
+#### Arguments
+
+- **field**: Part or field of the date to return.
+  The following date fields are supported:
+
+  - year
+  - month
+  - week _(week of the year)_
+  - day _(day of the month)_
+  - hour
+  - minute
+  - second
+  - millisecond
+  - microsecond
+  - nanosecond
+  - dow _(day of the week)_
+  - doy _(day of the year)_
+
+- **source**: Source time expression to operate on.
+  Can be a constant, column, or function.
 
 ### `to_timestamp`
 
@@ -961,7 +1048,8 @@ to_timestamp(expression)
 
 #### Arguments
 
-- **expression**: Column or literal value to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `to_timestamp_millis`
 
@@ -976,7 +1064,8 @@ to_timestamp_millis(expression)
 
 #### Arguments
 
-- **expression**: Column or literal value to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `to_timestamp_micros`
 
@@ -991,7 +1080,8 @@ to_timestamp_micros(expression)
 
 #### Arguments
 
-- **expression**: Column or literal value to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `to_timestamp_seconds`
 
@@ -1006,7 +1096,8 @@ to_timestamp_seconds(expression)
 
 #### Arguments
 
-- **expression**: Column or literal value to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `from_unixtime`
 
@@ -1020,7 +1111,8 @@ from_unixtime(expression)
 
 #### Arguments
 
-- **expression**: Column or integer literal to operate on.
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ## Hashing Functions
 
@@ -1040,7 +1132,8 @@ md5(expression)
 
 #### Arguments
 
-- **expression**: Column or string literal to operate on.
+- **expression**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 
 ### `sha224`
 
@@ -1052,7 +1145,8 @@ sha224(expression)
 
 #### Arguments
 
-- **expression**: Column or string literal to operate on.
+- **expression**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 
 ### `sha256`
 
@@ -1064,7 +1158,8 @@ sha256(expression)
 
 #### Arguments
 
-- **expression**: Column or string literal to operate on.
+- **expression**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 
 ### `sha384`
 
@@ -1076,7 +1171,8 @@ sha384(expression)
 
 #### Arguments
 
-- **expression**: Column or string literal to operate on.
+- **expression**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 
 ### `sha512`
 
@@ -1088,7 +1184,8 @@ sha512(expression)
 
 #### Arguments
 
-- **expression**: Column or string literal to operate on.
+- **expression**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
 
 ## Other Functions
 
@@ -1106,7 +1203,9 @@ array(expression1[, ..., expression_n])
 
 #### Arguments
 
-- **expression_n**: Column or literal value to include in the output array.
+- **expression_n**: Expression to include in the output array.
+  Can be a constant, column, or function, and any combination of arithmetic or
+  string operators.
 
 ### `arrow_typeof`
 
@@ -1118,7 +1217,9 @@ arrow_typeof(expression)
 
 #### Arguments
 
-- **expression**: Column or literal value to evaluate.
+- **expression**: Expression to evaluate.
+  Can be a constant, column, or function, and any combination of arithmetic or
+  string operators.
 
 ### `struct`
 
@@ -1132,4 +1233,6 @@ struct(expression1[, ..., expression_n])
 
 #### Arguments
 
-- **expression_n**: Column or literal value to include in the output struct.
+- **expression_n**: Expression to include in the output struct.
+  Can be a constant, column, or function, and any combination of arithmetic or
+  string operators.
