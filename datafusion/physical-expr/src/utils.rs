@@ -341,6 +341,49 @@ pub fn make_sort_exprs_from_requirements(
         .collect()
 }
 
+// implementation for searching after normalization.
+fn get_indices_of_matching_exprs_normalized(
+    to_search: &[Arc<dyn PhysicalExpr>],
+    searched: &[Arc<dyn PhysicalExpr>],
+) -> Vec<usize> {
+    let mut result = vec![];
+    for item in to_search {
+        if let Some(idx) = searched.iter().position(|e| e.eq(item)) {
+            result.push(idx);
+        }
+    }
+    result
+}
+
+/// Find the indices of matching entries inside the `searched` vector for each element in the `to_search` vector
+pub fn get_indices_of_matching_exprs<F: FnOnce() -> EquivalenceProperties>(
+    to_search: &[Arc<dyn PhysicalExpr>],
+    searched: &[Arc<dyn PhysicalExpr>],
+    equal_properties: F,
+) -> Vec<usize> {
+    if let eq_classes @ [_, ..] = equal_properties().classes() {
+        let to_search_normalized = to_search
+            .iter()
+            .map(|e| normalize_expr_with_equivalence_properties(e.clone(), eq_classes))
+            .collect::<Vec<_>>();
+        let searched_normalized = searched
+            .iter()
+            .map(|e| normalize_expr_with_equivalence_properties(e.clone(), eq_classes))
+            .collect::<Vec<_>>();
+        get_indices_of_matching_exprs_normalized(
+            &to_search_normalized,
+            &searched_normalized,
+        )
+    } else {
+        get_indices_of_matching_exprs_normalized(to_search, searched)
+    }
+}
+
+/// Get `Arc<dyn PhysicalExpr>` content of the `PhysicalSortExpr` for each entry in the vector
+pub fn convert_to_expr(in1: &[PhysicalSortExpr]) -> Vec<Arc<dyn PhysicalExpr>> {
+    in1.iter().map(|elem| elem.expr.clone()).collect::<Vec<_>>()
+}
+
 #[derive(Clone, Debug)]
 pub struct ExprTreeNode<T> {
     expr: Arc<dyn PhysicalExpr>,
@@ -625,6 +668,46 @@ mod tests {
                 .filter(|property| property.expr_type == "Other")
                 .count(),
             2
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_convert_to_expr() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::UInt64, false)]);
+        let sort_expr = vec![PhysicalSortExpr {
+            expr: col("a", &schema).unwrap(),
+            options: Default::default(),
+        }];
+        assert!(convert_to_expr(&sort_expr)[0].eq(&sort_expr[0].expr));
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_indices_of_matching_exprs() -> Result<()> {
+        let empty_schema = &Arc::new(Schema {
+            fields: vec![],
+            metadata: Default::default(),
+        });
+        let equal_properties = || EquivalenceProperties::new(empty_schema.clone());
+        let list1: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(Column::new("a", 0)),
+            Arc::new(Column::new("b", 1)),
+            Arc::new(Column::new("c", 2)),
+            Arc::new(Column::new("d", 3)),
+        ];
+        let list2: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(Column::new("b", 1)),
+            Arc::new(Column::new("c", 2)),
+            Arc::new(Column::new("a", 0)),
+        ];
+        assert_eq!(
+            get_indices_of_matching_exprs(&list1, &list2, equal_properties),
+            vec![2, 0, 1]
+        );
+        assert_eq!(
+            get_indices_of_matching_exprs(&list2, &list1, equal_properties),
+            vec![1, 2, 0]
         );
         Ok(())
     }

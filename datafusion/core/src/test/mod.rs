@@ -38,7 +38,8 @@ use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use bzip2::write::BzEncoder;
 #[cfg(feature = "compression")]
 use bzip2::Compression as BzCompression;
-use datafusion_common::DataFusionError;
+use datafusion_common::{DataFusionError, Statistics};
+use datafusion_physical_expr::PhysicalSortExpr;
 #[cfg(feature = "compression")]
 use flate2::write::GzEncoder;
 #[cfg(feature = "compression")]
@@ -324,6 +325,32 @@ pub fn create_vec_batches(schema: &Schema, n: usize) -> Vec<RecordBatch> {
         vec.push(batch.clone());
     }
     vec
+}
+
+/// Created a sorted Csv exec
+pub fn csv_exec_sorted(
+    schema: &SchemaRef,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    infinite_source: bool,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+
+    Arc::new(CsvExec::new(
+        FileScanConfig {
+            object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+            file_schema: schema.clone(),
+            file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
+            statistics: Statistics::default(),
+            projection: None,
+            limit: None,
+            table_partition_cols: vec![],
+            output_ordering: Some(sort_exprs),
+            infinite_source,
+        },
+        false,
+        0,
+        FileCompressionType::UNCOMPRESSED,
+    ))
 }
 
 /// Create batch

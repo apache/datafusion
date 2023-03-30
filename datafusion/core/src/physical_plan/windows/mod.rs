@@ -25,7 +25,7 @@ use crate::physical_plan::{
         PhysicalSortExpr, RowNumber,
     },
     type_coercion::coerce,
-    udaf, PhysicalExpr,
+    udaf, ExecutionPlan, PhysicalExpr,
 };
 use crate::scalar::ScalarValue;
 use arrow::datatypes::Schema;
@@ -43,6 +43,7 @@ mod bounded_window_agg_exec;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
+use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
@@ -212,6 +213,21 @@ pub(crate) fn calc_requirements(
     (!sort_reqs.is_empty()).then_some(sort_reqs)
 }
 
+pub(crate) fn get_ordered_partition_by_indices(
+    partition_by_exprs: &[Arc<dyn PhysicalExpr>],
+    input: &Arc<dyn ExecutionPlan>,
+) -> Vec<usize> {
+    let input_ordering = input.output_ordering();
+    let input_ordering = input_ordering.unwrap_or(&[]);
+    let input_ordering_exprs = convert_to_expr(input_ordering);
+    let equal_properties = || input.equivalence_properties();
+    get_indices_of_matching_exprs(
+        partition_by_exprs,
+        &input_ordering_exprs,
+        equal_properties,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,7 +237,7 @@ mod tests {
     use crate::physical_plan::{collect, ExecutionPlan};
     use crate::prelude::SessionContext;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
-    use crate::test::{self, assert_is_pending};
+    use crate::test::{self, assert_is_pending, csv_exec_sorted};
     use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, SchemaRef};
@@ -243,6 +259,55 @@ mod tests {
         let d = Field::new("d", DataType::Int32, true);
         let schema = Arc::new(Schema::new(vec![a, b, c, d]));
         Ok(schema)
+    }
+
+    /// make PhysicalSortExpr with default options
+    fn sort_expr(name: &str, schema: &Schema) -> PhysicalSortExpr {
+        sort_expr_options(name, schema, SortOptions::default())
+    }
+
+    /// PhysicalSortExpr with specified options
+    fn sort_expr_options(
+        name: &str,
+        schema: &Schema,
+        options: SortOptions,
+    ) -> PhysicalSortExpr {
+        PhysicalSortExpr {
+            expr: col(name, schema).unwrap(),
+            options,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_partition_by_ordering() -> Result<()> {
+        let test_schema = create_test_schema2()?;
+        // Columns a,c are nullable whereas b,d are not nullable.
+        // Source is sorted by a ASC NULLS FIRST, b ASC NULLS FIRST, c ASC NULLS FIRST, d ASC NULLS FIRST
+        // Column e is not ordered.
+        let sort_exprs = vec![
+            sort_expr("a", &test_schema),
+            sort_expr("b", &test_schema),
+            sort_expr("c", &test_schema),
+            sort_expr("d", &test_schema),
+        ];
+        // Input is ordered by a,b,c,d
+        let input = csv_exec_sorted(&test_schema, sort_exprs, true);
+        let test_data = vec![
+            (vec!["a", "b"], vec![0, 1]),
+            (vec!["b", "a"], vec![1, 0]),
+            (vec!["b", "a", "c"], vec![1, 0, 2]),
+        ];
+        for (pb_names, expected) in test_data {
+            let pb_exprs = pb_names
+                .iter()
+                .map(|name| col(name, &test_schema))
+                .collect::<Result<Vec<_>>>()?;
+            assert_eq!(
+                get_ordered_partition_by_indices(&pb_exprs, &input),
+                expected
+            );
+        }
+        Ok(())
     }
 
     #[tokio::test]
