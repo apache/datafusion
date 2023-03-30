@@ -44,7 +44,7 @@ use arrow::{
     },
 };
 use arrow_array::timezone::Tz;
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, TimeZone};
+use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 
 // Constants we use throughout this file:
 const MILLISECS_IN_ONE_DAY: i64 = 86_400_000;
@@ -1088,50 +1088,6 @@ pub fn calculate_naives<const TIME_MODE: bool>(
             Ok((lhs, rhs))
         }
     }
-}
-
-/// This function creates the [`NaiveDateTime`] object corresponding to the
-/// given timestamp using the units (tick size) implied by argument `mode`.
-#[inline]
-pub fn with_timezone_to_naive_datetime<const TIME_MODE: bool>(
-    ts: i64,
-    tz: &Option<Tz>,
-) -> Result<NaiveDateTime> {
-    let datetime = if TIME_MODE == MILLISECOND_MODE {
-        ticks_to_naive_datetime::<1_000_000>(ts)
-    } else {
-        ticks_to_naive_datetime::<1>(ts)
-    }?;
-
-    if let Some(parsed_tz) = tz {
-        let offset = parsed_tz
-            .offset_from_local_datetime(&datetime)
-            .single()
-            .ok_or_else(|| {
-                DataFusionError::Execution(
-                    "error conversion result of timezone offset".to_string(),
-                )
-            })?;
-        return Ok(DateTime::<Tz>::from_local(datetime, offset).naive_utc());
-    }
-    Ok(datetime)
-}
-
-/// This function creates the [`NaiveDateTime`] object corresponding to the
-/// given timestamp, whose tick size is specified by `UNIT_NANOS`.
-#[inline]
-fn ticks_to_naive_datetime<const UNIT_NANOS: i128>(ticks: i64) -> Result<NaiveDateTime> {
-    let mut secs: i64 = ((ticks as i128 * UNIT_NANOS) / 1_000_000_000) as i64;
-    let mut nsecs: i32 = ((ticks as i128 * UNIT_NANOS) % 1_000_000_000) as i32;
-    if nsecs < 0 {
-        secs -= 1;
-        nsecs += 1_000_000_000;
-    }
-    NaiveDateTime::from_timestamp_opt(secs, nsecs as u32).ok_or_else(|| {
-        DataFusionError::Execution(
-            "Can not convert given timestamp to a NaiveDateTime".to_string(),
-        )
-    })
 }
 
 #[inline]
