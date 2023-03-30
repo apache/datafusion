@@ -1,0 +1,69 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+# Use `interval` SQL literal syntax
+# the types should be the same: https://github.com/apache/arrow-datafusion/issues/5801
+query TT
+select
+  arrow_typeof(interval '5 months'),
+  arrow_typeof(interval '5 days 3 nanoseconds')
+----
+Interval(YearMonth) Interval(MonthDayNano)
+
+
+# Use interval SQL type
+query TT
+select
+  arrow_typeof('5 months'::interval),
+  arrow_typeof('5 days 3 nanoseconds'::interval)
+----
+Interval(MonthDayNano) Interval(MonthDayNano)
+
+# cast with explicit cast sytax
+query TT
+select
+  arrow_typeof(cast ('5 months' as interval)),
+  arrow_typeof(cast ('5 days 3 nanoseconds' as interval))
+----
+Interval(MonthDayNano) Interval(MonthDayNano)
+
+
+# Should work tables with interval values
+# https://github.com/apache/arrow-datafusion/issues/5802
+statement error DataFusion error: This feature is not implemented: Unsupported value Interval \{ value: Value\(SingleQuotedString\("5 days 3 nanoseconds"\)\), leading_field: None, leading_precision: None, last_field: None, fractional_seconds_precision: None \} in a values list expression
+create table t (i interval) as values (interval '5 days 3 nanoseconds');
+
+
+# Create tables with interval values
+statement ok
+create table t (i interval) as values ('5 days 3 nanoseconds'::interval);
+
+statement ok
+insert into t values ('6 days 7 nanoseconds'::interval)
+
+query ?T
+select
+  i,
+  arrow_typeof(i)
+from t;
+----
+0 years 0 mons 5 days 0 hours 0 mins 0.000000003 secs Interval(MonthDayNano)
+0 years 0 mons 6 days 0 hours 0 mins 0.000000007 secs Interval(MonthDayNano)
+
+statement ok
+drop table t;
