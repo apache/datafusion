@@ -2155,6 +2155,9 @@ impl ScalarValue {
             DataType::Interval(IntervalUnit::YearMonth) => {
                 build_array_primitive!(IntervalYearMonthArray, IntervalYearMonth)
             }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                build_array_primitive!(IntervalMonthDayNanoArray, IntervalMonthDayNano)
+            }
             DataType::List(fields) if fields.data_type() == &DataType::Int8 => {
                 build_array_list_primitive!(Int8Type, Int8, i8)
             }
@@ -2304,7 +2307,6 @@ impl ScalarValue {
             | DataType::Time64(TimeUnit::Millisecond)
             | DataType::Duration(_)
             | DataType::FixedSizeList(_, _)
-            | DataType::Interval(_)
             | DataType::LargeList(_)
             | DataType::Union(_, _, _)
             | DataType::Map(_, _)
@@ -2844,6 +2846,20 @@ impl ScalarValue {
                         true => None,
                         false => Some(array.value(index).into()),
                     },
+                )
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                typed_cast!(array, index, IntervalDayTimeArray, IntervalDayTime)
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                typed_cast!(array, index, IntervalYearMonthArray, IntervalYearMonth)
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                typed_cast!(
+                    array,
+                    index,
+                    IntervalMonthDayNanoArray,
+                    IntervalMonthDayNano
                 )
             }
             other => {
