@@ -17,7 +17,7 @@
 
 //! Math expressions
 
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, Int32Array};
 use arrow::array::{Float32Array, Float64Array, Int64Array};
 use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
@@ -113,6 +113,18 @@ macro_rules! make_function_inputs2 {
             })
             .collect::<$ARRAY_TYPE>()
     }};
+    ($ARG1: expr, $ARG2: expr, $NAME1:expr, $NAME2: expr, $ARRAY_TYPE1:ident, $ARRAY_TYPE2:ident, $FUNC: block) => {{
+        let arg1 = downcast_arg!($ARG1, $NAME1, $ARRAY_TYPE1);
+        let arg2 = downcast_arg!($ARG2, $NAME2, $ARRAY_TYPE2);
+
+        arg1.iter()
+            .zip(arg2.iter())
+            .map(|(a1, a2)| match (a1, a2) {
+                (Some(a1), Some(a2)) => Some($FUNC(a1, a2.try_into().ok()?)),
+                _ => None,
+            })
+            .collect::<$ARRAY_TYPE1>()
+    }};
 }
 
 math_unary_function!("sqrt", sqrt);
@@ -124,7 +136,6 @@ math_unary_function!("acos", acos);
 math_unary_function!("atan", atan);
 math_unary_function!("floor", floor);
 math_unary_function!("ceil", ceil);
-math_unary_function!("round", round);
 math_unary_function!("trunc", trunc);
 math_unary_function!("abs", abs);
 math_unary_function!("signum", signum);
@@ -147,6 +158,58 @@ pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let values = iter::repeat_with(|| rng.gen_range(0.0..1.0)).take(len);
     let array = Float64Array::from_iter_values(values);
     Ok(ColumnarValue::Array(Arc::new(array)))
+}
+
+/// Round SQL function
+pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 && args.len() != 2 {
+        return Err(DataFusionError::Internal(
+            "round function requires one or two arguments".to_string(),
+        ));
+    }
+
+    let mut decimal_places =
+        &(Arc::new(Int32Array::from_value(0, args[0].len())) as ArrayRef);
+
+    if args.len() == 2 {
+        decimal_places = &args[1];
+    }
+
+    match args[0].data_type() {
+        DataType::Float64 => Ok(Arc::new(make_function_inputs2!(
+            &args[0],
+            decimal_places,
+            "value",
+            "decimal_places",
+            Float64Array,
+            Int32Array,
+            {
+                |value: f64, decimal_places: i32| {
+                    (value * 10.0_f64.powi(decimal_places)).round()
+                        / 10.0_f64.powi(decimal_places)
+                }
+            }
+        )) as ArrayRef),
+
+        DataType::Float32 => Ok(Arc::new(make_function_inputs2!(
+            &args[0],
+            decimal_places,
+            "value",
+            "decimal_places",
+            Float32Array,
+            Int32Array,
+            {
+                |value: f32, decimal_places: i32| {
+                    (value * 10.0_f32.powi(decimal_places)).round()
+                        / 10.0_f32.powi(decimal_places)
+                }
+            }
+        )) as ArrayRef),
+
+        other => Err(DataFusionError::Internal(format!(
+            "Unsupported data type {other:?} for function round"
+        ))),
+    }
 }
 
 /// Power SQL function
@@ -364,5 +427,41 @@ mod tests {
         assert_eq!(floats.value(1), 2.0);
         assert_eq!(floats.value(2), 4.0);
         assert_eq!(floats.value(3), 4.0);
+    }
+
+    #[test]
+    fn test_round_f32() {
+        let args: Vec<ArrayRef> = vec![
+            Arc::new(Float32Array::from(vec![125.2345; 10])), // input
+            Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, -1, -2, -3, -4])), // decimal_places
+        ];
+
+        let result = round(&args).expect("failed to initialize function round");
+        let floats =
+            as_float32_array(&result).expect("failed to initialize function round");
+
+        let expected = Float32Array::from(vec![
+            125.0, 125.2, 125.23, 125.235, 125.2345, 125.2345, 130.0, 100.0, 0.0, 0.0,
+        ]);
+
+        assert_eq!(floats, &expected);
+    }
+
+    #[test]
+    fn test_round_f64() {
+        let args: Vec<ArrayRef> = vec![
+            Arc::new(Float64Array::from(vec![125.2345; 10])), // input
+            Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, -1, -2, -3, -4])), // decimal_places
+        ];
+
+        let result = round(&args).expect("failed to initialize function round");
+        let floats =
+            as_float64_array(&result).expect("failed to initialize function round");
+
+        let expected = Float64Array::from(vec![
+            125.0, 125.2, 125.23, 125.235, 125.2345, 125.2345, 130.0, 100.0, 0.0, 0.0,
+        ]);
+
+        assert_eq!(floats, &expected);
     }
 }
