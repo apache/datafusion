@@ -56,7 +56,7 @@ create table t (i interval) as values ('5 days 3 nanoseconds'::interval);
 statement ok
 insert into t values ('6 days 7 nanoseconds'::interval)
 
-query ?T
+query ?T rowsort
 select
   i,
   arrow_typeof(i)
