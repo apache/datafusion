@@ -82,6 +82,8 @@ mod unix_test {
                 if interval < broken_pipe_timeout {
                     thread::sleep(Duration::from_millis(100));
                     continue;
+                } else {
+                    return Err(DataFusionError::Execution(e.to_string()));
                 }
             }
             return Err(DataFusionError::Execution(e.to_string()));
@@ -273,17 +275,17 @@ mod unix_test {
                         let a1_iter = 0..TEST_DATA_SIZE;
                         // Join key
                         let a2_iter = (0..TEST_DATA_SIZE).map(|x| x % 10);
-                        for (a1, a2) in a1_iter.zip(a2_iter) {
+                        for (cnt, (a1, a2)) in a1_iter.zip(a2_iter).enumerate() {
                             // Wait a reading sign for unbounded execution
                             // After first batch FIFO reading, we will wait for a batch created.
+                            while waiting_thread.load(Ordering::SeqCst) && TEST_BATCH_SIZE + 1 < cnt
+                            {
+                                log::debug!("Waiting.");
+                                thread::sleep(Duration::from_millis(200));
+                            }
                             let line = format!("{a1},{a2}\n").to_owned();
                             write_to_fifo(&file, &line, execution_start, broken_pipe_timeout)
                                 .unwrap();
-                        }
-                        while waiting_thread.load(Ordering::SeqCst)
-                        {
-                            log::debug!("Waiting.");
-                            thread::sleep(Duration::from_millis(200));
                         }
                         drop(file);
                         log::debug!("File at {:?} finished.", fifo_path);
