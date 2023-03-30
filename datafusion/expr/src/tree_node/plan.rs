@@ -108,11 +108,20 @@ impl TreeNode for LogicalPlan {
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        let children = self.inputs().into_iter().cloned().collect::<Vec<_>>();
-        if !children.is_empty() {
-            let new_children: Result<Vec<_>> =
-                children.into_iter().map(transform).collect();
-            self.with_new_inputs(new_children?.as_slice())
+        let old_children = self.inputs();
+        let new_children = old_children
+            .iter()
+            .map(|&c| c.clone())
+            .map(transform)
+            .collect::<Result<Vec<_>>>()?;
+
+        // if any changes made, make a new child
+        if old_children
+            .iter()
+            .zip(new_children.iter())
+            .any(|(c1, c2)| c1 != &c2)
+        {
+            self.with_new_inputs(new_children.as_slice())
         } else {
             Ok(self)
         }

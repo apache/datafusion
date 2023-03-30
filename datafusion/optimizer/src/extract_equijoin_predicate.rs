@@ -179,7 +179,7 @@ mod tests {
                 Some(col("t1.a").eq(col("t2.a"))),
             )?
             .build()?;
-        let expected = "Left Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+        let expected = "Left Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
             \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
             \n  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]";
 
@@ -199,7 +199,7 @@ mod tests {
                 Some((col("t1.a") + lit(10i64)).eq(col("t2.a") * lit(2u32))),
             )?
             .build()?;
-        let expected = "Left Join: t1.a + Int64(10) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+        let expected = "Left Join: t1.a + Int64(10) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
             \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
             \n  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]";
 
@@ -223,7 +223,7 @@ mod tests {
                 ),
             )?
             .build()?;
-        let expected = "Left Join:  Filter: t1.a + Int64(10) >= t2.a * UInt32(2) AND t1.b < Int32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+        let expected = "Left Join:  Filter: t1.a + Int64(10) >= t2.a * UInt32(2) AND t1.b < Int32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
             \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
             \n  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]";
 
@@ -250,7 +250,7 @@ mod tests {
                 ),
             )?
             .build()?;
-        let expected = "Left Join: t1.a + UInt32(11) = t2.a * UInt32(2), t1.a + Int64(10) = t2.a * UInt32(2) Filter: t1.b < Int32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+        let expected = "Left Join: t1.a + UInt32(11) = t2.a * UInt32(2), t1.a + Int64(10) = t2.a * UInt32(2) Filter: t1.b < Int32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
             \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
             \n  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]";
 
@@ -277,7 +277,7 @@ mod tests {
                 ),
             )?
             .build()?;
-        let expected = "Left Join: t1.a = t2.a, t1.b = t2.b Filter: t1.c = t2.c OR t1.a + t1.b > t2.b + t2.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+        let expected = "Left Join: t1.a = t2.a, t1.b = t2.b Filter: t1.c = t2.c OR t1.a + t1.b > t2.b + t2.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
             \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
             \n  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]";
 
@@ -314,9 +314,9 @@ mod tests {
                 ),
             )?
             .build()?;
-        let expected = "Left Join: t1.a = t2.a Filter: t1.c + t2.c + t3.c < UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+        let expected = "Left Join: t1.a = t2.a Filter: t1.c + t2.c + t3.c < UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
             \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
-            \n  Left Join: t2.a = t3.a Filter: t2.a + t3.b > UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+            \n  Left Join: t2.a = t3.a Filter: t2.a + t3.b > UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
             \n    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
             \n    TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]";
 
@@ -349,9 +349,9 @@ mod tests {
                 Some(col("t1.a").eq(col("t2.a")).and(col("t2.c").eq(col("t3.c")))),
             )?
             .build()?;
-        let expected = "Left Join: t1.a = t2.a Filter: t2.c = t3.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+        let expected = "Left Join: t1.a = t2.a Filter: t2.c = t3.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
         \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
-        \n  Left Join: t2.a = t3.a Filter: t2.a + t3.b > UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+        \n  Left Join: t2.a = t3.a Filter: t2.a + t3.b > UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
         \n    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]";
 
@@ -380,7 +380,7 @@ mod tests {
                 Some(filter),
             )?
             .build()?;
-        let expected = "Left Join: t1.a + CAST(Int64(1) AS UInt32) = t2.a + CAST(Int32(2) AS UInt32) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+        let expected = "Left Join: t1.a + CAST(Int64(1) AS UInt32) = t2.a + CAST(Int32(2) AS UInt32) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
         \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
         \n  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]";
 
