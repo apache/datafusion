@@ -279,7 +279,7 @@ mod unix_test {
                             // After first 2 batch FIFO reading in both sides, we will wait for a batch created.
                             while waiting_thread.load(Ordering::SeqCst) && (TEST_BATCH_SIZE * 2) + 1 < cnt
                             {
-                                thread::sleep(Duration::from_millis(100));
+                                thread::sleep(Duration::from_millis(150));
                             }
                             let line = format!("{a1},{a2}\n").to_owned();
                             write_to_fifo(&file, &line, execution_start, broken_pipe_timeout)
