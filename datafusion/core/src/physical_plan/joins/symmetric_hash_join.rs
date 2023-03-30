@@ -47,9 +47,6 @@ use parking_lot::Mutex;
 
 use datafusion_common::{utils::bisect, ScalarValue};
 use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval};
-use datafusion_physical_expr::{
-    make_sort_requirements_from_exprs, PhysicalSortRequirement,
-};
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
