@@ -17,6 +17,7 @@
 
 
 # Use `interval` SQL literal syntax
+# the types should be the same: https://github.com/apache/arrow-datafusion/issues/5801
 query TT
 select
   arrow_typeof(interval '5 months'),
@@ -25,7 +26,7 @@ select
 Interval(YearMonth) Interval(MonthDayNano)
 
 
-# use interval SQL type
+# Use interval SQL type
 query TT
 select
   arrow_typeof('5 months'::interval),
@@ -42,10 +43,10 @@ select
 Interval(MonthDayNano) Interval(MonthDayNano)
 
 
-# Create tables with interval values
-# (TODO file ticket)
-#statement error DataFusion error: This feature is not implemented: Unsupported value Interval \{ value: Value\(SingleQuotedString\("5 days 3 nanoseconds"\)\), leading_field: None, leading_precision: None, last_field: None, fractional_seconds_precision: None \} in a values list expression
-#create table t (i interval) as values (interval '5 days 3 nanoseconds');
+# Should work tables with interval values
+# https://github.com/apache/arrow-datafusion/issues/5802
+statement error DataFusion error: This feature is not implemented: Unsupported value Interval \{ value: Value\(SingleQuotedString\("5 days 3 nanoseconds"\)\), leading_field: None, leading_precision: None, last_field: None, fractional_seconds_precision: None \} in a values list expression
+create table t (i interval) as values (interval '5 days 3 nanoseconds');
 
 
 # Create tables with interval values
@@ -66,5 +67,3 @@ from t;
 
 statement ok
 drop table t;
-
-# TODO write tests for casting 'interval ...' sytax to ::interval
