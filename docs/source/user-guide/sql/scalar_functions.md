@@ -475,16 +475,17 @@ concat(separator, str[, ..., str_n])
 
 ### `chr`
 
-Returns the character with the specified ASCII code value.
+Returns the character with the specified ASCII or Unicode code value.
 
 ```
-chr(acsii)
+chr(expression)
 ```
 
 #### Arguments
 
-- **ascii**: Expression containing the ASCII code value to operate on.
-  Can be a constant, column, or function, and any combination of string operators.
+- **expression**: Expression containing the ASCII or Unicode code value to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic or
+  string operators.
 
 **Related functions**:
 [ascii](#ascii)
@@ -1190,6 +1191,7 @@ sha512(expression)
 ## Other Functions
 
 - [array](#array)
+- [arrow_cast](#arrow_cast)
 - [arrow_typeof](#arrow_typeof)
 - [struct](#struct)
 
@@ -1207,9 +1209,25 @@ array(expression1[, ..., expression_n])
   Can be a constant, column, or function, and any combination of arithmetic or
   string operators.
 
+### `arrow_cast`
+
+Casts a value to a specific Arrow data type:
+
+```
+arrow_cast(expression, datatype)
+```
+
+#### Arguments
+
+- **expression**: Expression to cast.
+  Can be a constant, column, or function, and any combination of arithmetic or
+  string operators.
+- **datatype**: [Arrow data type](https://arrow.apache.org/datafusion/user-guide/sql/data_types.html)
+  to cast to.
+
 ### `arrow_typeof`
 
-Returns the underlying Arrow type of the the expression:
+Returns the underlying Arrow data type of the expression:
 
 ```
 arrow_typeof(expression)
