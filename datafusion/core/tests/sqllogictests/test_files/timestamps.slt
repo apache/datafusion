@@ -260,3 +260,14 @@ query P
 SELECT INTERVAL '8' MONTH + '2000-01-01T00:00:00'::timestamp;
 ----
 2000-09-01T00:00:00
+
+# timestamptz to utf8 conversion
+query BBBB
+SELECT 
+  '2000-01-01T00:00:00'::timestamp::timestamptz = '2000-01-01T00:00:00',
+  '2000-01-01T00:00:00'::timestamp::timestamptz != '2000-01-01T00:00:00',
+  '2000-01-01T00:00:00'::timestamp::timestamptz >= '2000-01-01T00:00:00',
+  '2000-01-01T00:00:00'::timestamp::timestamptz <= '2000-01-01T00:00:00'
+;
+----
+true false true true

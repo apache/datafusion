@@ -63,6 +63,9 @@ impl PhysicalSortExpr {
         })
     }
 
+    /// Check whether sort expression satisfies `PhysicalSortRequirement`.
+    // If sort options is Some in `PhysicalSortRequirement`, `expr` and `options` field are compared for equality.
+    // If sort options is None in `PhysicalSortRequirement`, only `expr` is compared for equality.
     pub fn satisfy(&self, requirement: &PhysicalSortRequirement) -> bool {
         self.expr.eq(&requirement.expr)
             && requirement

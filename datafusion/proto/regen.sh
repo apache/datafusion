@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,24 +17,5 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "datafusion-substrait"
-description = "DataFusion Substrait Producer and Consumer"
-version = { workspace = true }
-edition = { workspace = true }
-readme = { workspace = true }
-homepage = { workspace = true }
-repository = { workspace = true }
-license = { workspace = true }
-authors = { workspace = true }
-rust-version = { workspace = true }
-
-[dependencies]
-async-recursion = "1.0"
-chrono = "0.4.23"
-datafusion = { version = "21.0.0", path = "../core" }
-itertools = "0.10.5"
-object_store = "0.5.4"
-prost = "0.11"
-substrait = "0.5.1"
-tokio = "1.17"
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR && cargo run --manifest-path gen/Cargo.toml

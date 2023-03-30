@@ -168,6 +168,10 @@ pub struct SymmetricHashJoinExec {
     pub(crate) join_type: JoinType,
     /// Order information of filter expressions
     sorted_filter_exprs: Vec<SortedFilterExpr>,
+    /// Left required sort
+    left_required_sort_exprs: Vec<PhysicalSortExpr>,
+    /// Right required sort
+    right_required_sort_exprs: Vec<PhysicalSortExpr>,
     /// Expression graph for interval calculations
     physical_expr_graph: ExprIntervalGraph,
     /// The schema once the join is applied
@@ -331,6 +335,9 @@ impl SymmetricHashJoinExec {
             sorted_expr.set_node_index(*index);
         }
 
+        let left_required_sort_exprs = vec![left_ordering.clone()];
+        let right_required_sort_exprs = vec![right_ordering.clone()];
+
         Ok(SymmetricHashJoinExec {
             left,
             right,
@@ -338,6 +345,8 @@ impl SymmetricHashJoinExec {
             filter,
             join_type: *join_type,
             sorted_filter_exprs,
+            left_required_sort_exprs,
+            right_required_sort_exprs,
             physical_expr_graph,
             schema: Arc::new(schema),
             random_state,
@@ -394,14 +403,11 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
-        vec![
-            self.left
-                .output_ordering()
-                .map(make_sort_requirements_from_exprs),
-            self.right
-                .output_ordering()
-                .map(make_sort_requirements_from_exprs),
-        ]
+        let left_required =
+            make_sort_requirements_from_exprs(&self.left_required_sort_exprs);
+        let right_required =
+            make_sort_requirements_from_exprs(&self.right_required_sort_exprs);
+        vec![Some(left_required), Some(right_required)]
     }
 
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
