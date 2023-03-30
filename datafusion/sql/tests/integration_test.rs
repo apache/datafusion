@@ -1138,7 +1138,7 @@ fn select_interval_out_of_range() {
     let sql = "SELECT INTERVAL '100000000000000000 day'";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        r#"NotImplemented("Interval field value out of range: \"100000000000000000 day\"")"#,
+        "ArrowError(ParseError(\"Parsed interval field value out of range: 0 months 100000000000000000 days 0 nanos\"))",
         format!("{err:?}")
     );
 }
@@ -2617,7 +2617,8 @@ fn cte_use_same_name_multiple_times() {
 #[test]
 fn date_plus_interval_in_projection() {
     let sql = "select t_date32 + interval '5 days' FROM test";
-    let expected = "Projection: test.t_date32 + IntervalDayTime(\"21474836480\")\
+    let expected =
+        "Projection: test.t_date32 + IntervalMonthDayNano(\"92233720368547758080\")\
                             \n  TableScan: test";
     quick_test(sql, expected);
 }
@@ -2630,7 +2631,7 @@ fn date_plus_interval_in_filter() {
                         AND cast('1999-12-31' as date) + interval '30 days'";
     let expected =
             "Projection: test.t_date64\
-            \n  Filter: test.t_date64 BETWEEN CAST(Utf8(\"1999-12-31\") AS Date32) AND CAST(Utf8(\"1999-12-31\") AS Date32) + IntervalDayTime(\"128849018880\")\
+            \n  Filter: test.t_date64 BETWEEN CAST(Utf8(\"1999-12-31\") AS Date32) AND CAST(Utf8(\"1999-12-31\") AS Date32) + IntervalMonthDayNano(\"553402322211286548480\")\
             \n    TableScan: test";
     quick_test(sql, expected);
 }
@@ -3908,7 +3909,7 @@ fn test_inner_join_with_cast_key() {
 fn test_multi_grouping_sets() {
     let sql = "SELECT person.id, person.age
             FROM person
-            GROUP BY 
+            GROUP BY
                 person.id,
                 GROUPING SETS ((person.age,person.salary),(person.age))";
 

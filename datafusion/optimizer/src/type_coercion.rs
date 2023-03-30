@@ -22,9 +22,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, IntervalUnit};
 
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
-use datafusion_common::{
-    parse_interval, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{self, Between, BinaryExpr, Case, Like, WindowFunction};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
@@ -448,13 +446,7 @@ fn coerce_scalar(target_type: &DataType, value: &ScalarValue) -> Result<ScalarVa
     match value {
         // Coerce Utf8 values:
         ScalarValue::Utf8(Some(val)) => {
-            // When `target_type` is `Interval`, we use `parse_interval` since
-            // `try_from_string` does not support `String` to `Interval` coercions.
-            if let DataType::Interval(..) = target_type {
-                parse_interval("millisecond", val)
-            } else {
-                ScalarValue::try_from_string(val.clone(), target_type)
-            }
+            ScalarValue::try_from_string(val.clone(), target_type)
         }
         s => {
             if s.is_null() {
@@ -601,14 +593,7 @@ fn coerce_arguments_for_signature(
 
 /// Cast `expr` to the specified type, if possible
 fn cast_expr(expr: &Expr, to_type: &DataType, schema: &DFSchema) -> Result<Expr> {
-    // Special case until Interval coercion is handled in arrow-rs
-    // https://github.com/apache/arrow-rs/issues/3643
-    match (expr, to_type) {
-        (Expr::Literal(ScalarValue::Utf8(Some(s))), DataType::Interval(_)) => {
-            parse_interval("millisecond", s.as_str()).map(Expr::Literal)
-        }
-        _ => expr.clone().cast_to(to_type, schema),
-    }
+    expr.clone().cast_to(to_type, schema)
 }
 
 /// Returns the coerced exprs for each `input_exprs`.
