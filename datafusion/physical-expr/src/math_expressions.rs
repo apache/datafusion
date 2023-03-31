@@ -164,7 +164,7 @@ pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 && args.len() != 2 {
         return Err(DataFusionError::Internal(
-            "round function requires one or two arguments".to_string(),
+            format!("round function requires one or two arguments, got {}", args.len())
         ));
     }
 
