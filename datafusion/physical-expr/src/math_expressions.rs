@@ -163,9 +163,10 @@ pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 /// Round SQL function
 pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 && args.len() != 2 {
-        return Err(DataFusionError::Internal(
-            format!("round function requires one or two arguments, got {}", args.len())
-        ));
+        return Err(DataFusionError::Internal(format!(
+            "round function requires one or two arguments, got {}",
+            args.len()
+        )));
     }
 
     let mut decimal_places =
