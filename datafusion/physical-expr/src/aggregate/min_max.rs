@@ -172,7 +172,14 @@ macro_rules! min_max_batch {
     ($VALUES:expr, $OP:ident) => {{
         match $VALUES.data_type() {
             DataType::Decimal128(precision, scale) => {
-                typed_min_max_batch!($VALUES, Decimal128Array, Decimal128, $OP, precision, scale)
+                typed_min_max_batch!(
+                    $VALUES,
+                    Decimal128Array,
+                    Decimal128,
+                    $OP,
+                    precision,
+                    scale
+                )
             }
             // all types that have a natural order
             DataType::Float64 => {
