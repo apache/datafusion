@@ -37,8 +37,8 @@ default = ["unicode_expressions"]
 unicode_expressions = []
 
 [dependencies]
-arrow-schema = { workspace = true }
 arrow = { workspace = true }
+arrow-schema = { workspace = true }
 datafusion-common = { path = "../common", version = "21.0.0" }
 datafusion-expr = { path = "../expr", version = "21.0.0" }
 log = "^0.4"
