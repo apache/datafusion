@@ -475,6 +475,11 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        if self.left.output_partitioning() != self.right.output_partitioning() {
+            return Err(DataFusionError::Plan(format!(
+                "Invalid SymmetricHashJoinExec, partition count mismatch between children executors, consider using RepartitionExec",
+            )));
+        }
         // If `filter_state` and `filter` are both present, then calculate sorted filter expressions
         // for both sides, and build an expression graph if one is not already built.
         let (left_sorted_filter_expr, right_sorted_filter_expr, graph) =
