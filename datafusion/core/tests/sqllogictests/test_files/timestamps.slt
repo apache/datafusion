@@ -466,13 +466,19 @@ SELECT INTERVAL '8' MONTH + '2000-01-01T00:00:00'::timestamp;
 ----
 2000-09-01T00:00:00
 
-# Interval columns are created with timestamp subtraction in subquery since they are not supported yet
 statement ok
-create table foo (val int, ts1 timestamp, ts2 timestamp) as values
-(1, '2023-03-15T15:00:20.000000123'::timestamp, '2023-01-20T23:00:00.000000099'::timestamp),
-(2, '2023-02-28T12:01:55.000123456'::timestamp, '2000-02-23T11:00:00.123000001'::timestamp),
-(3, '2033-11-02T23:22:13.000123456'::timestamp, '1990-03-01T00:00:00.333000001'::timestamp),
-(4, '2003-07-11T01:31:15.000123456'::timestamp, '2045-04-11T15:00:00.000000001'::timestamp);
+create table foo (val int, ts1 timestamp, ts2 timestamp, i interval) as values
+(1, '2023-03-15T15:00:20.000000123'::timestamp, '2023-01-20T23:00:00.000000099'::timestamp, '1 day'::interval),
+(2, '2023-02-28T12:01:55.000123456'::timestamp, '2000-02-23T11:00:00.123000001'::timestamp, '2 months'::interval),
+(3, '2033-11-02T23:22:13.000123456'::timestamp, '1990-03-01T00:00:00.333000001'::timestamp, '1 day 3 hours'::interval),
+(4, '2003-07-11T01:31:15.000123456'::timestamp, '2045-04-11T15:00:00.000000001'::timestamp, '1 day 7 nanoseconds'::interval);
+
+statement ok
+create table bar (val int, i1 interval, i2 interval) as values
+(1, '1 day'::interval,               '2 days'::interval),
+(2, '2 months'::interval,            '13 days'::interval),
+(3, '1 day 3 hours'::interval,       '4 minutes'::interval),
+(4, '1 day 7 nanoseconds'::interval, '4 seconds'::interval);
 
 # Timestamp - Timestamp
 query I?
@@ -485,73 +491,48 @@ SELECT val, ts1 - ts2 FROM foo ORDER BY ts2 - ts1;
 
 # Interval - Interval
 query ?
-SELECT subq.interval1 - subq.interval2
-FROM (
-  SELECT ts1 - ts2 AS interval1,
-  ts2 - ts1 AS interval2
-  FROM foo
-) AS subq;
+SELECT i1 - i2 FROM bar;
 ----
-0 years 0 mons 106 days 32 hours 0 mins 40.000000048 secs
-0 years 0 mons 16812 days 2 hours 3 mins 49.754246910 secs
-0 years 0 mons 31904 days 46 hours 44 mins 25.334246910 secs
-0 years 0 mons -30500 days -26 hours -57 mins -29.999753090 secs
+0 years 0 mons -1 days 0 hours 0 mins 0.000000000 secs
+0 years 2 mons -13 days 0 hours 0 mins 0.000000000 secs
+0 years 0 mons 1 days 2 hours 56 mins 0.000000000 secs
+0 years 0 mons 1 days 0 hours 0 mins -3.999999993 secs
 
 # Interval + Interval
 query ?
-SELECT subq.interval1 + subq.interval2
-FROM (
-  SELECT ts1 - ts2 AS interval1,
-  ts2 - ts1 AS interval2
-  FROM foo
-) AS subq;
+SELECT i1 + i2 FROM bar;
 ----
-0 years 0 mons 0 days 0 hours 0 mins 0.000000000 secs
-0 years 0 mons 0 days 0 hours 0 mins 0.000000000 secs
-0 years 0 mons 0 days 0 hours 0 mins 0.000000000 secs
-0 years 0 mons 0 days 0 hours 0 mins 0.000000000 secs
+0 years 0 mons 3 days 0 hours 0 mins 0.000000000 secs
+0 years 2 mons 13 days 0 hours 0 mins 0.000000000 secs
+0 years 0 mons 1 days 3 hours 4 mins 0.000000000 secs
+0 years 0 mons 1 days 0 hours 0 mins 4.000000007 secs
 
 # Timestamp - Interval
 query P
-SELECT subq.ts1 - subq.interval1
-FROM (
-  SELECT ts1,
-  ts1 - ts2 AS interval1
-  FROM foo
-) AS subq;
+SELECT ts1 - i FROM foo;
 ----
-2023-01-20T23:00:00.000000099
-2000-02-23T11:00:00.123000001
-1990-03-01T00:00:00.333000001
-2045-04-11T15:00:00.000000001
+2023-03-14T15:00:20.000000123
+2022-12-28T12:01:55.000123456
+2033-11-01T20:22:13.000123456
+2003-07-10T01:31:15.000123449
 
 # Interval + Timestamp
 query P
-SELECT subq.interval1 + subq.ts1
-FROM (
-  SELECT ts1,
-  ts1 - ts2 AS interval1
-  FROM foo
-) AS subq;
+SELECT i + ts1 FROM foo;
 ----
-2023-05-08T07:00:40.000000147
-2046-03-05T13:03:49.877246911
-2077-07-07T22:44:25.667246911
-1961-10-08T12:02:30.000246911
+2023-03-16T15:00:20.000000123
+2023-04-28T12:01:55.000123456
+2033-11-04T02:22:13.000123456
+2003-07-12T01:31:15.000123463
 
 # Timestamp + Interval
 query P
-SELECT  subq.ts1 + subq.interval1
-FROM (
-  SELECT ts1,
-  ts1 - ts2 AS interval1
-  FROM foo
-) AS subq;
+SELECT ts1 + i FROM foo;
 ----
-2023-05-08T07:00:40.000000147
-2046-03-05T13:03:49.877246911
-2077-07-07T22:44:25.667246911
-1961-10-08T12:02:30.000246911
+2023-03-16T15:00:20.000000123
+2023-04-28T12:01:55.000123456
+2033-11-04T02:22:13.000123456
+2003-07-12T01:31:15.000123463
 
 # Timestamp + Timestamp => error
 statement error DataFusion error: Error during planning: Timestamp\(Nanosecond, None\) Timestamp\(Nanosecond, None\) is an unsupported operation. addition/subtraction on dates/timestamps only supported with interval types
@@ -560,15 +541,13 @@ FROM foo;
 
 # Interval - Timestamp => error
 statement error DataFusion error: Error during planning: Interval\(MonthDayNano\) - Timestamp\(Nanosecond, None\) can't be evaluated because there isn't a common type to coerce the types to
-SELECT subq.interval1 - subq.ts1
-FROM (
-  SELECT ts1,
-  ts1 - ts2 AS interval1
-  FROM foo
-) AS subq;
+SELECT i - ts1 from FOO;
 
 statement ok
 drop table foo;
+
+statement ok
+drop table bar;
 
 # timestamptz to utf8 conversion
 query BBBB
