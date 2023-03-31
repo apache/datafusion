@@ -3335,6 +3335,17 @@ fn test_prepare_statement_to_plan_panic_param_format() {
 }
 
 #[test]
+#[should_panic(
+    expected = "value: Plan(\"Invalid placeholder, zero is not a valid index: $0\""
+)]
+fn test_prepare_statement_to_plan_panic_param_zero() {
+    // param is zero following the $ sign
+    // panic due to error returned from the parser
+    let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $0";
+    logical_plan(sql).unwrap();
+}
+
+#[test]
 #[should_panic(expected = "value: SQL(ParserError(\"Expected AS, found: SELECT\"))")]
 fn test_prepare_statement_to_plan_panic_prepare_wrong_syntax() {
     // param is not number following the $ sign
