@@ -645,46 +645,47 @@ pub fn to_substrait_rex(
             })
         }
         Expr::Literal(value) => {
-            let literal_type = match value {
-                ScalarValue::Int8(Some(n)) => Some(LiteralType::I8(*n as i32)),
-                ScalarValue::UInt8(Some(n)) => Some(LiteralType::I8(*n as i32)),
-                ScalarValue::Int16(Some(n)) => Some(LiteralType::I16(*n as i32)),
-                ScalarValue::UInt16(Some(n)) => Some(LiteralType::I16(*n as i32)),
-                ScalarValue::Int32(Some(n)) => Some(LiteralType::I32(*n)),
-                ScalarValue::UInt32(Some(n)) => Some(LiteralType::I32(unsafe {
-                    mem::transmute_copy::<u32, i32>(n)
-                })),
-                ScalarValue::Int64(Some(n)) => Some(LiteralType::I64(*n)),
-                ScalarValue::UInt64(Some(n)) => Some(LiteralType::I64(unsafe {
-                    mem::transmute_copy::<u64, i64>(n)
-                })),
-                ScalarValue::Boolean(Some(b)) => Some(LiteralType::Boolean(*b)),
-                ScalarValue::Float32(Some(f)) => Some(LiteralType::Fp32(*f)),
-                ScalarValue::Float64(Some(f)) => Some(LiteralType::Fp64(*f)),
-                ScalarValue::Decimal128(v, p, s) if v.is_some() => {
-                    Some(LiteralType::Decimal(Decimal {
-                        value: v.unwrap().to_le_bytes().to_vec(),
-                        precision: *p as i32,
-                        scale: *s as i32,
-                    }))
-                }
-                ScalarValue::Utf8(Some(s)) => Some(LiteralType::String(s.clone())),
-                ScalarValue::LargeUtf8(Some(s)) => Some(LiteralType::String(s.clone())),
-                ScalarValue::Binary(Some(b)) => Some(LiteralType::Binary(b.clone())),
-                ScalarValue::LargeBinary(Some(b)) => Some(LiteralType::Binary(b.clone())),
-                ScalarValue::Date32(Some(d)) => Some(LiteralType::Date(*d)),
-                _ => Some(try_to_substrait_null(value)?),
-            };
+            // let literal_type = match value {
+            //     ScalarValue::Int8(Some(n)) => Some(LiteralType::I8(*n as i32)),
+            //     ScalarValue::UInt8(Some(n)) => Some(LiteralType::I8(*n as i32)),
+            //     ScalarValue::Int16(Some(n)) => Some(LiteralType::I16(*n as i32)),
+            //     ScalarValue::UInt16(Some(n)) => Some(LiteralType::I16(*n as i32)),
+            //     ScalarValue::Int32(Some(n)) => Some(LiteralType::I32(*n)),
+            //     ScalarValue::UInt32(Some(n)) => Some(LiteralType::I32(unsafe {
+            //         mem::transmute_copy::<u32, i32>(n)
+            //     })),
+            //     ScalarValue::Int64(Some(n)) => Some(LiteralType::I64(*n)),
+            //     ScalarValue::UInt64(Some(n)) => Some(LiteralType::I64(unsafe {
+            //         mem::transmute_copy::<u64, i64>(n)
+            //     })),
+            //     ScalarValue::Boolean(Some(b)) => Some(LiteralType::Boolean(*b)),
+            //     ScalarValue::Float32(Some(f)) => Some(LiteralType::Fp32(*f)),
+            //     ScalarValue::Float64(Some(f)) => Some(LiteralType::Fp64(*f)),
+            //     ScalarValue::Decimal128(v, p, s) if v.is_some() => {
+            //         Some(LiteralType::Decimal(Decimal {
+            //             value: v.unwrap().to_le_bytes().to_vec(),
+            //             precision: *p as i32,
+            //             scale: *s as i32,
+            //         }))
+            //     }
+            //     ScalarValue::Utf8(Some(s)) => Some(LiteralType::String(s.clone())),
+            //     ScalarValue::LargeUtf8(Some(s)) => Some(LiteralType::String(s.clone())),
+            //     ScalarValue::Binary(Some(b)) => Some(LiteralType::Binary(b.clone())),
+            //     ScalarValue::LargeBinary(Some(b)) => Some(LiteralType::Binary(b.clone())),
+            //     ScalarValue::Date32(Some(d)) => Some(LiteralType::Date(*d)),
+            //     _ => Some(try_to_substrait_null(value)?),
+            // };
 
-            let type_variation_reference = if value.is_unsigned() { 1 } else { 0 };
+            // let type_variation_reference = if value.is_unsigned() { 1 } else { 0 };
 
-            Ok(Expression {
-                rex_type: Some(RexType::Literal(Literal {
-                    nullable: true,
-                    type_variation_reference,
-                    literal_type,
-                })),
-            })
+            // Ok(Expression {
+            //     rex_type: Some(RexType::Literal(Literal {
+            //         nullable: true,
+            //         type_variation_reference,
+            //         literal_type,
+            //     })),
+            // })
+            to_substrait_literal(value)
         }
         Expr::Alias(expr, _alias) => to_substrait_rex(expr, schema, extension_info),
         Expr::WindowFunction(WindowFunction {
@@ -1050,31 +1051,215 @@ fn to_substrait_bounds(window_frame: &WindowFrame) -> Result<(Bound, Bound)> {
     ))
 }
 
+fn to_substrait_literal(value: &ScalarValue) -> Result<Expression> {
+    let (literal_type, type_variation_reference) = match value {
+        ScalarValue::Boolean(Some(b)) => (LiteralType::Boolean(*b), DEFAULT_TYPE_REF),
+        ScalarValue::Int8(Some(n)) => (LiteralType::I8(*n as i32), DEFAULT_TYPE_REF),
+        ScalarValue::UInt8(Some(n)) => {
+            (LiteralType::I8(*n as i32), UNSIGNED_INTEGER_TYPE_REF)
+        }
+        ScalarValue::Int16(Some(n)) => (LiteralType::I16(*n as i32), DEFAULT_TYPE_REF),
+        ScalarValue::UInt16(Some(n)) => {
+            (LiteralType::I16(*n as i32), UNSIGNED_INTEGER_TYPE_REF)
+        }
+        ScalarValue::Int32(Some(n)) => (LiteralType::I32(*n), DEFAULT_TYPE_REF),
+        ScalarValue::UInt32(Some(n)) => (
+            LiteralType::I32(unsafe { mem::transmute_copy::<u32, i32>(n) }),
+            UNSIGNED_INTEGER_TYPE_REF,
+        ),
+        ScalarValue::Int64(Some(n)) => (LiteralType::I64(*n), DEFAULT_TYPE_REF),
+        ScalarValue::UInt64(Some(n)) => (
+            LiteralType::I64(unsafe { mem::transmute_copy::<u64, i64>(n) }),
+            UNSIGNED_INTEGER_TYPE_REF,
+        ),
+        ScalarValue::Float32(Some(f)) => (LiteralType::Fp32(*f), DEFAULT_TYPE_REF),
+        ScalarValue::Float64(Some(f)) => (LiteralType::Fp64(*f), DEFAULT_TYPE_REF),
+        ScalarValue::TimestampSecond(Some(t), _) => {
+            (LiteralType::Timestamp(*t), TIMESTAMP_SECOND_TYPE_REF)
+        }
+        ScalarValue::TimestampMillisecond(Some(t), _) => {
+            (LiteralType::Timestamp(*t), TIMESTAMP_MILLI_TYPE_REF)
+        }
+        ScalarValue::TimestampMicrosecond(Some(t), _) => {
+            (LiteralType::Timestamp(*t), TIMESTAMP_MICRO_TYPE_REF)
+        }
+        ScalarValue::TimestampNanosecond(Some(t), _) => {
+            (LiteralType::Timestamp(*t), TIMESTAMP_NANO_TYPE_REF)
+        }
+        ScalarValue::Date32(Some(d)) => (LiteralType::Date(*d), DATE_32_TYPE_REF),
+        // Date64 literal is not supported in Substrait
+        ScalarValue::Binary(Some(b)) => {
+            (LiteralType::Binary(b.clone()), DEFAULT_CONTAINER_TYPE_REF)
+        }
+        ScalarValue::LargeBinary(Some(b)) => {
+            (LiteralType::Binary(b.clone()), LARGE_CONTAINER_TYPE_REF)
+        }
+        ScalarValue::FixedSizeBinary(_, Some(b)) => {
+            (LiteralType::FixedBinary(b.clone()), DEFAULT_TYPE_REF)
+        }
+        ScalarValue::Utf8(Some(s)) => {
+            (LiteralType::String(s.clone()), DEFAULT_CONTAINER_TYPE_REF)
+        }
+        ScalarValue::LargeUtf8(Some(s)) => {
+            (LiteralType::String(s.clone()), LARGE_CONTAINER_TYPE_REF)
+        }
+        ScalarValue::Decimal128(v, p, s) if v.is_some() => (
+            LiteralType::Decimal(Decimal {
+                value: v.unwrap().to_le_bytes().to_vec(),
+                precision: *p as i32,
+                scale: *s as i32,
+            }),
+            DECIMAL_128_TYPE_REF,
+        ),
+        _ => (try_to_substrait_null(value)?, DEFAULT_TYPE_REF),
+    };
+
+    Ok(Expression {
+        rex_type: Some(RexType::Literal(Literal {
+            nullable: true,
+            type_variation_reference,
+            literal_type: Some(literal_type),
+        })),
+    })
+}
+
 fn try_to_substrait_null(v: &ScalarValue) -> Result<LiteralType> {
-    let default_type_ref = 0;
+    // let default_type_ref = 0;
     let default_nullability = r#type::Nullability::Nullable as i32;
     match v {
         ScalarValue::Int8(None) => Ok(LiteralType::Null(substrait::proto::Type {
             kind: Some(r#type::Kind::I8(r#type::I8 {
-                type_variation_reference: default_type_ref,
+                type_variation_reference: DEFAULT_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::UInt8(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::I8(r#type::I8 {
+                type_variation_reference: UNSIGNED_INTEGER_TYPE_REF,
                 nullability: default_nullability,
             })),
         })),
         ScalarValue::Int16(None) => Ok(LiteralType::Null(substrait::proto::Type {
             kind: Some(r#type::Kind::I16(r#type::I16 {
-                type_variation_reference: default_type_ref,
+                type_variation_reference: DEFAULT_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::UInt16(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::I16(r#type::I16 {
+                type_variation_reference: UNSIGNED_INTEGER_TYPE_REF,
                 nullability: default_nullability,
             })),
         })),
         ScalarValue::Int32(None) => Ok(LiteralType::Null(substrait::proto::Type {
             kind: Some(r#type::Kind::I32(r#type::I32 {
-                type_variation_reference: default_type_ref,
+                type_variation_reference: DEFAULT_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::UInt32(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::I32(r#type::I32 {
+                type_variation_reference: UNSIGNED_INTEGER_TYPE_REF,
                 nullability: default_nullability,
             })),
         })),
         ScalarValue::Int64(None) => Ok(LiteralType::Null(substrait::proto::Type {
             kind: Some(r#type::Kind::I64(r#type::I64 {
-                type_variation_reference: default_type_ref,
+                type_variation_reference: DEFAULT_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::UInt64(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::I64(r#type::I64 {
+                type_variation_reference: UNSIGNED_INTEGER_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::Float32(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::Fp32(r#type::Fp32 {
+                type_variation_reference: DEFAULT_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::Float64(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::Fp64(r#type::Fp64 {
+                type_variation_reference: DEFAULT_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::TimestampSecond(None, _) => {
+            Ok(LiteralType::Null(substrait::proto::Type {
+                kind: Some(r#type::Kind::Timestamp(r#type::Timestamp {
+                    type_variation_reference: TIMESTAMP_SECOND_TYPE_REF,
+                    nullability: default_nullability,
+                })),
+            }))
+        }
+        ScalarValue::TimestampMillisecond(None, _) => {
+            Ok(LiteralType::Null(substrait::proto::Type {
+                kind: Some(r#type::Kind::Timestamp(r#type::Timestamp {
+                    type_variation_reference: TIMESTAMP_MILLI_TYPE_REF,
+                    nullability: default_nullability,
+                })),
+            }))
+        }
+        ScalarValue::TimestampMicrosecond(None, _) => {
+            Ok(LiteralType::Null(substrait::proto::Type {
+                kind: Some(r#type::Kind::Timestamp(r#type::Timestamp {
+                    type_variation_reference: TIMESTAMP_MICRO_TYPE_REF,
+                    nullability: default_nullability,
+                })),
+            }))
+        }
+        ScalarValue::TimestampNanosecond(None, _) => {
+            Ok(LiteralType::Null(substrait::proto::Type {
+                kind: Some(r#type::Kind::Timestamp(r#type::Timestamp {
+                    type_variation_reference: TIMESTAMP_NANO_TYPE_REF,
+                    nullability: default_nullability,
+                })),
+            }))
+        }
+        ScalarValue::Date32(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::Date(r#type::Date {
+                type_variation_reference: DATE_32_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::Date64(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::Date(r#type::Date {
+                type_variation_reference: DATE_64_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::Binary(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::Binary(r#type::Binary {
+                type_variation_reference: DEFAULT_CONTAINER_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::LargeBinary(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::Binary(r#type::Binary {
+                type_variation_reference: LARGE_CONTAINER_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::FixedSizeBinary(_, None) => {
+            Ok(LiteralType::Null(substrait::proto::Type {
+                kind: Some(r#type::Kind::Binary(r#type::Binary {
+                    type_variation_reference: DEFAULT_TYPE_REF,
+                    nullability: default_nullability,
+                })),
+            }))
+        }
+        ScalarValue::Utf8(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::String(r#type::String {
+                type_variation_reference: DEFAULT_CONTAINER_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        })),
+        ScalarValue::LargeUtf8(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::String(r#type::String {
+                type_variation_reference: LARGE_CONTAINER_TYPE_REF,
                 nullability: default_nullability,
             })),
         })),
@@ -1083,7 +1268,7 @@ fn try_to_substrait_null(v: &ScalarValue) -> Result<LiteralType> {
                 kind: Some(r#type::Kind::Decimal(r#type::Decimal {
                     scale: *s as i32,
                     precision: *p as i32,
-                    type_variation_reference: default_type_ref,
+                    type_variation_reference: DEFAULT_TYPE_REF,
                     nullability: default_nullability,
                 })),
             }))
