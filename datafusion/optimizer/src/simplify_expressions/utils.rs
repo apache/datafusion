@@ -396,16 +396,16 @@ pub fn simpl_power(current_args: Vec<Expr>, info: &dyn SimplifyInfo) -> Result<E
 
     match exponent {
         Expr::Literal(value)
+            if value == &ScalarValue::new_zero(&info.get_data_type(exponent)?)? =>
+        {
+            Ok(Expr::Literal(ScalarValue::new_one(
+                &info.get_data_type(base)?,
+            )?))
+        }
+        Expr::Literal(value)
             if value == &ScalarValue::new_one(&info.get_data_type(exponent)?)? =>
         {
             Ok(base.clone())
-        }
-        Expr::Literal(value)
-            if value == &ScalarValue::new_zero(&info.get_data_type(exponent)?)? =>
-        {
-            Ok(Expr::Literal(ScalarValue::new_zero(
-                &info.get_data_type(base)?,
-            )?))
         }
         Expr::ScalarFunction {
             fun: BuiltinScalarFunction::Log,

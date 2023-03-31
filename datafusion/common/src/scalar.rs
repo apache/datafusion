@@ -1709,7 +1709,6 @@ impl ScalarValue {
     pub fn new_one(datatype: &DataType) -> Result<ScalarValue> {
         assert!(datatype.is_primitive());
         Ok(match datatype {
-            DataType::Boolean => ScalarValue::Boolean(Some(true)),
             DataType::Int8 => ScalarValue::Int8(Some(1)),
             DataType::Int16 => ScalarValue::Int16(Some(1)),
             DataType::Int32 => ScalarValue::Int32(Some(1)),

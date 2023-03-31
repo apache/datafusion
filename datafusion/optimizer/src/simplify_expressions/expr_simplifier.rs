@@ -2255,13 +2255,13 @@ mod tests {
 
     #[test]
     fn test_simplify_power() {
-        // Power(c3, 0) ===> 0
+        // Power(c3, 0) ===> 1
         {
             let expr = power(col("c3_non_null"), lit(0));
-            let expected = lit(0i64);
+            let expected = lit(1i64);
             assert_eq!(simplify(expr), expected);
         }
-        // Power(c3, 1) ===> a
+        // Power(c3, 1) ===> c3
         {
             let expr = power(col("c3_non_null"), lit(1));
             let expected = col("c3_non_null");
