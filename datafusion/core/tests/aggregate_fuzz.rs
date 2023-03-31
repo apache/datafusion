@@ -162,8 +162,8 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
 }
 
 /// Return randomly sized record batches with:
-/// two sorted int32 columns 'a', 'b' ranged from 0..len / DISTINCT as columns
-/// two random int32 columns 'x', 'y' as other columns
+/// three sorted int32 columns 'a', 'b', 'c' ranged from 0..'n_distinct' as columns
+/// one random int32 column 'd' as other columns
 pub(crate) fn make_staggered_batches<const STREAM: bool>(
     len: usize,
     n_distinct: usize,

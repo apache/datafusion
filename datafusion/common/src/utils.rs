@@ -250,15 +250,6 @@ pub fn calc_ordering_range(in1: &[usize]) -> usize {
     count
 }
 
-/// Create a new vector from the elements at the `indices` of `searched` vector
-pub fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Vec<T> {
-    let mut result = vec![];
-    for idx in indices {
-        result.push(searched[*idx].clone());
-    }
-    result
-}
-
 /// evaluate the partition points given the sort columns; if the sort columns are
 /// empty then the result will be a single element vec of the whole column rows.
 pub fn evaluate_partition_points(

@@ -38,7 +38,7 @@ use datafusion_physical_expr::{
 use std::any::Any;
 use std::collections::HashMap;
 
-use datafusion_common::utils::{calc_ordering_range, get_at_indices};
+use datafusion_common::utils::calc_ordering_range;
 use itertools::Itertools;
 use std::sync::Arc;
 
@@ -71,9 +71,14 @@ pub enum AggregateMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum PartitionSearchMode {
-    PartiallySorted(Vec<usize>),
-    Sorted(Vec<usize>),
+enum GroupByOrderMode {
+    // It means that some of the expressions in the GROUP BY clause is ordered.
+    // `Vec<usize>` stores indices such that when iterated in this order GROUP BY expressions would match input ordering.
+    // For instance, in input is ordered by a, b and GROUP BY c, b, a is entered Vec<usize> would be vec![2, 1]
+    PartiallyOrdered(Vec<usize>),
+    // It means that all of the expressions in the GROUP BY clause is ordered.
+    // Similarly, `Vec<usize>` stores indices such that when iterated in this order GROUP BY expressions would match input ordering.
+    Ordered(Vec<usize>),
 }
 
 /// Represents `GROUP BY` clause in the plan (including the more general GROUPING SET)
@@ -196,53 +201,65 @@ pub struct AggregateExec {
     ordered_indices: Vec<usize>,
 }
 
+/// Calculates the working mode for `GROUP BY` queries.
+// If None of the expressions in the GROUP BY is ordered, function returns `None`
+// If some of the expressions in the GROUP BY is ordered, function returns `Some(GroupByOrderMode::PartiallyOrdered)`
+// If all of the expressions in the GROUP BY is ordered, function returns `Some(GroupByOrderMode::Ordered)`
 fn get_working_mode(
     input: &Arc<dyn ExecutionPlan>,
     group_by: &PhysicalGroupBy,
-) -> Option<PartitionSearchMode> {
-    let output_ordering = input.output_ordering().unwrap_or(&[]);
-    let single_group = group_by.groups.len() == 1;
-    if single_group {
+) -> Option<GroupByOrderMode> {
+    if group_by.groups.len() == 1 {
+        let output_ordering = input.output_ordering().unwrap_or(&[]);
+        // Since direction of the ordering is not important for group by columns. We convert
+        // PhysicalSortExpr to PhysicalExpr in the existing ordering.
         let ordering_exprs = convert_to_expr(output_ordering);
         let groupby_exprs = group_by
             .expr
             .iter()
             .map(|(elem, _)| elem.clone())
             .collect::<Vec<_>>();
+        // Find where each expression of the group by clause occurs in the existing ordering (If occurs)
         let indices =
             get_indices_of_matching_exprs(&groupby_exprs, &ordering_exprs, || {
                 input.equivalence_properties()
             });
         let ordered_indices = indices.iter().copied().sorted().collect::<Vec<_>>();
+        // Find out how many expressions of the existing ordering, defines ordering for expressions in the group by clause.
+        // If input is ordered by a, b, c, d and GROUP BY b, a, d is entered, below result would be 2. Meaning 2 elements (a, b)
+        // among group by expressions defines ordering in the input.
         let first_n = calc_ordering_range(&ordered_indices);
-        let ordered_exprs = get_at_indices(&ordering_exprs, &ordered_indices[0..first_n]);
+        let ordered_exprs = ordering_exprs[0..first_n].to_vec();
+        // Find the indices of the group by expressions such that when iterated with this order would match existing ordering.
+        // For the example above, this would produce 1, 0. Meaning, among the GROUP BY expressions b, a, d: 1st and 0th entries (a, b)
+        // matches input ordering.
         let ordered_group_by_indices =
             get_indices_of_matching_exprs(&ordered_exprs, &groupby_exprs, || {
                 input.equivalence_properties()
             });
         if first_n > 0 {
             if first_n == group_by.expr.len() {
-                Some(PartitionSearchMode::Sorted(ordered_group_by_indices))
+                Some(GroupByOrderMode::Ordered(ordered_group_by_indices))
             } else {
-                Some(PartitionSearchMode::PartiallySorted(
-                    ordered_group_by_indices,
-                ))
+                Some(GroupByOrderMode::PartiallyOrdered(ordered_group_by_indices))
             }
         } else {
-            // println!("cannot run in streaming mode.");
+            // If None of the group by columns is ordered. There is no way to run streaming execution.
             None
         }
     } else {
-        // println!("cannot run in streaming mode.");
+        // If we have more than 1 group (grouping set is used). We do not support
+        // streaming execution.
         None
     }
 }
 
-fn get_ordered_indices(working_mode: &Option<PartitionSearchMode>) -> Vec<usize> {
+// Util function to get iteration order information stored inside the `GroupByOrderMode`.
+fn get_ordered_indices(working_mode: &Option<GroupByOrderMode>) -> Vec<usize> {
     if let Some(mode) = working_mode {
         match mode {
-            PartitionSearchMode::Sorted(ordered_indices)
-            | PartitionSearchMode::PartiallySorted(ordered_indices) => {
+            GroupByOrderMode::Ordered(ordered_indices)
+            | GroupByOrderMode::PartiallyOrdered(ordered_indices) => {
                 ordered_indices.clone()
             }
         }
@@ -283,10 +300,12 @@ impl AggregateExec {
         }
         let working_mode = get_working_mode(&input, &group_by);
         let ordered_indices = get_ordered_indices(&working_mode);
-        let input_out_ordering = input.output_ordering().unwrap_or(&[]);
+        let existing_ordering = input.output_ordering().unwrap_or(&[]);
+
+        // Output ordering information for the executor.
         let out_ordering = ordered_indices
             .iter()
-            .zip(input_out_ordering)
+            .zip(existing_ordering)
             .map(|(idx, input_col)| {
                 let name = group_by.expr[*idx].1.as_str();
                 let col_expr = col(name, &schema)?;
@@ -831,9 +850,7 @@ mod tests {
     use std::task::{Context, Poll};
 
     use super::StreamType;
-    use crate::physical_plan::aggregates::PartitionSearchMode::{
-        PartiallySorted, Sorted,
-    };
+    use crate::physical_plan::aggregates::GroupByOrderMode::{Ordered, PartiallyOrdered};
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::{
@@ -912,28 +929,28 @@ mod tests {
         // test cases consists of vector of tuples. Where each tuple represents a single test case.
         // First field in the tuple is Vec<str> where each element in the vector represents GROUP BY columns
         // For instance `vec!["a", "b"]` corresponds to GROUP BY a, b
-        // Second field in the tuple is Option<PartitionSearchMode>, which corresponds to expected algorithm mode.
+        // Second field in the tuple is Option<GroupByOrderMode>, which corresponds to expected algorithm mode.
         // None represents that existing ordering is not sufficient to run executor with any one of the algorithms
         // (We need to add SortExec to be able to run it).
-        // Some(PartitionSearchMode) represents, we can run algorithm with existing ordering; and algorithm should work in
-        // PartitionSearchMode.
+        // Some(GroupByOrderMode) represents, we can run algorithm with existing ordering; and algorithm should work in
+        // GroupByOrderMode.
         let test_cases = vec![
-            (vec!["a"], Some(Sorted(vec![0]))),
+            (vec!["a"], Some(Ordered(vec![0]))),
             (vec!["b"], None),
             (vec!["c"], None),
-            (vec!["b", "a"], Some(Sorted(vec![1, 0]))),
+            (vec!["b", "a"], Some(Ordered(vec![1, 0]))),
             (vec!["c", "b"], None),
-            (vec!["c", "a"], Some(PartiallySorted(vec![1]))),
-            (vec!["c", "b", "a"], Some(Sorted(vec![2, 1, 0]))),
-            (vec!["d", "a"], Some(PartiallySorted(vec![1]))),
+            (vec!["c", "a"], Some(PartiallyOrdered(vec![1]))),
+            (vec!["c", "b", "a"], Some(Ordered(vec![2, 1, 0]))),
+            (vec!["d", "a"], Some(PartiallyOrdered(vec![1]))),
             (vec!["d", "b"], None),
             (vec!["d", "c"], None),
-            (vec!["d", "b", "a"], Some(PartiallySorted(vec![2, 1]))),
+            (vec!["d", "b", "a"], Some(PartiallyOrdered(vec![2, 1]))),
             (vec!["d", "c", "b"], None),
-            (vec!["d", "c", "a"], Some(PartiallySorted(vec![2]))),
+            (vec!["d", "c", "a"], Some(PartiallyOrdered(vec![2]))),
             (
                 vec!["d", "c", "b", "a"],
-                Some(PartiallySorted(vec![3, 2, 1])),
+                Some(PartiallyOrdered(vec![3, 2, 1])),
             ),
         ];
         for (case_idx, test_case) in test_cases.iter().enumerate() {
