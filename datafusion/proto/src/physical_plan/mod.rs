@@ -334,7 +334,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     input,
                     Arc::new((&input_schema).try_into()?),
                     vec![],
-                    None,
                 )?))
             }
             PhysicalPlanType::Aggregate(hash_agg) => {

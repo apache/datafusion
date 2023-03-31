@@ -55,6 +55,9 @@ use crate::physical_plan::{
 };
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_physical_expr::{
+    make_sort_requirements_from_exprs, PhysicalSortRequirement,
+};
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -225,10 +228,10 @@ impl ExecutionPlan for SortMergeJoinExec {
         ]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortExpr>>> {
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
         vec![
-            Some(self.left_sort_exprs.clone()),
-            Some(self.right_sort_exprs.clone()),
+            Some(make_sort_requirements_from_exprs(&self.left_sort_exprs)),
+            Some(make_sort_requirements_from_exprs(&self.right_sort_exprs)),
         ]
     }
 

@@ -1331,6 +1331,54 @@ where
     Ok(Arc::new(table))
 }
 
+fn make_timestamp_tz_sub_table<A>(
+    tz1: Option<String>,
+    tz2: Option<String>,
+) -> Result<Arc<MemTable>>
+where
+    A: ArrowTimestampType<Native = i64>,
+{
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("ts1", DataType::Timestamp(A::UNIT, tz1.clone()), false),
+        Field::new("ts2", DataType::Timestamp(A::UNIT, tz2.clone()), false),
+        Field::new("val", DataType::Int32, true),
+    ]));
+
+    let divisor = match A::UNIT {
+        TimeUnit::Nanosecond => 1,
+        TimeUnit::Microsecond => 1000,
+        TimeUnit::Millisecond => 1_000_000,
+        TimeUnit::Second => 1_000_000_000,
+    };
+
+    let timestamps1 = vec![
+        1_678_892_420_000_000_000i64 / divisor, //2023-03-15T15:00:20.000_000_000
+        1_678_892_410_000_000_000i64 / divisor, //2023-03-15T15:00:10.000_000_000
+        1_678_892_430_000_000_000i64 / divisor, //2023-03-15T15:00:30.000_000_000
+    ];
+    let timestamps2 = vec![
+        1_678_892_400_000_000_000i64 / divisor, //2023-03-15T15:00:00.000_000_000
+        1_678_892_400_000_000_000i64 / divisor, //2023-03-15T15:00:00.000_000_000
+        1_678_892_400_000_000_000i64 / divisor, //2023-03-15T15:00:00.000_000_000
+    ];
+
+    let array1 =
+        PrimitiveArray::<A>::from_iter_values(timestamps1).with_timezone_opt(tz1);
+    let array2 =
+        PrimitiveArray::<A>::from_iter_values(timestamps2).with_timezone_opt(tz2);
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(array1),
+            Arc::new(array2),
+            Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+        ],
+    )?;
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+    Ok(Arc::new(table))
+}
+
 fn make_timestamp_nano_table() -> Result<Arc<MemTable>> {
     make_timestamp_table::<TimestampNanosecondType>()
 }

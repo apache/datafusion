@@ -321,6 +321,9 @@ fn init() {
 mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion_physical_expr::{
+        make_sort_requirements_from_exprs, PhysicalSortRequirement,
+    };
 
     use super::*;
     use crate::datasource::listing::PartitionedFile;
@@ -1131,8 +1134,10 @@ mod tests {
         }
 
         // model that it requires the output ordering of its input
-        fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortExpr>>> {
-            vec![self.input.output_ordering().map(|elem| elem.to_vec())]
+        fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+            vec![self
+                .output_ordering()
+                .map(make_sort_requirements_from_exprs)]
         }
 
         fn with_new_children(

@@ -295,6 +295,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 make_decimal_type(precision, scale)
             }
             SQLDataType::Bytea => Ok(DataType::Binary),
+            SQLDataType::Interval => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
             // Explicitly list all other types so that if sqlparser
             // adds/changes the `SQLDataType` the compiler will tell us on upgrade
             // and avoid bugs like https://github.com/apache/arrow-datafusion/issues/3059
@@ -305,7 +306,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Varbinary(_)
             | SQLDataType::Blob(_)
             | SQLDataType::Datetime(_)
-            | SQLDataType::Interval
             | SQLDataType::Regclass
             | SQLDataType::Custom(_, _)
             | SQLDataType::Array(_)

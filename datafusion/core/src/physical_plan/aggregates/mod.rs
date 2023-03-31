@@ -821,7 +821,6 @@ mod tests {
     use arrow::compute::{concat_batches, SortOptions};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use arrow::util::pretty::print_batches;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_expr::expressions::{lit, ApproxDistinct, Count, Median};

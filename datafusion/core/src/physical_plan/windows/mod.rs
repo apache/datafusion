@@ -46,6 +46,7 @@ pub use bounded_window_agg_exec::BoundedWindowAggExec;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
+use datafusion_physical_expr::PhysicalSortRequirement;
 pub use window_agg_exec::WindowAggExec;
 
 /// Create a physical expression for window function
@@ -187,6 +188,30 @@ fn create_built_in_window_expr(
     })
 }
 
+pub(crate) fn calc_requirements(
+    partition_by_exprs: &[Arc<dyn PhysicalExpr>],
+    orderby_sort_exprs: &[PhysicalSortExpr],
+) -> Option<Vec<PhysicalSortRequirement>> {
+    let mut sort_reqs = vec![];
+    for partition_by in partition_by_exprs {
+        sort_reqs.push(PhysicalSortRequirement {
+            expr: partition_by.clone(),
+            options: None,
+        });
+    }
+    for PhysicalSortExpr { expr, options } in orderby_sort_exprs {
+        let contains = sort_reqs.iter().any(|e| expr.eq(&e.expr));
+        if !contains {
+            sort_reqs.push(PhysicalSortRequirement {
+                expr: expr.clone(),
+                options: Some(*options),
+            });
+        }
+    }
+    // Convert empty result to None. Otherwise wrap result inside Some()
+    (!sort_reqs.is_empty()).then_some(sort_reqs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +223,7 @@ mod tests {
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending};
     use arrow::array::*;
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_primitive_array;
@@ -208,6 +234,79 @@ mod tests {
         let csv = test::scan_partitioned_csv(partitions)?;
         let schema = csv.schema();
         Ok((csv, schema))
+    }
+
+    fn create_test_schema2() -> Result<SchemaRef> {
+        let a = Field::new("a", DataType::Int32, true);
+        let b = Field::new("b", DataType::Int32, true);
+        let c = Field::new("c", DataType::Int32, true);
+        let d = Field::new("d", DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![a, b, c, d]));
+        Ok(schema)
+    }
+
+    #[tokio::test]
+    async fn test_calc_requirements() -> Result<()> {
+        let schema = create_test_schema2()?;
+        let test_data = vec![
+            // PARTITION BY a, ORDER BY b ASC NULLS FIRST
+            (
+                vec!["a"],
+                vec![("b", true, true)],
+                vec![("a", None), ("b", Some((true, true)))],
+            ),
+            // PARTITION BY a, ORDER BY a ASC NULLS FIRST
+            (vec!["a"], vec![("a", true, true)], vec![("a", None)]),
+            // PARTITION BY a, ORDER BY b ASC NULLS FIRST, c DESC NULLS LAST
+            (
+                vec!["a"],
+                vec![("b", true, true), ("c", false, false)],
+                vec![
+                    ("a", None),
+                    ("b", Some((true, true))),
+                    ("c", Some((false, false))),
+                ],
+            ),
+            // PARTITION BY a, c, ORDER BY b ASC NULLS FIRST, c DESC NULLS LAST
+            (
+                vec!["a", "c"],
+                vec![("b", true, true), ("c", false, false)],
+                vec![("a", None), ("c", None), ("b", Some((true, true)))],
+            ),
+        ];
+        for (pb_params, ob_params, expected_params) in test_data {
+            let mut partitionbys = vec![];
+            for col_name in pb_params {
+                partitionbys.push(col(col_name, &schema)?);
+            }
+
+            let mut orderbys = vec![];
+            for (col_name, descending, nulls_first) in ob_params {
+                let expr = col(col_name, &schema)?;
+                let options = SortOptions {
+                    descending,
+                    nulls_first,
+                };
+                orderbys.push(PhysicalSortExpr { expr, options });
+            }
+
+            let mut expected: Option<Vec<PhysicalSortRequirement>> = None;
+            for (col_name, reqs) in expected_params {
+                let options = reqs.map(|(descending, nulls_first)| SortOptions {
+                    descending,
+                    nulls_first,
+                });
+                let expr = col(col_name, &schema)?;
+                let res = PhysicalSortRequirement { expr, options };
+                if let Some(expected) = &mut expected {
+                    expected.push(res);
+                } else {
+                    expected = Some(vec![res]);
+                }
+            }
+            assert_eq!(calc_requirements(&partitionbys, &orderbys), expected);
+        }
+        Ok(())
     }
 
     #[tokio::test]
@@ -269,7 +368,6 @@ mod tests {
             input,
             schema.clone(),
             vec![],
-            None,
         )?);
 
         let result: Vec<RecordBatch> = collect(window_exec, task_ctx).await?;
@@ -323,7 +421,6 @@ mod tests {
             input,
             schema.clone(),
             vec![],
-            None,
         )?);
 
         let result: Vec<RecordBatch> = collect(window_exec, task_ctx).await?;
@@ -371,7 +468,6 @@ mod tests {
             blocking_exec,
             schema,
             vec![],
-            None,
         )?);
 
         let fut = collect(window_agg_exec, task_ctx);
