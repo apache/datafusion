@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use ahash::RandomState;
-use arrow::row::{OwnedRow, RowConverter, Rows, SortField};
+use arrow::row::{OwnedRow, RowConverter, SortField};
 use datafusion_physical_expr::hash_utils::create_hashes;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
@@ -49,7 +49,6 @@ use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::utils::{evaluate_partition_points, get_row_at_idx};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
-use datafusion_physical_expr::window::PartitionKey;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_row::accessor::RowAccessor;
 use datafusion_row::layout::RowLayout;
@@ -312,16 +311,17 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 }
 
 impl GroupedHashAggregateStream {
-    fn get_per_partition_indices(
-        &self,
-        group_rows: &Rows,
+    // Get the indices for each group
+    fn get_per_group_indices(
+        &mut self,
         group_values: &[ArrayRef],
-    ) -> Result<Vec<(PartitionKey, u64, Vec<u32>)>> {
+    ) -> Result<Vec<(OwnedRow, u64, Vec<u32>)>> {
+        let group_rows = self.row_converter.convert_columns(group_values)?;
         let n_rows = group_rows.num_rows();
         // 1.1 Calculate the group keys for the group values
         let mut batch_hashes = vec![0; n_rows];
         create_hashes(group_values, &self.random_state, &mut batch_hashes)?;
-        let mut res: Vec<(PartitionKey, u64, Vec<u32>)> = vec![];
+        let mut res: Vec<(OwnedRow, u64, Vec<u32>)> = vec![];
         if self.is_fully_sorted {
             let sort_column = self
                 .ordered_indices
@@ -335,19 +335,17 @@ impl GroupedHashAggregateStream {
             let n_rows = group_rows.num_rows();
             let ranges = evaluate_partition_points(n_rows, &sort_column)?;
             for range in ranges {
-                let row = get_row_at_idx(group_values, range.start)?;
+                let row = group_rows.row(range.start).owned();
                 let indices = (range.start as u32..range.end as u32).collect::<Vec<_>>();
                 res.push((row, batch_hashes[range.start], indices))
             }
         } else {
             let mut row_map: RawTable<(u64, usize)> = RawTable::with_capacity(n_rows);
             for (hash, row_idx) in batch_hashes.into_iter().zip(0u32..) {
+                let row = group_rows.row(row_idx as usize).owned();
                 let entry = row_map.get_mut(hash, |(_hash, group_idx)| {
-                    // In case of hash collusion. Get the partition where PartitionKey is same.
-                    // We can safely get first index of the partition indices (During initialization one partition indices has size 1)
-                    let row = get_row_at_idx(group_values, row_idx as usize).unwrap();
+                    // In case of hash collusion. Get the partition where OwnedRow is same.
                     row.eq(&res[*group_idx].0)
-                    // equal_rows(row_idx, res[*group_idx].1[0], columns, columns, true).unwrap()
                 });
                 match entry {
                     // Existing partition. Update indices for the corresponding partition.
@@ -358,7 +356,6 @@ impl GroupedHashAggregateStream {
                             (hash, res.len()),
                             |(hash, _group_index)| *hash,
                         );
-                        let row = get_row_at_idx(group_values, row_idx as usize)?;
                         // This is a new partition its only index is row_idx for now.
                         res.push((row, hash, vec![row_idx]));
                     }
@@ -388,8 +385,6 @@ impl GroupedHashAggregateStream {
 
         let row_converter_size_pre = self.row_converter.size();
         for group_values in &group_by_values {
-            let group_rows = self.row_converter.convert_columns(group_values)?;
-
             // 1.1 construct the key from the group values
             // 1.2 construct the mapping key if it does not exist
             // 1.3 add the row' index to `indices`
@@ -397,12 +392,7 @@ impl GroupedHashAggregateStream {
             // track which entries in `aggr_state` have rows in this batch to aggregate
             let mut groups_with_rows = vec![];
 
-            let n_rows = group_rows.num_rows();
-            // 1.1 Calculate the group keys for the group values
-            let mut batch_hashes = vec![0; n_rows];
-            create_hashes(group_values, &self.random_state, &mut batch_hashes)?;
-            let per_partition_indices =
-                self.get_per_partition_indices(&group_rows, group_values)?;
+            let per_group_indices = self.get_per_group_indices(group_values)?;
 
             let RowAggregationState {
                 map: row_map,
@@ -410,18 +400,17 @@ impl GroupedHashAggregateStream {
                 ..
             } = &mut self.row_aggr_state;
 
-            for (row, hash, indices) in per_partition_indices {
+            for (owned_row, hash, indices) in per_group_indices {
                 let entry = row_map.get_mut(hash, |(_hash, group_idx)| {
                     // verify that a group that we are inserting with hash is
                     // actually the same key value as the group in
                     // existing_idx  (aka group_values @ row)
                     let group_state = &row_group_states[*group_idx];
-                    group_rows.row(indices[0] as usize)
-                        == group_state.group_by_values.row()
+                    owned_row.row() == group_state.group_by_values.row()
                 });
                 match entry {
                     // Existing entry for this group value
-                    Some((_, group_idx)) => {
+                    Some((_hash, group_idx)) => {
                         let group_state = &mut row_group_states[*group_idx];
 
                         // 1.3
@@ -437,14 +426,18 @@ impl GroupedHashAggregateStream {
                     None => {
                         let accumulator_set =
                             aggregates::create_accumulators(&self.normal_aggr_expr)?;
-                        let ordered_columns = self
-                            .ordered_indices
-                            .iter()
-                            .map(|idx| row[*idx].clone())
-                            .collect::<Vec<_>>();
+                        let ordered_columns = if self.ordered_indices.is_empty() {
+                            vec![]
+                        } else {
+                            let row = get_row_at_idx(group_values, indices[0] as usize)?;
+                            self.ordered_indices
+                                .iter()
+                                .map(|idx| row[*idx].clone())
+                                .collect::<Vec<_>>()
+                        };
                         // Add new entry to group_states and save newly created index
                         let group_state = RowGroupState {
-                            group_by_values: group_rows.row(indices[0] as usize).owned(),
+                            group_by_values: owned_row,
                             ordered_columns,
                             emit_status: GroupStatus::CanEmit(false),
                             hash,
@@ -618,24 +611,27 @@ impl GroupedHashAggregateStream {
             .size()
             .saturating_sub(row_converter_size_pre);
 
-        let mut new_result = false;
-        let last_ordered_columns = self
-            .row_aggr_state
-            .group_states
-            .last()
-            .map(|elem| elem.ordered_columns.clone());
-        if let Some(last_ordered_columns) = last_ordered_columns {
-            for cur_group in &mut self.row_aggr_state.group_states {
-                if cur_group.ordered_columns != last_ordered_columns {
-                    // We will no longer receive value. Set status to GroupStatus::CanEmit(true)
-                    // meaning we can generate result for this group.
-                    cur_group.emit_status = GroupStatus::CanEmit(true);
-                    new_result = true;
+        if !self.ordered_indices.is_empty() {
+            let mut new_result = false;
+            let last_ordered_columns = self
+                .row_aggr_state
+                .group_states
+                .last()
+                .map(|elem| elem.ordered_columns.clone());
+
+            if let Some(last_ordered_columns) = last_ordered_columns {
+                for cur_group in &mut self.row_aggr_state.group_states {
+                    if cur_group.ordered_columns != last_ordered_columns {
+                        // We will no longer receive value. Set status to GroupStatus::CanEmit(true)
+                        // meaning we can generate result for this group.
+                        cur_group.emit_status = GroupStatus::CanEmit(true);
+                        new_result = true;
+                    }
                 }
             }
-        }
-        if new_result {
-            self.exec_state = ExecutionState::ProducingOutput;
+            if new_result {
+                self.exec_state = ExecutionState::ProducingOutput;
+            }
         }
 
         Ok(allocated)
@@ -745,6 +741,7 @@ impl GroupedHashAggregateStream {
             self.row_aggr_state.group_states.len(),
         );
         let group_state_chunk = &self.row_aggr_state.group_states[skip_items..end_idx];
+        // Consider only the groups that can be emitted. (The ones we are sure that will not receive new entry.)
         let group_state_chunk = &group_state_chunk
             .iter()
             .filter(|elem| elem.emit_status == GroupStatus::CanEmit(true))
