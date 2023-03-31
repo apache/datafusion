@@ -262,13 +262,27 @@ mod tests {
 
     #[tokio::test]
     async fn qualified_catalog_schema_table_reference() -> Result<()> {
-        roundtrip("SELECT * FROM datafusion.public.data;").await
+        roundtrip("SELECT a,b,c,d,e FROM datafusion.public.data;").await
     }
 
     #[tokio::test]
     async fn read_all_types() -> Result<()> {
         let mut ctx = create_all_type_context().await?;
-        let df = ctx.sql("SELECT * FROM data;").await?;
+        let df = ctx
+            .sql(
+                "select * from data where 
+                a = TRUE AND
+                b = 0 AND
+                c = 0 AND
+                d = 0 AND
+                e = 0 AND
+                f = 0 AND
+                g = 0 AND
+                h = 0 AND
+                i = 0;",
+            )
+            .await?;
+        println!("{:?}", df.clone().collect().await.unwrap());
         let plan = df.into_optimized_plan()?;
         let proto = to_substrait_plan(&plan)?;
         let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
@@ -281,6 +295,46 @@ mod tests {
         let plan2str = format!("{plan2:?}");
         assert_eq!(plan1str, plan2str);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn integer_type_literal() -> Result<()> {
+        roundtrip_all_types(
+            "select * from data where 
+            a = TRUE AND
+            b = 0 AND
+            c = 0 AND
+            d = 0 AND
+            e = 0 AND
+            f = 0 AND
+            g = 0 AND
+            h = 0 AND
+            i = 0;",
+        )
+        .await
+    }
+
+    // Literal in this cases have incorrect type. This is not a good case
+    #[tokio::test]
+    async fn other_type_literal() -> Result<()> {
+        roundtrip_all_types(
+            "select * from data where 
+            j = 0.0 AND
+            k = 0.0 AND
+            l = TIMESTAMP '2020-01-01 00:00:00' AND
+            m = TIMESTAMP '2020-01-01 00:00:00' AND
+            n = TIMESTAMP '2020-01-01 00:00:00' AND
+            o = TIMESTAMP '2020-01-01 00:00:00' AND
+            p = 0 AND
+            -- Date64 is not supported
+            -- binarys are ignored in this test
+            u = 'foo' AND
+            v = 'foo' AND
+            -- lists are ignored in this test
+            y = 1.0 AND
+            z = 1.0;",
+        )
+        .await
     }
 
     async fn assert_expected_plan(sql: &str, expected_plan_str: &str) -> Result<()> {
@@ -336,6 +390,23 @@ mod tests {
 
     async fn roundtrip(sql: &str) -> Result<()> {
         let mut ctx = create_context().await?;
+        let df = ctx.sql(sql).await?;
+        let plan = df.into_optimized_plan()?;
+        let proto = to_substrait_plan(&plan)?;
+        let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+        let plan2 = ctx.state().optimize(&plan2)?;
+
+        println!("{plan:#?}");
+        println!("{plan2:#?}");
+
+        let plan1str = format!("{plan:?}");
+        let plan2str = format!("{plan2:?}");
+        assert_eq!(plan1str, plan2str);
+        Ok(())
+    }
+
+    async fn roundtrip_all_types(sql: &str) -> Result<()> {
+        let mut ctx = create_all_type_context().await?;
         let df = ctx.sql(sql).await?;
         let plan = df.into_optimized_plan()?;
         let proto = to_substrait_plan(&plan)?;
