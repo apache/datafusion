@@ -30,7 +30,8 @@ use arrow::{
 use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    and, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Volatility,
+    and, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Like,
+    Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
@@ -1117,6 +1118,22 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: op @ (RegexMatch | RegexNotMatch | RegexIMatch | RegexNotIMatch),
                 right,
             }) => simplify_regex_expr(left, op, right)?,
+
+            // Rules for Like
+            Expr::Like(Like {
+                expr,
+                pattern,
+                negated,
+                escape_char: _,
+            }) if !is_null(&expr) && pattern.eq(&Box::new(lit("%"))) => lit(!negated),
+
+            // Rules for ILike
+            Expr::ILike(Like {
+                expr,
+                pattern,
+                negated,
+                escape_char: _,
+            }) if !is_null(&expr) && pattern.eq(&Box::new(lit("%"))) => lit(!negated),
 
             // no additional rewrites possible
             expr => expr,
@@ -2850,5 +2867,75 @@ mod tests {
             simplify(expr),
             or(col("c2").lt(lit(3)), col("c2").gt(lit(4)))
         );
+    }
+
+    #[test]
+    fn test_like_and_ilke() {
+        // test non-null values
+        let expr = Expr::Like(Like::new(
+            false,
+            Box::new(col("c1")),
+            Box::new(lit("foo%")),
+            None,
+        ));
+        assert_eq!(simplify(expr), lit(true));
+
+        let expr = Expr::Like(Like::new(
+            true,
+            Box::new(col("c1")),
+            Box::new(lit("foo%")),
+            None,
+        ));
+        assert_eq!(simplify(expr), lit(false));
+
+        let expr = Expr::Like(Like::new(
+            false,
+            Box::new(col("c1")),
+            Box::new(lit("foo%")),
+            None,
+        ));
+        assert_eq!(simplify(expr), lit(true));
+
+        let expr = Expr::ILike(Like::new(
+            false,
+            Box::new(col("c1")),
+            Box::new(lit("foo%")),
+            None,
+        ));
+        assert_eq!(simplify(expr), lit(true));
+
+        // test null values
+        let null = lit(ScalarValue::Utf8(None));
+        let expr = Expr::Like(Like::new(
+            false,
+            Box::new(null.clone()),
+            Box::new(lit("foo%")),
+            None,
+        ));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = Expr::Like(Like::new(
+            true,
+            Box::new(null.clone()),
+            Box::new(lit("foo%")),
+            None,
+        ));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = Expr::Like(Like::new(
+            false,
+            Box::new(null.clone()),
+            Box::new(lit("foo%")),
+            None,
+        ));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = Expr::ILike(Like::new(
+            false,
+            Box::new(null),
+            Box::new(lit("foo%")),
+            None,
+        ));
+        assert_eq!(simplify(expr), lit_bool_null());
     }
 }
