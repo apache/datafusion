@@ -233,13 +233,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match selection {
             Some(predicate_expr) => {
                 let fallback_schemas = plan.fallback_normalize_schemas();
-                let outer_query_schema = planner_context.outer_query_schema.clone();
-                let outer_query_schema_vec =
-                    if let Some(outer) = outer_query_schema.as_ref() {
-                        vec![outer]
-                    } else {
-                        vec![]
-                    };
+                let outer_query_schema = planner_context.outer_query_schema().cloned();
+                let outer_query_schema_vec = outer_query_schema
+                    .as_ref()
+                    .map(|schema| vec![schema])
+                    .unwrap_or_else(|| vec![]);
 
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;

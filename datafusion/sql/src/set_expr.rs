@@ -29,7 +29,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match set_expr {
             SetExpr::Select(s) => self.select_to_plan(*s, planner_context),
             SetExpr::Values(v) => {
-                self.sql_values_to_plan(v, &planner_context.prepare_param_data_types)
+                self.sql_values_to_plan(v, &planner_context.prepare_param_data_types())
             }
             SetExpr::SetOperation {
                 op,
