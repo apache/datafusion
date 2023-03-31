@@ -166,48 +166,13 @@ macro_rules! typed_min_max_batch {
     }};
 }
 
-// TODO implement this in arrow-rs with simd
-// https://github.com/apache/arrow-rs/issues/1010
-// Statically-typed version of min/max(array) -> ScalarValue for decimal types.
-macro_rules! typed_min_max_batch_decimal128 {
-    ($VALUES:expr, $PRECISION:ident, $SCALE:ident, $OP:ident) => {{
-        let null_count = $VALUES.null_count();
-        if null_count == $VALUES.len() {
-            ScalarValue::Decimal128(None, *$PRECISION, *$SCALE)
-        } else {
-            let array = downcast_value!($VALUES, Decimal128Array);
-            if null_count == 0 {
-                // there is no null value
-                let mut result = array.value(0);
-                for i in 1..array.len() {
-                    result = result.$OP(array.value(i));
-                }
-                ScalarValue::Decimal128(Some(result), *$PRECISION, *$SCALE)
-            } else {
-                let mut result = 0_i128;
-                let mut has_value = false;
-                for i in 0..array.len() {
-                    if !has_value && array.is_valid(i) {
-                        has_value = true;
-                        result = array.value(i);
-                    }
-                    if array.is_valid(i) {
-                        result = result.$OP(array.value(i));
-                    }
-                }
-                ScalarValue::Decimal128(Some(result), *$PRECISION, *$SCALE)
-            }
-        }
-    }};
-}
-
 // Statically-typed version of min/max(array) -> ScalarValue  for non-string types.
 // this is a macro to support both operations (min and max).
 macro_rules! min_max_batch {
     ($VALUES:expr, $OP:ident) => {{
         match $VALUES.data_type() {
             DataType::Decimal128(precision, scale) => {
-                typed_min_max_batch_decimal128!($VALUES, precision, scale, $OP)
+                typed_min_max_batch!($VALUES, Decimal128Array, Decimal128, $OP, precision, scale)
             }
             // all types that have a natural order
             DataType::Float64 => {
