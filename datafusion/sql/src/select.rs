@@ -237,7 +237,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let outer_query_schema_vec = outer_query_schema
                     .as_ref()
                     .map(|schema| vec![schema])
-                    .unwrap_or_else(|| vec![]);
+                    .unwrap_or_else(Vec::new);
 
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
