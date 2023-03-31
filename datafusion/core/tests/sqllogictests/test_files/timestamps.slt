@@ -68,9 +68,214 @@ select * from foo where ts != '2000-02-01T00:00:00';
 statement ok
 drop table foo;
 
-###
+##########
+## to_timestamp tests
+##########
+
+statement ok
+create table t1(ts bigint) as VALUES
+   (1235865600000),
+   (1235865660000),
+   (1238544000000);
+
+
+# query_cast_timestamp_millis
+query P
+SELECT to_timestamp_millis(ts) FROM t1 LIMIT 3
+----
+2009-03-01T00:00:00
+2009-03-01T00:01:00
+2009-04-01T00:00:00
+
+# query_cast_timestamp_micros
+
+query P
+SELECT to_timestamp_micros(ts * 1000) FROM t1 LIMIT 3
+----
+2009-03-01T00:00:00
+2009-03-01T00:01:00
+2009-04-01T00:00:00
+
+# query_cast_timestamp_seconds
+
+query P
+SELECT to_timestamp_seconds(ts / 1000) FROM t1 LIMIT 3
+----
+2009-03-01T00:00:00
+2009-03-01T00:01:00
+2009-04-01T00:00:00
+
+statement error DataFusion error: Execution error: Table 'ts' doesn't exist\.
+drop table ts;
+
+# Create timestamp tables with different precisions but the same logical values
+
+statement ok
+create table ts_data(ts bigint, value int) as values
+  (1599572549190855000, 1),
+  (1599568949190855000, 2),
+  (1599565349190855000, 3);
+
+statement ok
+create table ts_data_nanos as select arrow_cast(ts, 'Timestamp(Nanosecond, None)') as ts, value from ts_data;
+
+statement ok
+create table ts_data_micros as select arrow_cast(ts / 1000, 'Timestamp(Microsecond, None)') as ts, value from ts_data;
+
+statement ok
+create table ts_data_millis as select arrow_cast(ts / 1000000, 'Timestamp(Millisecond, None)') as ts, value from ts_data;
+
+statement ok
+create table ts_data_secs as select arrow_cast(ts / 1000000000, 'Timestamp(Second, None)') as ts, value from ts_data;
+
+
+
+# query_cast_timestamp_nanos_to_others
+
+query P
+SELECT to_timestamp_micros(ts / 1000) FROM ts_data LIMIT 3
+----
+2020-09-08T13:42:29.190855
+2020-09-08T12:42:29.190855
+2020-09-08T11:42:29.190855
+
+query P
+SELECT to_timestamp_millis(ts / 1000000) FROM ts_data LIMIT 3
+----
+2020-09-08T13:42:29.190
+2020-09-08T12:42:29.190
+2020-09-08T11:42:29.190
+
+
+query P
+SELECT to_timestamp_seconds(ts / 1000000000) FROM ts_data LIMIT 3
+----
+2020-09-08T13:42:29
+2020-09-08T12:42:29
+2020-09-08T11:42:29
+
+# query_cast_timestamp_seconds_to_others
+
+# Original column is seconds, convert to millis and check timestamp
+query P
+SELECT to_timestamp_millis(ts) FROM ts_data_secs LIMIT 3
+----
+2020-09-08T13:42:29
+2020-09-08T12:42:29
+2020-09-08T11:42:29
+
+# Original column is seconds, convert to micros and check timestamp
+query P
+SELECT to_timestamp_micros(ts) FROM ts_data_secs LIMIT 3
+----
+2020-09-08T13:42:29
+2020-09-08T12:42:29
+2020-09-08T11:42:29
+
+# to nanos
+query P
+SELECT to_timestamp(ts) FROM ts_data_secs LIMIT 3
+----
+2020-09-08T13:42:29
+2020-09-08T12:42:29
+2020-09-08T11:42:29
+
+
+# query_cast_timestamp_micros_to_others
+
+# Original column is micros, convert to millis and check timestamp
+query P
+SELECT to_timestamp_millis(ts) FROM ts_data_micros LIMIT 3
+----
+2020-09-08T13:42:29.190
+2020-09-08T12:42:29.190
+2020-09-08T11:42:29.190
+
+
+# Original column is micros, convert to seconds and check timestamp
+query P
+SELECT to_timestamp_seconds(ts) FROM ts_data_micros LIMIT 3
+----
+2020-09-08T13:42:29
+2020-09-08T12:42:29
+2020-09-08T11:42:29
+
+
+# Original column is micros, convert to nanos and check timestamp
+
+query P
+SELECT to_timestamp(ts) FROM ts_data_micros LIMIT 3
+----
+2020-09-08T13:42:29.190855
+2020-09-08T12:42:29.190855
+2020-09-08T11:42:29.190855
+
+# query_cast_timestamp_from_unixtime
+
+
+query P
+SELECT from_unixtime(ts / 1000000000) FROM ts_data LIMIT 3;
+----
+2020-09-08T13:42:29
+2020-09-08T12:42:29
+2020-09-08T11:42:29
+
+# to_timestamp
+
+query I
+SELECT COUNT(*) FROM ts_data_nanos where ts > to_timestamp('2020-09-08T12:00:00+00:00')
+----
+2
+
+# to_timestamp_millis
+
+query I
+SELECT COUNT(*) FROM ts_data_millis where ts > to_timestamp_millis('2020-09-08T12:00:00+00:00')
+----
+2
+
+# to_timestamp_micros
+
+query I
+SELECT COUNT(*) FROM ts_data_micros where ts > to_timestamp_micros('2020-09-08T12:00:00+00:00')
+----
+2
+
+# to_timestamp_seconds
+
+query I
+SELECT COUNT(*) FROM ts_data_secs where ts > to_timestamp_seconds('2020-09-08T12:00:00+00:00')
+----
+2
+
+# from_unixtime
+
+# 1599566400 is '2020-09-08T12:00:00+00:00'
+query I
+SELECT COUNT(*) FROM ts_data_secs where ts > from_unixtime(1599566400)
+----
+2
+
+statement ok
+drop table ts_data
+
+statement ok
+drop table ts_data_nanos
+
+statement ok
+drop table ts_data_micros
+
+statement ok
+drop table ts_data_millis
+
+statement ok
+drop table ts_data_secs
+
+
+
+##########
 ## test date_bin function
-###
+##########
 query P
 SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:00:00Z')
 ----
