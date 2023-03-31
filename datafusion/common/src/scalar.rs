@@ -573,9 +573,40 @@ macro_rules! primitive_op {
         match ($LEFT, $RIGHT) {
             (lhs, None) => Ok(ScalarValue::$SCALAR(*lhs)),
             #[allow(unused_variables)]
-            (None, Some(b)) => { primitive_right!(*b, $OPERATION, $SCALAR) },
-            (Some(a), Some(b)) => Ok(ScalarValue::$SCALAR(Some(*a $OPERATION *b))),
+            (None, Some(b)) => {
+                primitive_right!(*b, $OPERATION, $SCALAR)
+            }
+            (Some(a), Some(b)) => {
+                if let Some(value) = primitive_checked_op!(a, b, $OPERATION, $SCALAR) {
+                    Ok(ScalarValue::$SCALAR(Some(value)))
+                } else {
+                    Err(DataFusionError::Execution(
+                        "Overflow while calculating ScalarValue.".to_string(),
+                    ))
+                }
+            }
         }
+    };
+}
+
+macro_rules! primitive_checked_op {
+    ($LEFT:expr, $RIGHT:expr, $OPERATION:tt, Float64) => {
+        Some(*$LEFT $OPERATION *$RIGHT)
+    };
+    ($LEFT:expr, $RIGHT:expr, $OPERATION:tt, Float32) => {
+        Some(*$LEFT $OPERATION *$RIGHT)
+    };
+    ($LEFT:expr, $RIGHT:expr, +, $SCALAR:ident) => {
+        (*$LEFT).checked_add(*$RIGHT)
+    };
+    ($LEFT:expr, $RIGHT:expr, -, $SCALAR:ident) => {
+        (*$LEFT).checked_sub(*$RIGHT)
+    };
+    ($LEFT:expr, $RIGHT:expr, *, $SCALAR:ident) => {
+        (*$LEFT).checked_mul(*$RIGHT)
+    };
+    ($LEFT:expr, $RIGHT:expr, /, $SCALAR:ident) => {
+        (*$LEFT).checked_div(*$RIGHT)
     };
 }
 
@@ -3661,6 +3692,46 @@ mod tests {
             float_value.sub(float_value_2)?,
             ScalarValue::Float64(Some(0.))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_sub_trait_int32_test() -> Result<()> {
+        let int_value = ScalarValue::Int32(Some(42));
+        let int_value_2 = ScalarValue::Int32(Some(100));
+        assert_eq!(int_value.sub(&int_value_2)?, ScalarValue::Int32(Some(-58)));
+        assert_eq!(int_value_2.sub(int_value)?, ScalarValue::Int32(Some(58)));
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_sub_trait_int32_overflow_test() -> Result<()> {
+        let int_value = ScalarValue::Int32(Some(i32::MAX));
+        let int_value_2 = ScalarValue::Int32(Some(i32::MIN));
+        assert!(matches!(
+            int_value.sub(&int_value_2),
+            Err(DataFusionError::Execution(msg)) if msg == "Overflow while calculating ScalarValue."
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_sub_trait_int64_test() -> Result<()> {
+        let int_value = ScalarValue::Int64(Some(42));
+        let int_value_2 = ScalarValue::Int64(Some(100));
+        assert_eq!(int_value.sub(&int_value_2)?, ScalarValue::Int64(Some(-58)));
+        assert_eq!(int_value_2.sub(int_value)?, ScalarValue::Int64(Some(58)));
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_sub_trait_int64_overflow_test() -> Result<()> {
+        let int_value = ScalarValue::Int64(Some(i64::MAX));
+        let int_value_2 = ScalarValue::Int64(Some(i64::MIN));
+        assert!(matches!(
+            int_value.sub(&int_value_2),
+            Err(DataFusionError::Execution(msg)) if msg == "Overflow while calculating ScalarValue."
+        ));
         Ok(())
     }
 
