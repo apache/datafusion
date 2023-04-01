@@ -189,11 +189,18 @@ CREATE EXTERNAL TABLE test
 STORED AS PARQUET
 OPTIONS(
     'access_key_id' '******',
-    'access_key' '******',
+    'secret_access_key' '******',
     'region' 'us-east-2'
 )
 LOCATION 's3://bucket/path/file.parquet';
 ```
+
+The supported OPTIONS are:
+
+- access_key_id
+- secret_access_key
+- session_token
+- region
 
 It is also simplify sql statements by environment variables.
 
@@ -215,7 +222,7 @@ DataFusion CLI v21.0.0
 1 row in set. Query took 0.171 seconds.
 ```
 
-Details of the environment variables that can be used are
+Details of the environment variables that can be used are:
 
 - AWS_ACCESS_KEY_ID -> access_key_id
 - AWS_SECRET_ACCESS_KEY -> secret_access_key
@@ -234,13 +241,65 @@ CREATE EXTERNAL TABLE test
 STORED AS PARQUET
 OPTIONS(
     'access_key_id' '******',
-    'access_key' '******',
+    'secret_access_key' '******',
     'endpoint' 'https://bucket.oss-cn-hangzhou.aliyuncs.com'
 )
 LOCATION 'oss://bucket/path/file.parquet';
 ```
 
+The supported OPTIONS are:
+
+- access_key_id
+- secret_access_key
+- endpoint
+
 Note that the `endpoint` format of oss needs to be: `https://{bucket}.{oss-region-endpoint}`
+
+## Registering GCS Data Sources
+
+GCS data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement.
+
+```sql
+CREATE EXTERNAL TABLE test
+STORED AS PARQUET
+OPTIONS(
+    'service_account_path' '/tmp/gcs.json',
+)
+LOCATION 'gs://bucket/path/file.parquet';
+```
+
+The supported OPTIONS are:
+
+- service_account_path -> location of service account file
+- service_account_key -> JSON serialized service account key
+- application_credentials_path -> location of application credentials file
+
+It is also simplify sql statements by environment variables.
+
+```bash
+$ export GOOGLE_SERVICE_ACCOUNT=/tmp/gcs.json
+
+$ datafusion-cli
+DataFusion CLI v21.0.0
+❯ create external table test stored as csv location 'gs://bucket/path/file.parquet';
+0 rows in set. Query took 0.374 seconds.
+❯ select * from test;
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
+| 1        | 2        |
++----------+----------+
+1 row in set. Query took 0.171 seconds.
+```
+
+Details of the environment variables that can be used are:
+
+- GOOGLE_SERVICE_ACCOUNT: location of service account file
+- GOOGLE_SERVICE_ACCOUNT_PATH: (alias) location of service account file
+- SERVICE_ACCOUNT: (alias) location of service account file
+- GOOGLE_SERVICE_ACCOUNT_KEY: JSON serialized service account key
+- GOOGLE_BUCKET: bucket name
+- GOOGLE_BUCKET_NAME: (alias) bucket name
 
 ## Commands
 
