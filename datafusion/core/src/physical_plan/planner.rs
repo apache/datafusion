@@ -923,21 +923,21 @@ impl DefaultPhysicalPlanner {
 
                     let join_filter = match filter {
                         Some(expr) => {
-                            // Extract columns from filter expression
+                            // Extract columns from filter expression and saved in a HashSet
                             let cols = expr.to_columns()?;
 
-                            // Collect left & right field indices
+                            // Collect left & right field indices, the field indices are sorted in ascending order
                             let left_field_indices = cols.iter()
                                 .filter_map(|c| match left_df_schema.index_of_column(c) {
                                     Ok(idx) => Some(idx),
                                     _ => None,
-                                })
+                                }).sorted()
                                 .collect::<Vec<_>>();
                             let right_field_indices = cols.iter()
                                 .filter_map(|c| match right_df_schema.index_of_column(c) {
                                     Ok(idx) => Some(idx),
                                     _ => None,
-                                })
+                                }).sorted()
                                 .collect::<Vec<_>>();
 
                             // Collect DFFields and Fields required for intermediate schemas
@@ -956,7 +956,6 @@ impl DefaultPhysicalPlanner {
                                         ))
                                 )
                                 .unzip();
-
 
                             // Construct intermediate schemas used for filtering data and
                             // convert logical expression to physical according to filter schema
