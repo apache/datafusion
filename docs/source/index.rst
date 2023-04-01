@@ -63,5 +63,6 @@ community.
    contributor-guide/roadmap
    contributor-guide/quarterly_roadmap
    contributor-guide/specification/index
+   Github <https://github.com/apache/arrow-datafusion>
    Issue tracker <https://github.com/apache/arrow-datafusion/issues>
    Code of conduct <https://github.com/apache/arrow-datafusion/blob/main/CODE_OF_CONDUCT.md>
