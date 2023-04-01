@@ -83,9 +83,12 @@ pub struct FileStream<F: FileOpener> {
     baseline_metrics: BaselineMetrics,
 }
 
+/// Represents the state of the next `FileOpenFuture`. Since we need to poll
+/// this future while scanning the current file, we need to store the result if it 
+/// is ready
 enum NextOpen {
-    Future(FileOpenFuture),
-    Reader(Result<BoxStream<'static, Result<RecordBatch, ArrowError>>>),
+    Pending(FileOpenFuture),
+    Ready(Result<BoxStream<'static, Result<RecordBatch, ArrowError>>>),
 }
 
 enum FileStreamState {
