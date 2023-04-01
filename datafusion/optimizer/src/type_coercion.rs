@@ -355,40 +355,40 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 // If either fail to find a common data type, will return error
 
                 // prepare types
-                let case_type = match &case.expr {
-                    None => Ok(None),
-                    Some(expr) => expr.get_type(&self.schema).map(Some),
-                }?;
+                let case_type = case
+                    .expr
+                    .as_ref()
+                    .map(|expr| expr.get_type(&self.schema))
+                    .transpose()?;
                 let then_types = case
                     .when_then_expr
                     .iter()
-                    .map(|when_then| when_then.1.get_type(&self.schema))
+                    .map(|(_when, then)| then.get_type(&self.schema))
                     .collect::<Result<Vec<_>>>()?;
-                let else_type = match &case.else_expr {
-                    None => Ok(None),
-                    Some(expr) => expr.get_type(&self.schema).map(Some),
-                }?;
+                let else_type = case
+                    .else_expr
+                    .as_ref()
+                    .map(|expr| expr.get_type(&self.schema))
+                    .transpose()?;
 
                 // find common coercible types
-                let case_when_coerce_type = match case_type {
-                    None => None,
-                    Some(case_type) => {
+                let case_when_coerce_type = case_type.as_ref()
+                    .map(|case_type| {
                         let when_types = case
                             .when_then_expr
                             .iter()
-                            .map(|when_then| when_then.0.get_type(&self.schema))
+                            .map(|(when, _then)| when.get_type(&self.schema))
                             .collect::<Result<Vec<_>>>()?;
                         let coerced_type =
-                            get_coerce_type_for_case_when(&when_types, Some(&case_type));
-                        let coerced_type = coerced_type.ok_or_else(|| {
+                            get_coerce_type_for_case_when(&when_types, Some(case_type));
+                        coerced_type.ok_or_else(|| {
                             DataFusionError::Internal(format!(
                             "Failed to coerce case ({case_type:?}) and when ({when_types:?}) \
                              to common types in CASE WHEN expression"
                             ))
-                        })?;
-                        Some(coerced_type)
-                    }
-                };
+                        })
+                    })
+                    .transpose()?;
                 let then_else_coerce_type =
                     get_coerce_type_for_case_when(&then_types, else_type.as_ref())
                         .ok_or_else(|| {
@@ -399,14 +399,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                         })?;
 
                 // do cast if found common coercible types
-                let case_expr = match case.expr.zip(case_when_coerce_type.as_ref()) {
-                    None => None,
-                    Some((case_expr, coercible_type)) => {
-                        let coerced_expr =
-                            case_expr.cast_to(coercible_type, &self.schema)?;
-                        Some(Box::new(coerced_expr))
-                    }
-                };
+                let case_expr = case
+                    .expr
+                    .zip(case_when_coerce_type.as_ref())
+                    .map(|(case_expr, coercible_type)| {
+                        case_expr.cast_to(coercible_type, &self.schema)
+                    })
+                    .transpose()?
+                    .map(Box::new);
                 let when_then = case
                     .when_then_expr
                     .into_iter()
@@ -422,12 +422,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                         Ok((when, then))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let else_expr = match &case.else_expr {
-                    None => None,
-                    Some(expr) => Some(Box::new(
-                        expr.clone().cast_to(&then_else_coerce_type, &self.schema)?,
-                    )),
-                };
+                let else_expr = case
+                    .else_expr
+                    .map(|expr| expr.cast_to(&then_else_coerce_type, &self.schema))
+                    .transpose()?
+                    .map(Box::new);
                 Ok(Expr::Case(Case::new(case_expr, when_then, else_expr)))
             }
             Expr::ScalarUDF { fun, args } => {
