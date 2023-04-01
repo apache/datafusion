@@ -200,6 +200,73 @@ fn cast_to_invalid_decimal_type() {
 }
 
 #[test]
+fn plan_start_transaction() {
+    let sql = "start transaction";
+    let plan = "TransactionStart: ReadWrite Serializable";
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_start_transaction_isolation() {
+    let sql = "start transaction isolation level read committed";
+    let plan = "TransactionStart: ReadWrite ReadCommitted";
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_start_transaction_read_only() {
+    let sql = "start transaction read only";
+    let plan = "TransactionStart: ReadOnly Serializable";
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_start_transaction_fully_qualified() {
+    let sql = "start transaction isolation level read committed read only";
+    let plan = "TransactionStart: ReadOnly ReadCommitted";
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_start_transaction_overly_qualified() {
+    let sql = r#"start transaction
+isolation level read committed
+read only
+isolation level repeatable read
+"#;
+    let plan = "TransactionStart: ReadOnly RepeatableRead";
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_commit_transaction() {
+    let sql = "commit transaction";
+    let plan = "TransactionEnd: Commit chain:=false";
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_commit_transaction_chained() {
+    let sql = "commit transaction and chain";
+    let plan = "TransactionEnd: Commit chain:=true";
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_rollback_transaction() {
+    let sql = "rollback transaction";
+    let plan = "TransactionEnd: Rollback chain:=false";
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_rollback_transaction_chained() {
+    let sql = "rollback transaction and chain";
+    let plan = "TransactionEnd: Rollback chain:=true";
+    quick_test(sql, plan);
+}
+
+#[test]
 fn plan_insert() {
     let sql =
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
