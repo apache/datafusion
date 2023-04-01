@@ -1125,7 +1125,14 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 pattern,
                 negated,
                 escape_char: _,
-            }) if !is_null(&expr) && pattern.eq(&Box::new(lit("%"))) => lit(!negated),
+            }) if !is_null(&expr)
+                && matches!(
+                    pattern.as_ref(),
+                    Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) if pattern_str == "%"
+                ) =>
+            {
+                lit(!negated)
+            }
 
             // Rules for ILike
             Expr::ILike(Like {
@@ -1133,7 +1140,14 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 pattern,
                 negated,
                 escape_char: _,
-            }) if !is_null(&expr) && pattern.eq(&Box::new(lit("%"))) => lit(!negated),
+            }) if !is_null(&expr)
+                && matches!(
+                    pattern.as_ref(),
+                    Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) if pattern_str == "%"
+                ) =>
+            {
+                lit(!negated)
+            }
 
             // no additional rewrites possible
             expr => expr,
@@ -2433,6 +2447,24 @@ mod tests {
         })
     }
 
+    fn ilike(expr: Expr, pattern: &str) -> Expr {
+        Expr::ILike(Like {
+            negated: false,
+            expr: Box::new(expr),
+            pattern: Box::new(lit(pattern)),
+            escape_char: None,
+        })
+    }
+
+    fn not_ilike(expr: Expr, pattern: &str) -> Expr {
+        Expr::ILike(Like {
+            negated: true,
+            expr: Box::new(expr),
+            pattern: Box::new(lit(pattern)),
+            escape_char: None,
+        })
+    }
+
     // ------------------------------
     // ----- Simplifier tests -------
     // ------------------------------
@@ -2842,66 +2874,30 @@ mod tests {
     #[test]
     fn test_like_and_ilke() {
         // test non-null values
-        let expr = Expr::Like(Like::new(
-            false,
-            Box::new(col("c1")),
-            Box::new(lit("%")),
-            None,
-        ));
+        let expr = like(col("c1"), "%");
         assert_eq!(simplify(expr), lit(true));
 
-        let expr = Expr::Like(Like::new(
-            true,
-            Box::new(col("c1")),
-            Box::new(lit("%")),
-            None,
-        ));
+        let expr = not_like(col("c1"), "%");
         assert_eq!(simplify(expr), lit(false));
 
-        let expr = Expr::Like(Like::new(
-            false,
-            Box::new(col("c1")),
-            Box::new(lit("%")),
-            None,
-        ));
+        let expr = ilike(col("c1"), "%");
         assert_eq!(simplify(expr), lit(true));
 
-        let expr = Expr::ILike(Like::new(
-            false,
-            Box::new(col("c1")),
-            Box::new(lit("%")),
-            None,
-        ));
-        assert_eq!(simplify(expr), lit(true));
+        let expr = not_ilike(col("c1"), "%");
+        assert_eq!(simplify(expr), lit(false));
 
         // test null values
         let null = lit(ScalarValue::Utf8(None));
-        let expr = Expr::Like(Like::new(
-            false,
-            Box::new(null.clone()),
-            Box::new(lit("%")),
-            None,
-        ));
+        let expr = like(null.clone(), "%");
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = Expr::Like(Like::new(
-            true,
-            Box::new(null.clone()),
-            Box::new(lit("%")),
-            None,
-        ));
+        let expr = not_like(null.clone(), "%");
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = Expr::Like(Like::new(
-            false,
-            Box::new(null.clone()),
-            Box::new(lit("%")),
-            None,
-        ));
+        let expr = ilike(null.clone(), "%");
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr =
-            Expr::ILike(Like::new(false, Box::new(null), Box::new(lit("%")), None));
+        let expr = not_ilike(null, "%");
         assert_eq!(simplify(expr), lit_bool_null());
     }
 }
