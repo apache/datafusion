@@ -330,9 +330,29 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 }
             }
             Expr::Case(case) => {
-                // all the result of then and else should be convert to a common data type
-                // if case.expr is provided, this should be converted to common data type for when
-                // if they can't be coercible to a common data type, then return error.
+                // Given expressions like:
+                //
+                // CASE a1
+                //   WHEN a2 THEN b1
+                //   WHEN a3 THEN b2
+                //   ELSE b3
+                // END
+                //
+                // or:
+                //
+                // CASE
+                //   WHEN x1 THEN b1
+                //   WHEN x2 THEN b2
+                //   ELSE b3
+                // END
+                //
+                // Then all aN (a1, a2, a3) must be converted to a common data type in the first example
+                // (case-when expression coercion)
+                //
+                // And all bN (b1, b2, b3) must be converted to a common data type in both examples
+                // (then-else expression coercion)
+                //
+                // If either fail to find a common data type, will return error
 
                 // prepare types
                 let case_type = match &case.expr {
