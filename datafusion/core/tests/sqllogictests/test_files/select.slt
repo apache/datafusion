@@ -214,3 +214,9 @@ select * from (select 1 a union all select 2) b order by a limit null;
 query I
 select * from (select 1 a union all select 2) b order by a limit 0;
 ----
+
+# select case when type coercion
+query I
+select CASE 10.5 WHEN 0 THEN 1 ELSE 10 END as col;
+----
+10
