@@ -24,8 +24,6 @@ use arrow::datatypes::{DataType, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
 use datafusion_expr::CreateExternalTable;
-use object_store::aws::AmazonS3Builder;
-use url::Url;
 
 use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::file_format::avro::AvroFormat;
@@ -142,73 +140,6 @@ impl TableProviderFactory for ListingTableFactory {
             .with_file_sort_order(file_sort_order);
 
         let table_path = ListingTableUrl::parse(&cmd.location)?;
-
-        // try obtaining all relevant information of object store from cmd.options
-        match table_path.scheme() {
-            "s3" => {
-                let url: &Url = table_path.as_ref();
-                let bucket_name = url
-                    .host_str()
-                    .ok_or(DataFusionError::External("invaild bucket name".into()))?;
-                let mut builder =
-                    AmazonS3Builder::from_env().with_bucket_name(bucket_name);
-
-                if let (Some(access_key_id), Some(secret_access_key)) = (
-                    cmd.options.get("access_key_id"),
-                    cmd.options.get("secret_access_key"),
-                ) {
-                    builder = builder
-                        .with_access_key_id(access_key_id)
-                        .with_secret_access_key(secret_access_key);
-                }
-
-                if let Some(session_token) = cmd.options.get("session_token") {
-                    builder = builder.with_token(session_token);
-                }
-
-                if let Some(region) = cmd.options.get("region") {
-                    builder = builder.with_region(region);
-                }
-
-                let store = Arc::new(builder.build()?);
-
-                state
-                    .runtime_env()
-                    .register_object_store(table_path.as_ref(), store);
-            }
-            "oss" => {
-                let url: &Url = table_path.as_ref();
-                let bucket_name = url
-                    .host_str()
-                    .ok_or(DataFusionError::External("invaild bucket name".into()))?;
-                let mut builder = AmazonS3Builder::from_env()
-                    .with_virtual_hosted_style_request(true)
-                    .with_bucket_name(bucket_name)
-                    // oss don't care about the "region" field
-                    .with_region("do_not_care");
-
-                if let (Some(access_key_id), Some(secret_access_key)) = (
-                    cmd.options.get("access_key_id"),
-                    cmd.options.get("secret_access_key"),
-                ) {
-                    builder = builder
-                        .with_access_key_id(access_key_id)
-                        .with_secret_access_key(secret_access_key);
-                }
-
-                if let Some(endpoint) = cmd.options.get("endpoint") {
-                    builder = builder.with_endpoint(endpoint);
-                }
-
-                let store = Arc::new(builder.build()?);
-
-                state
-                    .runtime_env()
-                    .register_object_store(table_path.as_ref(), store);
-            }
-            _ => {}
-        };
-
         let resolved_schema = match provided_schema {
             None => options.infer_schema(state, &table_path).await?,
             Some(s) => s,

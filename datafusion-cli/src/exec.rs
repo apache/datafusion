@@ -22,14 +22,20 @@ use crate::{
     helper::CliHelper,
     print_options::PrintOptions,
 };
-use datafusion::error::Result;
-use datafusion::prelude::SessionContext;
+use datafusion::{
+    datasource::listing::ListingTableUrl,
+    error::{DataFusionError, Result},
+    logical_expr::CreateExternalTable,
+};
+use datafusion::{logical_expr::LogicalPlan, prelude::SessionContext};
+use object_store::{aws::AmazonS3Builder, gcp::GoogleCloudStorageBuilder};
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
-use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::time::Instant;
+use std::{fs::File, sync::Arc};
+use url::Url;
 
 /// run and execute SQL statements and commands from a file, against a context with the given print options
 pub async fn exec_from_lines(
@@ -165,9 +171,127 @@ async fn exec_and_print(
     sql: String,
 ) -> Result<()> {
     let now = Instant::now();
-    let df = ctx.sql(&sql).await?;
+
+    let plan = ctx.state().create_logical_plan(&sql).await?;
+    let df = match &plan {
+        LogicalPlan::CreateExternalTable(cmd) => {
+            create_external_table(&ctx, cmd)?;
+            ctx.execute_logical_plan(plan).await?
+        }
+        _ => ctx.execute_logical_plan(plan).await?,
+    };
+
     let results = df.collect().await?;
     print_options.print_batches(&results, now)?;
 
     Ok(())
+}
+
+fn create_external_table(ctx: &SessionContext, cmd: &CreateExternalTable) -> Result<()> {
+    let table_path = ListingTableUrl::parse(&cmd.location)?;
+    let scheme = table_path.scheme();
+    let url: &Url = table_path.as_ref();
+
+    // registering the cloud object store dynamically using cmd.options
+    match scheme {
+        "s3" => {
+            let bucket_name = get_bucket_name(url)?;
+            let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket_name);
+
+            if let (Some(access_key_id), Some(secret_access_key)) = (
+                cmd.options.get("access_key_id"),
+                cmd.options.get("secret_access_key"),
+            ) {
+                builder = builder
+                    .with_access_key_id(access_key_id)
+                    .with_secret_access_key(secret_access_key);
+            }
+
+            if let Some(session_token) = cmd.options.get("session_token") {
+                builder = builder.with_token(session_token);
+            }
+
+            if let Some(region) = cmd.options.get("region") {
+                builder = builder.with_region(region);
+            }
+
+            let store = Arc::new(builder.build()?);
+
+            ctx.runtime_env().register_object_store(url, store);
+        }
+        "oss" => {
+            let bucket_name = get_bucket_name(url)?;
+            let mut builder = AmazonS3Builder::from_env()
+                .with_virtual_hosted_style_request(true)
+                .with_bucket_name(bucket_name)
+                // oss don't care about the "region" field
+                .with_region("do_not_care");
+
+            if let (Some(access_key_id), Some(secret_access_key)) = (
+                cmd.options.get("access_key_id"),
+                cmd.options.get("secret_access_key"),
+            ) {
+                builder = builder
+                    .with_access_key_id(access_key_id)
+                    .with_secret_access_key(secret_access_key);
+            }
+
+            if let Some(endpoint) = cmd.options.get("endpoint") {
+                builder = builder.with_endpoint(endpoint);
+            }
+
+            let store = Arc::new(builder.build()?);
+
+            ctx.runtime_env().register_object_store(url, store);
+        }
+        "gs" | "gcs" => {
+            let bucket_name = get_bucket_name(url)?;
+            let mut builder =
+                GoogleCloudStorageBuilder::from_env().with_bucket_name(bucket_name);
+
+            if let Some(service_account_path) = cmd.options.get("service_account_path") {
+                builder = builder.with_service_account_path(service_account_path);
+            }
+
+            if let Some(service_account_key) = cmd.options.get("service_account_key") {
+                builder = builder.with_service_account_key(service_account_key);
+            }
+
+            if let Some(application_credentials_path) =
+                cmd.options.get("application_credentials_path")
+            {
+                builder =
+                    builder.with_application_credentials(application_credentials_path);
+            }
+
+            let store = Arc::new(builder.build()?);
+
+            ctx.runtime_env().register_object_store(url, store);
+        }
+        _ => {
+            // for other types, try to get from the object_store_registry
+            let store = ctx
+                .runtime_env()
+                .object_store_registry
+                .get_store(url)
+                .map_err(|_| {
+                    DataFusionError::Execution(format!(
+                        "Unsupported object store scheme: {}",
+                        scheme
+                    ))
+                })?;
+            ctx.runtime_env().register_object_store(url, store);
+        }
+    };
+
+    Ok(())
+}
+
+fn get_bucket_name(url: &Url) -> Result<&str> {
+    url.host_str().ok_or_else(|| {
+        DataFusionError::Execution(format!(
+            "Not able to parse bucket name from url: {}",
+            url.as_str()
+        ))
+    })
 }

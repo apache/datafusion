@@ -317,6 +317,11 @@ impl SessionContext {
         // create a query planner
         let plan = self.state().create_logical_plan(sql).await?;
 
+        self.execute_logical_plan(plan).await
+    }
+
+    /// Execute the [`LogicalPlan`], return a [`DataFrame`]
+    pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
             LogicalPlan::Dml(DmlStatement {
                 table_name,
