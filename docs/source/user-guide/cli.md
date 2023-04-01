@@ -211,7 +211,7 @@ $ export AWS_ACCESS_KEY_ID=******
 
 $ datafusion-cli
 DataFusion CLI v21.0.0
-❯ create external table test stored as csv location 's3://bucket/path/file.parquet';
+❯ create external table test stored as parquet location 's3://bucket/path/file.parquet';
 0 rows in set. Query took 0.374 seconds.
 ❯ select * from test;
 +----------+----------+
@@ -281,7 +281,7 @@ $ export GOOGLE_SERVICE_ACCOUNT=/tmp/gcs.json
 
 $ datafusion-cli
 DataFusion CLI v21.0.0
-❯ create external table test stored as csv location 'gs://bucket/path/file.parquet';
+❯ create external table test stored as parquet location 'gs://bucket/path/file.parquet';
 0 rows in set. Query took 0.374 seconds.
 ❯ select * from test;
 +----------+----------+
