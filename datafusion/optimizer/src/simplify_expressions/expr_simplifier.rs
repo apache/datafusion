@@ -2337,16 +2337,10 @@ mod tests {
         assert_no_change(regex_match(col("c1"), lit("f_o")));
 
         // empty cases
-        assert_change(regex_match(col("c1"), lit("")), like(col("c1"), "%"));
-        assert_change(
-            regex_not_match(col("c1"), lit("")),
-            not_like(col("c1"), "%"),
-        );
-        assert_change(regex_imatch(col("c1"), lit("")), ilike(col("c1"), "%"));
-        assert_change(
-            regex_not_imatch(col("c1"), lit("")),
-            not_ilike(col("c1"), "%"),
-        );
+        assert_change(regex_match(col("c1"), lit("")), lit(true));
+        assert_change(regex_not_match(col("c1"), lit("")), lit(false));
+        assert_change(regex_imatch(col("c1"), lit("")), lit(true));
+        assert_change(regex_not_imatch(col("c1"), lit("")), lit(false));
 
         // single character
         assert_change(regex_match(col("c1"), lit("x")), like(col("c1"), "%x%"));
@@ -2365,12 +2359,6 @@ mod tests {
             regex_match(col("c1"), lit("foo|x|baz")),
             like(col("c1"), "%foo%")
                 .or(like(col("c1"), "%x%"))
-                .or(like(col("c1"), "%baz%")),
-        );
-        assert_change(
-            regex_match(col("c1"), lit("foo||baz")),
-            like(col("c1"), "%foo%")
-                .or(like(col("c1"), "%"))
                 .or(like(col("c1"), "%baz%")),
         );
         assert_change(
@@ -2438,24 +2426,6 @@ mod tests {
 
     fn not_like(expr: Expr, pattern: &str) -> Expr {
         Expr::Like(Like {
-            negated: true,
-            expr: Box::new(expr),
-            pattern: Box::new(lit(pattern)),
-            escape_char: None,
-        })
-    }
-
-    fn ilike(expr: Expr, pattern: &str) -> Expr {
-        Expr::ILike(Like {
-            negated: false,
-            expr: Box::new(expr),
-            pattern: Box::new(lit(pattern)),
-            escape_char: None,
-        })
-    }
-
-    fn not_ilike(expr: Expr, pattern: &str) -> Expr {
-        Expr::ILike(Like {
             negated: true,
             expr: Box::new(expr),
             pattern: Box::new(lit(pattern)),
@@ -2875,7 +2845,7 @@ mod tests {
         let expr = Expr::Like(Like::new(
             false,
             Box::new(col("c1")),
-            Box::new(lit("foo%")),
+            Box::new(lit("%")),
             None,
         ));
         assert_eq!(simplify(expr), lit(true));
@@ -2883,7 +2853,7 @@ mod tests {
         let expr = Expr::Like(Like::new(
             true,
             Box::new(col("c1")),
-            Box::new(lit("foo%")),
+            Box::new(lit("%")),
             None,
         ));
         assert_eq!(simplify(expr), lit(false));
@@ -2891,7 +2861,7 @@ mod tests {
         let expr = Expr::Like(Like::new(
             false,
             Box::new(col("c1")),
-            Box::new(lit("foo%")),
+            Box::new(lit("%")),
             None,
         ));
         assert_eq!(simplify(expr), lit(true));
@@ -2899,7 +2869,7 @@ mod tests {
         let expr = Expr::ILike(Like::new(
             false,
             Box::new(col("c1")),
-            Box::new(lit("foo%")),
+            Box::new(lit("%")),
             None,
         ));
         assert_eq!(simplify(expr), lit(true));
@@ -2909,7 +2879,7 @@ mod tests {
         let expr = Expr::Like(Like::new(
             false,
             Box::new(null.clone()),
-            Box::new(lit("foo%")),
+            Box::new(lit("%")),
             None,
         ));
         assert_eq!(simplify(expr), lit_bool_null());
@@ -2917,7 +2887,7 @@ mod tests {
         let expr = Expr::Like(Like::new(
             true,
             Box::new(null.clone()),
-            Box::new(lit("foo%")),
+            Box::new(lit("%")),
             None,
         ));
         assert_eq!(simplify(expr), lit_bool_null());
@@ -2925,17 +2895,13 @@ mod tests {
         let expr = Expr::Like(Like::new(
             false,
             Box::new(null.clone()),
-            Box::new(lit("foo%")),
+            Box::new(lit("%")),
             None,
         ));
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = Expr::ILike(Like::new(
-            false,
-            Box::new(null),
-            Box::new(lit("foo%")),
-            None,
-        ));
+        let expr =
+            Expr::ILike(Like::new(false, Box::new(null), Box::new(lit("%")), None));
         assert_eq!(simplify(expr), lit_bool_null());
     }
 }
