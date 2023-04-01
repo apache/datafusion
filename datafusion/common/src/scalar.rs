@@ -1745,6 +1745,27 @@ impl ScalarValue {
         })
     }
 
+    pub fn new_ten(datatype: &DataType) -> Result<ScalarValue> {
+        assert!(datatype.is_primitive());
+        Ok(match datatype {
+            DataType::Int8 => ScalarValue::Int8(Some(10)),
+            DataType::Int16 => ScalarValue::Int16(Some(10)),
+            DataType::Int32 => ScalarValue::Int32(Some(10)),
+            DataType::Int64 => ScalarValue::Int64(Some(10)),
+            DataType::UInt8 => ScalarValue::UInt8(Some(10)),
+            DataType::UInt16 => ScalarValue::UInt16(Some(10)),
+            DataType::UInt32 => ScalarValue::UInt32(Some(10)),
+            DataType::UInt64 => ScalarValue::UInt64(Some(10)),
+            DataType::Float32 => ScalarValue::Float32(Some(10.0)),
+            DataType::Float64 => ScalarValue::Float64(Some(10.0)),
+            _ => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Can't create a negative one scalar from data_type \"{datatype:?}\""
+                )));
+            }
+        })
+    }
+
     /// Getter for the `DataType` of the value
     pub fn get_datatype(&self) -> DataType {
         match self {

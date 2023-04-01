@@ -356,8 +356,12 @@ pub fn distribute_negation(expr: Expr) -> Expr {
 /// 2. Log(a, a) ===> 1
 /// 3. Log(a, Power(a, b)) ===> b
 pub fn simpl_log(current_args: Vec<Expr>, info: &dyn SimplifyInfo) -> Result<Expr> {
-    let base = &current_args[0];
-    let number = &current_args[1];
+    let mut number = &current_args[0];
+    let mut base = &Expr::Literal(ScalarValue::new_ten(&info.get_data_type(number)?)?);
+    if current_args.len() == 2 {
+        base = &current_args[0];
+        number = &current_args[1];
+    }
 
     match number {
         Expr::Literal(value)
@@ -379,7 +383,7 @@ pub fn simpl_log(current_args: Vec<Expr>, info: &dyn SimplifyInfo) -> Result<Exp
             } else {
                 Ok(Expr::ScalarFunction {
                     fun: BuiltinScalarFunction::Log,
-                    args: current_args,
+                    args: vec![base.clone(), number.clone()],
                 })
             }
         }
