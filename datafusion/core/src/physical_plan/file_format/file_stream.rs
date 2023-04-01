@@ -304,6 +304,7 @@ impl<F: FileOpener> FileStream<F> {
                     partition_values,
                     next,
                 } => {
+                    // We need to poll the next `FileOpenFuture` here to drive it forward
                     if let Some((next_open_future, _)) = next {
                         if let NextOpen::Future(f) = next_open_future {
                             if let Poll::Ready(reader) = f.as_mut().poll(cx) {
