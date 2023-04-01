@@ -1139,7 +1139,12 @@ pub fn parse_expr(
                 ScalarFunction::Log10 => Ok(log10(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Floor => Ok(floor(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Ceil => Ok(ceil(parse_expr(&args[0], registry)?)),
-                ScalarFunction::Round => Ok(round(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Round => Ok(round(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
                 ScalarFunction::Trunc => Ok(trunc(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Abs => Ok(abs(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Signum => Ok(signum(parse_expr(&args[0], registry)?)),
