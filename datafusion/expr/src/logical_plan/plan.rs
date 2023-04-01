@@ -1490,6 +1490,8 @@ pub struct Union {
 pub struct CreateMemoryTable {
     /// The table name
     pub name: OwnedTableReference,
+    /// The ordered list of columns in the primary key, or an empty vector if none
+    pub primary_key: Vec<Column>,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists

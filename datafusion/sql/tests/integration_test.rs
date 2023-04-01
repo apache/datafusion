@@ -200,6 +200,17 @@ fn cast_to_invalid_decimal_type() {
 }
 
 #[test]
+fn plan_create_table_with_pk() {
+    let sql = "create table person (id int, name string, primary key(id))";
+    let plan = r#"
+CreateMemoryTable: Bare { table: "person" }
+  EmptyRelation
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
 fn plan_start_transaction() {
     let sql = "start transaction";
     let plan = "TransactionStart: ReadWrite Serializable";
