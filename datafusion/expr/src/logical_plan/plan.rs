@@ -127,9 +127,9 @@ pub enum LogicalPlan {
     /// Unnest a column that contains a nested list type.
     Unnest(Unnest),
     // Begin a transaction
-    TransactionStart(TransactionStartNode),
+    TransactionStart(TransactionStart),
     // Commit or rollback a transaction
-    TransactionEnd(TransactionEndNode),
+    TransactionEnd(TransactionEnd),
 }
 
 impl LogicalPlan {
@@ -175,8 +175,8 @@ impl LogicalPlan {
             }
             LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
-            LogicalPlan::TransactionStart(TransactionStartNode { schema, .. }) => schema,
-            LogicalPlan::TransactionEnd(TransactionEndNode { schema, .. }) => schema,
+            LogicalPlan::TransactionStart(TransactionStart { schema, .. }) => schema,
+            LogicalPlan::TransactionEnd(TransactionEnd { schema, .. }) => schema,
         }
     }
 
@@ -1076,7 +1076,7 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "TransactionStart: {access_mode:?} {isolation_level:?}")
                     }
-                    LogicalPlan::TransactionEnd(TransactionEndNode {
+                    LogicalPlan::TransactionEnd(TransactionEnd {
                         conclusion,
                         chain,
                         ..
@@ -1616,7 +1616,7 @@ pub enum TransactionIsolationLevel {
 
 /// Indicator that the following statements should be committed or rolled back atomically
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct TransactionStartNode {
+pub struct TransactionStart {
     /// indicates if transaction is allowed to write
     pub access_mode: TransactionAccessMode,
     // indicates ANSI isolation level
@@ -1627,7 +1627,7 @@ pub struct TransactionStartNode {
 
 /// Indicator that any current transaction should be terminated
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct TransactionEndNode {
+pub struct TransactionEnd {
     /// whether the transaction committed or aborted
     pub conclusion: TransactionConclusion,
     /// if specified a new transaction is immediately started with same characteristics

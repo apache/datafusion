@@ -31,8 +31,8 @@ use datafusion_common::{
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::{
-    Analyze, Prepare, TransactionAccessMode, TransactionConclusion, TransactionEndNode,
-    TransactionIsolationLevel, TransactionStartNode,
+    Analyze, Prepare, TransactionAccessMode, TransactionConclusion, TransactionEnd,
+    TransactionIsolationLevel, TransactionStart,
 };
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
@@ -437,21 +437,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         TransactionAccessMode::ReadWrite
                     }
                 };
-                Ok(LogicalPlan::TransactionStart(TransactionStartNode {
+                Ok(LogicalPlan::TransactionStart(TransactionStart {
                     access_mode,
                     isolation_level,
                     schema: DFSchemaRef::new(DFSchema::empty()),
                 }))
             }
             Statement::Commit { chain } => {
-                Ok(LogicalPlan::TransactionEnd(TransactionEndNode {
+                Ok(LogicalPlan::TransactionEnd(TransactionEnd {
                     conclusion: TransactionConclusion::Commit,
                     chain,
                     schema: DFSchemaRef::new(DFSchema::empty()),
                 }))
             }
             Statement::Rollback { chain } => {
-                Ok(LogicalPlan::TransactionEnd(TransactionEndNode {
+                Ok(LogicalPlan::TransactionEnd(TransactionEnd {
                     conclusion: TransactionConclusion::Rollback,
                     chain,
                     schema: DFSchemaRef::new(DFSchema::empty()),

@@ -27,9 +27,8 @@ pub use plan::{
     DropTable, DropView, EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint,
     JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare, Projection,
     Repartition, SetVariable, Sort, StringifiedPlan, Subquery, SubqueryAlias, TableScan,
-    ToStringifiedPlan, TransactionAccessMode, TransactionConclusion, TransactionEndNode,
-    TransactionIsolationLevel, TransactionStartNode, Union, Unnest, Values, Window,
-    WriteOp,
+    ToStringifiedPlan, TransactionAccessMode, TransactionConclusion, TransactionEnd,
+    TransactionIsolationLevel, TransactionStart, Union, Unnest, Values, Window, WriteOp,
 };
 
 pub use display::display_schema;
