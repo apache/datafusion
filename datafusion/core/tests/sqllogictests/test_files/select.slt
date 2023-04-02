@@ -215,8 +215,14 @@ query I
 select * from (select 1 a union all select 2) b order by a limit 0;
 ----
 
-# select case when type coercion
+# select case when type coercion with case expression
 query I
-select CASE 10.5 WHEN 0 THEN 1 ELSE 10 END as col;
+select CASE 10.5 WHEN 0 THEN 1 ELSE 2 END as col;
 ----
-10
+2
+
+# select case when type coercion without case expression
+query I
+select CASE WHEN 0 THEN 1 ELSE 2 END as col;
+----
+2

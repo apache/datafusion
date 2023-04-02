@@ -349,10 +349,16 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 // Then all aN (a1, a2, a3) must be converted to a common data type in the first example
                 // (case-when expression coercion)
                 //
+                // All xN (x1, x2) must be converted to a boolean data type in the second example
+                // (when-boolean expression coercion)
+                //
                 // And all bN (b1, b2, b3) must be converted to a common data type in both examples
                 // (then-else expression coercion)
                 //
-                // If either fail to find a common data type, will return error
+                // If any fail to find and cast to a common/specific data type, will return error
+                //
+                // Note that case-when and when-boolean expression coercions are mutually exclusive
+                // Only one or the other can occur for a case expression, whilst then-else expression coercion will always occur
 
                 // prepare types
                 let case_type = case
@@ -411,15 +417,20 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     .when_then_expr
                     .into_iter()
                     .map(|(when, then)| {
-                        let when = match &case_when_coerce_type {
-                            Some(case_when_coerce_type) => Box::new(
-                                when.cast_to(case_when_coerce_type, &self.schema)?,
-                            ),
-                            None => when,
-                        };
-                        let then =
-                            Box::new(then.cast_to(&then_else_coerce_type, &self.schema)?);
-                        Ok((when, then))
+                        let when_type =
+                            case_when_coerce_type.as_ref().unwrap_or(&DataType::Boolean);
+                        let when =
+                            when.cast_to(when_type, &self.schema).map_err(|e| {
+                                DataFusionError::Context(
+                                    format!(
+                                        "WHEN expressions in CASE couldn't be \
+                                         converted to common type ({when_type})"
+                                    ),
+                                    Box::new(e),
+                                )
+                            })?;
+                        let then = then.cast_to(&then_else_coerce_type, &self.schema)?;
+                        Ok((Box::new(when), Box::new(then)))
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let else_expr = case
