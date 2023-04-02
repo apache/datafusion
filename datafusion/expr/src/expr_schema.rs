@@ -70,6 +70,7 @@ impl ExprSchemable for Expr {
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l) => Ok(l.get_datatype()),
             Expr::Case(case) => {
+                // https://github.com/apache/arrow-datafusion/issues/5821
                 // when #5681 will be fixed, this code can be reverted to:
                 // case.when_then_expr[0].1.get_type(schema)
                 let then_types = case
