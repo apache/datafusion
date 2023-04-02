@@ -454,7 +454,7 @@ impl GroupedHashAggregateStream {
                                 group_state.aggregation_buffer.as_mut_slice(),
                             );
                             match self.mode {
-                                AggregateMode::Partial => {
+                                AggregateMode::Partial | AggregateMode::Single => {
                                     accumulator.update_batch(&values, &mut state_accessor)
                                 }
                                 AggregateMode::FinalPartitioned
@@ -486,7 +486,7 @@ impl GroupedHashAggregateStream {
                         .try_for_each(|(accumulator, values)| {
                             let size_pre = accumulator.size();
                             let res = match self.mode {
-                                AggregateMode::Partial => {
+                                AggregateMode::Partial | AggregateMode::Single => {
                                     accumulator.update_batch(&values)
                                 }
                                 AggregateMode::FinalPartitioned
@@ -594,7 +594,7 @@ impl GroupedHashAggregateStream {
             AggregateMode::Partial => {
                 read_as_batch(&state_buffers, &self.row_aggr_schema, RowType::WordAligned)
             }
-            AggregateMode::Final | AggregateMode::FinalPartitioned => {
+            AggregateMode::Final | AggregateMode::FinalPartitioned | AggregateMode::Single => {
                 let mut results = vec![];
                 for (idx, acc) in self.row_accumulators.iter().enumerate() {
                     let mut state_accessor =
@@ -628,7 +628,7 @@ impl GroupedHashAggregateStream {
         for (idx, &Range { start, end }) in self.indices[0].iter().enumerate() {
             for (field_idx, field) in output_fields[start..end].iter().enumerate() {
                 let current = match self.mode {
-                    AggregateMode::Partial => ScalarValue::iter_to_array(
+                    AggregateMode::Partial | AggregateMode::Single => ScalarValue::iter_to_array(
                         group_state_chunk.iter().map(|row_group_state| {
                             row_group_state.accumulator_set[idx]
                                 .state()

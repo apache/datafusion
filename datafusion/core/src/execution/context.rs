@@ -105,6 +105,7 @@ use uuid::Uuid;
 // backwards compatibility
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
+use crate::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 
 use super::options::{
     AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions, ReadOptions,
@@ -1296,6 +1297,7 @@ impl SessionState {
             // Enforce sort before PipelineFixer
             Arc::new(EnforceDistribution::new()),
             Arc::new(EnforceSorting::new()),
+            Arc::new(CombinePartialFinalAggregate::new()),
             // If the query is processing infinite inputs, the PipelineFixer rule applies the
             // necessary transformations to make the query runnable (if it is not already runnable).
             // If the query can not be made runnable, the rule emits an error with a diagnostic message.
