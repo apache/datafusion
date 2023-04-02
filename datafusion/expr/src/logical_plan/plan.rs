@@ -1069,7 +1069,7 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "DropTable: {name:?} if not exist:={if_exists}")
                     }
-                    LogicalPlan::TransactionStart(TransactionStartNode {
+                    LogicalPlan::TransactionStart(TransactionStart {
                         access_mode,
                         isolation_level,
                         ..
