@@ -256,6 +256,127 @@ SELECT COUNT(*) FROM ts_data_secs where ts > from_unixtime(1599566400)
 ----
 2
 
+
+# count_distinct_timestamps
+query P rowsort
+SELECT DISTINCT ts FROM ts_data_nanos;
+----
+2020-09-08T11:42:29.190855
+2020-09-08T12:42:29.190855
+2020-09-08T13:42:29.190855
+
+
+query I
+SELECT COUNT(DISTINCT(ts)) FROM ts_data_nanos
+----
+3
+
+# add_interval_month
+query D
+select date '1994-01-31' + interval '1' month as date;
+----
+1994-02-28
+
+
+# sub_interval_month
+query D
+select date '1994-03-31' - interval '1' month as date;
+----
+1994-02-28
+
+
+# sub_month_wrap
+query D
+select date '1994-01-15' - interval '1' month as date;
+----
+1993-12-15
+
+# add_interval_day
+query D
+select date '1994-01-15' + interval '1' day as date;
+----
+1994-01-16
+
+# sub_interval_day
+query D
+select date '1994-01-01' - interval '1' day as date;
+----
+1993-12-31
+
+
+# cast_string_to_time()
+statement ok
+set datafusion.optimizer.skip_failed_rules = false
+
+query DDDD
+select
+        time '08:09:10.123456789' as time_nano,
+        time '13:14:15.123456'    as time_micro,
+        time '13:14:15.123'       as time_milli,
+        time '13:14:15'           as time;
+----
+08:09:10.123456789 13:14:15.123456 13:14:15.123 13:14:15
+
+query error Cannot cast string 'not a time' to value of Time64\(Nanosecond\) type\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+SELECT TIME 'not a time' as time;
+
+# invalid time
+query error Cannot cast string '24:01:02' to value of Time64\(Nanosecond\) type\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+SELECT TIME '24:01:02' as time;
+
+statement ok
+set datafusion.optimizer.skip_failed_rules = true
+
+
+# cast_to_timestamp_twice
+query P
+select to_timestamp(a) from (select to_timestamp(1) as a) A;
+----
+1970-01-01T00:00:00.000000001
+
+# cast_to_timestamp_seconds_twice
+query P
+select to_timestamp_seconds(a) from (select to_timestamp_seconds(1) as a)A
+----
+1970-01-01T00:00:01
+
+
+# cast_to_timestamp_millis_twice
+query P
+select to_timestamp_millis(a) from (select to_timestamp_millis(1) as a)A;
+----
+1970-01-01T00:00:00.001
+
+# cast_to_timestamp_micros_twice
+query P
+select to_timestamp_micros(a) from (select to_timestamp_micros(1) as a)A;
+----
+1970-01-01T00:00:00.000001
+
+# to_timestamp_i32
+query P
+select to_timestamp(cast (1 as int));
+----
+1970-01-01T00:00:00.000000001
+
+# to_timestamp_micros_i32
+query P
+select to_timestamp_micros(cast (1 as int));
+----
+1970-01-01T00:00:00.000001
+
+# to_timestamp_millis_i32
+query P
+select to_timestamp_millis(cast (1 as int));
+----
+1970-01-01T00:00:00.001
+
+# to_timestamp_seconds_i32
+query P
+select to_timestamp_seconds(cast (1 as int));
+----
+1970-01-01T00:00:01
+
 statement ok
 drop table ts_data
 
