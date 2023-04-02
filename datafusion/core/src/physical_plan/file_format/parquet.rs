@@ -1530,7 +1530,7 @@ mod tests {
         let state = session_ctx.state();
         let task_ctx = state.task_ctx();
         let parquet_exec = scan_format(
-            &state,
+            &task_ctx,
             &ParquetFormat::default(),
             &testdata,
             filename,
@@ -1619,7 +1619,7 @@ mod tests {
 
         let store = Arc::new(LocalFileSystem::new()) as _;
         let file_schema = ParquetFormat::default()
-            .infer_schema(&state, &store, &[meta.clone()])
+            .infer_schema(&state.task_ctx(), &store, &[meta.clone()])
             .await?;
 
         let group_empty = vec![vec![file_range(&meta, 0, 5)]];
@@ -1651,7 +1651,7 @@ mod tests {
         let meta = local_unpartitioned_file(filename);
 
         let schema = ParquetFormat::default()
-            .infer_schema(&state, &store, &[meta.clone()])
+            .infer_schema(&task_ctx, &store, &[meta.clone()])
             .await
             .unwrap();
 

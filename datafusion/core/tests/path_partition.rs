@@ -576,7 +576,7 @@ async fn register_partitioned_alltypes_parquet(
         ListingTableUrl::parse(format!("mirror:///{}", store_paths[0])).unwrap();
 
     let file_schema = options
-        .infer_schema(&ctx.state(), &store_path)
+        .infer_schema(&ctx.task_ctx(), &store_path)
         .await
         .expect("Parquet schema inference failed");
 

@@ -387,7 +387,7 @@ async fn get_table(
     let config = ListingTableConfig::new(table_path).with_listing_options(options);
 
     let config = match table_format {
-        "parquet" => config.infer_schema(&state).await?,
+        "parquet" => config.infer_schema(&state.task_ctx()).await?,
         "tbl" => config.with_schema(Arc::new(get_tbl_tpch_table_schema(table))),
         "csv" => config.with_schema(Arc::new(get_tpch_table_schema(table))),
         _ => unreachable!(),

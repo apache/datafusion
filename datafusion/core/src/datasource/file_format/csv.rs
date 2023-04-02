@@ -37,10 +37,10 @@ use super::FileFormat;
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::error::Result;
-use crate::execution::context::SessionState;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
+use datafusion_execution::TaskContext;
 
 /// The default file extension of csv files
 pub const DEFAULT_CSV_EXTENSION: &str = ".csv";
@@ -115,7 +115,7 @@ impl FileFormat for CsvFormat {
 
     async fn infer_schema(
         &self,
-        _state: &SessionState,
+        _task_ctx: &TaskContext,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -142,7 +142,7 @@ impl FileFormat for CsvFormat {
 
     async fn infer_stats(
         &self,
-        _state: &SessionState,
+        _task_ctx: &TaskContext,
         _store: &Arc<dyn ObjectStore>,
         _table_schema: SchemaRef,
         _object: &ObjectMeta,
@@ -152,7 +152,7 @@ impl FileFormat for CsvFormat {
 
     async fn create_physical_plan(
         &self,
-        _state: &SessionState,
+        _task_ctx: &TaskContext,
         conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -296,6 +296,7 @@ mod tests {
     use super::super::test_util::scan_format;
     use super::*;
     use crate::datasource::file_format::test_util::VariableStream;
+    use crate::execution::context::SessionState;
     use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
     use bytes::Bytes;
@@ -430,7 +431,7 @@ mod tests {
         };
         let inferred_schema = csv_format
             .infer_schema(
-                &state,
+                &state.task_ctx(),
                 &(variable_object_store.clone() as Arc<dyn ObjectStore>),
                 &[object_meta],
             )
@@ -467,8 +468,9 @@ mod tests {
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let task_ctx = state.task_ctx();
         let root = format!("{}/csv", crate::test_util::arrow_test_data());
         let format = CsvFormat::default();
-        scan_format(state, &format, &root, file_name, projection, limit).await
+        scan_format(&task_ctx, &format, &root, file_name, projection, limit).await
     }
 }

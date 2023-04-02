@@ -92,18 +92,19 @@ async fn get_exec(
 
     let meta = object_store.head(&path).await.unwrap();
 
+    let task_ctx = state.task_ctx();
     let file_schema = format
-        .infer_schema(state, &object_store, &[meta.clone()])
+        .infer_schema(&task_ctx, &object_store, &[meta.clone()])
         .await
         .expect("Schema inference");
     let statistics = format
-        .infer_stats(state, &object_store, file_schema.clone(), &meta)
+        .infer_stats(&task_ctx, &object_store, file_schema.clone(), &meta)
         .await
         .expect("Stats inference");
     let file_groups = vec![vec![meta.into()]];
     let exec = format
         .create_physical_plan(
-            state,
+            &task_ctx,
             FileScanConfig {
                 object_store_url,
                 file_schema,

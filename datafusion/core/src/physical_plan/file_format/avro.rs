@@ -245,6 +245,7 @@ mod tests {
     async fn test_with_stores(store: Arc<dyn ObjectStore>) -> Result<()> {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
+        let task_ctx = session_ctx.task_ctx();
 
         let url = Url::parse("file://").unwrap();
         state
@@ -256,7 +257,7 @@ mod tests {
         let meta = local_unpartitioned_file(filename);
 
         let file_schema = AvroFormat {}
-            .infer_schema(&state, &store, &[meta.clone()])
+            .infer_schema(&task_ctx, &store, &[meta.clone()])
             .await?;
 
         let avro_exec = AvroExec::new(FileScanConfig {
@@ -321,7 +322,7 @@ mod tests {
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
         let actual_schema = AvroFormat {}
-            .infer_schema(&state, &object_store, &[meta.clone()])
+            .infer_schema(&state.task_ctx(), &object_store, &[meta.clone()])
             .await?;
 
         let mut fields = actual_schema.fields().clone();
@@ -394,7 +395,7 @@ mod tests {
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
         let file_schema = AvroFormat {}
-            .infer_schema(&state, &object_store, &[meta.clone()])
+            .infer_schema(&state.task_ctx(), &object_store, &[meta.clone()])
             .await?;
 
         let mut partitioned_file = PartitionedFile::from(meta);

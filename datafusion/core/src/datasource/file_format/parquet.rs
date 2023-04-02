@@ -43,10 +43,10 @@ use crate::config::ConfigOptions;
 
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
-use crate::execution::context::SessionState;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::file_format::{ParquetExec, SchemaAdapter};
 use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
+use datafusion_execution::TaskContext;
 
 /// The default file extension of parquet files
 pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
@@ -147,7 +147,7 @@ impl FileFormat for ParquetFormat {
 
     async fn infer_schema(
         &self,
-        state: &SessionState,
+        task_ctx: &TaskContext,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -158,7 +158,7 @@ impl FileFormat for ParquetFormat {
             schemas.push(schema)
         }
 
-        let schema = if self.skip_metadata(state.config_options()) {
+        let schema = if self.skip_metadata(task_ctx.options()) {
             Schema::try_merge(clear_metadata(schemas))
         } else {
             Schema::try_merge(schemas)
@@ -169,7 +169,7 @@ impl FileFormat for ParquetFormat {
 
     async fn infer_stats(
         &self,
-        _state: &SessionState,
+        _task_ctx: &TaskContext,
         store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         object: &ObjectMeta,
@@ -186,7 +186,7 @@ impl FileFormat for ParquetFormat {
 
     async fn create_physical_plan(
         &self,
-        state: &SessionState,
+        task_ctx: &TaskContext,
         conf: FileScanConfig,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -194,14 +194,14 @@ impl FileFormat for ParquetFormat {
         // If disable pruning then set the predicate to None, thus readers
         // will not prune data based on the statistics.
         let predicate = self
-            .enable_pruning(state.config_options())
+            .enable_pruning(task_ctx.options())
             .then(|| filters.cloned())
             .flatten();
 
         Ok(Arc::new(ParquetExec::new(
             conf,
             predicate,
-            self.metadata_size_hint(state.config_options()),
+            self.metadata_size_hint(task_ctx.options()),
         )))
     }
 }
@@ -612,6 +612,7 @@ pub(crate) mod test_util {
 #[cfg(test)]
 mod tests {
     use super::super::test_util::scan_format;
+    use crate::execution::context::SessionState;
     use crate::physical_plan::collect;
     use std::fmt::{Display, Formatter};
     use std::ops::Range;
@@ -658,10 +659,12 @@ mod tests {
         let store = Arc::new(LocalFileSystem::new()) as _;
         let (meta, _files) = store_parquet(vec![batch1, batch2], false).await?;
 
-        let session = SessionContext::new();
-        let ctx = session.state();
+        let ctx = SessionContext::new();
         let format = ParquetFormat::default();
-        let schema = format.infer_schema(&ctx, &store, &meta).await.unwrap();
+        let schema = format
+            .infer_schema(&ctx.task_ctx(), &store, &meta)
+            .await
+            .unwrap();
 
         let stats =
             fetch_statistics(store.as_ref(), schema.clone(), &meta[0], None).await?;
@@ -808,10 +811,10 @@ mod tests {
         assert_eq!(store.request_count(), 2);
 
         let session = SessionContext::new();
-        let ctx = session.state();
+        let task_ctx = session.task_ctx();
         let format = ParquetFormat::default().with_metadata_size_hint(Some(9));
         let schema = format
-            .infer_schema(&ctx, &store.upcast(), &meta)
+            .infer_schema(&task_ctx, &store.upcast(), &meta)
             .await
             .unwrap();
 
@@ -841,7 +844,7 @@ mod tests {
 
         let format = ParquetFormat::default().with_metadata_size_hint(Some(size_hint));
         let schema = format
-            .infer_schema(&ctx, &store.upcast(), &meta)
+            .infer_schema(&task_ctx, &store.upcast(), &meta)
             .await
             .unwrap();
         let stats = fetch_statistics(
@@ -1293,8 +1296,9 @@ mod tests {
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let task_ctx = state.task_ctx();
         let testdata = crate::test_util::parquet_test_data();
         let format = ParquetFormat::default();
-        scan_format(state, &format, &testdata, file_name, projection, limit).await
+        scan_format(&task_ctx, &format, &testdata, file_name, projection, limit).await
     }
 }

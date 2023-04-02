@@ -298,8 +298,9 @@ mod tests {
         state: &SessionState,
         file_compression_type: FileCompressionType,
     ) -> (ObjectStoreUrl, Vec<Vec<PartitionedFile>>, SchemaRef) {
+        let task_ctx = state.task_ctx();
         let store_url = ObjectStoreUrl::local_filesystem();
-        let store = state.runtime_env().object_store(&store_url).unwrap();
+        let store = task_ctx.runtime_env().object_store(&store_url).unwrap();
 
         let filename = "1.json";
         let file_groups = partitioned_file_groups(
@@ -319,7 +320,7 @@ mod tests {
             .object_meta;
         let schema = JsonFormat::default()
             .with_file_compression_type(file_compression_type.to_owned())
-            .infer_schema(state, &store, &[meta.clone()])
+            .infer_schema(&task_ctx, &store, &[meta.clone()])
             .await
             .unwrap();
 

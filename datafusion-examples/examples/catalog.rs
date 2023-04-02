@@ -32,7 +32,7 @@ use datafusion::{
         TableProvider,
     },
     error::Result,
-    execution::context::SessionState,
+    execution::context::TaskContext,
     prelude::SessionContext,
 };
 use std::sync::RwLock;
@@ -53,6 +53,7 @@ async fn main() -> Result<()> {
     .unwrap();
     let mut ctx = SessionContext::new();
     let state = ctx.state();
+    let task_ctx = state.task_ctx();
     let catlist = Arc::new(CustomCatalogList::new());
     // use our custom catalog list for context. each context has a single catalog list.
     // context will by default have MemoryCatalogList
@@ -61,7 +62,7 @@ async fn main() -> Result<()> {
     // intitialize our catalog and schemas
     let catalog = DirCatalog::new();
     let parquet_schema = DirSchema::create(
-        &state,
+        &task_ctx,
         DirSchemaOpts {
             format: Arc::new(ParquetFormat::default()),
             dir: &repo_dir.join("parquet-testing").join("data"),
@@ -70,7 +71,7 @@ async fn main() -> Result<()> {
     )
     .await?;
     let csv_schema = DirSchema::create(
-        &state,
+        &task_ctx,
         DirSchemaOpts {
             format: Arc::new(CsvFormat::default()),
             dir: &repo_dir.join("testing").join("data").join("csv"),
@@ -138,7 +139,10 @@ struct DirSchema {
     tables: RwLock<HashMap<String, Arc<dyn TableProvider>>>,
 }
 impl DirSchema {
-    async fn create(state: &SessionState, opts: DirSchemaOpts<'_>) -> Result<Arc<Self>> {
+    async fn create(
+        task_ctx: &TaskContext,
+        opts: DirSchemaOpts<'_>,
+    ) -> Result<Arc<Self>> {
         let DirSchemaOpts { ext, dir, format } = opts;
         let mut tables = HashMap::new();
         let listdir = std::fs::read_dir(dir).unwrap();
@@ -153,7 +157,7 @@ impl DirSchema {
             let opts = ListingOptions::new(format.clone());
             let conf = ListingTableConfig::new(table_path)
                 .with_listing_options(opts)
-                .infer_schema(state)
+                .infer_schema(task_ctx)
                 .await?;
             let table = ListingTable::try_new(conf)?;
             tables.insert(filename, Arc::new(table) as Arc<dyn TableProvider>);

@@ -32,6 +32,10 @@ use crate::{
 };
 
 /// Task Execution Context
+///
+/// Contains all information needed to execte a DataFusion plan. It
+/// does not contain information needed by the planner such as table
+/// sources.
 pub struct TaskContext {
     /// Session Id
     session_id: String,
@@ -101,6 +105,11 @@ impl TaskContext {
     /// Return the SessionConfig associated with the Task
     pub fn session_config(&self) -> &SessionConfig {
         &self.session_config
+    }
+
+    /// Return the [`ConfigOptions`] associated with the Task
+    pub fn options(&self) -> &ConfigOptions {
+        self.session_config.options()
     }
 
     /// Return the `session_id` of this [TaskContext]

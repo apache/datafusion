@@ -42,17 +42,18 @@ use crate::datasource::{
     listing::ListingTableUrl,
     TableProvider, TableType,
 };
+use crate::execution::context::SessionState;
 use crate::logical_expr::TableProviderFilterPushDown;
 use crate::physical_plan;
 use crate::{
     error::{DataFusionError, Result},
-    execution::context::SessionState,
     logical_expr::Expr,
     physical_plan::{
         empty::EmptyExec, file_format::FileScanConfig, project_schema, ExecutionPlan,
         Statistics,
     },
 };
+use datafusion_execution::TaskContext;
 
 use super::PartitionedFile;
 
@@ -149,8 +150,8 @@ impl ListingTableConfig {
     }
 
     /// Infer `ListingOptions` based on `table_path` suffix.
-    pub async fn infer_options(self, state: &SessionState) -> Result<Self> {
-        let store = state
+    pub async fn infer_options(self, task_ctx: &TaskContext) -> Result<Self> {
+        let store = task_ctx
             .runtime_env()
             .object_store(self.table_paths.get(0).unwrap())?;
 
@@ -168,7 +169,7 @@ impl ListingTableConfig {
 
         let listing_options = ListingOptions::new(format)
             .with_file_extension(file_extension)
-            .with_target_partitions(state.config().target_partitions());
+            .with_target_partitions(task_ctx.options().execution.target_partitions);
 
         Ok(Self {
             table_paths: self.table_paths,
@@ -178,11 +179,11 @@ impl ListingTableConfig {
     }
 
     /// Infer the [`SchemaRef`] based on `table_path` suffix.  Requires `self.options` to be set prior to using.
-    pub async fn infer_schema(self, state: &SessionState) -> Result<Self> {
+    pub async fn infer_schema(self, task_ctx: &TaskContext) -> Result<Self> {
         match self.options {
             Some(options) => {
                 let schema = options
-                    .infer_schema(state, self.table_paths.get(0).unwrap())
+                    .infer_schema(task_ctx, self.table_paths.get(0).unwrap())
                     .await?;
 
                 Ok(Self {
@@ -198,8 +199,11 @@ impl ListingTableConfig {
     }
 
     /// Convenience wrapper for calling `infer_options` and `infer_schema`
-    pub async fn infer(self, state: &SessionState) -> Result<Self> {
-        self.infer_options(state).await?.infer_schema(state).await
+    pub async fn infer(self, task_ctx: &TaskContext) -> Result<Self> {
+        self.infer_options(task_ctx)
+            .await?
+            .infer_schema(task_ctx)
+            .await
     }
 }
 
@@ -430,17 +434,17 @@ impl ListingOptions {
     /// locally or ask a remote service to do it (e.g a scheduler).
     pub async fn infer_schema<'a>(
         &'a self,
-        state: &SessionState,
+        task_ctx: &TaskContext,
         table_path: &'a ListingTableUrl,
     ) -> Result<SchemaRef> {
-        let store = state.runtime_env().object_store(table_path)?;
+        let store = task_ctx.runtime_env().object_store(table_path)?;
 
         let files: Vec<_> = table_path
             .list_all_files(store.as_ref(), &self.file_extension)
             .try_collect()
             .await?;
 
-        self.format.infer_schema(state, &store, &files).await
+        self.format.infer_schema(task_ctx, &store, &files).await
     }
 }
 
@@ -523,7 +527,7 @@ impl StatisticsCache {
 ///
 /// // Resolve the schema
 /// let resolved_schema = listing_options
-///    .infer_schema(&session_state, &table_path)
+///    .infer_schema(&session_state.task_ctx(), &table_path)
 ///    .await?;
 ///
 /// let config = ListingTableConfig::new(table_path)
@@ -672,8 +676,10 @@ impl TableProvider for ListingTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let task_ctx = &state.task_ctx();
+
         let (partitioned_file_lists, statistics) =
-            self.list_files_for_scan(state, filters, limit).await?;
+            self.list_files_for_scan(task_ctx, filters, limit).await?;
 
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
@@ -716,7 +722,7 @@ impl TableProvider for ListingTable {
         self.options
             .format
             .create_physical_plan(
-                state,
+                task_ctx,
                 FileScanConfig {
                     object_store_url: self.table_paths.get(0).unwrap().object_store(),
                     file_schema: Arc::clone(&self.file_schema),
@@ -766,11 +772,11 @@ impl ListingTable {
     /// be distributed to different threads / executors.
     async fn list_files_for_scan<'a>(
         &'a self,
-        ctx: &'a SessionState,
+        task_ctx: &'a TaskContext,
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
-        let store = ctx
+        let store = task_ctx
             .runtime_env()
             .object_store(self.table_paths.get(0).unwrap())?;
         // list files (with partitions)
@@ -798,7 +804,7 @@ impl ListingTable {
                             .options
                             .format
                             .infer_stats(
-                                ctx,
+                                task_ctx,
                                 &store,
                                 self.file_schema.clone(),
                                 &part_file.object_meta,
@@ -902,7 +908,7 @@ mod tests {
         let state = ctx.state();
 
         let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
-        let schema = opt.infer_schema(&state, &table_path).await?;
+        let schema = opt.infer_schema(&state.task_ctx(), &table_path).await?;
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
             .with_schema(schema);
@@ -926,7 +932,7 @@ mod tests {
 
         let opt = ListingOptions::new(Arc::new(ParquetFormat::default()))
             .with_collect_stat(false);
-        let schema = opt.infer_schema(&state, &table_path).await?;
+        let schema = opt.infer_schema(&state.task_ctx(), &table_path).await?;
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
             .with_schema(schema);
@@ -948,7 +954,10 @@ mod tests {
         let ctx = SessionContext::new();
         let state = ctx.state();
         let options = ListingOptions::new(Arc::new(ParquetFormat::default()));
-        let schema = options.infer_schema(&state, &table_path).await.unwrap();
+        let schema = options
+            .infer_schema(&state.task_ctx(), &table_path)
+            .await
+            .unwrap();
 
         use crate::physical_plan::expressions::col as physical_col;
         use std::ops::Add;
@@ -1318,7 +1327,7 @@ mod tests {
         let table_path = ListingTableUrl::parse(filename).unwrap();
 
         let config = ListingTableConfig::new(table_path)
-            .infer(&ctx.state())
+            .infer(&ctx.task_ctx())
             .await?;
         let table = ListingTable::try_new(config)?;
         Ok(Arc::new(table))
@@ -1350,7 +1359,9 @@ mod tests {
 
         let table = ListingTable::try_new(config)?;
 
-        let (file_list, _) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+        let (file_list, _) = table
+            .list_files_for_scan(&ctx.task_ctx(), &[], None)
+            .await?;
 
         assert_eq!(file_list.len(), output_partitioning);
 
@@ -1386,7 +1397,9 @@ mod tests {
 
         let table = ListingTable::try_new(config)?;
 
-        let (file_list, _) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+        let (file_list, _) = table
+            .list_files_for_scan(&ctx.task_ctx(), &[], None)
+            .await?;
 
         assert_eq!(file_list.len(), output_partitioning);
 

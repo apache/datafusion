@@ -147,9 +147,9 @@ impl SchemaProvider for DynamicFileSchemaProvider {
 
         // if the inner schema provider didn't have a table by
         // that name, try to treat it as a listing table
-        let state = self.state.upgrade()?.read().clone();
+        let task_ctx = self.state.upgrade()?.read().task_ctx();
         let config = ListingTableConfig::new(ListingTableUrl::parse(name).ok()?)
-            .infer(&state)
+            .infer(&task_ctx)
             .await
             .ok()?;
         Some(Arc::new(ListingTable::try_new(config).ok()?))

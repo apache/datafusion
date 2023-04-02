@@ -180,7 +180,7 @@ mod tests {
         let ctx = SessionContext::new();
 
         let config = ListingTableConfig::new(table_path)
-            .infer(&ctx.state())
+            .infer(&ctx.task_ctx())
             .await
             .unwrap();
         let table = ListingTable::try_new(config).unwrap();

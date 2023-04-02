@@ -49,7 +49,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
     };
 
     let schema = ParquetFormat::default()
-        .infer_schema(state, &store, &[meta.clone()])
+        .infer_schema(&state.task_ctx(), &store, &[meta.clone()])
         .await
         .unwrap();
 

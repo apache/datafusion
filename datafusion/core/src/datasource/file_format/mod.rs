@@ -36,8 +36,8 @@ use crate::error::Result;
 use crate::physical_plan::file_format::FileScanConfig;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
-use crate::execution::context::SessionState;
 use async_trait::async_trait;
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use object_store::{ObjectMeta, ObjectStore};
 
@@ -58,7 +58,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     /// the files have schemas that cannot be merged.
     async fn infer_schema(
         &self,
-        state: &SessionState,
+        state: &TaskContext,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef>;
@@ -72,7 +72,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     /// TODO: should the file source return statistics for only columns referred to in the table schema?
     async fn infer_stats(
         &self,
-        state: &SessionState,
+        state: &TaskContext,
         store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         object: &ObjectMeta,
@@ -82,7 +82,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     /// according to this file format.
     async fn create_physical_plan(
         &self,
-        state: &SessionState,
+        state: &TaskContext,
         conf: FileScanConfig,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
@@ -106,7 +106,7 @@ pub(crate) mod test_util {
     use tokio::io::AsyncWrite;
 
     pub async fn scan_format(
-        state: &SessionState,
+        state: &TaskContext,
         format: &dyn FileFormat,
         store_root: &str,
         file_name: &str,

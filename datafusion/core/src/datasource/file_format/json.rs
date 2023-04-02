@@ -37,10 +37,10 @@ use super::FileScanConfig;
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::error::Result;
-use crate::execution::context::SessionState;
 use crate::physical_plan::file_format::NdJsonExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
+use datafusion_execution::TaskContext;
 
 /// The default file extension of json files
 pub const DEFAULT_JSON_EXTENSION: &str = ".json";
@@ -87,7 +87,7 @@ impl FileFormat for JsonFormat {
 
     async fn infer_schema(
         &self,
-        _state: &SessionState,
+        _task_ctx: &TaskContext,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -131,7 +131,7 @@ impl FileFormat for JsonFormat {
 
     async fn infer_stats(
         &self,
-        _state: &SessionState,
+        _task_ctx: &TaskContext,
         _store: &Arc<dyn ObjectStore>,
         _table_schema: SchemaRef,
         _object: &ObjectMeta,
@@ -141,7 +141,7 @@ impl FileFormat for JsonFormat {
 
     async fn create_physical_plan(
         &self,
-        _state: &SessionState,
+        _task_ctx: &TaskContext,
         conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -158,6 +158,7 @@ mod tests {
     use object_store::local::LocalFileSystem;
 
     use super::*;
+    use crate::execution::context::SessionState;
     use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
@@ -256,21 +257,22 @@ mod tests {
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let task_ctx = state.task_ctx();
         let filename = "tests/jsons/2.json";
         let format = JsonFormat::default();
-        scan_format(state, &format, ".", filename, projection, limit).await
+        scan_format(&task_ctx, &format, ".", filename, projection, limit).await
     }
 
     #[tokio::test]
     async fn infer_schema_with_limit() {
         let session = SessionContext::new();
-        let ctx = session.state();
+        let task_ctx = session.state().task_ctx();
         let store = Arc::new(LocalFileSystem::new()) as _;
         let filename = "tests/jsons/schema_infer_limit.json";
         let format = JsonFormat::default().with_schema_infer_max_rec(Some(3));
 
         let file_schema = format
-            .infer_schema(&ctx, &store, &[local_unpartitioned_file(filename)])
+            .infer_schema(&task_ctx, &store, &[local_unpartitioned_file(filename)])
             .await
             .expect("Schema inference");
 

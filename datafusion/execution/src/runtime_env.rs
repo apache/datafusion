@@ -32,7 +32,8 @@ use std::sync::Arc;
 use url::Url;
 
 #[derive(Clone)]
-/// Execution runtime environment.
+/// Execution runtime environment for managing access to external
+/// resources such as memory, disk and object stores.
 pub struct RuntimeEnv {
     /// Runtime memory management
     pub memory_pool: Arc<dyn MemoryPool>,

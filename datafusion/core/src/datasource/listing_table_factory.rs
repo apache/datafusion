@@ -59,6 +59,7 @@ impl TableProviderFactory for ListingTableFactory {
         state: &SessionState,
         cmd: &CreateExternalTable,
     ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
+        let task_ctx = state.task_ctx();
         let file_compression_type = FileCompressionType::from(cmd.file_compression_type);
         let file_type = FileType::from_str(cmd.file_type.as_str()).map_err(|_| {
             DataFusionError::Execution(format!("Unknown FileType {}", cmd.file_type))
@@ -139,7 +140,7 @@ impl TableProviderFactory for ListingTableFactory {
 
         let table_path = ListingTableUrl::parse(&cmd.location)?;
         let resolved_schema = match provided_schema {
-            None => options.infer_schema(state, &table_path).await?,
+            None => options.infer_schema(&task_ctx, &table_path).await?,
             Some(s) => s,
         };
         let config = ListingTableConfig::new(table_path)

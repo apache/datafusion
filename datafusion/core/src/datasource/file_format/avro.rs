@@ -23,13 +23,13 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use object_store::{GetResult, ObjectMeta, ObjectStore};
 
 use super::FileFormat;
 use crate::avro_to_arrow::read_avro_schema_from_reader;
 use crate::error::Result;
-use crate::execution::context::SessionState;
 use crate::physical_plan::file_format::{AvroExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
@@ -48,7 +48,7 @@ impl FileFormat for AvroFormat {
 
     async fn infer_schema(
         &self,
-        _state: &SessionState,
+        _task_ctx: &TaskContext,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -70,7 +70,7 @@ impl FileFormat for AvroFormat {
 
     async fn infer_stats(
         &self,
-        _state: &SessionState,
+        _task_ctx: &TaskContext,
         _store: &Arc<dyn ObjectStore>,
         _table_schema: SchemaRef,
         _object: &ObjectMeta,
@@ -80,7 +80,7 @@ impl FileFormat for AvroFormat {
 
     async fn create_physical_plan(
         &self,
-        _state: &SessionState,
+        _task_ctx: &TaskContext,
         conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -94,6 +94,7 @@ impl FileFormat for AvroFormat {
 mod tests {
     use super::*;
     use crate::datasource::file_format::test_util::scan_format;
+    use crate::execution::context::SessionState;
     use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
     use datafusion_common::cast::{
@@ -359,7 +360,15 @@ mod tests {
         let testdata = crate::test_util::arrow_test_data();
         let store_root = format!("{testdata}/avro");
         let format = AvroFormat {};
-        scan_format(state, &format, &store_root, file_name, projection, limit).await
+        scan_format(
+            &state.task_ctx(),
+            &format,
+            &store_root,
+            file_name,
+            projection,
+            limit,
+        )
+        .await
     }
 }
 
@@ -379,7 +388,9 @@ mod tests {
         let format = AvroFormat {};
         let testdata = crate::test_util::arrow_test_data();
         let filename = "avro/alltypes_plain.avro";
-        let result = scan_format(&state, &format, &testdata, filename, None, None).await;
+        let result =
+            scan_format(&state.task_ctx(), &format, &testdata, filename, None, None)
+                .await;
         assert!(matches!(
             result,
             Err(DataFusionError::NotImplemented(msg))

@@ -711,11 +711,12 @@ impl SessionContext {
         table_paths: P,
         options: impl ReadOptions<'a>,
     ) -> Result<DataFrame> {
+        let task_ctx = self.state().task_ctx();
         let table_paths = table_paths.to_urls()?;
         let session_config = self.copied_config();
         let listing_options = options.to_listing_options(&session_config);
         let resolved_schema = options
-            .get_resolved_schema(&session_config, self.state(), table_paths[0].clone())
+            .get_resolved_schema(&task_ctx, table_paths[0].clone())
             .await?;
         let config = ListingTableConfig::new_with_multi_paths(table_paths)
             .with_listing_options(listing_options)
@@ -841,10 +842,11 @@ impl SessionContext {
         provided_schema: Option<SchemaRef>,
         sql_definition: Option<String>,
     ) -> Result<()> {
+        let task_ctx = self.task_ctx();
         let table_path = ListingTableUrl::parse(table_path)?;
         let resolved_schema = match (provided_schema, options.infinite_source) {
             (Some(s), _) => s,
-            (None, false) => options.infer_schema(&self.state(), &table_path).await?,
+            (None, false) => options.infer_schema(&task_ctx, &table_path).await?,
             (None, true) => {
                 return Err(DataFusionError::Plan(
                     "Schema inference for infinite data sources is not supported."
@@ -1188,7 +1190,14 @@ impl QueryPlanner for DefaultQueryPlanner {
     }
 }
 
-/// Execution context for registering data sources and executing queries
+/// Holds state needed for planning queries within the context of a Session.
+///
+/// * [`SessionContext`] is the main API for creating and executing queries and plans.
+///
+/// * [`SessionState`] contains lower level information needed to register data sources and plan queries
+///
+/// * [`TaskContext`] contains the portion of the session state needed for executing queries.
+///
 #[derive(Clone)]
 pub struct SessionState {
     /// UUID for the session
@@ -1217,7 +1226,7 @@ pub struct SessionState {
     /// `CREATE EXTERNAL TABLE ... STORED AS <FORMAT>` for custom file
     /// formats other than those built into DataFusion
     table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
-    /// Runtime environment
+    /// Runtime environment for managing memory, disk, object_stores, etc
     runtime_env: Arc<RuntimeEnv>,
 }
 

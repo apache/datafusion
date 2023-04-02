@@ -37,7 +37,8 @@ use crate::datasource::{
     listing::ListingOptions,
 };
 use crate::error::Result;
-use crate::execution::context::{SessionConfig, SessionState};
+use crate::execution::context::SessionConfig;
+use datafusion_execution::TaskContext;
 
 /// Options that control the reading of CSV files.
 ///
@@ -351,16 +352,14 @@ pub trait ReadOptions<'a> {
     /// Infer and resolve the schema from the files/sources provided.
     async fn get_resolved_schema(
         &self,
-        config: &SessionConfig,
-        state: SessionState,
+        ctx: &TaskContext,
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef>;
 
     /// helper function to reduce repetitive code. Infers the schema from sources if not provided. Infinite data sources not supported through this function.
     async fn _get_resolved_schema(
         &'a self,
-        config: &SessionConfig,
-        state: SessionState,
+        ctx: &TaskContext,
         table_path: ListingTableUrl,
         schema: Option<&'a Schema>,
         infinite: bool,
@@ -371,8 +370,8 @@ pub trait ReadOptions<'a> {
         match (schema, infinite) {
             (Some(s), _) => Ok(Arc::new(s.to_owned())),
             (None, false) => Ok(self
-                .to_listing_options(config)
-                .infer_schema(&state, &table_path)
+                .to_listing_options(ctx.session_config())
+                .infer_schema(ctx, &table_path)
                 .await?),
             (None, true) => Err(DataFusionError::Plan(
                 "Schema inference for infinite data sources is not supported."
@@ -402,11 +401,10 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
 
     async fn get_resolved_schema(
         &self,
-        config: &SessionConfig,
-        state: SessionState,
+        task_ctx: &TaskContext,
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef> {
-        self._get_resolved_schema(config, state, table_path, self.schema, self.infinite)
+        self._get_resolved_schema(task_ctx, table_path, self.schema, self.infinite)
             .await
     }
 }
@@ -426,14 +424,13 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
 
     async fn get_resolved_schema(
         &self,
-        config: &SessionConfig,
-        state: SessionState,
+        task_ctx: &TaskContext,
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef> {
         // with parquet we resolve the schema in all cases
         Ok(self
-            .to_listing_options(config)
-            .infer_schema(&state, &table_path)
+            .to_listing_options(task_ctx.session_config())
+            .infer_schema(task_ctx, &table_path)
             .await?)
     }
 }
@@ -453,11 +450,10 @@ impl ReadOptions<'_> for NdJsonReadOptions<'_> {
 
     async fn get_resolved_schema(
         &self,
-        config: &SessionConfig,
-        state: SessionState,
+        task_ctx: &TaskContext,
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef> {
-        self._get_resolved_schema(config, state, table_path, self.schema, self.infinite)
+        self._get_resolved_schema(task_ctx, table_path, self.schema, self.infinite)
             .await
     }
 }
@@ -476,11 +472,10 @@ impl ReadOptions<'_> for AvroReadOptions<'_> {
 
     async fn get_resolved_schema(
         &self,
-        config: &SessionConfig,
-        state: SessionState,
+        task_ctx: &TaskContext,
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef> {
-        self._get_resolved_schema(config, state, table_path, self.schema, self.infinite)
+        self._get_resolved_schema(task_ctx, table_path, self.schema, self.infinite)
             .await
     }
 }
