@@ -279,8 +279,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .collect::<Result<_>>()?;
 
                 // Create planner context with parameters
-                let mut planner_context =
-                    PlannerContext::new_with_prepare_param_data_types(data_types.clone());
+                let mut planner_context = PlannerContext::new()
+                    .with_prepare_param_data_types(data_types.clone());
 
                 // Build logical plan for inner statement of the prepare statement
                 let plan = self.sql_statement_to_plan_with_context(
@@ -961,7 +961,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Projection
         let mut planner_context =
-            PlannerContext::new_with_prepare_param_data_types(prepare_param_data_types);
+            PlannerContext::new().with_prepare_param_data_types(prepare_param_data_types);
         let source = self.query_to_plan(*source, &mut planner_context)?;
         if fields.len() != source.schema().fields().len() {
             Err(DataFusionError::Plan(
