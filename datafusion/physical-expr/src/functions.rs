@@ -33,7 +33,7 @@
 use crate::execution_props::ExecutionProps;
 use crate::{
     array_expressions, conditional_expressions, datetime_expressions,
-    expressions::{cast_column, nullif_func, DEFAULT_DATAFUSION_CAST_OPTIONS},
+    expressions::{cast_column, if_func, nullif_func, DEFAULT_DATAFUSION_CAST_OPTIONS},
     math_expressions, string_expressions, struct_expressions, PhysicalExpr,
     ScalarFunctionExpr,
 };
@@ -765,6 +765,7 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::Upper => Arc::new(string_expressions::upper),
         BuiltinScalarFunction::Uuid => Arc::new(string_expressions::uuid),
+        BuiltinScalarFunction::If => Arc::new(if_func),
         _ => {
             return Err(DataFusionError::Internal(format!(
                 "create_physical_fun: Unsupported scalar function {fun:?}"
