@@ -39,6 +39,7 @@
 - [signum](#signum)
 - [sin](#sin)
 - [sqrt](#sqrt)
+- [cbrt](#cbrt)
 - [tan](#tan)
 - [trunc](#trunc)
 
@@ -277,6 +278,20 @@ sqrt(numeric_expression)
 
 - **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `cbrt`
+
+Returns the cube root of a number.
+
+```
+cbrt(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
 
 ### `tan`
 
