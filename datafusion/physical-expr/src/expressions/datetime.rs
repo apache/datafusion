@@ -275,7 +275,7 @@ pub fn evaluate_temporal_arrays(
             ts_interval_array_op(array_rhs, sign, array_lhs)?
         }
         (_, _) => Err(DataFusionError::Execution(format!(
-            "Invalid array types for DateIntervalExpr: {:?} {} {:?}",
+            "Invalid array types for DateIntervalExpr: {} {} {}",
             array_lhs.data_type(),
             sign,
             array_rhs.data_type()

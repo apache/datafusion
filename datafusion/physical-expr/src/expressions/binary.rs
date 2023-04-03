@@ -1363,7 +1363,7 @@ pub fn ts_array_op(array_lhs: &ArrayRef, array_rhs: &ArrayRef) -> Result<ArrayRe
             IntervalMonthDayNanoType
         )),
         (_, _) => Err(DataFusionError::Execution(format!(
-            "Invalid array types for Timestamp subtraction: {:?} - {:?}",
+            "Invalid array types for Timestamp subtraction: {} - {}",
             array_lhs.data_type(),
             array_rhs.data_type()
         ))),
@@ -1496,7 +1496,7 @@ pub fn interval_array_op(
             IntervalMonthDayNanoType
         )),
         (_, _) => Err(DataFusionError::Execution(format!(
-            "Invalid array types for Interval operation: {:?} {} {:?}",
+            "Invalid array types for Interval operation: {} {} {}",
             array_lhs.data_type(),
             sign,
             array_rhs.data_type()
@@ -1681,7 +1681,7 @@ pub fn ts_interval_array_op(
             IntervalMonthDayNanoType
         )),
         (_, _) => Err(DataFusionError::Execution(format!(
-            "Invalid array types for Timestamp Interval operation: {:?} {} {:?}",
+            "Invalid array types for Timestamp Interval operation: {} {} {}",
             array_lhs.data_type(),
             sign,
             array_rhs.data_type()
