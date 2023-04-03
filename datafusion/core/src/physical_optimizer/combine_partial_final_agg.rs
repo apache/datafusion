@@ -48,53 +48,60 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_down(&|plan| {
-            let transformed = if let Some(AggregateExec {
-                mode: final_mode,
-                input: final_input,
-                group_by: final_group_by,
-                aggr_expr: final_aggr_expr,
-                ..
-            }) = plan.as_any().downcast_ref::<AggregateExec>()
-            {
-                if matches!(
-                    final_mode,
-                    AggregateMode::Final | AggregateMode::FinalPartitioned
-                ) {
-                    if let Some(AggregateExec {
-                        mode,
-                        group_by,
-                        aggr_expr,
-                        input,
-                        input_schema,
-                        ..
-                    }) = final_input.as_any().downcast_ref::<AggregateExec>()
-                    {
-                        if matches!(mode, AggregateMode::Partial)
-                            && final_group_by.eq(group_by)
-                            && final_aggr_expr.len() == aggr_expr.len()
-                            && final_aggr_expr.iter().zip(aggr_expr.iter()).all(
-                                |(final_expr, partial_expr)| final_expr.eq(partial_expr),
+            let transformed = plan.as_any().downcast_ref::<AggregateExec>().and_then(
+                |AggregateExec {
+                     mode: final_mode,
+                     input: final_input,
+                     group_by: final_group_by,
+                     aggr_expr: final_aggr_expr,
+                     ..
+                 }| {
+                    if matches!(
+                        final_mode,
+                        AggregateMode::Final | AggregateMode::FinalPartitioned
+                    ) {
+                        final_input
+                            .as_any()
+                            .downcast_ref::<AggregateExec>()
+                            .and_then(
+                                |AggregateExec {
+                                     mode: input_mode,
+                                     input: partial_input,
+                                     group_by: input_group_by,
+                                     aggr_expr: input_aggr_expr,
+                                     input_schema,
+                                     ..
+                                 }| {
+                                    if matches!(input_mode, AggregateMode::Partial)
+                                        && final_group_by.eq(input_group_by)
+                                        && final_aggr_expr.len() == input_aggr_expr.len()
+                                        && final_aggr_expr
+                                            .iter()
+                                            .zip(input_aggr_expr.iter())
+                                            .all(|(final_expr, partial_expr)| {
+                                                final_expr.eq(partial_expr)
+                                            })
+                                    {
+                                        AggregateExec::try_new(
+                                            AggregateMode::Single,
+                                            input_group_by.clone(),
+                                            input_aggr_expr.to_vec(),
+                                            partial_input.clone(),
+                                            input_schema.clone(),
+                                        )
+                                        .ok()
+                                        .map(Arc::new)
+                                    } else {
+                                        None
+                                    }
+                                },
                             )
-                        {
-                            Some(Arc::new(AggregateExec::try_new(
-                                AggregateMode::Single,
-                                group_by.clone(),
-                                aggr_expr.to_vec(),
-                                input.clone(),
-                                input_schema.clone(),
-                            )?))
-                        } else {
-                            None
-                        }
                     } else {
                         None
                     }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+                },
+            );
+
             Ok(if let Some(transformed) = transformed {
                 Transformed::Yes(transformed)
             } else {
