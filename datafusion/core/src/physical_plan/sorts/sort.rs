@@ -30,7 +30,7 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, CompositeMetricsSet, MemTrackingMetrics, MetricsSet,
 };
-use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeStream;
+use crate::physical_plan::sorts::sort_preserving_merge::streaming_merge;
 use crate::physical_plan::sorts::SortedStream;
 use crate::physical_plan::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::physical_plan::{
@@ -193,13 +193,13 @@ impl ExternalSorter {
             let tracking_metrics = self
                 .metrics_set
                 .new_final_tracking(self.partition_id, &self.runtime.memory_pool);
-            Ok(Box::pin(SortPreservingMergeStream::new_from_streams(
+            streaming_merge(
                 streams,
                 self.schema.clone(),
                 &self.expr,
                 tracking_metrics,
                 self.session_config.batch_size(),
-            )?))
+            )
         } else if !self.in_mem_batches.is_empty() {
             let tracking_metrics = self
                 .metrics_set
@@ -305,13 +305,7 @@ fn in_mem_partial_sort(
         })
         .collect();
 
-    Ok(Box::pin(SortPreservingMergeStream::new_from_streams(
-        streams,
-        schema,
-        expressions,
-        tracking_metrics,
-        batch_size,
-    )?))
+    streaming_merge(streams, schema, expressions, tracking_metrics, batch_size)
 }
 
 async fn spill_partial_sorted_stream(
