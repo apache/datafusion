@@ -913,9 +913,7 @@ pub fn from_plan(
         | LogicalPlan::CreateExternalTable(_)
         | LogicalPlan::DropTable(_)
         | LogicalPlan::DropView(_)
-        | LogicalPlan::TransactionStart(_)
-        | LogicalPlan::TransactionEnd(_)
-        | LogicalPlan::SetVariable(_)
+        | LogicalPlan::Statement(_)
         | LogicalPlan::CreateCatalogSchema(_)
         | LogicalPlan::CreateCatalog(_) => {
             // All of these plan types have no inputs / exprs so should not be called

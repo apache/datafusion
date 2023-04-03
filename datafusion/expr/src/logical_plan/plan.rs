@@ -19,6 +19,8 @@
 use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
+use crate::logical_plan::statement::{DmlStatement, Statement};
+
 use crate::logical_plan::plan;
 use crate::utils::{
     enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs, from_plan,
@@ -88,6 +90,8 @@ pub enum LogicalPlan {
     SubqueryAlias(SubqueryAlias),
     /// Skip some number of rows, and then fetch some number of rows.
     Limit(Limit),
+    /// [`Statement`]
+    Statement(Statement),
     /// Creates an external table.
     CreateExternalTable(CreateExternalTable),
     /// Creates an in memory table.
@@ -116,8 +120,6 @@ pub enum LogicalPlan {
     Extension(Extension),
     /// Remove duplicate rows from the input
     Distinct(Distinct),
-    /// Set a Variable
-    SetVariable(SetVariable),
     /// Prepare a statement
     Prepare(Prepare),
     /// Insert / Update / Delete
@@ -126,10 +128,6 @@ pub enum LogicalPlan {
     DescribeTable(DescribeTable),
     /// Unnest a column that contains a nested list type.
     Unnest(Unnest),
-    // Begin a transaction
-    TransactionStart(TransactionStart),
-    // Commit or rollback a transaction
-    TransactionEnd(TransactionEnd),
 }
 
 impl LogicalPlan {
@@ -151,6 +149,7 @@ impl LogicalPlan {
             LogicalPlan::CrossJoin(CrossJoin { schema, .. }) => schema,
             LogicalPlan::Repartition(Repartition { input, .. }) => input.schema(),
             LogicalPlan::Limit(Limit { input, .. }) => input.schema(),
+            LogicalPlan::Statement(statement) => statement.schema(),
             LogicalPlan::Subquery(Subquery { subquery, .. }) => subquery.schema(),
             LogicalPlan::SubqueryAlias(SubqueryAlias { schema, .. }) => schema,
             LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
@@ -169,14 +168,11 @@ impl LogicalPlan {
             LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => schema,
             LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
             LogicalPlan::DropView(DropView { schema, .. }) => schema,
-            LogicalPlan::SetVariable(SetVariable { schema, .. }) => schema,
             LogicalPlan::DescribeTable(DescribeTable { dummy_schema, .. }) => {
                 dummy_schema
             }
             LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
-            LogicalPlan::TransactionStart(TransactionStart { schema, .. }) => schema,
-            LogicalPlan::TransactionEnd(TransactionEnd { schema, .. }) => schema,
         }
     }
 
@@ -243,12 +239,10 @@ impl LogicalPlan {
                 self.inputs().iter().map(|p| p.schema()).collect()
             }
             // return empty
-            LogicalPlan::DropTable(_)
+            LogicalPlan::Statement(_)
+            | LogicalPlan::DropTable(_)
             | LogicalPlan::DropView(_)
-            | LogicalPlan::DescribeTable(_)
-            | LogicalPlan::TransactionStart(_)
-            | LogicalPlan::TransactionEnd(_)
-            | LogicalPlan::SetVariable(_) => vec![],
+            | LogicalPlan::DescribeTable(_) => vec![],
         }
     }
 
@@ -362,15 +356,13 @@ impl LogicalPlan {
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Limit(_)
+            | LogicalPlan::Statement(_)
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateMemoryTable(_)
             | LogicalPlan::CreateView(_)
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
-            | LogicalPlan::TransactionStart(_)
-            | LogicalPlan::TransactionEnd(_)
-            | LogicalPlan::SetVariable(_)
             | LogicalPlan::DropView(_)
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze(_)
@@ -414,15 +406,13 @@ impl LogicalPlan {
             LogicalPlan::Unnest(Unnest { input, .. }) => vec![input],
             // plans without inputs
             LogicalPlan::TableScan { .. }
+            | LogicalPlan::Statement { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
-            | LogicalPlan::TransactionStart(_)
-            | LogicalPlan::TransactionEnd(_)
-            | LogicalPlan::SetVariable(_)
             | LogicalPlan::DropView(_)
             | LogicalPlan::DescribeTable(_) => vec![],
         }
@@ -1039,6 +1029,9 @@ impl LogicalPlan {
                     LogicalPlan::SubqueryAlias(SubqueryAlias { ref alias, .. }) => {
                         write!(f, "SubqueryAlias: {alias}")
                     }
+                    LogicalPlan::Statement(statement) => {
+                        write!(f, "{}", statement.display())
+                    }
                     LogicalPlan::CreateExternalTable(CreateExternalTable {
                         ref name,
                         ..
@@ -1069,29 +1062,10 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "DropTable: {name:?} if not exist:={if_exists}")
                     }
-                    LogicalPlan::TransactionStart(TransactionStart {
-                        access_mode,
-                        isolation_level,
-                        ..
-                    }) => {
-                        write!(f, "TransactionStart: {access_mode:?} {isolation_level:?}")
-                    }
-                    LogicalPlan::TransactionEnd(TransactionEnd {
-                        conclusion,
-                        chain,
-                        ..
-                    }) => {
-                        write!(f, "TransactionEnd: {conclusion:?} chain:={chain}")
-                    }
                     LogicalPlan::DropView(DropView {
                         name, if_exists, ..
                     }) => {
                         write!(f, "DropView: {name:?} if not exist:={if_exists}")
-                    }
-                    LogicalPlan::SetVariable(SetVariable {
-                        variable, value, ..
-                    }) => {
-                        write!(f, "SetVariable: set {variable:?} to {value:?}")
                     }
                     LogicalPlan::Distinct(Distinct { .. }) => {
                         write!(f, "Distinct:")
@@ -1222,18 +1196,6 @@ pub struct DropView {
     pub name: OwnedTableReference,
     /// If the view exists
     pub if_exists: bool,
-    /// Dummy schema
-    pub schema: DFSchemaRef,
-}
-
-/// Set a Variable's value -- value in
-/// [`ConfigOptions`](datafusion_common::config::ConfigOptions)
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct SetVariable {
-    /// The variable name
-    pub variable: String,
-    /// The value to set
-    pub value: String,
     /// Dummy schema
     pub schema: DFSchemaRef,
 }
@@ -1557,83 +1519,6 @@ impl Hash for CreateExternalTable {
         self.order_exprs.hash(state);
         self.options.len().hash(state); // HashMap is not hashable
     }
-}
-
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum WriteOp {
-    Insert,
-    Delete,
-    Update,
-    Ctas,
-}
-
-impl Display for WriteOp {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            WriteOp::Insert => write!(f, "Insert"),
-            WriteOp::Delete => write!(f, "Delete"),
-            WriteOp::Update => write!(f, "Update"),
-            WriteOp::Ctas => write!(f, "Ctas"),
-        }
-    }
-}
-
-/// The operator that modifies the content of a database (adapted from substrait WriteRel)
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct DmlStatement {
-    /// The table name
-    pub table_name: OwnedTableReference,
-    /// The schema of the table (must align with Rel input)
-    pub table_schema: DFSchemaRef,
-    /// The type of operation to perform
-    pub op: WriteOp,
-    /// The relation that determines the tuples to add/remove/modify the schema must match with table_schema
-    pub input: Arc<LogicalPlan>,
-}
-
-/// Indicates if a transaction was committed or aborted
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum TransactionConclusion {
-    Commit,
-    Rollback,
-}
-
-/// Indicates if this transaction is allowed to write
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum TransactionAccessMode {
-    ReadOnly,
-    ReadWrite,
-}
-
-/// Indicates ANSI transaction isolation level
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum TransactionIsolationLevel {
-    ReadUncommitted,
-    ReadCommitted,
-    RepeatableRead,
-    Serializable,
-}
-
-/// Indicator that the following statements should be committed or rolled back atomically
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct TransactionStart {
-    /// indicates if transaction is allowed to write
-    pub access_mode: TransactionAccessMode,
-    // indicates ANSI isolation level
-    pub isolation_level: TransactionIsolationLevel,
-    /// Empty schema
-    pub schema: DFSchemaRef,
-}
-
-/// Indicator that any current transaction should be terminated
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct TransactionEnd {
-    /// whether the transaction committed or aborted
-    pub conclusion: TransactionConclusion,
-    /// if specified a new transaction is immediately started with same characteristics
-    pub chain: bool,
-    /// Empty schema
-    pub schema: DFSchemaRef,
 }
 
 /// Prepare a statement but do not execute it. Prepare statements can have 0 or more
