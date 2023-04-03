@@ -244,6 +244,10 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     (
                         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
                         &DataType::Interval(_),
+                    )
+                    | (
+                        &DataType::Interval(_),
+                        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
                     ) => {
                         // this is a workaround for https://github.com/apache/arrow-datafusion/issues/3419
                         Ok(expr.clone())
@@ -728,8 +732,9 @@ mod test {
     use datafusion_expr::expr::{self, Like};
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true,
-        AccumulatorFunctionImplementation, AggregateFunction, AggregateUDF,
-        BuiltinScalarFunction, Case, ColumnarValue, ExprSchemable, StateTypeFunction,
+        AccumulatorFunctionImplementation, AggregateFunction, AggregateUDF, BinaryExpr,
+        BuiltinScalarFunction, Case, ColumnarValue, ExprSchemable, Operator,
+        StateTypeFunction,
     };
     use datafusion_expr::{
         lit,
@@ -1398,6 +1403,27 @@ mod test {
             in CASE WHEN expression"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn interval_plus_timestamp() -> Result<()> {
+        // SELECT INTERVAL '1' YEAR + '2000-01-01T00:00:00'::timestamp;
+        let expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(lit(ScalarValue::IntervalYearMonth(Some(12)))),
+            Operator::Plus,
+            Box::new(cast(
+                lit("2000-01-01T00:00:00"),
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+            )),
+        ));
+        let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        }));
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let expected = "Projection: IntervalYearMonth(\"12\") + CAST(Utf8(\"2000-01-01T00:00:00\") AS Timestamp(Nanosecond, None))\n  EmptyRelation";
+        assert_optimized_plan_eq(&plan, expected)?;
         Ok(())
     }
 }
