@@ -676,6 +676,7 @@ async fn test_boolean_expressions() -> Result<()> {
 #[tokio::test]
 async fn test_mathematical_expressions_with_null() -> Result<()> {
     test_expression!("sqrt(NULL)", "NULL");
+    test_expression!("cbrt(NULL)", "NULL");
     test_expression!("sin(NULL)", "NULL");
     test_expression!("cos(NULL)", "NULL");
     test_expression!("tan(NULL)", "NULL");
@@ -1625,6 +1626,19 @@ async fn csv_query_sqrt_sqrt() -> Result<()> {
     let actual = execute(&ctx, sql).await;
     // sqrt(sqrt(c12=0.9294097332465232)) = 0.9818650561397431
     let expected = vec![vec!["0.9818650561397431"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+// this query used to deadlock due to the call udf(udf())
+#[tokio::test]
+async fn csv_query_cbrt_cbrt() -> Result<()> {
+    let ctx = create_ctx();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT cbrt(cbrt(c12)) FROM aggregate_test_100 LIMIT 1";
+    let actual = execute(&ctx, sql).await;
+    // cbrt(cbrt(c12=0.9294097332465232)) = 0.9918990366780552
+    let expected = vec![vec!["0.9918990366780552"]];
     assert_float_eq(&expected, &actual);
     Ok(())
 }

@@ -2126,6 +2126,7 @@ pub enum ScalarFunction {
     CurrentDate = 70,
     CurrentTime = 71,
     Uuid = 72,
+    Cbrt = 73,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2152,6 +2153,7 @@ impl ScalarFunction {
             ScalarFunction::Signum => "Signum",
             ScalarFunction::Sin => "Sin",
             ScalarFunction::Sqrt => "Sqrt",
+            ScalarFunction::Cbrt => "Cbrt",
             ScalarFunction::Tan => "Tan",
             ScalarFunction::Trunc => "Trunc",
             ScalarFunction::Array => "Array",
@@ -2230,6 +2232,7 @@ impl ScalarFunction {
             "Signum" => Some(Self::Signum),
             "Sin" => Some(Self::Sin),
             "Sqrt" => Some(Self::Sqrt),
+            "Cbrt" => Some(Self::Cbrt),
             "Tan" => Some(Self::Tan),
             "Trunc" => Some(Self::Trunc),
             "Array" => Some(Self::Array),
