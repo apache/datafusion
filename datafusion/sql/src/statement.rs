@@ -130,6 +130,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ..
             } if table_properties.is_empty() && with_options.is_empty() => match query {
                 Some(query) => {
+                    let primary_key = Self::primary_key_from_constraints(&constraints)?;
+
                     let plan = self.query_to_plan(*query, planner_context)?;
                     let input_schema = plan.schema();
 
@@ -161,7 +163,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                     Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                         name: self.object_name_to_table_reference(name)?,
-                        primary_key: vec![],
+                        primary_key,
                         input: Arc::new(plan),
                         if_not_exists,
                         or_replace,
@@ -169,33 +171,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
 
                 None => {
-                    let pk: Option<Vec<Ident>> = constraints
-                        .iter()
-                        .filter_map(|c: &TableConstraint| match c {
-                            TableConstraint::Unique {
-                                columns,
-                                is_primary,
-                                ..
-                            } => match is_primary {
-                                true => Some(columns),
-                                false => None,
-                            },
-                            TableConstraint::ForeignKey { .. } => None,
-                            TableConstraint::Check { .. } => None,
-                            TableConstraint::Index { .. } => None,
-                            TableConstraint::FulltextOrSpatial { .. } => None,
-                        })
-                        .last()
-                        .cloned();
-                    let primary_key: Vec<Column> =
-                        pk.map_or(vec![], |cols: Vec<Ident>| {
-                            cols.iter()
-                                .map(|c| Column {
-                                    relation: None,
-                                    name: c.value.clone(),
-                                })
-                                .collect()
-                        });
+                    let primary_key = Self::primary_key_from_constraints(&constraints)?;
 
                     let schema = self.build_schema(columns)?.to_dfschema_ref()?;
                     let plan = EmptyRelation {
@@ -1097,5 +1073,55 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         self.schema_provider
             .get_table_provider(tables_reference)
             .is_ok()
+    }
+
+    fn primary_key_from_constraints(
+        constraints: &[TableConstraint],
+    ) -> Result<Vec<Column>> {
+        let pk: Result<Vec<&Vec<Ident>>> = constraints
+            .iter()
+            .map(|c: &TableConstraint| match c {
+                TableConstraint::Unique {
+                    columns,
+                    is_primary,
+                    ..
+                } => match is_primary {
+                    true => Ok(columns),
+                    false => Err(DataFusionError::Plan(
+                        "Non-primary unique constraints are not supported".to_string(),
+                    )),
+                },
+                TableConstraint::ForeignKey { .. } => Err(DataFusionError::Plan(
+                    "Foreign key constraints are not currently supported".to_string(),
+                )),
+                TableConstraint::Check { .. } => Err(DataFusionError::Plan(
+                    "Check constraints are not currently supported".to_string(),
+                )),
+                TableConstraint::Index { .. } => Err(DataFusionError::Plan(
+                    "Indexes are not currently supported".to_string(),
+                )),
+                TableConstraint::FulltextOrSpatial { .. } => Err(DataFusionError::Plan(
+                    "Indexes are not currently supported".to_string(),
+                )),
+            })
+            .collect();
+        let pk = pk?;
+        let pk = match pk.as_slice() {
+            [] => return Ok(vec![]),
+            [pk] => pk,
+            _ => {
+                return Err(DataFusionError::Plan(
+                    "Only one primary key is supported!".to_string(),
+                ))?
+            }
+        };
+        let primary_key: Vec<Column> = pk
+            .iter()
+            .map(|c| Column {
+                relation: None,
+                name: c.value.clone(),
+            })
+            .collect();
+        Ok(primary_key)
     }
 }
