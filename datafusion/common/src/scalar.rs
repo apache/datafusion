@@ -1147,6 +1147,22 @@ pub fn milliseconds_add_array<const INTERVAL_MODE: i8>(
 }
 
 #[inline]
+pub fn milliseconds_add_array<const INTERVAL_MODE: i8>(
+    ts_ms: i64,
+    interval: i128,
+    sign: i32,
+) -> Result<i64> {
+    let mut secs = ts_ms / 1000;
+    let mut nsecs = ((ts_ms % 1000) * 1_000_000) as i32;
+    if nsecs < 0 {
+        secs -= 1;
+        nsecs += 1_000_000_000;
+    }
+    do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs as u32, interval, sign)
+        .map(|dt| dt.timestamp_millis())
+}
+
+#[inline]
 pub fn microseconds_add(ts_us: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
     let mut secs = ts_us / 1_000_000;
     let mut nsecs = ((ts_us % 1_000_000) * 1000) as i32;
@@ -1175,6 +1191,22 @@ pub fn microseconds_add_array<const INTERVAL_MODE: i8>(
 }
 
 #[inline]
+pub fn microseconds_add_array<const INTERVAL_MODE: i8>(
+    ts_us: i64,
+    interval: i128,
+    sign: i32,
+) -> Result<i64> {
+    let mut secs = ts_us / 1_000_000;
+    let mut nsecs = ((ts_us % 1_000_000) * 1000) as i32;
+    if nsecs < 0 {
+        secs -= 1;
+        nsecs += 1_000_000_000;
+    }
+    do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs as u32, interval, sign)
+        .map(|dt| dt.timestamp_nanos() / 1000)
+}
+
+#[inline]
 pub fn nanoseconds_add(ts_ns: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
     let mut secs = ts_ns / 1_000_000_000;
     let mut nsecs = (ts_ns % 1_000_000_000) as i32;
@@ -1183,6 +1215,51 @@ pub fn nanoseconds_add(ts_ns: i64, scalar: &ScalarValue, sign: i32) -> Result<i6
         nsecs += 1_000_000_000;
     }
     do_date_time_math(secs, nsecs as u32, scalar, sign).map(|dt| dt.timestamp_nanos())
+}
+
+#[inline]
+pub fn nanoseconds_add_array<const INTERVAL_MODE: i8>(
+    ts_ns: i64,
+    interval: i128,
+    sign: i32,
+) -> Result<i64> {
+    let mut secs = ts_ns / 1_000_000_000;
+    let mut nsecs = (ts_ns % 1_000_000_000) as i32;
+    if nsecs < 0 {
+        secs -= 1;
+        nsecs += 1_000_000_000;
+    }
+    do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs as u32, interval, sign)
+        .map(|dt| dt.timestamp_nanos())
+}
+
+#[inline]
+pub fn seconds_sub(ts_lhs: i64, ts_rhs: i64) -> i64 {
+    let diff_ms = (ts_lhs - ts_rhs) * 1000;
+    let days = (diff_ms / MILLISECS_IN_ONE_DAY) as i32;
+    let millis = (diff_ms % MILLISECS_IN_ONE_DAY) as i32;
+    IntervalDayTimeType::make_value(days, millis)
+}
+#[inline]
+pub fn milliseconds_sub(ts_lhs: i64, ts_rhs: i64) -> i64 {
+    let diff_ms = ts_lhs - ts_rhs;
+    let days = (diff_ms / MILLISECS_IN_ONE_DAY) as i32;
+    let millis = (diff_ms % MILLISECS_IN_ONE_DAY) as i32;
+    IntervalDayTimeType::make_value(days, millis)
+}
+#[inline]
+pub fn microseconds_sub(ts_lhs: i64, ts_rhs: i64) -> i128 {
+    let diff_ns = (ts_lhs - ts_rhs) * 1000;
+    let days = (diff_ns / NANOSECS_IN_ONE_DAY) as i32;
+    let nanos = diff_ns % NANOSECS_IN_ONE_DAY;
+    IntervalMonthDayNanoType::make_value(0, days, nanos)
+}
+#[inline]
+pub fn nanoseconds_sub(ts_lhs: i64, ts_rhs: i64) -> i128 {
+    let diff_ns = ts_lhs - ts_rhs;
+    let days = (diff_ns / NANOSECS_IN_ONE_DAY) as i32;
+    let nanos = diff_ns % NANOSECS_IN_ONE_DAY;
+    IntervalMonthDayNanoType::make_value(0, days, nanos)
 }
 
 #[inline]
@@ -2189,6 +2266,9 @@ impl ScalarValue {
             DataType::Interval(IntervalUnit::YearMonth) => {
                 build_array_primitive!(IntervalYearMonthArray, IntervalYearMonth)
             }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                build_array_primitive!(IntervalMonthDayNanoArray, IntervalMonthDayNano)
+            }
             DataType::List(fields) if fields.data_type() == &DataType::Int8 => {
                 build_array_list_primitive!(Int8Type, Int8, i8)
             }
@@ -2338,7 +2418,6 @@ impl ScalarValue {
             | DataType::Time64(TimeUnit::Millisecond)
             | DataType::Duration(_)
             | DataType::FixedSizeList(_, _)
-            | DataType::Interval(_)
             | DataType::LargeList(_)
             | DataType::Union(_, _, _)
             | DataType::Map(_, _)
@@ -2892,6 +2971,20 @@ impl ScalarValue {
                         true => None,
                         false => Some(array.value(index).into()),
                     },
+                )
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                typed_cast!(array, index, IntervalDayTimeArray, IntervalDayTime)
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                typed_cast!(array, index, IntervalYearMonthArray, IntervalYearMonth)
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                typed_cast!(
+                    array,
+                    index,
+                    IntervalMonthDayNanoArray,
+                    IntervalMonthDayNano
                 )
             }
             other => {

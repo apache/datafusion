@@ -126,6 +126,10 @@ pub enum LogicalPlan {
     DescribeTable(DescribeTable),
     /// Unnest a column that contains a nested list type.
     Unnest(Unnest),
+    // Begin a transaction
+    TransactionStart(TransactionStart),
+    // Commit or rollback a transaction
+    TransactionEnd(TransactionEnd),
 }
 
 impl LogicalPlan {
@@ -171,6 +175,8 @@ impl LogicalPlan {
             }
             LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
+            LogicalPlan::TransactionStart(TransactionStart { schema, .. }) => schema,
+            LogicalPlan::TransactionEnd(TransactionEnd { schema, .. }) => schema,
         }
     }
 
@@ -240,6 +246,8 @@ impl LogicalPlan {
             LogicalPlan::DropTable(_)
             | LogicalPlan::DropView(_)
             | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::TransactionStart(_)
+            | LogicalPlan::TransactionEnd(_)
             | LogicalPlan::SetVariable(_) => vec![],
         }
     }
@@ -360,6 +368,8 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
+            | LogicalPlan::TransactionStart(_)
+            | LogicalPlan::TransactionEnd(_)
             | LogicalPlan::SetVariable(_)
             | LogicalPlan::DropView(_)
             | LogicalPlan::CrossJoin(_)
@@ -410,6 +420,8 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
+            | LogicalPlan::TransactionStart(_)
+            | LogicalPlan::TransactionEnd(_)
             | LogicalPlan::SetVariable(_)
             | LogicalPlan::DropView(_)
             | LogicalPlan::DescribeTable(_) => vec![],
@@ -1057,6 +1069,20 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "DropTable: {name:?} if not exist:={if_exists}")
                     }
+                    LogicalPlan::TransactionStart(TransactionStart {
+                        access_mode,
+                        isolation_level,
+                        ..
+                    }) => {
+                        write!(f, "TransactionStart: {access_mode:?} {isolation_level:?}")
+                    }
+                    LogicalPlan::TransactionEnd(TransactionEnd {
+                        conclusion,
+                        chain,
+                        ..
+                    }) => {
+                        write!(f, "TransactionEnd: {conclusion:?} chain:={chain}")
+                    }
                     LogicalPlan::DropView(DropView {
                         name, if_exists, ..
                     }) => {
@@ -1563,6 +1589,51 @@ pub struct DmlStatement {
     pub op: WriteOp,
     /// The relation that determines the tuples to add/remove/modify the schema must match with table_schema
     pub input: Arc<LogicalPlan>,
+}
+
+/// Indicates if a transaction was committed or aborted
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum TransactionConclusion {
+    Commit,
+    Rollback,
+}
+
+/// Indicates if this transaction is allowed to write
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum TransactionAccessMode {
+    ReadOnly,
+    ReadWrite,
+}
+
+/// Indicates ANSI transaction isolation level
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum TransactionIsolationLevel {
+    ReadUncommitted,
+    ReadCommitted,
+    RepeatableRead,
+    Serializable,
+}
+
+/// Indicator that the following statements should be committed or rolled back atomically
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct TransactionStart {
+    /// indicates if transaction is allowed to write
+    pub access_mode: TransactionAccessMode,
+    // indicates ANSI isolation level
+    pub isolation_level: TransactionIsolationLevel,
+    /// Empty schema
+    pub schema: DFSchemaRef,
+}
+
+/// Indicator that any current transaction should be terminated
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct TransactionEnd {
+    /// whether the transaction committed or aborted
+    pub conclusion: TransactionConclusion,
+    /// if specified a new transaction is immediately started with same characteristics
+    pub chain: bool,
+    /// Empty schema
+    pub schema: DFSchemaRef,
 }
 
 /// Prepare a statement but do not execute it. Prepare statements can have 0 or more

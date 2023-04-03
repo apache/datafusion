@@ -464,7 +464,7 @@ scalar_expr!(
     num,
     "nearest integer greater than or equal to argument"
 );
-scalar_expr!(Round, round, num, "round to nearest integer");
+nary_scalar_expr!(Round, round, "round to nearest integer");
 scalar_expr!(Trunc, trunc, num, "truncate toward zero");
 scalar_expr!(Abs, abs, num, "absolute value");
 scalar_expr!(Signum, signum, num, "sign of the argument (-1, 0, +1) ");
@@ -766,7 +766,8 @@ mod test {
         test_unary_scalar_expr!(Atan, atan);
         test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
-        test_unary_scalar_expr!(Round, round);
+        test_nary_scalar_expr!(Round, round, input);
+        test_nary_scalar_expr!(Round, round, input, decimal_places);
         test_unary_scalar_expr!(Trunc, trunc);
         test_unary_scalar_expr!(Abs, abs);
         test_unary_scalar_expr!(Signum, signum);

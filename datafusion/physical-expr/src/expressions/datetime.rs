@@ -363,6 +363,97 @@ pub fn evaluate_temporal_arrays(
     Ok(ColumnarValue::Array(ret))
 }
 
+macro_rules! ts_sub_op {
+    ($lhs:ident, $rhs:ident, $lhs_tz:ident, $rhs_tz:ident, $coef:expr, $caster:expr, $op:expr, $ts_unit:expr, $mode:expr, $type_out:ty) => {{
+        let prim_array_lhs = $caster(&$lhs)?;
+        let prim_array_rhs = $caster(&$rhs)?;
+        let ret: PrimitiveArray<$type_out> =
+            arrow::compute::try_binary(prim_array_lhs, prim_array_rhs, |ts1, ts2| {
+                let (parsed_lhs_tz, parsed_rhs_tz) =
+                    (parse_timezones($lhs_tz)?, parse_timezones($rhs_tz)?);
+                let (naive_lhs, naive_rhs) = calculate_naives::<$mode>(
+                    ts1.mul_wrapping($coef),
+                    parsed_lhs_tz,
+                    ts2.mul_wrapping($coef),
+                    parsed_rhs_tz,
+                )?;
+                Ok($op($ts_unit(&naive_lhs), $ts_unit(&naive_rhs)))
+            })?;
+        Arc::new(ret) as ArrayRef
+    }};
+}
+macro_rules! interval_op {
+    ($lhs:ident, $rhs:ident, $caster:expr, $op:expr, $sign:ident, $type_in:ty) => {{
+        let prim_array_lhs = $caster(&$lhs)?;
+        let prim_array_rhs = $caster(&$rhs)?;
+        let ret = Arc::new(binary::<$type_in, $type_in, _, $type_in>(
+            prim_array_lhs,
+            prim_array_rhs,
+            |interval1, interval2| $op(interval1, interval2, $sign),
+        )?) as ArrayRef;
+        ret
+    }};
+}
+macro_rules! interval_cross_op {
+    ($lhs:ident, $rhs:ident, $caster1:expr, $caster2:expr, $op:expr, $sign:ident, $commute:ident, $type_in1:ty, $type_in2:ty) => {{
+        let prim_array_lhs = $caster1(&$lhs)?;
+        let prim_array_rhs = $caster2(&$rhs)?;
+        let ret = Arc::new(binary::<$type_in1, $type_in2, _, IntervalMonthDayNanoType>(
+            prim_array_lhs,
+            prim_array_rhs,
+            |interval1, interval2| $op(interval1, interval2, $sign, $commute),
+        )?) as ArrayRef;
+        ret
+    }};
+}
+macro_rules! ts_interval_op {
+    ($lhs:ident, $rhs:ident, $tz:ident, $caster1:expr, $caster2:expr, $op:expr, $sign:ident, $type_in1:ty, $type_in2:ty) => {{
+        let prim_array_lhs = $caster1(&$lhs)?;
+        let prim_array_rhs = $caster2(&$rhs)?;
+        let ret: PrimitiveArray<$type_in1> = arrow::compute::try_binary(
+            prim_array_lhs,
+            prim_array_rhs,
+            |ts, interval| Ok($op(ts, interval as i128, $sign)?),
+        )?;
+        Arc::new(ret.with_timezone_opt($tz.clone())) as ArrayRef
+    }};
+}
+// This function evaluates temporal array operations, such as timestamp - timestamp, interval + interval,
+// timestamp + interval, and interval + timestamp. It takes two arrays as input and an integer sign representing
+// the operation (+1 for addition and -1 for subtraction). It returns a ColumnarValue as output, which can hold
+// either a scalar or an array.
+pub fn evaluate_temporal_arrays(
+    array_lhs: &ArrayRef,
+    sign: i32,
+    array_rhs: &ArrayRef,
+) -> Result<ColumnarValue> {
+    let ret = match (array_lhs.data_type(), array_rhs.data_type()) {
+        // Timestamp - Timestamp operations, operands of only the same types are supported.
+        (DataType::Timestamp(_, _), DataType::Timestamp(_, _)) => {
+            ts_array_op(array_lhs, array_rhs)?
+        }
+        // Interval (+ , -) Interval operations
+        (DataType::Interval(_), DataType::Interval(_)) => {
+            interval_array_op(array_lhs, array_rhs, sign)?
+        }
+        // Timestamp (+ , -) Interval and Interval + Timestamp operations
+        // Interval - Timestamp operation is not rational hence not supported
+        (DataType::Timestamp(_, _), DataType::Interval(_)) => {
+            ts_interval_array_op(array_lhs, sign, array_rhs)?
+        }
+        (DataType::Interval(_), DataType::Timestamp(_, _)) if sign == 1 => {
+            ts_interval_array_op(array_rhs, sign, array_lhs)?
+        }
+        (_, _) => Err(DataFusionError::Execution(format!(
+            "Invalid array types for DateIntervalExpr: {:?} {} {:?}",
+            array_lhs.data_type(),
+            sign,
+            array_rhs.data_type()
+        )))?,
+    };
+    Ok(ColumnarValue::Array(ret))
+}
+
 /// Performs a timestamp subtraction operation on two arrays and returns the resulting array.
 fn ts_array_op(array_lhs: &ArrayRef, array_rhs: &ArrayRef) -> Result<ArrayRef> {
     match (array_lhs.data_type(), array_rhs.data_type()) {
