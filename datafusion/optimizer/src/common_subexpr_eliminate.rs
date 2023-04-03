@@ -237,6 +237,8 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
             | LogicalPlan::DropView(_)
+            | LogicalPlan::TransactionStart(_)
+            | LogicalPlan::TransactionEnd(_)
             | LogicalPlan::SetVariable(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Distinct(_)
