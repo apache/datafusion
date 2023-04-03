@@ -284,7 +284,7 @@ config_namespace! {
         /// its inputs do not have any ordering or filtering If the flag is not enabled,
         /// the SymmetricHashJoin operator will be unable to prune its internal buffers,
         /// resulting in certain join types - such as Full, Left, LeftAnti, LeftSemi, Right,
-        /// RightAnti, and RightSemi -being produced only at the end of the execution.
+        /// RightAnti, and RightSemi - being produced only at the end of the execution.
         /// This is not typical in stream processing. Additionally, without proper design for
         /// long runner execution, all types of joins may encounter out-of-memory errors.
         pub allow_symmetric_joins_without_pruning: bool, default = true
