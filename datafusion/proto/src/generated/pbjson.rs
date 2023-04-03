@@ -17028,7 +17028,6 @@ impl serde::Serialize for ScalarFunction {
             Self::Signum => "Signum",
             Self::Sin => "Sin",
             Self::Sqrt => "Sqrt",
-            Self::Cbrt => "Cbrt",
             Self::Tan => "Tan",
             Self::Trunc => "Trunc",
             Self::Array => "Array",
@@ -17084,6 +17083,7 @@ impl serde::Serialize for ScalarFunction {
             Self::CurrentDate => "CurrentDate",
             Self::CurrentTime => "CurrentTime",
             Self::Uuid => "Uuid",
+            Self::Cbrt => "Cbrt",
         };
         serializer.serialize_str(variant)
     }
@@ -17113,7 +17113,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Signum",
             "Sin",
             "Sqrt",
-            "Cbrt",
             "Tan",
             "Trunc",
             "Array",
@@ -17169,6 +17168,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "CurrentDate",
             "CurrentTime",
             "Uuid",
+            "Cbrt",
         ];
 
         struct GeneratedVisitor;
@@ -17229,7 +17229,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Signum" => Ok(ScalarFunction::Signum),
                     "Sin" => Ok(ScalarFunction::Sin),
                     "Sqrt" => Ok(ScalarFunction::Sqrt),
-                    "Cbrt" => Ok(ScalarFunction::Cbrt),
                     "Tan" => Ok(ScalarFunction::Tan),
                     "Trunc" => Ok(ScalarFunction::Trunc),
                     "Array" => Ok(ScalarFunction::Array),
@@ -17285,6 +17284,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "CurrentDate" => Ok(ScalarFunction::CurrentDate),
                     "CurrentTime" => Ok(ScalarFunction::CurrentTime),
                     "Uuid" => Ok(ScalarFunction::Uuid),
+                    "Cbrt" => Ok(ScalarFunction::Cbrt),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

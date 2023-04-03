@@ -2153,7 +2153,6 @@ impl ScalarFunction {
             ScalarFunction::Signum => "Signum",
             ScalarFunction::Sin => "Sin",
             ScalarFunction::Sqrt => "Sqrt",
-            ScalarFunction::Cbrt => "Cbrt",
             ScalarFunction::Tan => "Tan",
             ScalarFunction::Trunc => "Trunc",
             ScalarFunction::Array => "Array",
@@ -2209,6 +2208,7 @@ impl ScalarFunction {
             ScalarFunction::CurrentDate => "CurrentDate",
             ScalarFunction::CurrentTime => "CurrentTime",
             ScalarFunction::Uuid => "Uuid",
+            ScalarFunction::Cbrt => "Cbrt",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2232,7 +2232,6 @@ impl ScalarFunction {
             "Signum" => Some(Self::Signum),
             "Sin" => Some(Self::Sin),
             "Sqrt" => Some(Self::Sqrt),
-            "Cbrt" => Some(Self::Cbrt),
             "Tan" => Some(Self::Tan),
             "Trunc" => Some(Self::Trunc),
             "Array" => Some(Self::Array),
@@ -2288,6 +2287,7 @@ impl ScalarFunction {
             "CurrentDate" => Some(Self::CurrentDate),
             "CurrentTime" => Some(Self::CurrentTime),
             "Uuid" => Some(Self::Uuid),
+            "Cbrt" => Some(Self::Cbrt),
             _ => None,
         }
     }
