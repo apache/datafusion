@@ -469,6 +469,102 @@ macro_rules! min_max {
             ) => {
                 typed_min_max!(lhs, rhs, Time64Nanosecond, $OP)
             }
+            (
+                ScalarValue::IntervalYearMonth(lhs),
+                ScalarValue::IntervalYearMonth(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, IntervalYearMonth, $OP)
+            }
+            (
+                ScalarValue::IntervalYearMonth(lhs),
+                ScalarValue::IntervalDayTime(rhs),
+            ) => {
+                match (stringify!($OP) , ScalarValue::IntervalYearMonth(*lhs).partial_cmp(&ScalarValue::IntervalDayTime(*rhs))) {
+                    ("min", Some(std::cmp::Ordering::Greater)) | ("max", Some(std::cmp::Ordering::Less)) => ScalarValue::IntervalDayTime(*rhs),
+                    (_, Some(_)) => ScalarValue::IntervalYearMonth(*lhs),
+                    (_,_) => return Err(DataFusionError::Internal(format!(
+                        "MIN/MAX is not expected to receive scalars of incompatible types {:?} - {:?}",
+                        ScalarValue::IntervalYearMonth(*lhs), ScalarValue::IntervalDayTime(*rhs)
+                    )))
+                }
+            }
+            (
+                ScalarValue::IntervalYearMonth(lhs),
+                ScalarValue::IntervalMonthDayNano(rhs),
+            ) => {
+                match (stringify!($OP) , ScalarValue::IntervalYearMonth(*lhs).partial_cmp(&ScalarValue::IntervalMonthDayNano(*rhs))) {
+                    ("min", Some(std::cmp::Ordering::Greater)) | ("max", Some(std::cmp::Ordering::Less)) => ScalarValue::IntervalMonthDayNano(*rhs),
+                    (_, Some(_)) => ScalarValue::IntervalYearMonth(*lhs),
+                    (_,_) => return Err(DataFusionError::Internal(format!(
+                        "MIN/MAX is not expected to receive scalars of incompatible types {:?} - {:?}",
+                        ScalarValue::IntervalYearMonth(*lhs), ScalarValue::IntervalMonthDayNano(*rhs)
+                    )))
+                }
+            }
+            (
+                ScalarValue::IntervalDayTime(lhs),
+                ScalarValue::IntervalDayTime(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, IntervalDayTime, $OP)
+            }
+            (
+                ScalarValue::IntervalDayTime(lhs),
+                ScalarValue::IntervalYearMonth(rhs),
+            ) => {
+                match (stringify!($OP) , ScalarValue::IntervalDayTime(*lhs).partial_cmp(&ScalarValue::IntervalYearMonth(*rhs))) {
+                    ("min", Some(std::cmp::Ordering::Greater)) | ("max", Some(std::cmp::Ordering::Less)) => ScalarValue::IntervalYearMonth(*rhs),
+                    (_, Some(_)) => ScalarValue::IntervalDayTime(*lhs),
+                    (_,_) => return Err(DataFusionError::Internal(format!(
+                        "MIN/MAX is not expected to receive scalars of incompatible types {:?} - {:?}",
+                        ScalarValue::IntervalDayTime(*lhs), ScalarValue::IntervalYearMonth(*rhs)
+                    )))
+                }
+            }
+            (
+                ScalarValue::IntervalDayTime(lhs),
+                ScalarValue::IntervalMonthDayNano(rhs),
+            ) => {
+                match (stringify!($OP) , ScalarValue::IntervalDayTime(*lhs).partial_cmp(&ScalarValue::IntervalMonthDayNano(*rhs))) {
+                    ("min", Some(std::cmp::Ordering::Greater)) | ("max", Some(std::cmp::Ordering::Less)) => ScalarValue::IntervalMonthDayNano(*rhs),
+                    (_, Some(_)) => ScalarValue::IntervalDayTime(*lhs),
+                    (_,_) => return Err(DataFusionError::Internal(format!(
+                        "MIN/MAX is not expected to receive scalars of incompatible types {:?} - {:?}",
+                        ScalarValue::IntervalDayTime(*lhs), ScalarValue::IntervalMonthDayNano(*rhs)
+                    )))
+                }
+            }
+            (
+                ScalarValue::IntervalMonthDayNano(lhs),
+                ScalarValue::IntervalMonthDayNano(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, IntervalMonthDayNano, $OP)
+            }
+            (
+                ScalarValue::IntervalMonthDayNano(lhs),
+                ScalarValue::IntervalYearMonth(rhs),
+            ) => {
+                match (stringify!($OP) , ScalarValue::IntervalMonthDayNano(*lhs).partial_cmp(&ScalarValue::IntervalYearMonth(*rhs))) {
+                    ("min", Some(std::cmp::Ordering::Greater)) | ("max", Some(std::cmp::Ordering::Less)) => ScalarValue::IntervalYearMonth(*rhs),
+                    (_, Some(_)) => ScalarValue::IntervalMonthDayNano(*lhs),
+                    (_,_) => return Err(DataFusionError::Internal(format!(
+                        "MIN/MAX is not expected to receive scalars of incompatible types {:?} - {:?}",
+                        ScalarValue::IntervalMonthDayNano(*lhs), ScalarValue::IntervalYearMonth(*rhs)
+                    )))
+                }
+            }
+            (
+                ScalarValue::IntervalMonthDayNano(lhs),
+                ScalarValue::IntervalDayTime(rhs),
+            ) => {
+                match (stringify!($OP) , ScalarValue::IntervalMonthDayNano(*lhs).partial_cmp(&ScalarValue::IntervalDayTime(*rhs))) {
+                    ("min", Some(std::cmp::Ordering::Greater)) | ("max", Some(std::cmp::Ordering::Less)) => ScalarValue::IntervalDayTime(*rhs),
+                    (_, Some(_)) => ScalarValue::IntervalMonthDayNano(*lhs),
+                    (_,_) => return Err(DataFusionError::Internal(format!(
+                        "MIN/MAX is not expected to receive scalars of incompatible types {:?} - {:?}",
+                        ScalarValue::IntervalMonthDayNano(*lhs), ScalarValue::IntervalDayTime(*rhs)
+                    )))
+                }
+            }
             e => {
                 return Err(DataFusionError::Internal(format!(
                     "MIN/MAX is not expected to receive scalars of incompatible types {:?}",

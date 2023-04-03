@@ -19,8 +19,9 @@
 
 use std::sync::Arc;
 
-use crate::expressions::{BinaryExpr, Literal};
+use crate::expressions::{BinaryExpr, DateTimeIntervalExpr, Literal};
 use crate::PhysicalExpr;
+use arrow_schema::Schema;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Operator;
 
@@ -61,6 +62,134 @@ pub fn gen_conjunctive_numeric_expr(
         op_4,
         Arc::new(Literal::new(ScalarValue::Int32(Some(d)))),
     ));
+    let left_expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, left_and_2));
+    let right_expr = Arc::new(BinaryExpr::new(right_and_1, Operator::Lt, right_and_2));
+    Arc::new(BinaryExpr::new(left_expr, Operator::And, right_expr))
+}
+
+#[allow(clippy::too_many_arguments)]
+/// This test function generates a conjunctive statement with
+/// two timestamp terms with the following form:
+/// left_col (op_1) a  > right_col (op_2) b AND left_col (op_3) c < right_col (op_4) d
+pub fn gen_conjunctive_interval_expr(
+    left_col: Arc<dyn PhysicalExpr>,
+    right_col: Arc<dyn PhysicalExpr>,
+    op_1: Operator,
+    op_2: Operator,
+    op_3: Operator,
+    op_4: Operator,
+    a: i32,
+    b: i32,
+    c: i32,
+    d: i32,
+    schema: &Schema,
+) -> Arc<dyn PhysicalExpr> {
+    let left_and_1 = Arc::new(
+        DateTimeIntervalExpr::try_new(
+            left_col.clone(),
+            op_1,
+            Arc::new(Literal::new(ScalarValue::IntervalDayTime(Some(a.into())))),
+            schema,
+        )
+        .unwrap(),
+    );
+    let left_and_2 = Arc::new(
+        DateTimeIntervalExpr::try_new(
+            right_col.clone(),
+            op_2,
+            Arc::new(Literal::new(ScalarValue::IntervalDayTime(Some(b.into())))),
+            schema,
+        )
+        .unwrap(),
+    );
+    let right_and_1 = Arc::new(
+        DateTimeIntervalExpr::try_new(
+            left_col,
+            op_3,
+            Arc::new(Literal::new(ScalarValue::IntervalDayTime(Some(c.into())))),
+            schema,
+        )
+        .unwrap(),
+    );
+    let right_and_2 = Arc::new(
+        DateTimeIntervalExpr::try_new(
+            right_col,
+            op_4,
+            Arc::new(Literal::new(ScalarValue::IntervalDayTime(Some(d.into())))),
+            schema,
+        )
+        .unwrap(),
+    );
+    let left_expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, left_and_2));
+    let right_expr = Arc::new(BinaryExpr::new(right_and_1, Operator::Lt, right_and_2));
+    Arc::new(BinaryExpr::new(left_expr, Operator::And, right_expr))
+}
+
+#[allow(clippy::too_many_arguments)]
+/// This test function generates a conjunctive statement with
+/// one timestamp and one interval term with the following form:
+/// left_col (op_1) a  > right_col (op_2) b AND left_col (op_3) c < right_col (op_4) d
+pub fn gen_conjunctive_timestamp_expr(
+    left_col: Arc<dyn PhysicalExpr>,
+    right_col: Arc<dyn PhysicalExpr>,
+    op_1: Operator,
+    op_2: Operator,
+    op_3: Operator,
+    op_4: Operator,
+    a: i32,
+    b: i32,
+    c: i32,
+    d: i32,
+    schema: &Schema,
+) -> Arc<dyn PhysicalExpr> {
+    let left_and_1 = Arc::new(
+        DateTimeIntervalExpr::try_new(
+            left_col.clone(),
+            op_1,
+            Arc::new(Literal::new(ScalarValue::TimestampMillisecond(
+                Some(a.into()),
+                None,
+            ))),
+            schema,
+        )
+        .unwrap(),
+    );
+    let left_and_2 = Arc::new(
+        DateTimeIntervalExpr::try_new(
+            right_col.clone(),
+            op_2,
+            Arc::new(Literal::new(ScalarValue::TimestampMillisecond(
+                Some(b.into()),
+                None,
+            ))),
+            schema,
+        )
+        .unwrap(),
+    );
+    let right_and_1 = Arc::new(
+        DateTimeIntervalExpr::try_new(
+            left_col,
+            op_3,
+            Arc::new(Literal::new(ScalarValue::TimestampMillisecond(
+                Some(c.into()),
+                None,
+            ))),
+            schema,
+        )
+        .unwrap(),
+    );
+    let right_and_2 = Arc::new(
+        DateTimeIntervalExpr::try_new(
+            right_col,
+            op_4,
+            Arc::new(Literal::new(ScalarValue::TimestampMillisecond(
+                Some(d.into()),
+                None,
+            ))),
+            schema,
+        )
+        .unwrap(),
+    );
     let left_expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, left_and_2));
     let right_expr = Arc::new(BinaryExpr::new(right_and_1, Operator::Lt, right_and_2));
     Arc::new(BinaryExpr::new(left_expr, Operator::And, right_expr))

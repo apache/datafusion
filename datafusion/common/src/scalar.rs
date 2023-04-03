@@ -1016,7 +1016,7 @@ fn ts_sub_to_interval<const TIME_MODE: bool>(
 pub fn parse_timezones(tz: &Option<String>) -> Result<Option<Tz>> {
     if let Some(tz) = tz {
         let parsed_tz: Tz = FromStr::from_str(tz).map_err(|_| {
-            DataFusionError::Execution("cannot parse given timezone".to_string())
+            DataFusionError::Execution(format!("cannot parse '{tz}' as timezone"))
         })?;
         Ok(Some(parsed_tz))
     } else {
@@ -1121,9 +1121,13 @@ pub fn seconds_add_array<const INTERVAL_MODE: i8>(
 
 #[inline]
 pub fn milliseconds_add(ts_ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let secs = ts_ms / 1000;
-    let nsecs = ((ts_ms % 1000) * 1_000_000) as u32;
-    do_date_time_math(secs, nsecs, scalar, sign).map(|dt| dt.timestamp_millis())
+    let mut secs = ts_ms / 1000;
+    let mut nsecs = ((ts_ms % 1000) * 1_000_000) as i32;
+    if nsecs < 0 {
+        secs -= 1;
+        nsecs += 1_000_000_000;
+    }
+    do_date_time_math(secs, nsecs as u32, scalar, sign).map(|dt| dt.timestamp_millis())
 }
 
 #[inline]
@@ -1144,9 +1148,14 @@ pub fn milliseconds_add_array<const INTERVAL_MODE: i8>(
 
 #[inline]
 pub fn microseconds_add(ts_us: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let secs = ts_us / 1_000_000;
-    let nsecs = ((ts_us % 1_000_000) * 1000) as u32;
-    do_date_time_math(secs, nsecs, scalar, sign).map(|dt| dt.timestamp_nanos() / 1000)
+    let mut secs = ts_us / 1_000_000;
+    let mut nsecs = ((ts_us % 1_000_000) * 1000) as i32;
+    if nsecs < 0 {
+        secs -= 1;
+        nsecs += 1_000_000_000;
+    }
+    do_date_time_math(secs, nsecs as u32, scalar, sign)
+        .map(|dt| dt.timestamp_nanos() / 1000)
 }
 
 #[inline]
@@ -1167,9 +1176,13 @@ pub fn microseconds_add_array<const INTERVAL_MODE: i8>(
 
 #[inline]
 pub fn nanoseconds_add(ts_ns: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let secs = ts_ns / 1_000_000_000;
-    let nsecs = (ts_ns % 1_000_000_000) as u32;
-    do_date_time_math(secs, nsecs, scalar, sign).map(|dt| dt.timestamp_nanos())
+    let mut secs = ts_ns / 1_000_000_000;
+    let mut nsecs = (ts_ns % 1_000_000_000) as i32;
+    if nsecs < 0 {
+        secs -= 1;
+        nsecs += 1_000_000_000;
+    }
+    do_date_time_math(secs, nsecs as u32, scalar, sign).map(|dt| dt.timestamp_nanos())
 }
 
 #[inline]
@@ -1226,7 +1239,7 @@ fn do_date_time_math(
 ) -> Result<NaiveDateTime> {
     let prior = NaiveDateTime::from_timestamp_opt(secs, nsecs).ok_or_else(|| {
         DataFusionError::Internal(format!(
-            "Could not conert to NaiveDateTime: secs {secs} nsecs {nsecs} scalar {scalar:?} sign {sign}"
+            "Could not convert to NaiveDateTime: secs {secs} nsecs {nsecs} scalar {scalar:?} sign {sign}"
         ))
     })?;
     do_date_math(prior, scalar, sign)
@@ -1241,7 +1254,7 @@ fn do_date_time_math_array<const INTERVAL_MODE: i8>(
 ) -> Result<NaiveDateTime> {
     let prior = NaiveDateTime::from_timestamp_opt(secs, nsecs).ok_or_else(|| {
         DataFusionError::Internal(format!(
-            "Could not conert to NaiveDateTime: secs {secs} nsecs {nsecs}"
+            "Could not convert to NaiveDateTime: secs {secs} nsecs {nsecs}"
         ))
     })?;
     do_date_math_array::<_, INTERVAL_MODE>(prior, interval, sign)
@@ -1697,6 +1710,27 @@ impl ScalarValue {
             DataType::UInt64 => ScalarValue::UInt64(Some(0)),
             DataType::Float32 => ScalarValue::Float32(Some(0.0)),
             DataType::Float64 => ScalarValue::Float64(Some(0.0)),
+            DataType::Timestamp(TimeUnit::Second, tz) => {
+                ScalarValue::TimestampSecond(Some(0), tz.clone())
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, tz) => {
+                ScalarValue::TimestampMillisecond(Some(0), tz.clone())
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+                ScalarValue::TimestampMicrosecond(Some(0), tz.clone())
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+                ScalarValue::TimestampNanosecond(Some(0), tz.clone())
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                ScalarValue::IntervalYearMonth(Some(0))
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                ScalarValue::IntervalDayTime(Some(0))
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                ScalarValue::IntervalMonthDayNano(Some(0))
+            }
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Can't create a zero scalar from data_type \"{datatype:?}\""
@@ -2783,6 +2817,20 @@ impl ScalarValue {
                     TimestampNanosecondArray,
                     TimestampNanosecond,
                     tz_opt
+                )
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                typed_cast!(array, index, IntervalYearMonthArray, IntervalYearMonth)
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                typed_cast!(array, index, IntervalDayTimeArray, IntervalDayTime)
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                typed_cast!(
+                    array,
+                    index,
+                    IntervalMonthDayNanoArray,
+                    IntervalMonthDayNano
                 )
             }
             DataType::Dictionary(key_type, _) => {

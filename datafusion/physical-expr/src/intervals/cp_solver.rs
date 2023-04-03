@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use arrow_schema::DataType;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::type_coercion::binary::coerce_types;
 use datafusion_expr::Operator;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::{DefaultIx, StableGraph};
@@ -237,9 +238,14 @@ pub fn propagate_arithmetic(
 /// If we have expression < 0, expression must have the range [-∞, 0].
 /// Currently, we only support strict inequalities since open/closed intervals
 /// are not implemented yet.
-fn comparison_operator_target(datatype: &DataType, op: &Operator) -> Result<Interval> {
-    let unbounded = ScalarValue::try_from(datatype)?;
-    let zero = ScalarValue::new_zero(datatype)?;
+fn comparison_operator_target(
+    left_datatype: &DataType,
+    op: &Operator,
+    right_datatype: &DataType,
+) -> Result<Interval> {
+    let datatype = coerce_types(left_datatype, &Operator::Minus, right_datatype)?;
+    let unbounded = ScalarValue::try_from(&datatype)?;
+    let zero = ScalarValue::new_zero(&datatype)?;
     Ok(match *op {
         Operator::Gt => Interval {
             lower: zero,
@@ -265,7 +271,11 @@ pub fn propagate_comparison(
     left_child: &Interval,
     right_child: &Interval,
 ) -> Result<(Option<Interval>, Option<Interval>)> {
-    let parent = comparison_operator_target(&left_child.get_datatype(), op)?;
+    let parent = comparison_operator_target(
+        &left_child.get_datatype(),
+        op,
+        &right_child.get_datatype(),
+    )?;
     propagate_arithmetic(&Operator::Minus, &parent, left_child, right_child)
 }
 
