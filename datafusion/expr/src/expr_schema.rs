@@ -21,7 +21,7 @@ use crate::expr::{
 };
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::binary_operator_data_type;
-use crate::type_coercion::other::get_coerce_type_for_case_when;
+use crate::type_coercion::other::get_coerce_type_for_case_expression;
 use crate::{aggregate_function, function, window_function};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
@@ -82,13 +82,12 @@ impl ExprSchemable for Expr {
                     None => Ok(None),
                     Some(expr) => expr.get_type(schema).map(Some),
                 }?;
-                get_coerce_type_for_case_when(&then_types, else_type.as_ref()).ok_or_else(
-                    || {
+                get_coerce_type_for_case_expression(&then_types, else_type.as_ref())
+                    .ok_or_else(|| {
                         DataFusionError::Internal(String::from(
                             "Cannot infer type for CASE statement",
                         ))
-                    },
-                )
+                    })
             }
             Expr::Cast(Cast { data_type, .. })
             | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
