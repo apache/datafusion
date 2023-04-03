@@ -158,6 +158,7 @@ pub(crate) fn pushdown_sorts(
         if ordering_satisfy_requirement(plan.output_ordering(), parent_required, || {
             plan.equivalence_properties()
         }) {
+            // Satisfies parent requirements, immediately return.
             return Ok(Transformed::Yes(SortPushDown {
                 required_ordering: None,
                 ..requirements
@@ -256,7 +257,6 @@ fn pushdown_requirement_to_children(
         || is_limit(plan)
     {
         // If the current plan is a leaf node or can not maintain any of the input ordering, can not pushed down requirements.
-        // For RepartitionExec, we always choose to not push down the sort requirements even the RepartitionExec(input_partition=1) could maintain input ordering.
         // For RepartitionExec, we always choose to not push down the sort requirements even the RepartitionExec(input_partition=1) could maintain input ordering.
         // Pushing down is not beneficial
         Ok(None)

@@ -75,39 +75,39 @@ pub fn add_sort_above(
     Ok(())
 }
 
-/// Checks whether the given executor is a limit;
+/// Checks whether the given operator is a limit;
 /// i.e. either a [`LocalLimitExec`] or a [`GlobalLimitExec`].
 pub fn is_limit(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<GlobalLimitExec>() || plan.as_any().is::<LocalLimitExec>()
 }
 
-/// Checks whether the given executor is a window;
+/// Checks whether the given operator is a window;
 /// i.e. either a [`WindowAggExec`] or a [`BoundedWindowAggExec`].
 pub fn is_window(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<WindowAggExec>() || plan.as_any().is::<BoundedWindowAggExec>()
 }
 
-/// Checks whether the given executor is a [`SortExec`].
+/// Checks whether the given operator is a [`SortExec`].
 pub fn is_sort(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<SortExec>()
 }
 
-/// Checks whether the given executor is a [`SortPreservingMergeExec`].
+/// Checks whether the given operator is a [`SortPreservingMergeExec`].
 pub fn is_sort_preserving_merge(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<SortPreservingMergeExec>()
 }
 
-/// Checks whether the given executor is a [`CoalescePartitionsExec`].
+/// Checks whether the given operator is a [`CoalescePartitionsExec`].
 pub fn is_coalesce_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<CoalescePartitionsExec>()
 }
 
-/// Checks whether the given executor is a [`UnionExec`].
+/// Checks whether the given operator is a [`UnionExec`].
 pub fn is_union(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<UnionExec>()
 }
 
-/// Checks whether the given executor is a [`RepartitionExec`].
+/// Checks whether the given operator is a [`RepartitionExec`].
 pub fn is_repartition(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<RepartitionExec>()
 }
