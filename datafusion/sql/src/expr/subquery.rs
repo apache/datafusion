@@ -30,11 +30,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let old_outer_query_schema = planner_context.outer_query_schema.clone();
-        planner_context.outer_query_schema = Some(input_schema.clone());
+        let old_outer_query_schema =
+            planner_context.set_outer_query_schema(Some(input_schema.clone()));
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
-        planner_context.outer_query_schema = old_outer_query_schema;
+        planner_context.set_outer_query_schema(old_outer_query_schema);
         Ok(Expr::Exists {
             subquery: Subquery {
                 subquery: Arc::new(sub_plan),
@@ -52,11 +52,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let old_outer_query_schema = planner_context.outer_query_schema.clone();
-        planner_context.outer_query_schema = Some(input_schema.clone());
+        let old_outer_query_schema =
+            planner_context.set_outer_query_schema(Some(input_schema.clone()));
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
-        planner_context.outer_query_schema = old_outer_query_schema;
+        planner_context.set_outer_query_schema(old_outer_query_schema);
         let expr = Box::new(self.sql_to_expr(expr, input_schema, planner_context)?);
         Ok(Expr::InSubquery {
             expr,
@@ -74,11 +74,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let old_outer_query_schema = planner_context.outer_query_schema.clone();
-        planner_context.outer_query_schema = Some(input_schema.clone());
+        let old_outer_query_schema =
+            planner_context.set_outer_query_schema(Some(input_schema.clone()));
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
-        planner_context.outer_query_schema = old_outer_query_schema;
+        planner_context.set_outer_query_schema(old_outer_query_schema);
         Ok(Expr::ScalarSubquery(Subquery {
             subquery: Arc::new(sub_plan),
             outer_ref_columns,
