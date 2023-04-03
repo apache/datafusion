@@ -194,7 +194,9 @@ fn aggregate_batch(
             // 1.3
             let size_pre = accum.size();
             let res = match mode {
-                AggregateMode::Partial | AggregateMode::Single => accum.update_batch(values),
+                AggregateMode::Partial | AggregateMode::Single => {
+                    accum.update_batch(values)
+                }
                 AggregateMode::Final | AggregateMode::FinalPartitioned => {
                     accum.merge_batch(values)
                 }

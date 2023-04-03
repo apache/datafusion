@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! CombinePartialFinalAggregate optimizer rule checks the adjacent Partial and Final AggregateExecs
+//! and try to combine them if necessary
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
@@ -24,6 +26,11 @@ use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 
+/// CombinePartialFinalAggregate optimizer rule combines the adjacent Partial and Final AggregateExecs
+/// into a Single AggregateExec if their grouping exprs and aggregate exprs equal.
+///
+/// This rule should be applied after the EnforceDistribution and EnforceSorting rules
+///
 #[derive(Default)]
 pub struct CombinePartialFinalAggregate {}
 
@@ -65,6 +72,9 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                         if matches!(mode, AggregateMode::Partial)
                             && final_group_by.eq(group_by)
                             && final_aggr_expr.len() == aggr_expr.len()
+                            && final_aggr_expr.iter().zip(aggr_expr.iter()).all(
+                                |(final_expr, partial_expr)| final_expr.eq(partial_expr),
+                            )
                         {
                             Some(Arc::new(AggregateExec::try_new(
                                 AggregateMode::Single,

@@ -17,9 +17,12 @@
 
 //! Utilities used in aggregates
 
+use crate::AggregateExpr;
 use arrow::array::ArrayRef;
 use datafusion_common::Result;
 use datafusion_expr::Accumulator;
+use std::any::Any;
+use std::sync::Arc;
 
 /// Convert scalar values from an accumulator into arrays.
 pub fn get_accum_scalar_values_as_arrays(
@@ -30,4 +33,18 @@ pub fn get_accum_scalar_values_as_arrays(
         .iter()
         .map(|s| s.to_array_of_size(1))
         .collect::<Vec<_>>())
+}
+
+pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
+    if any.is::<Arc<dyn AggregateExpr>>() {
+        any.downcast_ref::<Arc<dyn AggregateExpr>>()
+            .unwrap()
+            .as_any()
+    } else if any.is::<Box<dyn AggregateExpr>>() {
+        any.downcast_ref::<Box<dyn AggregateExpr>>()
+            .unwrap()
+            .as_any()
+    } else {
+        any
+    }
 }

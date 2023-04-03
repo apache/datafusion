@@ -156,13 +156,13 @@ impl PartialEq for PhysicalGroupBy {
                 .expr
                 .iter()
                 .zip(other.expr.iter())
-                .all(|((expr1,name1), (expr2, name2))| expr1.eq(expr2) && name1 == name2)
+                .all(|((expr1, name1), (expr2, name2))| expr1.eq(expr2) && name1 == name2)
             && self.null_expr.len() == other.null_expr.len()
             && self
                 .null_expr
                 .iter()
                 .zip(other.null_expr.iter())
-            .all(|((expr1,name1), (expr2, name2))| expr1.eq(expr2) && name1 == name2)
+                .all(|((expr1, name1), (expr2, name2))| expr1.eq(expr2) && name1 == name2)
             && self.groups == other.groups
     }
 }
