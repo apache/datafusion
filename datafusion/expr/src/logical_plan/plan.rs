@@ -1046,9 +1046,17 @@ impl LogicalPlan {
                         write!(f, "CreateExternalTable: {name:?}")
                     }
                     LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                        name, ..
+                        name,
+                        primary_key,
+                        ..
                     }) => {
-                        write!(f, "CreateMemoryTable: {name:?}")
+                        let pk: Vec<String> =
+                            primary_key.iter().map(|c| c.name.to_string()).collect();
+                        let mut pk = pk.join(", ");
+                        if !pk.is_empty() {
+                            pk = format!(" primary_key=[{pk}]");
+                        }
+                        write!(f, "CreateMemoryTable: {name:?}{pk}")
                     }
                     LogicalPlan::CreateView(CreateView { name, .. }) => {
                         write!(f, "CreateView: {name:?}")
@@ -1490,6 +1498,8 @@ pub struct Union {
 pub struct CreateMemoryTable {
     /// The table name
     pub name: OwnedTableReference,
+    /// The ordered list of columns in the primary key, or an empty vector if none
+    pub primary_key: Vec<Column>,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists

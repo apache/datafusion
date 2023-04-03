@@ -200,6 +200,36 @@ fn cast_to_invalid_decimal_type() {
 }
 
 #[test]
+fn plan_create_table_with_pk() {
+    let sql = "create table person (id int, name string, primary key(id))";
+    let plan = r#"
+CreateMemoryTable: Bare { table: "person" } primary_key=[id]
+  EmptyRelation
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_create_table_no_pk() {
+    let sql = "create table person (id int, name string)";
+    let plan = r#"
+CreateMemoryTable: Bare { table: "person" }
+  EmptyRelation
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+#[should_panic(expected = "Non-primary unique constraints are not supported")]
+fn plan_create_table_check_constraint() {
+    let sql = "create table person (id int, name string, unique(id))";
+    let plan = "";
+    quick_test(sql, plan);
+}
+
+#[test]
 fn plan_start_transaction() {
     let sql = "start transaction";
     let plan = "TransactionStart: ReadWrite Serializable";
