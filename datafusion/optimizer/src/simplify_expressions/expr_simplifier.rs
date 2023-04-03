@@ -2245,7 +2245,7 @@ mod tests {
             let expected = col("c4_non_null");
             assert_eq!(simplify(expr), expected);
         }
-        // Log(c3, c4) ===> Log(c3, c4) 
+        // Log(c3, c4) ===> Log(c3, c4)
         {
             let expr = log(col("c3_non_null"), col("c4_non_null"));
             let expected = log(col("c3_non_null"), col("c4_non_null"));
