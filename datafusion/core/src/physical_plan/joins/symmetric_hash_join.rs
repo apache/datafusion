@@ -385,7 +385,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             .iter()
             .map(|(l, r)| (Arc::new(l.clone()) as _, Arc::new(r.clone()) as _))
             .unzip();
-        // TODO: This will change when we extend collected executions.
+        // TODO:  This will change when we extend collected executions.
         vec![
             if self.left.output_partitioning().partition_count() == 1 {
                 Distribution::SinglePartition
