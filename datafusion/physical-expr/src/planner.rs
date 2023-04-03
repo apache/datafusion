@@ -51,7 +51,7 @@ pub fn create_physical_expr(
     if input_schema.fields.len() != input_dfschema.fields().len() {
         return Err(DataFusionError::Internal(format!(
             "create_physical_expr expected same number of fields, got \
-                     got Arrow schema with {}  and DataFusion schema with {}",
+                     Arrow schema with {}  and DataFusion schema with {}",
             input_schema.fields.len(),
             input_dfschema.fields().len()
         )));
@@ -170,6 +170,7 @@ pub fn create_physical_expr(
             )
         }
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+            // Create physical expressions for left and right operands
             let lhs = create_physical_expr(
                 left,
                 input_dfschema,
@@ -182,6 +183,9 @@ pub fn create_physical_expr(
                 input_schema,
                 execution_props,
             )?;
+            // Match the data types and operator to determine the appropriate expression, if
+            // they are supported temporal types and operations, create DateTimeIntervalExpr,
+            // else create BinaryExpr.
             match (
                 lhs.data_type(input_schema)?,
                 op,
@@ -205,6 +209,26 @@ pub fn create_physical_expr(
                     rhs,
                     *op,
                     lhs,
+                    input_schema,
+                )?)),
+                (
+                    DataType::Timestamp(_, _),
+                    Operator::Minus,
+                    DataType::Timestamp(_, _),
+                ) => Ok(Arc::new(DateTimeIntervalExpr::try_new(
+                    lhs,
+                    *op,
+                    rhs,
+                    input_schema,
+                )?)),
+                (
+                    DataType::Interval(_),
+                    Operator::Plus | Operator::Minus,
+                    DataType::Interval(_),
+                ) => Ok(Arc::new(DateTimeIntervalExpr::try_new(
+                    lhs,
+                    *op,
+                    rhs,
                     input_schema,
                 )?)),
                 _ => {

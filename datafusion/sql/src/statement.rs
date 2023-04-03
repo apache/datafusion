@@ -30,7 +30,10 @@ use datafusion_common::{
 };
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
-use datafusion_expr::logical_plan::{Analyze, Prepare};
+use datafusion_expr::logical_plan::{
+    Analyze, Prepare, TransactionAccessMode, TransactionConclusion, TransactionEnd,
+    TransactionIsolationLevel, TransactionStart,
+};
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, CreateCatalog, CreateCatalogSchema,
@@ -43,7 +46,7 @@ use sqlparser::ast;
 use sqlparser::ast::{
     Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, OrderByExpr, Query,
     SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableFactor,
-    TableWithJoins, UnaryOperator, Value,
+    TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 
 use sqlparser::parser::ParserError::ParserError;
@@ -391,6 +394,68 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     ))?;
                 }
                 self.delete_to_plan(table_name, selection)
+            }
+
+            Statement::StartTransaction { modes } => {
+                let isolation_level: ast::TransactionIsolationLevel = modes
+                    .iter()
+                    .filter_map(|m: &ast::TransactionMode| match m {
+                        TransactionMode::AccessMode(_) => None,
+                        TransactionMode::IsolationLevel(level) => Some(level),
+                    })
+                    .last()
+                    .copied()
+                    .unwrap_or(ast::TransactionIsolationLevel::Serializable);
+                let access_mode: ast::TransactionAccessMode = modes
+                    .iter()
+                    .filter_map(|m: &ast::TransactionMode| match m {
+                        TransactionMode::AccessMode(mode) => Some(mode),
+                        TransactionMode::IsolationLevel(_) => None,
+                    })
+                    .last()
+                    .copied()
+                    .unwrap_or(ast::TransactionAccessMode::ReadWrite);
+                let isolation_level = match isolation_level {
+                    ast::TransactionIsolationLevel::ReadUncommitted => {
+                        TransactionIsolationLevel::ReadUncommitted
+                    }
+                    ast::TransactionIsolationLevel::ReadCommitted => {
+                        TransactionIsolationLevel::ReadCommitted
+                    }
+                    ast::TransactionIsolationLevel::RepeatableRead => {
+                        TransactionIsolationLevel::RepeatableRead
+                    }
+                    ast::TransactionIsolationLevel::Serializable => {
+                        TransactionIsolationLevel::Serializable
+                    }
+                };
+                let access_mode = match access_mode {
+                    ast::TransactionAccessMode::ReadOnly => {
+                        TransactionAccessMode::ReadOnly
+                    }
+                    ast::TransactionAccessMode::ReadWrite => {
+                        TransactionAccessMode::ReadWrite
+                    }
+                };
+                Ok(LogicalPlan::TransactionStart(TransactionStart {
+                    access_mode,
+                    isolation_level,
+                    schema: DFSchemaRef::new(DFSchema::empty()),
+                }))
+            }
+            Statement::Commit { chain } => {
+                Ok(LogicalPlan::TransactionEnd(TransactionEnd {
+                    conclusion: TransactionConclusion::Commit,
+                    chain,
+                    schema: DFSchemaRef::new(DFSchema::empty()),
+                }))
+            }
+            Statement::Rollback { chain } => {
+                Ok(LogicalPlan::TransactionEnd(TransactionEnd {
+                    conclusion: TransactionConclusion::Rollback,
+                    chain,
+                    schema: DFSchemaRef::new(DFSchema::empty()),
+                }))
             }
 
             _ => Err(DataFusionError::NotImplemented(format!(

@@ -77,12 +77,12 @@ For example, to cast the output of `now()` to a `Timestamp` with second precisio
 
 ## Date/Time Types
 
-| SQL DataType | Arrow DataType                                  |
-| ------------ | :---------------------------------------------- |
-| `DATE`       | `Date32`                                        |
-| `TIME`       | `Time64(Nanosecond)`                            |
-| `TIMESTAMP`  | `Timestamp(Nanosecond, None)`                   |
-| `INTERVAL`   | `Interval(IntervalUnit)` or `Interval(DayTime)` |
+| SQL DataType | Arrow DataType                   |
+| ------------ | :------------------------------- |
+| `DATE`       | `Date32`                         |
+| `TIME`       | `Time64(Nanosecond)`             |
+| `TIMESTAMP`  | `Timestamp(Nanosecond, None)`    |
+| `INTERVAL`   | `Interval(IntervalMonthDayNano)` |
 
 ## Boolean Types
 
