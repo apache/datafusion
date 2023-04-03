@@ -146,7 +146,7 @@ pub(crate) fn pushdown_sorts(
             // Can push down requirements
             Ok(Transformed::Yes(SortPushDown {
                 plan: child.clone(),
-                required_ordering,
+                required_ordering: None,
                 adjusted_request_ordering: adjusted,
             }))
         } else {
@@ -168,8 +168,8 @@ pub(crate) fn pushdown_sorts(
         if let Some(adjusted) = pushdown_requirement_to_children(plan, parent_required)? {
             Ok(Transformed::Yes(SortPushDown {
                 plan: plan.clone(),
+                required_ordering: None,
                 adjusted_request_ordering: adjusted,
-                ..requirements
             }))
         } else {
             // Can not push down requirements, add new SortExec:
