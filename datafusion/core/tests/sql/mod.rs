@@ -1365,7 +1365,6 @@ where
     Ok(Arc::new(table))
 }
 
-
 /// Return a new table provider that has a single Int32 column with
 /// values between `seq_start` and `seq_end`
 pub fn table_with_sequence(
