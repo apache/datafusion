@@ -292,7 +292,6 @@ cbrt(numeric_expression)
 - **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
-
 ### `tan`
 
 Returns the tangent of a number.
