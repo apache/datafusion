@@ -1046,9 +1046,17 @@ impl LogicalPlan {
                         write!(f, "CreateExternalTable: {name:?}")
                     }
                     LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                        name, ..
+                        name,
+                        primary_key,
+                        ..
                     }) => {
-                        write!(f, "CreateMemoryTable: {name:?}")
+                        let pk: Vec<String> =
+                            primary_key.iter().map(|c| c.name.to_string()).collect();
+                        let mut pk = pk.join(", ");
+                        if !pk.is_empty() {
+                            pk = format!(" primary_key=[{pk}]");
+                        }
+                        write!(f, "CreateMemoryTable: {name:?}{pk}")
                     }
                     LogicalPlan::CreateView(CreateView { name, .. }) => {
                         write!(f, "CreateView: {name:?}")
