@@ -152,7 +152,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 subquery,
                 negated,
             } => {
-                let new_plan = optimize_internal(&self.schema, &subquery.subquery)?;
+                let expr_type = expr.get_type(&self.schema)?;
+                let new_plan = analyze_internal(&self.schema, &subquery.subquery)?;
+                let subquery_type = new_plan.schema().field(0).data_type();
+                let expr = if &expr_type == subquery_type {
+                    expr
+                } else {
+                    Box::new(expr.cast_to(subquery_type, &self.schema)?)
+                };
                 Ok(Expr::InSubquery {
                     expr,
                     subquery: Subquery {
@@ -251,6 +258,17 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     ) => {
                         // this is a workaround for https://github.com/apache/arrow-datafusion/issues/3419
                         Ok(expr.clone())
+                    }
+                    (DataType::Timestamp(_, _), DataType::Timestamp(_, _))
+                        if op.is_numerical_operators() =>
+                    {
+                        if matches!(op, Operator::Minus) {
+                            Ok(expr)
+                        } else {
+                            Err(DataFusionError::Internal(format!(
+                                "Unsupported operation {op:?} between {left_type:?} and {right_type:?}"
+                            )))
+                        }
                     }
                     _ => {
                         let coerced_type = coerce_types(&left_type, &op, &right_type)?;
