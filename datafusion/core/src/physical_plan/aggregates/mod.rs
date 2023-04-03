@@ -197,8 +197,8 @@ pub struct AggregateExec {
     alias_map: HashMap<Column, Vec<Column>>,
     /// Execution Metrics
     metrics: ExecutionPlanMetricsSet,
-    out_ordering: Vec<PhysicalSortExpr>,
-    ordered_indices: Vec<usize>,
+    out_ordering: Option<Vec<PhysicalSortExpr>>,
+    ordered_indices: Option<Vec<usize>>,
 }
 
 /// Calculates the working mode for `GROUP BY` queries.
@@ -255,16 +255,16 @@ fn get_working_mode(
 }
 
 // Util function to get iteration order information stored inside the `GroupByOrderMode`.
-fn get_ordered_indices(working_mode: &Option<GroupByOrderMode>) -> Vec<usize> {
+fn get_ordered_indices(working_mode: &Option<GroupByOrderMode>) -> Option<Vec<usize>> {
     if let Some(mode) = working_mode {
         match mode {
             GroupByOrderMode::Ordered(ordered_indices)
             | GroupByOrderMode::PartiallyOrdered(ordered_indices) => {
-                ordered_indices.clone()
+                Some(ordered_indices.clone())
             }
         }
     } else {
-        vec![]
+        None
     }
 }
 
@@ -303,19 +303,22 @@ impl AggregateExec {
         let existing_ordering = input.output_ordering().unwrap_or(&[]);
 
         // Output ordering information for the executor.
-        let out_ordering = ordered_indices
-            .iter()
-            .zip(existing_ordering)
-            .map(|(idx, input_col)| {
-                let name = group_by.expr[*idx].1.as_str();
-                let col_expr = col(name, &schema)?;
-                let options = input_col.options;
-                Ok(PhysicalSortExpr {
-                    expr: col_expr,
-                    options,
+        let out_ordering = ordered_indices.as_deref().map(|indices| {
+            indices
+                .iter()
+                .zip(existing_ordering)
+                .map(|(idx, input_col)| {
+                    let name = group_by.expr[*idx].1.as_str();
+                    let col_expr = col(name, &schema)?;
+                    let options = input_col.options;
+                    Ok(PhysicalSortExpr {
+                        expr: col_expr,
+                        options,
+                    })
                 })
-            })
-            .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()
+                .unwrap()
+        });
 
         Ok(AggregateExec {
             mode,
@@ -451,7 +454,7 @@ impl ExecutionPlan for AggregateExec {
     /// infinite, returns an error to indicate this.    
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
-            if self.ordered_indices.is_empty() {
+            if self.ordered_indices.is_none() {
                 // Cannot run without breaking pipeline.
                 Err(DataFusionError::Plan(
                     "Aggregate Error: `GROUP BY` clause (including the more general GROUPING SET) is not supported for unbounded inputs.".to_string(),
@@ -465,11 +468,7 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        if self.out_ordering.is_empty() {
-            None
-        } else {
-            Some(&self.out_ordering)
-        }
+        self.out_ordering.as_deref()
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {

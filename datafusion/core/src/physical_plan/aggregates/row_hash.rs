@@ -102,8 +102,8 @@ pub(crate) struct GroupedHashAggregateStream {
     /// first element in the array corresponds to normal accumulators
     /// second element in the array corresponds to row accumulators
     indices: [Vec<Range<usize>>; 2],
-    ordered_indices: Vec<usize>,
-    ordering: Vec<PhysicalSortExpr>,
+    ordered_indices: Option<Vec<usize>>,
+    ordering: Option<Vec<PhysicalSortExpr>>,
     is_end: bool,
     is_fully_sorted: bool,
 }
@@ -137,8 +137,8 @@ impl GroupedHashAggregateStream {
         batch_size: usize,
         context: Arc<TaskContext>,
         partition: usize,
-        ordered_indices: Vec<usize>,
-        ordering: Vec<PhysicalSortExpr>,
+        ordered_indices: Option<Vec<usize>>,
+        ordering: Option<Vec<PhysicalSortExpr>>,
     ) -> Result<Self> {
         let timer = baseline_metrics.elapsed_compute().timer();
         let mut start_idx = group_by.expr.len();
@@ -204,8 +204,10 @@ impl GroupedHashAggregateStream {
         timer.done();
 
         let exec_state = ExecutionState::ReadingInput;
-
-        let is_fully_sorted = ordered_indices.len() == group_by.expr.len();
+        let is_fully_sorted = ordered_indices
+            .as_ref()
+            .map(|indices| indices.len() == group_by.expr.len())
+            .unwrap_or(false);
         Ok(GroupedHashAggregateStream {
             schema: Arc::clone(&schema),
             mode,
@@ -285,7 +287,7 @@ impl Stream for GroupedHashAggregateStream {
                             let batch = result.record_output(&self.baseline_metrics);
                             self.row_group_skip_position += batch.num_rows();
                             self.exec_state = ExecutionState::ReadingInput;
-                            if !self.ordered_indices.is_empty() {
+                            if self.ordered_indices.is_some() {
                                 self.prune()?;
                             }
                             return Poll::Ready(Some(Ok(batch)));
@@ -323,13 +325,14 @@ impl GroupedHashAggregateStream {
         create_hashes(group_values, &self.random_state, &mut batch_hashes)?;
         let mut res: Vec<(OwnedRow, u64, Vec<u32>)> = vec![];
         if self.is_fully_sorted {
-            let sort_column = self
-                .ordered_indices
+            let ordered_indices = self.ordered_indices.as_deref().unwrap_or(&[]);
+            let ordering = self.ordering.as_deref().unwrap_or(&[]);
+            let sort_column = ordered_indices
                 .iter()
                 .enumerate()
                 .map(|(idx, cur_idx)| SortColumn {
                     values: group_values[*cur_idx].clone(),
-                    options: Some(self.ordering[idx].options),
+                    options: Some(ordering[idx].options),
                 })
                 .collect::<Vec<_>>();
             let n_rows = group_rows.num_rows();
@@ -426,14 +429,16 @@ impl GroupedHashAggregateStream {
                     None => {
                         let accumulator_set =
                             aggregates::create_accumulators(&self.normal_aggr_expr)?;
-                        let ordered_columns = if self.ordered_indices.is_empty() {
-                            vec![]
-                        } else {
+                        let ordered_columns = if let Some(ordered_indices) =
+                            &self.ordered_indices
+                        {
                             let row = get_row_at_idx(group_values, indices[0] as usize)?;
-                            self.ordered_indices
+                            ordered_indices
                                 .iter()
                                 .map(|idx| row[*idx].clone())
                                 .collect::<Vec<_>>()
+                        } else {
+                            vec![]
                         };
                         // Add new entry to group_states and save newly created index
                         let group_state = RowGroupState {
@@ -611,7 +616,7 @@ impl GroupedHashAggregateStream {
             .size()
             .saturating_sub(row_converter_size_pre);
 
-        if !self.ordered_indices.is_empty() {
+        if self.ordered_indices.is_some() {
             let mut new_result = false;
             let last_ordered_columns = self
                 .row_aggr_state
