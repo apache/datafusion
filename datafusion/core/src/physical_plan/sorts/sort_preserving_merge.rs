@@ -312,9 +312,6 @@ pub(crate) struct SortPreservingMergeStream {
     /// If the stream has encountered an error
     aborted: bool,
 
-    /// An id to uniquely identify the input stream batch
-    next_batch_id: usize,
-
     /// Vector that holds all [`SortKeyCursor`]s
     cursors: Vec<Option<SortKeyCursor>>,
 
@@ -375,7 +372,6 @@ impl SortPreservingMergeStream {
             tracking_metrics,
             aborted: false,
             in_progress: vec![],
-            next_batch_id: 0,
             cursors: (0..stream_count).map(|_| None).collect(),
             loser_tree: Vec::with_capacity(stream_count),
             loser_tree_adjusted: false,
@@ -430,12 +426,7 @@ impl SortPreservingMergeStream {
                             }
                         };
 
-                        self.cursors[idx] = Some(SortKeyCursor::new(
-                            idx,
-                            self.next_batch_id, // assign this batch an ID
-                            rows,
-                        ));
-                        self.next_batch_id += 1;
+                        self.cursors[idx] = Some(SortKeyCursor::new(idx, rows));
                         self.batches[idx].push_back(batch)
                     } else {
                         empty_batch = true;
