@@ -615,21 +615,22 @@ fn analyze_window_sort_removal(
             DataFusionError::Plan("A SortExec should have output ordering".to_string())
         })?;
         if let Some(physical_ordering) = physical_ordering {
-            let (can_skip_sorting, should_reverse) = can_skip_sort(
+            if let Some(should_reverse) = can_skip_sort(
                 window_expr[0].partition_by(),
                 required_ordering,
                 &sort_input.schema(),
                 physical_ordering,
-            )?;
-            if !can_skip_sorting {
-                return Ok(None);
-            }
-            if let Some(first_should_reverse) = first_should_reverse {
-                if first_should_reverse != should_reverse {
-                    return Ok(None);
+            )? {
+                if let Some(first_should_reverse) = first_should_reverse {
+                    if first_should_reverse != should_reverse {
+                        return Ok(None);
+                    }
+                } else {
+                    first_should_reverse = Some(should_reverse);
                 }
             } else {
-                first_should_reverse = Some(should_reverse);
+                // Cannot skip sort
+                return Ok(None);
             }
         } else {
             // If there is no physical ordering, there is no way to remove a
@@ -830,7 +831,6 @@ fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExp
 #[derive(Debug)]
 /// This structure stores extra column information required to remove unnecessary sorts.
 pub struct ColumnInfo {
-    is_aligned: bool,
     reverse: bool,
     is_partition: bool,
 }
@@ -844,21 +844,22 @@ pub fn can_skip_sort(
     required: &[PhysicalSortExpr],
     input_schema: &SchemaRef,
     physical_ordering: &[PhysicalSortExpr],
-) -> Result<(bool, bool)> {
+) -> Result<Option<bool>> {
     if required.len() > physical_ordering.len() {
-        return Ok((false, false));
+        return Ok(None);
     }
     let mut col_infos = vec![];
     for (sort_expr, physical_expr) in zip(required, physical_ordering) {
         let column = sort_expr.expr.clone();
         let is_partition = partition_keys.iter().any(|e| e.eq(&column));
-        let (is_aligned, reverse) =
-            check_alignment(input_schema, physical_expr, sort_expr);
-        col_infos.push(ColumnInfo {
-            is_aligned,
-            reverse,
-            is_partition,
-        });
+        if let Some(reverse) = check_alignment(input_schema, physical_expr, sort_expr) {
+            col_infos.push(ColumnInfo {
+                reverse,
+                is_partition,
+            });
+        } else {
+            return Ok(None);
+        }
     }
     let partition_by_sections = col_infos
         .iter()
@@ -870,7 +871,7 @@ pub fn can_skip_sort(
         let first_reverse = partition_by_sections[0].reverse;
         let can_skip_partition_bys = partition_by_sections
             .iter()
-            .all(|c| c.is_aligned && c.reverse == first_reverse);
+            .all(|c| c.reverse == first_reverse);
         can_skip_partition_bys
     };
     let order_by_sections = col_infos
@@ -881,13 +882,12 @@ pub fn can_skip_sort(
         (true, false)
     } else {
         let first_reverse = order_by_sections[0].reverse;
-        let can_skip_order_bys = order_by_sections
-            .iter()
-            .all(|c| c.is_aligned && c.reverse == first_reverse);
+        let can_skip_order_bys =
+            order_by_sections.iter().all(|c| c.reverse == first_reverse);
         (can_skip_order_bys, first_reverse)
     };
     let can_skip = can_skip_order_bys && can_skip_partition_bys;
-    Ok((can_skip, should_reverse_order_bys))
+    Ok(can_skip.then_some(should_reverse_order_bys))
 }
 
 /// Compares `physical_ordering` and `required` ordering, returns a tuple
@@ -897,7 +897,7 @@ fn check_alignment(
     input_schema: &SchemaRef,
     physical_ordering: &PhysicalSortExpr,
     required: &PhysicalSortExpr,
-) -> (bool, bool) {
+) -> Option<bool> {
     if required.expr.eq(&physical_ordering.expr) {
         let nullable = required.expr.nullable(input_schema).unwrap();
         let physical_opts = physical_ordering.options;
@@ -909,9 +909,9 @@ fn check_alignment(
             physical_opts.descending != required_opts.descending
         };
         let can_skip = !nullable || is_reversed || (physical_opts == required_opts);
-        (can_skip, is_reversed)
+        can_skip.then_some(is_reversed)
     } else {
-        (false, false)
+        None
     }
 }
 
@@ -959,17 +959,17 @@ mod tests {
     async fn test_is_column_aligned_nullable() -> Result<()> {
         let schema = create_test_schema()?;
         let params = vec![
-            ((true, true), (false, false), (true, true)),
-            ((true, true), (false, true), (false, false)),
-            ((true, true), (true, false), (false, false)),
-            ((true, false), (false, true), (true, true)),
-            ((true, false), (false, false), (false, false)),
-            ((true, false), (true, true), (false, false)),
+            ((true, true), (false, false), Some(true)),
+            ((true, true), (false, true), None),
+            ((true, true), (true, false), None),
+            ((true, false), (false, true), Some(true)),
+            ((true, false), (false, false), None),
+            ((true, false), (true, true), None),
         ];
         for (
             (physical_desc, physical_nulls_first),
             (req_desc, req_nulls_first),
-            (is_aligned_expected, reverse_expected),
+            expected,
         ) in params
         {
             let physical_ordering = PhysicalSortExpr {
@@ -986,10 +986,8 @@ mod tests {
                     nulls_first: req_nulls_first,
                 },
             };
-            let (is_aligned, reverse) =
-                check_alignment(&schema, &physical_ordering, &required_ordering);
-            assert_eq!(is_aligned, is_aligned_expected);
-            assert_eq!(reverse, reverse_expected);
+            let res = check_alignment(&schema, &physical_ordering, &required_ordering);
+            assert_eq!(res, expected);
         }
 
         Ok(())
@@ -1000,17 +998,17 @@ mod tests {
         let schema = create_test_schema()?;
 
         let params = vec![
-            ((true, true), (false, false), (true, true)),
-            ((true, true), (false, true), (true, true)),
-            ((true, true), (true, false), (true, false)),
-            ((true, false), (false, true), (true, true)),
-            ((true, false), (false, false), (true, true)),
-            ((true, false), (true, true), (true, false)),
+            ((true, true), (false, false), Some(true)),
+            ((true, true), (false, true), Some(true)),
+            ((true, true), (true, false), Some(false)),
+            ((true, false), (false, true), Some(true)),
+            ((true, false), (false, false), Some(true)),
+            ((true, false), (true, true), Some(false)),
         ];
         for (
             (physical_desc, physical_nulls_first),
             (req_desc, req_nulls_first),
-            (is_aligned_expected, reverse_expected),
+            expected,
         ) in params
         {
             let physical_ordering = PhysicalSortExpr {
@@ -1027,10 +1025,8 @@ mod tests {
                     nulls_first: req_nulls_first,
                 },
             };
-            let (is_aligned, reverse) =
-                check_alignment(&schema, &physical_ordering, &required_ordering);
-            assert_eq!(is_aligned, is_aligned_expected);
-            assert_eq!(reverse, reverse_expected);
+            let res = check_alignment(&schema, &physical_ordering, &required_ordering);
+            assert_eq!(res, expected);
         }
 
         Ok(())
