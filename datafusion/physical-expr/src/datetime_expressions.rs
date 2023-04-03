@@ -222,7 +222,7 @@ fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
         })?
         .with_nanosecond(0);
     let value = match granularity {
-        "second" => value,
+        "second" | "millisecond" | "microsecond" => value,
         "minute" => value.and_then(|d| d.with_second(0)),
         "hour" => value
             .and_then(|d| d.with_second(0))
@@ -289,6 +289,22 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                         tz_opt.clone(),
                     );
                     ColumnarValue::Scalar(second)
+                }
+                "second" => {
+                    // cast to millisecond
+                    let mill = ScalarValue::TimestampMillisecond(
+                        Some(nano.unwrap() / 1_000_000),
+                        tz_opt.clone(),
+                    );
+                    ColumnarValue::Scalar(mill)
+                }
+                "millisecond" => {
+                    // cast to microsecond
+                    let micro = ScalarValue::TimestampMicrosecond(
+                        Some(nano.unwrap() / 1_000),
+                        tz_opt.clone(),
+                    );
+                    ColumnarValue::Scalar(micro)
                 }
                 _ => {
                     // cast to nanosecond
