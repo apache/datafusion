@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::usize;
+use std::{fmt, usize};
 
 use arrow::datatypes::SchemaRef;
 
@@ -29,9 +29,56 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::Interval;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use hashbrown::raw::RawTable;
+use smallvec::SmallVec;
 
 use crate::common::Result;
 use crate::physical_plan::joins::utils::{JoinFilter, JoinSide};
+
+// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
+//
+// Note that the `u64` keys are not stored in the hashmap (hence the `()` as key), but are only used
+// to put the indices in a certain bucket.
+// By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
+// we make sure that we don't have to re-hash the hashmap, which needs access to the key (the hash in this case) value.
+// E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
+// As the key is a hash value, we need to check possible hash collisions in the probe stage
+// During this stage it might be the case that a row is contained the same hashmap value,
+// but the values don't match. Those are checked in the [equal_rows] macro
+// TODO: speed up collision check and move away from using a hashbrown HashMap
+// https://github.com/apache/arrow-datafusion/issues/50
+pub struct JoinHashMap(pub RawTable<(u64, SmallVec<[u64; 1]>)>);
+
+impl JoinHashMap {
+    /// In this implementation, the scale_factor variable determines how conservative the shrinking strategy is.
+    /// The value of scale_factor is set to 4, which means the capacity will be reduced by 25%
+    /// when necessary. You can adjust the scale_factor value to achieve the desired
+    /// ,balance between memory usage and performance.
+    //
+    // If you increase the scale_factor, the capacity will shrink less aggressively,
+    // leading to potentially higher memory usage but fewer resizes.
+    // Conversely, if you decrease the scale_factor, the capacity will shrink more aggressively,
+    // potentially leading to lower memory usage but more frequent resizing.
+    pub(crate) fn shrink_if_necessary(&mut self, scale_factor: usize) {
+        let capacity = self.0.capacity();
+        let len = self.0.len();
+
+        if capacity > scale_factor * len {
+            let new_capacity = (capacity * (scale_factor - 1)) / scale_factor;
+            self.0.shrink_to(new_capacity, |(hash, _)| *hash)
+        }
+    }
+
+    pub(crate) fn size(&self) -> usize {
+        self.0.allocation_info().1.size()
+    }
+}
+
+impl fmt::Debug for JoinHashMap {
+    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
+        Ok(())
+    }
+}
 
 fn check_filter_expr_contains_sort_information(
     expr: &Arc<dyn PhysicalExpr>,
@@ -243,6 +290,7 @@ pub mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, cast, col, lit};
+    use smallvec::smallvec;
     use std::sync::Arc;
 
     /// Filter expr for a + b > c + 10 AND a + b < c + 100
@@ -575,5 +623,45 @@ pub mod tests {
         )?;
         assert!(res.is_none());
         Ok(())
+    }
+
+    #[test]
+    fn test_shrink_if_necessary() {
+        let scale_factor = 4;
+        let mut join_hash_map = JoinHashMap(RawTable::with_capacity(100));
+        let data_size = 2000;
+        let deleted_part = 3 * data_size / 4;
+        // Add elements to the JoinHashMap
+        for hash_value in 0..data_size {
+            join_hash_map.0.insert(
+                hash_value,
+                (hash_value, smallvec![hash_value]),
+                |(hash, _)| *hash,
+            );
+        }
+
+        assert_eq!(join_hash_map.0.len(), data_size as usize);
+        assert!(join_hash_map.0.capacity() >= data_size as usize);
+
+        // Remove some elements from the JoinHashMap
+        for hash_value in 0..deleted_part {
+            join_hash_map
+                .0
+                .remove_entry(hash_value, |(hash, _)| hash_value == *hash);
+        }
+
+        assert_eq!(join_hash_map.0.len(), (data_size - deleted_part) as usize);
+
+        // Old capacity
+        let old_capacity = join_hash_map.0.capacity();
+
+        // Test shrink_if_necessary
+        join_hash_map.shrink_if_necessary(scale_factor);
+
+        // The capacity should be reduced by the scale factor
+        let new_expected_capacity =
+            join_hash_map.0.capacity() * (scale_factor - 1) / scale_factor;
+        assert!(join_hash_map.0.capacity() >= new_expected_capacity);
+        assert!(join_hash_map.0.capacity() <= old_capacity);
     }
 }

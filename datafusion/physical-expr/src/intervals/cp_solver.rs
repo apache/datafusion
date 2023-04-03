@@ -122,6 +122,18 @@ pub struct ExprIntervalGraph {
     root: NodeIndex,
 }
 
+impl ExprIntervalGraph {
+    pub fn size(&self) -> usize {
+        let node_memory_usage = self.graph.node_count()
+            * (std::mem::size_of::<ExprIntervalGraphNode>()
+                + std::mem::size_of::<NodeIndex>());
+        let edge_memory_usage = self.graph.edge_count()
+            * (std::mem::size_of::<usize>() + std::mem::size_of::<NodeIndex>() * 2);
+
+        node_memory_usage + edge_memory_usage
+    }
+}
+
 /// This object encapsulates all possible constraint propagation results.
 #[derive(PartialEq, Debug)]
 pub enum PropagationResult {
