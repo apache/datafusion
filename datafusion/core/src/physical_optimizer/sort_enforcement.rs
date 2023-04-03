@@ -46,7 +46,7 @@ use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_common::{reverse_sort_options, DataFusionError};
+use datafusion_common::DataFusionError;
 use datafusion_physical_expr::utils::{
     make_sort_exprs_from_requirements, ordering_satisfy,
     ordering_satisfy_requirement_concrete,
@@ -615,7 +615,7 @@ fn analyze_window_sort_removal(
             DataFusionError::Plan("A SortExec should have output ordering".to_string())
         })?;
         if let Some(physical_ordering) = physical_ordering {
-            if let Some(should_reverse) = can_skip_sort(
+            if let Some(should_reverse) = can_skip_sort_before_window(
                 window_expr[0].partition_by(),
                 required_ordering,
                 &sort_input.schema(),
@@ -629,7 +629,7 @@ fn analyze_window_sort_removal(
                     first_should_reverse = Some(should_reverse);
                 }
             } else {
-                // Cannot skip sort
+                // Cannot skip sort immediately return.
                 return Ok(None);
             }
         } else {
@@ -835,11 +835,12 @@ pub struct ColumnInfo {
     is_partition: bool,
 }
 
-/// Compares physical ordering and required ordering of all `PhysicalSortExpr`s and returns a tuple.
-/// The first element indicates whether these `PhysicalSortExpr`s can be removed from the physical plan.
-/// The second element is a flag indicating whether we should reverse the sort direction in order to
+/// Compares physical ordering and required ordering of all `PhysicalSortExpr`s decides whether `SortExec` before
+/// `WindowAggExec` can be removed.
+/// `None` indicates `PhysicalSortExpr`s cannot be removed from the physical plan.
+/// `Some(bool)` is a flag indicating whether we should reverse the sort direction in order to
 /// remove physical sort expressions from the plan.
-pub fn can_skip_sort(
+pub fn can_skip_sort_before_window(
     partition_keys: &[Arc<dyn PhysicalExpr>],
     required: &[PhysicalSortExpr],
     input_schema: &SchemaRef,
@@ -852,7 +853,7 @@ pub fn can_skip_sort(
     for (sort_expr, physical_expr) in zip(required, physical_ordering) {
         let column = sort_expr.expr.clone();
         let is_partition = partition_keys.iter().any(|e| e.eq(&column));
-        if let Some(reverse) = check_alignment(input_schema, physical_expr, sort_expr) {
+        if let Some(reverse) = check_alignment(input_schema, physical_expr, sort_expr)? {
             col_infos.push(ColumnInfo {
                 reverse,
                 is_partition,
@@ -890,29 +891,33 @@ pub fn can_skip_sort(
     Ok(can_skip.then_some(should_reverse_order_bys))
 }
 
-/// Compares `physical_ordering` and `required` ordering, returns a tuple
-/// indicating (1) whether this column requires sorting, and (2) whether we
-/// should reverse the window expression in order to avoid sorting.
+/// Compares `physical_ordering` and `required` ordering, decides whether alignment matches
+/// `None` represents current column is not aligned, `Some` represents current column is aligned,
+/// `bool` represents whether we should reverse the window expression in order to avoid sorting.
 fn check_alignment(
     input_schema: &SchemaRef,
     physical_ordering: &PhysicalSortExpr,
     required: &PhysicalSortExpr,
-) -> Option<bool> {
-    if required.expr.eq(&physical_ordering.expr) {
-        let nullable = required.expr.nullable(input_schema).unwrap();
+) -> Result<Option<bool>> {
+    Ok(if required.expr.eq(&physical_ordering.expr) {
+        let nullable = required.expr.nullable(input_schema)?;
         let physical_opts = physical_ordering.options;
         let required_opts = required.options;
-        let is_reversed = if nullable {
-            physical_opts == reverse_sort_options(required_opts)
+        if nullable {
+            let is_reversed = physical_opts == !required_opts;
+            if is_reversed || (physical_opts == required_opts) {
+                Some(is_reversed)
+            } else {
+                None
+            }
         } else {
             // If the column is not nullable, NULLS FIRST/LAST is not important.
-            physical_opts.descending != required_opts.descending
-        };
-        let can_skip = !nullable || is_reversed || (physical_opts == required_opts);
-        can_skip.then_some(is_reversed)
+            let is_reversed = physical_opts.descending != required_opts.descending;
+            Some(is_reversed)
+        }
     } else {
         None
-    }
+    })
 }
 
 #[cfg(test)]
@@ -986,7 +991,7 @@ mod tests {
                     nulls_first: req_nulls_first,
                 },
             };
-            let res = check_alignment(&schema, &physical_ordering, &required_ordering);
+            let res = check_alignment(&schema, &physical_ordering, &required_ordering)?;
             assert_eq!(res, expected);
         }
 
@@ -1025,7 +1030,7 @@ mod tests {
                     nulls_first: req_nulls_first,
                 },
             };
-            let res = check_alignment(&schema, &physical_ordering, &required_ordering);
+            let res = check_alignment(&schema, &physical_ordering, &required_ordering)?;
             assert_eq!(res, expected);
         }
 

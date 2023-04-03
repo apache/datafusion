@@ -25,7 +25,7 @@ use arrow::compute::{concat, SortOptions};
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use arrow_schema::DataType;
-use datafusion_common::{reverse_sort_options, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame};
 use indexmap::IndexMap;
 use std::any::Any;
@@ -281,7 +281,7 @@ pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr
         .iter()
         .map(|e| PhysicalSortExpr {
             expr: e.expr.clone(),
-            options: reverse_sort_options(e.options),
+            options: !e.options,
         })
         .collect()
 }
