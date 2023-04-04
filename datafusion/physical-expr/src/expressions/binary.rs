@@ -1396,6 +1396,9 @@ pub fn ts_scalar_interval_op(
     };
     Ok(ColumnarValue::Array(ret))
 }
+/// This function handles the Interval - Interval operations,
+/// where the first one is an array, and the second one is a scalar,
+/// hence the result is also an interval array.
 pub fn interval_scalar_interval_op(
     array: ArrayRef,
     sign: i32,

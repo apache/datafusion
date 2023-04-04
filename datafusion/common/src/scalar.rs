@@ -1121,12 +1121,8 @@ pub fn seconds_add_array<const INTERVAL_MODE: i8>(
 
 #[inline]
 pub fn milliseconds_add(ts_ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let mut secs = ts_ms / 1000;
-    let mut nsecs = ((ts_ms % 1000) * 1_000_000) as i32;
-    if nsecs < 0 {
-        secs -= 1;
-        nsecs += 1_000_000_000;
-    }
+    let secs = ts_ms.div_euclid(1000);
+    let nsecs = ts_ms.rem_euclid(1000) * 1_000_000;
     do_date_time_math(secs, nsecs as u32, scalar, sign).map(|dt| dt.timestamp_millis())
 }
 
@@ -1136,24 +1132,16 @@ pub fn milliseconds_add_array<const INTERVAL_MODE: i8>(
     interval: i128,
     sign: i32,
 ) -> Result<i64> {
-    let mut secs = ts_ms / 1000;
-    let mut nsecs = ((ts_ms % 1000) * 1_000_000) as i32;
-    if nsecs < 0 {
-        secs -= 1;
-        nsecs += 1_000_000_000;
-    }
+    let secs = ts_ms.div_euclid(1000);
+    let nsecs = ts_ms.rem_euclid(1000) * 1_000_000;
     do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs as u32, interval, sign)
         .map(|dt| dt.timestamp_millis())
 }
 
 #[inline]
 pub fn microseconds_add(ts_us: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let mut secs = ts_us / 1_000_000;
-    let mut nsecs = ((ts_us % 1_000_000) * 1000) as i32;
-    if nsecs < 0 {
-        secs -= 1;
-        nsecs += 1_000_000_000;
-    }
+    let secs = ts_us.div_euclid(1_000_000);
+    let nsecs = ts_us.rem_euclid(1_000_000) * 1_000;
     do_date_time_math(secs, nsecs as u32, scalar, sign)
         .map(|dt| dt.timestamp_nanos() / 1000)
 }
@@ -1164,24 +1152,16 @@ pub fn microseconds_add_array<const INTERVAL_MODE: i8>(
     interval: i128,
     sign: i32,
 ) -> Result<i64> {
-    let mut secs = ts_us / 1_000_000;
-    let mut nsecs = ((ts_us % 1_000_000) * 1000) as i32;
-    if nsecs < 0 {
-        secs -= 1;
-        nsecs += 1_000_000_000;
-    }
+    let secs = ts_us.div_euclid(1_000_000);
+    let nsecs = ts_us.rem_euclid(1_000_000) * 1_000;
     do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs as u32, interval, sign)
         .map(|dt| dt.timestamp_nanos() / 1000)
 }
 
 #[inline]
 pub fn nanoseconds_add(ts_ns: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let mut secs = ts_ns / 1_000_000_000;
-    let mut nsecs = (ts_ns % 1_000_000_000) as i32;
-    if nsecs < 0 {
-        secs -= 1;
-        nsecs += 1_000_000_000;
-    }
+    let secs = ts_ns.div_euclid(1_000_000_000);
+    let nsecs = ts_ns.rem_euclid(1_000_000_000);
     do_date_time_math(secs, nsecs as u32, scalar, sign).map(|dt| dt.timestamp_nanos())
 }
 
@@ -1191,12 +1171,8 @@ pub fn nanoseconds_add_array<const INTERVAL_MODE: i8>(
     interval: i128,
     sign: i32,
 ) -> Result<i64> {
-    let mut secs = ts_ns / 1_000_000_000;
-    let mut nsecs = (ts_ns % 1_000_000_000) as i32;
-    if nsecs < 0 {
-        secs -= 1;
-        nsecs += 1_000_000_000;
-    }
+    let secs = ts_ns.div_euclid(1_000_000_000);
+    let nsecs = ts_ns.rem_euclid(1_000_000_000);
     do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs as u32, interval, sign)
         .map(|dt| dt.timestamp_nanos())
 }

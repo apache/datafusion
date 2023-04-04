@@ -1428,18 +1428,17 @@ mod tests {
     use std::fs::File;
 
     use arrow::array::{ArrayRef, IntervalDayTimeArray};
-    use arrow::array::{Int32Array, TimestampNanosecondArray};
+    use arrow::array::{Int32Array, TimestampMillisecondArray};
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
-    use arrow::util::pretty::pretty_format_batches;
+    use arrow::util::pretty::{pretty_format_batches, print_batches};
     use rstest::*;
     use tempfile::TempDir;
 
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, col, Column};
     use datafusion_physical_expr::intervals::test_utils::{
-        gen_conjunctive_interval_expr, gen_conjunctive_numeric_expr,
-        gen_conjunctive_timestamp_expr,
+        gen_conjunctive_numeric_expr, gen_conjunctive_temporal_expr,
     };
     use datafusion_physical_expr::PhysicalExpr;
 
@@ -1672,30 +1671,30 @@ mod tests {
         schema: &Schema,
     ) -> Arc<dyn PhysicalExpr> {
         match expr_id {
-            0 => gen_conjunctive_interval_expr(
+            0 => gen_conjunctive_temporal_expr(
                 left_col,
                 right_col,
                 Operator::Minus,
                 Operator::Minus,
                 Operator::Minus,
                 Operator::Minus,
-                5,
-                4,
-                3,
-                2,
+                ScalarValue::IntervalDayTime(Some(100)), // 100 ms
+                ScalarValue::IntervalDayTime(Some(200)), // 200 ms
+                ScalarValue::IntervalDayTime(Some(450)), // 450 ms
+                ScalarValue::IntervalDayTime(Some(300)), // 300 ms
                 schema,
             ),
-            1 => gen_conjunctive_timestamp_expr(
+            1 => gen_conjunctive_temporal_expr(
                 left_col,
                 right_col,
                 Operator::Minus,
                 Operator::Minus,
                 Operator::Minus,
                 Operator::Minus,
-                5000000,
-                4000000,
-                3000000,
-                2000000,
+                ScalarValue::TimestampMillisecond(Some(1672574403000), None), // 2023-01-01:12.00.03
+                ScalarValue::TimestampMillisecond(Some(1672574401000), None), // 2023-01-01:12.00.01
+                ScalarValue::TimestampMillisecond(Some(1672574400000), None), // 2023-01-01:12.00.00
+                ScalarValue::TimestampMillisecond(Some(1672574402000), None), // 2023-01-01:12.00.02
                 schema,
             ),
             _ => unreachable!(),
@@ -1745,14 +1744,16 @@ mod tests {
                 .collect::<Vec<Option<i32>>>()
         }));
 
-        let time = Arc::new(TimestampNanosecondArray::from(
+        let time = Arc::new(TimestampMillisecondArray::from(
             initial_range
                 .clone()
-                .map(|x| 1664264591000000000 + (5000000000 * (x as i64)))
+                .map(|x| x as i64 + 1672531200000) // x + 2023-01-01:00.00.00
                 .collect::<Vec<i64>>(),
         ));
         let interval_time: ArrayRef = Arc::new(IntervalDayTimeArray::from(
-            initial_range.map(|x| x as i64 * 15).collect::<Vec<i64>>(),
+            initial_range
+                .map(|x| x as i64 * 100) // x * 100ms
+                .collect::<Vec<i64>>(),
         ));
 
         let left = RecordBatch::try_from_iter(vec![
@@ -1831,6 +1832,8 @@ mod tests {
             left, right, on, filter, &join_type, false, task_ctx,
         )
         .await?;
+        print_batches(&first_batches);
+        print_batches(&second_batches);
         compare_batches(&first_batches, &second_batches);
         Ok(())
     }
@@ -2557,12 +2560,12 @@ mod tests {
         let intermediate_schema = Schema::new(vec![
             Field::new(
                 "left",
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Millisecond, None),
                 false,
             ),
             Field::new(
                 "right",
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Millisecond, None),
                 false,
             ),
         ]);
@@ -2623,12 +2626,12 @@ mod tests {
         let intermediate_schema = Schema::new(vec![
             Field::new(
                 "left",
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Millisecond, None),
                 false,
             ),
             Field::new(
                 "right",
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Millisecond, None),
                 false,
             ),
         ]);
