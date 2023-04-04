@@ -1379,11 +1379,14 @@ mod roundtrip_tests {
         let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
             vec![(col("a", &schema)?, "unused".to_string())];
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
-            col("b", &schema)?,
-            "AVG(b)".to_string(),
-            DataType::Float64,
-        ))];
+        let aggregates: Vec<Arc<dyn AggregateExpr>> =
+            vec![Arc::new(Avg::new_with_pre_cast(
+                col("b", &schema)?,
+                "AVG(b)".to_string(),
+                DataType::Float64,
+                DataType::Float64,
+                true,
+            ))];
 
         roundtrip_test(Arc::new(AggregateExec::try_new(
             AggregateMode::Final,

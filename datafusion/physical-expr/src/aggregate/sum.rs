@@ -47,9 +47,10 @@ use datafusion_row::accessor::RowAccessor;
 #[derive(Debug, Clone)]
 pub struct Sum {
     name: String,
-    data_type: DataType,
+    pub data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
     nullable: bool,
+    pub pre_cast_to_sum_type: bool,
 }
 
 impl Sum {
@@ -64,6 +65,22 @@ impl Sum {
             expr,
             data_type,
             nullable: true,
+            pre_cast_to_sum_type: false,
+        }
+    }
+
+    pub fn new_with_pre_cast(
+        expr: Arc<dyn PhysicalExpr>,
+        name: impl Into<String>,
+        data_type: DataType,
+        pre_cast_to_sum_type: bool,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            expr,
+            data_type,
+            nullable: true,
+            pre_cast_to_sum_type,
         }
     }
 }

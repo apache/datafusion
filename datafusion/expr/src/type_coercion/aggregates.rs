@@ -373,6 +373,21 @@ pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
     }
 }
 
+/// internal sum type of an average
+pub fn avg_sum_type(arg_type: &DataType) -> Result<DataType> {
+    match arg_type {
+        DataType::Decimal128(precision, scale) => {
+            // in the spark, the sum type of avg is DECIMAL(min(38,precision+10), s)
+            let new_precision = DECIMAL128_MAX_PRECISION.min(*precision + 10);
+            Ok(DataType::Decimal128(new_precision, *scale))
+        }
+        arg_type if NUMERICS.contains(arg_type) => Ok(DataType::Float64),
+        other => Err(DataFusionError::Plan(format!(
+            "AVG does not support {other:?}"
+        ))),
+    }
+}
+
 pub fn is_sum_support_arg_type(arg_type: &DataType) -> bool {
     matches!(
         arg_type,
