@@ -238,14 +238,14 @@ mod unix_test {
             "a1,a2\n".to_owned(),
             lines.clone(),
             waiting.clone(),
-            TEST_BATCH_SIZE * 2,
+            TEST_BATCH_SIZE,
         ));
         tasks.push(create_writing_thread(
             right_fifo.clone(),
             "a1,a2\n".to_owned(),
             lines.clone(),
             waiting.clone(),
-            TEST_BATCH_SIZE * 2,
+            TEST_BATCH_SIZE,
         ));
 
         // Create schema
