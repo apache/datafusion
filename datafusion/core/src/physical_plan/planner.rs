@@ -1156,21 +1156,11 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: Dml".to_string(),
                     ))
                 }
-                LogicalPlan::TransactionStart(_) => {
+                LogicalPlan::Statement(statement) => {
                     // DataFusion is a read-only query engine, but also a library, so consumers may implement this
+                    let name = statement.name();
                     Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: TransactionStart".to_string(),
-                    ))
-                }
-                LogicalPlan::TransactionEnd(_) => {
-                    // DataFusion is a read-only query engine, but also a library, so consumers may implement this
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: TransactionEnd".to_string(),
-                    ))
-                }
-                LogicalPlan::SetVariable(_) => {
-                    Err(DataFusionError::Internal(
-                        "Unsupported logical plan: SetVariable must be root of the plan".to_string(),
+                        format!("Unsupported logical plan: Statement({name})")
                     ))
                 }
                 LogicalPlan::DescribeTable(_) => {
