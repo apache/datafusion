@@ -84,7 +84,7 @@ pub struct FileStream<F: FileOpener> {
 }
 
 /// Represents the state of the next `FileOpenFuture`. Since we need to poll
-/// this future while scanning the current file, we need to store the result if it 
+/// this future while scanning the current file, we need to store the result if it
 /// is ready
 enum NextOpen {
     Pending(FileOpenFuture),
@@ -276,7 +276,7 @@ impl<F: FileOpener> FileStream<F> {
                                     partition_values,
                                     reader,
                                     next: Some((
-                                        NextOpen::Future(next_future),
+                                        NextOpen::Pending(next_future),
                                         next_partition_values,
                                     )),
                                 };
@@ -306,9 +306,9 @@ impl<F: FileOpener> FileStream<F> {
                 } => {
                     // We need to poll the next `FileOpenFuture` here to drive it forward
                     if let Some((next_open_future, _)) = next {
-                        if let NextOpen::Future(f) = next_open_future {
+                        if let NextOpen::Pending(f) = next_open_future {
                             if let Poll::Ready(reader) = f.as_mut().poll(cx) {
-                                *next_open_future = NextOpen::Reader(reader);
+                                *next_open_future = NextOpen::Ready(reader);
                             }
                         }
                     }
@@ -352,13 +352,13 @@ impl<F: FileOpener> FileStream<F> {
                                     self.file_stream_metrics.time_opening.start();
 
                                     match future {
-                                        NextOpen::Future(future) => {
+                                        NextOpen::Pending(future) => {
                                             self.state = FileStreamState::Open {
                                                 future,
                                                 partition_values,
                                             }
                                         }
-                                        NextOpen::Reader(reader) => {
+                                        NextOpen::Ready(reader) => {
                                             self.state = FileStreamState::Open {
                                                 future: Box::pin(std::future::ready(
                                                     reader,
