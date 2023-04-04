@@ -118,13 +118,10 @@ pub(crate) fn is_ascending_ordered(in1: &[usize]) -> bool {
 /// Returns the vector consisting of elements inside `in1` that are not inside `in2`.
 // Resulting vector have the same ordering as `in1` (except elements inside `in2` are removed.)
 pub(crate) fn get_set_diff_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
-    let mut res = vec![];
-    for lhs in in1 {
-        if !in2.iter().contains(lhs) {
-            res.push(*lhs);
-        }
-    }
-    res
+    in1.iter()
+        .filter(|lhs| !in2.iter().contains(lhs))
+        .copied()
+        .collect::<Vec<_>>()
 }
 
 /// Find the largest range that satisfy 0,1,2 .. n in the `in1`
