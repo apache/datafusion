@@ -146,7 +146,7 @@ pub fn gen_conjunctive_timestamp_expr(
         DateTimeIntervalExpr::try_new(
             left_col.clone(),
             op_1,
-            Arc::new(Literal::new(ScalarValue::TimestampMillisecond(
+            Arc::new(Literal::new(ScalarValue::TimestampNanosecond(
                 Some(a.into()),
                 None,
             ))),
@@ -158,7 +158,7 @@ pub fn gen_conjunctive_timestamp_expr(
         DateTimeIntervalExpr::try_new(
             right_col.clone(),
             op_2,
-            Arc::new(Literal::new(ScalarValue::TimestampMillisecond(
+            Arc::new(Literal::new(ScalarValue::TimestampNanosecond(
                 Some(b.into()),
                 None,
             ))),
@@ -170,7 +170,7 @@ pub fn gen_conjunctive_timestamp_expr(
         DateTimeIntervalExpr::try_new(
             left_col,
             op_3,
-            Arc::new(Literal::new(ScalarValue::TimestampMillisecond(
+            Arc::new(Literal::new(ScalarValue::TimestampNanosecond(
                 Some(c.into()),
                 None,
             ))),
@@ -182,7 +182,7 @@ pub fn gen_conjunctive_timestamp_expr(
         DateTimeIntervalExpr::try_new(
             right_col,
             op_4,
-            Arc::new(Literal::new(ScalarValue::TimestampMillisecond(
+            Arc::new(Literal::new(ScalarValue::TimestampNanosecond(
                 Some(d.into()),
                 None,
             ))),
