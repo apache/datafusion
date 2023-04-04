@@ -824,11 +824,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut assign_map = assignments
             .iter()
             .map(|assign| {
-                let col_name: &Ident = assign
-                    .id
-                    .iter()
-                    .last()
-                    .ok_or(DataFusionError::Plan("Empty column id".to_string()))?;
+                let col_name: &Ident = assign.id.iter().last().ok_or_else(|| {
+                    DataFusionError::Plan("Empty column id".to_string())
+                })?;
                 // Validate that the assignment target column exists
                 table_schema.field_with_unqualified_name(&col_name.value)?;
                 Ok((col_name.value.clone(), assign.value.clone()))

@@ -576,7 +576,6 @@ impl DefaultPhysicalPlanner {
                     }
 
                     let logical_input_schema = input.schema();
-
                     let physical_input_schema = input_exec.schema();
                     let window_expr = window_expr
                         .iter()
