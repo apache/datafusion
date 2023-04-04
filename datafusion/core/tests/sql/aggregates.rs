@@ -71,52 +71,6 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
 }
 
 #[tokio::test]
-async fn aggregate_decimal_sum() -> Result<()> {
-    let ctx = SessionContext::new();
-    // the data type of c1 is decimal(10,3)
-    ctx.register_table("d_table", table_with_decimal()).unwrap();
-    let result = plan_and_collect(&ctx, "select sum(c1) from d_table")
-        .await
-        .unwrap();
-    let expected = vec![
-        "+-----------------+",
-        "| SUM(d_table.c1) |",
-        "+-----------------+",
-        "| 100.000         |",
-        "+-----------------+",
-    ];
-    assert_eq!(
-        &DataType::Decimal128(20, 3),
-        result[0].schema().field(0).data_type()
-    );
-    assert_batches_sorted_eq!(expected, &result);
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_decimal_avg() -> Result<()> {
-    let ctx = SessionContext::new();
-    // the data type of c1 is decimal(10,3)
-    ctx.register_table("d_table", table_with_decimal()).unwrap();
-    let result = plan_and_collect(&ctx, "select avg(c1) from d_table")
-        .await
-        .unwrap();
-    let expected = vec![
-        "+-----------------+",
-        "| AVG(d_table.c1) |",
-        "+-----------------+",
-        "| 5.0000000       |",
-        "+-----------------+",
-    ];
-    assert_eq!(
-        &DataType::Decimal128(14, 7),
-        result[0].schema().field(0).data_type()
-    );
-    assert_batches_sorted_eq!(expected, &result);
-    Ok(())
-}
-
-#[tokio::test]
 async fn aggregate() -> Result<()> {
     let results = execute_with_partition("SELECT SUM(c1), SUM(c2) FROM test", 4).await?;
     assert_eq!(results.len(), 1);

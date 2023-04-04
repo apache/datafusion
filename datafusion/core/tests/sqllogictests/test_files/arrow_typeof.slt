@@ -279,8 +279,20 @@ query error Cannot automatically convert Interval\(DayTime\) to Interval\(MonthD
 ---
 select arrow_cast(interval '30 minutes', 'Interval(MonthDayNano)');
 
-query error DataFusion error: Error during planning: Cannot automatically convert Utf8 to Interval\(MonthDayNano\)
+query ?
+select arrow_cast('30 minutes', 'Interval(DayTime)');
+----
+0 years 0 mons 0 days 0 hours 30 mins 0.000 secs
+
+query ?
+select arrow_cast('1 year 5 months', 'Interval(YearMonth)');
+----
+1 years 5 mons 0 days 0 hours 0 mins 0.00 secs
+
+query ?
 select arrow_cast('30 minutes', 'Interval(MonthDayNano)');
+----
+0 years 0 mons 0 days 0 hours 30 mins 0.000000000 secs
 
 
 ## Duration

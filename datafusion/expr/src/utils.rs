@@ -843,6 +843,7 @@ pub fn from_plan(
             ..
         }) => Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
             input: Arc::new(inputs[0].clone()),
+            primary_key: vec![],
             name: name.clone(),
             if_not_exists: *if_not_exists,
             or_replace: *or_replace,
@@ -913,6 +914,8 @@ pub fn from_plan(
         | LogicalPlan::CreateExternalTable(_)
         | LogicalPlan::DropTable(_)
         | LogicalPlan::DropView(_)
+        | LogicalPlan::TransactionStart(_)
+        | LogicalPlan::TransactionEnd(_)
         | LogicalPlan::SetVariable(_)
         | LogicalPlan::CreateCatalogSchema(_)
         | LogicalPlan::CreateCatalog(_) => {
