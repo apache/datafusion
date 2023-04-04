@@ -30,11 +30,12 @@ use arrow::{
 use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    and, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Volatility,
+    and, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Like,
+    Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
-use super::SimplifyInfo;
+use crate::simplify_expressions::SimplifyInfo;
 
 /// This structure handles API for expression simplification
 pub struct ExprSimplifier<S> {
@@ -1072,6 +1073,18 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 out_expr.rewrite(self)?
             }
 
+            // log
+            Expr::ScalarFunction {
+                fun: BuiltinScalarFunction::Log,
+                args,
+            } => simpl_log(args, <&S>::clone(&info))?,
+
+            // power
+            Expr::ScalarFunction {
+                fun: BuiltinScalarFunction::Power,
+                args,
+            } => simpl_power(args, <&S>::clone(&info))?,
+
             // concat
             Expr::ScalarFunction {
                 fun: BuiltinScalarFunction::Concat,
@@ -1117,6 +1130,36 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: op @ (RegexMatch | RegexNotMatch | RegexIMatch | RegexNotIMatch),
                 right,
             }) => simplify_regex_expr(left, op, right)?,
+
+            // Rules for Like
+            Expr::Like(Like {
+                expr,
+                pattern,
+                negated,
+                escape_char: _,
+            }) if !is_null(&expr)
+                && matches!(
+                    pattern.as_ref(),
+                    Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) if pattern_str == "%"
+                ) =>
+            {
+                lit(!negated)
+            }
+
+            // Rules for ILike
+            Expr::ILike(Like {
+                expr,
+                pattern,
+                negated,
+                escape_char: _,
+            }) if !is_null(&expr)
+                && matches!(
+                    pattern.as_ref(),
+                    Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) if pattern_str == "%"
+                ) =>
+            {
+                lit(!negated)
+            }
 
             // no additional rewrites possible
             expr => expr,
@@ -2211,6 +2254,68 @@ mod tests {
     }
 
     #[test]
+    fn test_simplify_log() {
+        // Log(c3, 1) ===> 0
+        {
+            let expr = log(col("c3_non_null"), lit(1));
+            let expected = lit(0i64);
+            assert_eq!(simplify(expr), expected);
+        }
+        // Log(c3, c3) ===> 1
+        {
+            let expr = log(col("c3_non_null"), col("c3_non_null"));
+            let expected = lit(1i64);
+            assert_eq!(simplify(expr), expected);
+        }
+        // Log(c3, Power(c3, c4)) ===> c4
+        {
+            let expr = log(
+                col("c3_non_null"),
+                power(col("c3_non_null"), col("c4_non_null")),
+            );
+            let expected = col("c4_non_null");
+            assert_eq!(simplify(expr), expected);
+        }
+        // Log(c3, c4) ===> Log(c3, c4)
+        {
+            let expr = log(col("c3_non_null"), col("c4_non_null"));
+            let expected = log(col("c3_non_null"), col("c4_non_null"));
+            assert_eq!(simplify(expr), expected);
+        }
+    }
+
+    #[test]
+    fn test_simplify_power() {
+        // Power(c3, 0) ===> 1
+        {
+            let expr = power(col("c3_non_null"), lit(0));
+            let expected = lit(1i64);
+            assert_eq!(simplify(expr), expected);
+        }
+        // Power(c3, 1) ===> c3
+        {
+            let expr = power(col("c3_non_null"), lit(1));
+            let expected = col("c3_non_null");
+            assert_eq!(simplify(expr), expected);
+        }
+        // Power(c3, Log(c3, c4)) ===> c4
+        {
+            let expr = power(
+                col("c3_non_null"),
+                log(col("c3_non_null"), col("c4_non_null")),
+            );
+            let expected = col("c4_non_null");
+            assert_eq!(simplify(expr), expected);
+        }
+        // Power(c3, c4) ===> Power(c3, c4)
+        {
+            let expr = power(col("c3_non_null"), col("c4_non_null"));
+            let expected = power(col("c3_non_null"), col("c4_non_null"));
+            assert_eq!(simplify(expr), expected);
+        }
+    }
+
+    #[test]
     fn test_simplify_concat_ws() {
         let null = lit(ScalarValue::Utf8(None));
         // the delimiter is not a literal
@@ -2320,16 +2425,10 @@ mod tests {
         assert_no_change(regex_match(col("c1"), lit("f_o")));
 
         // empty cases
-        assert_change(regex_match(col("c1"), lit("")), like(col("c1"), "%"));
-        assert_change(
-            regex_not_match(col("c1"), lit("")),
-            not_like(col("c1"), "%"),
-        );
-        assert_change(regex_imatch(col("c1"), lit("")), ilike(col("c1"), "%"));
-        assert_change(
-            regex_not_imatch(col("c1"), lit("")),
-            not_ilike(col("c1"), "%"),
-        );
+        assert_change(regex_match(col("c1"), lit("")), lit(true));
+        assert_change(regex_not_match(col("c1"), lit("")), lit(false));
+        assert_change(regex_imatch(col("c1"), lit("")), lit(true));
+        assert_change(regex_not_imatch(col("c1"), lit("")), lit(false));
 
         // single character
         assert_change(regex_match(col("c1"), lit("x")), like(col("c1"), "%x%"));
@@ -2348,12 +2447,6 @@ mod tests {
             regex_match(col("c1"), lit("foo|x|baz")),
             like(col("c1"), "%foo%")
                 .or(like(col("c1"), "%x%"))
-                .or(like(col("c1"), "%baz%")),
-        );
-        assert_change(
-            regex_match(col("c1"), lit("foo||baz")),
-            like(col("c1"), "%foo%")
-                .or(like(col("c1"), "%"))
                 .or(like(col("c1"), "%baz%")),
         );
         assert_change(
@@ -2850,5 +2943,35 @@ mod tests {
             simplify(expr),
             or(col("c2").lt(lit(3)), col("c2").gt(lit(4)))
         );
+    }
+
+    #[test]
+    fn test_like_and_ilke() {
+        // test non-null values
+        let expr = like(col("c1"), "%");
+        assert_eq!(simplify(expr), lit(true));
+
+        let expr = not_like(col("c1"), "%");
+        assert_eq!(simplify(expr), lit(false));
+
+        let expr = ilike(col("c1"), "%");
+        assert_eq!(simplify(expr), lit(true));
+
+        let expr = not_ilike(col("c1"), "%");
+        assert_eq!(simplify(expr), lit(false));
+
+        // test null values
+        let null = lit(ScalarValue::Utf8(None));
+        let expr = like(null.clone(), "%");
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = not_like(null.clone(), "%");
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = ilike(null.clone(), "%");
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = not_ilike(null, "%");
+        assert_eq!(simplify(expr), lit_bool_null());
     }
 }

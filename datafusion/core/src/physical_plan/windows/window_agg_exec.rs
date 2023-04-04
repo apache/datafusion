@@ -43,7 +43,6 @@ use datafusion_common::DataFusionError;
 use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
-use log::debug;
 use std::any::Any;
 use std::ops::Range;
 use std::pin::Pin;
@@ -179,10 +178,8 @@ impl ExecutionPlan for WindowAggExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         if self.partition_keys.is_empty() {
-            debug!("No partition defined for WindowAggExec!!!");
             vec![Distribution::SinglePartition]
         } else {
-            //TODO support PartitionCollections if there is no common partition columns in the window_expr
             vec![Distribution::HashPartitioned(self.partition_keys.clone())]
         }
     }

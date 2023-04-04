@@ -23,7 +23,113 @@ select
   arrow_typeof(interval '5 months'),
   arrow_typeof(interval '5 days 3 nanoseconds')
 ----
-Interval(YearMonth) Interval(MonthDayNano)
+Interval(MonthDayNano) Interval(MonthDayNano)
+
+
+## This is incredibly confusing but document it in tests:
+#
+# years is parsed as a column name
+# year is parsed as part of the interval type.
+#
+# postgres=# select interval '5' year;
+#  interval
+# ----------
+#  5 years
+# (1 row)
+#
+# postgres=# select interval '5' years;
+#   years
+# ----------
+#  00:00:05
+# (1 row)
+query ?
+select interval '5' years
+----
+0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs
+
+
+# check all different kinds of intervals
+query ?
+select interval '5' year
+----
+0 years 60 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+select interval '5' month
+----
+0 years 5 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+select interval '5' months
+----
+0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs
+
+query ?
+select interval '5' week
+----
+0 years 0 mons 35 days 0 hours 0 mins 0.000000000 secs
+
+
+query ?
+select interval '5' day
+----
+0 years 0 mons 5 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+select interval '5' hour
+----
+0 years 0 mons 0 days 5 hours 0 mins 0.000000000 secs
+
+## This seems wrong (5 mons)
+query ?
+select interval '5' hours
+----
+0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs
+
+query ?
+select interval '5' minute
+----
+0 years 0 mons 0 days 0 hours 5 mins 0.000000000 secs
+
+query ?
+select interval '5' second
+----
+0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs
+
+query ?
+select interval '5' millisecond
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.005000000 secs
+
+query ?
+select interval '5' milliseconds
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.005000000 secs
+
+query ?
+select interval '5' microsecond
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.000005000 secs
+
+query ?
+select interval '5' microseconds
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.000005000 secs
+
+query ?
+select interval '5' nanosecond
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.000000005 secs
+
+query ?
+select interval '5' nanoseconds
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.000000005 secs
+
+
+
+
+
 
 
 # Use interval SQL type
