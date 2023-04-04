@@ -15,12 +15,21 @@
 .. specific language governing permissions and limitations
 .. under the License.
 
+.. image:: _static/images/DataFusion-Logo-Background-White.png
+  :alt: DataFusion Logo
+
 =======================
 Apache Arrow DataFusion
 =======================
 
-Table of Contents
-=================
+DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
+`Rust <http://rustlang.org>`_, using the `Apache Arrow <https://arrow.apache.org>`_
+in-memory format.
+
+DataFusion offers SQL and Dataframe APIs, excellent
+`performance <https://benchmark.clickhouse.com>`_, built-in support for
+CSV, Parquet, JSON, and Avro, extensive customization, and a great
+community.
 
 .. _toc.guide:
 
@@ -30,6 +39,9 @@ Table of Contents
 
    user-guide/introduction
    user-guide/example-usage
+   user-guide/users
+   user-guide/comparison
+   user-guide/integration
    user-guide/library
    user-guide/cli
    user-guide/dataframe
@@ -47,8 +59,10 @@ Table of Contents
 
    contributor-guide/index
    contributor-guide/communication
+   contributor-guide/architecture
    contributor-guide/roadmap
    contributor-guide/quarterly_roadmap
    contributor-guide/specification/index
+   Github <https://github.com/apache/arrow-datafusion>
    Issue tracker <https://github.com/apache/arrow-datafusion/issues>
    Code of conduct <https://github.com/apache/arrow-datafusion/blob/main/CODE_OF_CONDUCT.md>
