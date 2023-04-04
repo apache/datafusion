@@ -2821,20 +2821,6 @@ impl ScalarValue {
                     tz_opt
                 )
             }
-            DataType::Interval(IntervalUnit::YearMonth) => {
-                typed_cast!(array, index, IntervalYearMonthArray, IntervalYearMonth)
-            }
-            DataType::Interval(IntervalUnit::DayTime) => {
-                typed_cast!(array, index, IntervalDayTimeArray, IntervalDayTime)
-            }
-            DataType::Interval(IntervalUnit::MonthDayNano) => {
-                typed_cast!(
-                    array,
-                    index,
-                    IntervalMonthDayNanoArray,
-                    IntervalMonthDayNano
-                )
-            }
             DataType::Dictionary(key_type, _) => {
                 let (values_array, values_index) = match key_type.as_ref() {
                     DataType::Int8 => get_dict_value::<Int8Type>(array, index),
@@ -2894,6 +2880,20 @@ impl ScalarValue {
                         true => None,
                         false => Some(array.value(index).into()),
                     },
+                )
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                typed_cast!(array, index, IntervalDayTimeArray, IntervalDayTime)
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                typed_cast!(array, index, IntervalYearMonthArray, IntervalYearMonth)
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                typed_cast!(
+                    array,
+                    index,
+                    IntervalMonthDayNanoArray,
+                    IntervalMonthDayNano
                 )
             }
             other => {
