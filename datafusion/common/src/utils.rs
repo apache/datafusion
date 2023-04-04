@@ -163,8 +163,9 @@ where
     Ok(low)
 }
 
-/// evaluate the partition points given the sort columns; if the sort columns are
-/// empty then the result will be a single element vec of the whole column rows.
+/// This function finds the partition points according to `partition_columns`.
+/// If there are no sort columns, then the result will be a single element
+/// vector containing one partition range spanning all data.
 pub fn evaluate_partition_points(
     num_rows: usize,
     partition_columns: &[SortColumn],

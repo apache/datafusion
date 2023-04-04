@@ -587,7 +587,7 @@ fn analyze_window_sort_removal(
         .map(|elem| elem.len())
         .unwrap_or(0);
 
-    let mut first_should_reverse = None;
+    let mut needs_reverse = None;
     for sort_any in sort_tree.get_leaves() {
         let sort_output_ordering = sort_any.output_ordering();
         // Variable `sort_any` will either be a `SortExec` or a
@@ -598,8 +598,8 @@ fn analyze_window_sort_removal(
         let sort_output_ordering = sort_output_ordering.ok_or_else(|| {
             DataFusionError::Plan("A SortExec should have output ordering".to_string())
         })?;
-        // It is enough to check whether first n_req element of the sort output satisfies window_exec requirement.
-        // Because length of window_exec requirement is n_req.
+        // It is enough to check whether the first "n_req" elements of the sort
+        // output satisfy window_exec's requirement as it is only "n_req" long.
         let required_ordering = &sort_output_ordering[0..n_req];
         if let Some(physical_ordering) = physical_ordering {
             if let Some(should_reverse) = can_skip_sort(
@@ -608,24 +608,17 @@ fn analyze_window_sort_removal(
                 &sort_input.schema(),
                 physical_ordering,
             )? {
-                if let Some(first_should_reverse) = first_should_reverse {
-                    if first_should_reverse != should_reverse {
-                        return Ok(None);
-                    }
-                } else {
-                    first_should_reverse = Some(should_reverse);
+                if should_reverse == *needs_reverse.get_or_insert(should_reverse) {
+                    continue;
                 }
-            } else {
-                // Cannot skip sort immediately return.
-                return Ok(None);
             }
-        } else {
-            // If there is no physical ordering, there is no way to remove a
-            // sort, so immediately return.
-            return Ok(None);
         }
+        // If there is no physical ordering, or we can not skip the sort, or
+        // window reversal requirements are not uniform; then there is no
+        // opportunity for a sort removal -- we immediately return.
+        return Ok(None);
     }
-    let new_window_expr = if first_should_reverse.unwrap() {
+    let new_window_expr = if needs_reverse.unwrap() {
         window_expr
             .iter()
             .map(|e| e.get_reverse_expr())
@@ -790,11 +783,11 @@ pub struct ColumnInfo {
     is_partition: bool,
 }
 
-/// Compares physical ordering and required ordering of all `PhysicalSortExpr`s decides whether `SortExec` before
-/// `WindowAggExec` can be removed.
-/// `None` indicates `PhysicalSortExpr`s cannot be removed from the physical plan.
-/// `Some(bool)` is a flag indicating whether we should reverse the sort direction in order to
-/// remove physical sort expressions from the plan.
+/// Compares physical ordering and required ordering of all `PhysicalSortExpr`s
+/// to decide whether a `SortExec` before a `WindowAggExec` can be removed.
+/// A `None` return value indicates that we can remove the sort in question.
+/// A `Some(bool)` value indicates otherwise, and signals whether we need to
+/// reverse the ordering in order to remove the sort in question.
 pub fn can_skip_sort(
     partition_keys: &[Arc<dyn PhysicalExpr>],
     required: &[PhysicalSortExpr],
@@ -819,7 +812,7 @@ pub fn can_skip_sort(
     }
     let partition_by_sections = col_infos
         .iter()
-        .filter(|elem| elem.is_partition)
+        .filter(|c| c.is_partition)
         .collect::<Vec<_>>();
     let can_skip_partition_bys = if partition_by_sections.is_empty() {
         true
@@ -846,29 +839,24 @@ pub fn can_skip_sort(
     Ok(can_skip.then_some(should_reverse_order_bys))
 }
 
-/// Compares `physical_ordering` and `required` ordering, decides whether alignment matches
-/// `None` represents current column is not aligned, `Some` represents current column is aligned,
-/// `bool` represents whether we should reverse the window expression in order to avoid sorting.
+/// Compares `physical_ordering` and `required` ordering, decides whether
+/// alignments match. A `None` return value indicates that current column is
+/// not aligned. A `Some(bool)` value indicates otherwise, and signals whether
+/// we should reverse the window expression in order to avoid sorting.
 fn check_alignment(
     input_schema: &SchemaRef,
     physical_ordering: &PhysicalSortExpr,
     required: &PhysicalSortExpr,
 ) -> Result<Option<bool>> {
     Ok(if required.expr.eq(&physical_ordering.expr) {
-        let nullable = required.expr.nullable(input_schema)?;
         let physical_opts = physical_ordering.options;
         let required_opts = required.options;
-        if nullable {
-            let is_reversed = physical_opts == !required_opts;
-            if is_reversed || (physical_opts == required_opts) {
-                Some(is_reversed)
-            } else {
-                None
-            }
+        if required.expr.nullable(input_schema)? {
+            let reverse = physical_opts == !required_opts;
+            (reverse || physical_opts == required_opts).then_some(reverse)
         } else {
             // If the column is not nullable, NULLS FIRST/LAST is not important.
-            let is_reversed = physical_opts.descending != required_opts.descending;
-            Some(is_reversed)
+            Some(physical_opts.descending != required_opts.descending)
         }
     } else {
         None

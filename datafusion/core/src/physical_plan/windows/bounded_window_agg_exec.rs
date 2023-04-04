@@ -30,10 +30,9 @@ use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
-use arrow::array::Array;
-use arrow::compute::{concat, concat_batches, SortColumn};
 use arrow::{
-    array::ArrayRef,
+    array::{Array, ArrayRef},
+    compute::{concat, concat_batches, SortColumn},
     datatypes::{Schema, SchemaRef},
     record_batch::RecordBatch,
 };
