@@ -168,8 +168,16 @@ impl ExecutionPlan for BoundedWindowAggExec {
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
-        let requirements = calc_requirements(partition_bys, order_keys);
-        vec![requirements]
+        if self.ordered_partition_by_indices.is_empty() {
+            vec![calc_requirements(partition_bys, order_keys)]
+        } else {
+            let partition_bys = self
+                .ordered_partition_by_indices
+                .iter()
+                .map(|idx| partition_bys[*idx].clone())
+                .collect::<Vec<_>>();
+            vec![calc_requirements(&partition_bys, order_keys)]
+        }
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {

@@ -46,7 +46,6 @@ use datafusion_common::DataFusionError;
 use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
-use log::debug;
 use std::any::Any;
 use std::ops::Range;
 use std::pin::Pin;
@@ -171,16 +170,22 @@ impl ExecutionPlan for WindowAggExec {
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
-        let requirements = calc_requirements(partition_bys, order_keys);
-        vec![requirements]
+        if self.ordered_partition_by_indices.is_empty() {
+            vec![calc_requirements(partition_bys, order_keys)]
+        } else {
+            let partition_bys = self
+                .ordered_partition_by_indices
+                .iter()
+                .map(|idx| partition_bys[*idx].clone())
+                .collect::<Vec<_>>();
+            vec![calc_requirements(&partition_bys, order_keys)]
+        }
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         if self.partition_keys.is_empty() {
-            debug!("No partition defined for WindowAggExec!!!");
             vec![Distribution::SinglePartition]
         } else {
-            //TODO support PartitionCollections if there is no common partition columns in the window_expr
             vec![Distribution::HashPartitioned(self.partition_keys.clone())]
         }
     }

@@ -22,7 +22,13 @@ use std::collections::HashSet;
 
 use crate::config::ConfigOptions;
 use crate::error::Result;
+use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
+use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use crate::physical_plan::union::UnionExec;
+use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::DataFusionError;
@@ -133,6 +139,43 @@ pub(crate) fn calc_ordering_range(in1: &[usize]) -> usize {
         }
     }
     count
+}
+
+/// Checks whether the given operator is a limit;
+/// i.e. either a [`LocalLimitExec`] or a [`GlobalLimitExec`].
+pub fn is_limit(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<GlobalLimitExec>() || plan.as_any().is::<LocalLimitExec>()
+}
+
+/// Checks whether the given operator is a window;
+/// i.e. either a [`WindowAggExec`] or a [`BoundedWindowAggExec`].
+pub fn is_window(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<WindowAggExec>() || plan.as_any().is::<BoundedWindowAggExec>()
+}
+
+/// Checks whether the given operator is a [`SortExec`].
+pub fn is_sort(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<SortExec>()
+}
+
+/// Checks whether the given operator is a [`SortPreservingMergeExec`].
+pub fn is_sort_preserving_merge(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<SortPreservingMergeExec>()
+}
+
+/// Checks whether the given operator is a [`CoalescePartitionsExec`].
+pub fn is_coalesce_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<CoalescePartitionsExec>()
+}
+
+/// Checks whether the given operator is a [`UnionExec`].
+pub fn is_union(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<UnionExec>()
+}
+
+/// Checks whether the given operator is a [`RepartitionExec`].
+pub fn is_repartition(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<RepartitionExec>()
 }
 
 #[cfg(test)]
