@@ -6,7 +6,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.19: https://docutils.sourceforge.io/" />
 
-    <title>Features, and Usecases &#8212; Arrow DataFusion  documentation</title>
+    <title>Known Users &#8212; Arrow DataFusion  documentation</title>
     
     <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -34,8 +34,8 @@
     <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Example Usage" href="example-usage.html" />
-    <link rel="prev" title="Apache Arrow DataFusion" href="../index.html" />
+    <link rel="next" title="Comparisons to Other Projects" href="comparison.html" />
+    <link rel="prev" title="Example Usage" href="example-usage.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -72,8 +72,8 @@
  </span>
 </p>
 <ul class="current nav bd-sidenav">
- <li class="toctree-l1 current active">
-  <a class="current reference internal" href="#">
+ <li class="toctree-l1">
+  <a class="reference internal" href="introduction.html">
    Features, and Usecases
   </a>
  </li>
@@ -82,8 +82,8 @@
    Example Usage
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="users.html">
+ <li class="toctree-l1 current active">
+  <a class="current reference internal" href="#">
    Known Users
   </a>
  </li>
@@ -281,29 +281,9 @@
               
               <div class="toc-item">
                 
-<div class="tocsection onthispage pt-5 pb-3">
-    <i class="fas fa-list"></i> On this page
-</div>
 
 <nav id="bd-toc-nav">
-    <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#features">
-   Features
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#use-cases">
-   Use Cases
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#why-datafusion">
-   Why DataFusion?
-  </a>
- </li>
-</ul>
-
+    
 </nav>
               </div>
               
@@ -311,7 +291,7 @@
                 
 
 <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/introduction.md">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/users.md">
         <i class="fas fa-pencil-alt"></i> Edit this page
     </a>
 </div>
@@ -348,64 +328,32 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="features-and-usecases">
-<h1>Features, and Usecases<a class="headerlink" href="#features-and-usecases" title="Permalink to this heading">¶</a></h1>
-<p>DataFusion is a very fast, extensible query engine for building
-high-quality data-centric systems in <a class="reference external" href="http://rustlang.org">Rust</a>,
-using the <a class="reference external" href="https://arrow.apache.org">Apache Arrow</a> in-memory format.</p>
-<p>DataFusion offers SQL and Dataframe APIs, excellent <a class="reference external" href="https://benchmark.clickhouse.com/">performance</a>, built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and a great community.</p>
-<section id="features">
-<h2>Features<a class="headerlink" href="#features" title="Permalink to this heading">¶</a></h2>
+<section id="known-users">
+<h1>Known Users<a class="headerlink" href="#known-users" title="Permalink to this heading">¶</a></h1>
+<p>Here are some of the projects known to use DataFusion:</p>
 <ul class="simple">
-<li><p>Feature-rich <a class="reference external" href="https://arrow.apache.org/datafusion/user-guide/sql/index.html">SQL support</a> and <a class="reference external" href="https://arrow.apache.org/datafusion/user-guide/dataframe.html">DataFrame API</a></p></li>
-<li><p>Blazingly fast, vectorized, multi-threaded, streaming execution engine.</p></li>
-<li><p>Native support for Parquet, CSV, JSON, and Avro file formats. Support
-for custom file formats and non file datasources via the <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> trait.</p></li>
-<li><p>Many extension points: user defined scalar/aggregate/window functions, DataSources, SQL,
-other query languages, custom plan and execution nodes, optimizer passes, and more.</p></li>
-<li><p>Streaming, asynchronous IO directly from popular object stores, including AWS S3,
-Azure Blob Storage, and Google Cloud Storage. Other storage systems are supported via the
-<code class="docutils literal notranslate"><span class="pre">ObjectStore</span></code> trait.</p></li>
-<li><p><a class="reference external" href="https://docs.rs/datafusion/latest">Excellent Documentation</a> and a
-<a class="reference external" href="https://arrow.apache.org/datafusion/contributor-guide/communication.html">welcoming community</a>.</p></li>
-<li><p>A state of the art query optimizer with projection and filter pushdown, sort aware optimizations,
-automatic join reordering, expression coercion, and more.</p></li>
-<li><p>Permissive Apache 2.0 License, Apache Software Foundation governance</p></li>
-<li><p>Written in <a class="reference external" href="https://www.rust-lang.org/">Rust</a>, a modern system language with development
-productivity similar to Java or Golang, the performance of C++, and
-<a class="reference external" href="https://insights.stackoverflow.com/survey/2021#technology-most-loved-dreaded-and-wanted">loved by programmers everywhere</a>.</p></li>
-<li><p>Support for <a class="reference external" href="https://substrait.io/">Substrait</a> for query plan serialization, making it easier to integrate DataFusion
-with other projects, and to pass plans across language boundaries.</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/arrow-ballista">Ballista</a> Distributed SQL Query Engine</p></li>
+<li><p><a class="reference external" href="https://github.com/blaze-init/blaze">Blaze</a> Spark accelerator with DataFusion at its core</p></li>
+<li><p><a class="reference external" href="https://github.com/CeresDB/ceresdb">CeresDB</a> Distributed Time-Series Database</p></li>
+<li><p><a class="reference external" href="https://github.com/cloudfuse-io/buzz-rust">Cloudfuse Buzz</a></p></li>
+<li><p><a class="reference external" href="https://github.com/cnosdb/cnosdb">CnosDB</a> Open Source Distributed Time Series Database</p></li>
+<li><p><a class="reference external" href="https://github.com/cube-js/cube.js/tree/master/rust">Cube Store</a></p></li>
+<li><p><a class="reference external" href="https://github.com/dask-contrib/dask-sql">Dask SQL</a> Distributed SQL query engine in Python</p></li>
+<li><p><a class="reference external" href="https://github.com/datafusion-contrib/datafusion-tui">datafusion-tui</a> Text UI for DataFusion</p></li>
+<li><p><a class="reference external" href="https://github.com/delta-io/delta-rs">delta-rs</a> Native Rust implementation of Delta Lake</p></li>
+<li><p><a class="reference external" href="https://github.com/flock-lab/flock">Flock</a></p></li>
+<li><p><a class="reference external" href="https://github.com/GreptimeTeam/greptimedb">GreptimeDB</a> Open Source &amp; Cloud Native Distributed Time Series Database</p></li>
+<li><p><a class="reference external" href="https://github.com/influxdata/influxdb_iox">InfluxDB IOx</a> Time Series Database</p></li>
+<li><p><a class="reference external" href="https://github.com/kamu-data/kamu-cli/">Kamu</a> Planet-scale streaming data pipeline</p></li>
+<li><p><a class="reference external" href="https://github.com/parseablehq/parseable">Parseable</a> Log storage and observability platform</p></li>
+<li><p><a class="reference external" href="https://github.com/timvw/qv">qv</a> Quickly view your data</p></li>
+<li><p><a class="reference external" href="https://github.com/roapi/roapi">ROAPI</a></p></li>
+<li><p><a class="reference external" href="https://github.com/splitgraph/seafowl">Seafowl</a> CDN-friendly analytical database</p></li>
+<li><p><a class="reference external" href="https://synnada.ai/">Synnada</a> Streaming-first framework for data products</p></li>
+<li><p><a class="reference external" href="https://github.com/tensorbase/tensorbase">Tensorbase</a></p></li>
+<li><p><a class="reference external" href="https://vegafusion.io/">VegaFusion</a> Server-side acceleration for the <a class="reference external" href="https://vega.github.io/">Vega</a> visualization grammar</p></li>
+<li><p><a class="reference external" href="https://github.com/zinclabs/zincobserve">ZincObserve</a> Distributed cloud native observability platform</p></li>
 </ul>
-</section>
-<section id="use-cases">
-<h2>Use Cases<a class="headerlink" href="#use-cases" title="Permalink to this heading">¶</a></h2>
-<p>DataFusion can be used without modification as an embedded SQL
-engine or can be customized and used as a foundation for
-building new systems. Here are some examples of systems built using DataFusion:</p>
-<ul class="simple">
-<li><p>Specialized Analytical Database systems such as [CeresDB] and more general Apache Spark like system such a [Ballista].</p></li>
-<li><p>New query language engines such as [prql-query] and accelerators such as [VegaFusion]</p></li>
-<li><p>Research platform for new Database Systems, such as [Flock]</p></li>
-<li><p>SQL support to another library, such as [dask sql]</p></li>
-<li><p>Streaming data platforms such as [Synnada]</p></li>
-<li><p>Tools for reading / sorting / transcoding Parquet, CSV, AVRO, and JSON files such as [qv]</p></li>
-<li><p>A faster Spark runtime replacement [Blaze]</p></li>
-</ul>
-<p>By using DataFusion, the projects are freed to focus on their specific
-features, and avoid reimplementing general (but still necessary)
-features such as an expression representation, standard optimizations,
-execution plans, file format support, etc.</p>
-</section>
-<section id="why-datafusion">
-<h2>Why DataFusion?<a class="headerlink" href="#why-datafusion" title="Permalink to this heading">¶</a></h2>
-<ul class="simple">
-<li><p><em>High Performance</em>: Leveraging Rust and Arrow’s memory model, DataFusion is very fast.</p></li>
-<li><p><em>Easy to Connect</em>: Being part of the Apache Arrow ecosystem (Arrow, Parquet and Flight), DataFusion works well with the rest of the big data ecosystem</p></li>
-<li><p><em>Easy to Embed</em>: Allowing extension at almost any point in its design, DataFusion can be tailored for your specific usecase</p></li>
-<li><p><em>High Quality</em>: Extensively tested, both by itself and with the rest of the Arrow ecosystem, DataFusion can be used as the foundation for production systems.</p></li>
-</ul>
-</section>
 </section>
 
 
@@ -414,17 +362,17 @@ execution plans, file format support, etc.</p>
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="../index.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="example-usage.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Apache Arrow DataFusion</p>
+            <p class="prev-next-title">Example Usage</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="example-usage.html" title="next page">
+    <a class='right-next' id="next-link" href="comparison.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Example Usage</p>
+        <p class="prev-next-title">Comparisons to Other Projects</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>

@@ -34,7 +34,7 @@
     <script src="_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
-    <link rel="next" title="Introduction" href="user-guide/introduction.html" />
+    <link rel="next" title="Features, and Usecases" href="user-guide/introduction.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -73,12 +73,27 @@
 <ul class="nav bd-sidenav">
  <li class="toctree-l1">
   <a class="reference internal" href="user-guide/introduction.html">
-   Introduction
+   Features, and Usecases
   </a>
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="user-guide/example-usage.html">
    Example Usage
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="user-guide/users.html">
+   Known Users
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="user-guide/comparison.html">
+   Comparisons to Other Projects
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="user-guide/integration.html">
+   Integrations and Extensions
   </a>
  </li>
  <li class="toctree-l1">
@@ -191,6 +206,11 @@
   </a>
  </li>
  <li class="toctree-l1">
+  <a class="reference internal" href="contributor-guide/architecture.html">
+   Architecture
+  </a>
+ </li>
+ <li class="toctree-l1">
   <a class="reference internal" href="contributor-guide/roadmap.html">
    Roadmap
   </a>
@@ -221,6 +241,11 @@
     </a>
    </li>
   </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/arrow-datafusion">
+   Github
+  </a>
  </li>
  <li class="toctree-l1">
   <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues">
@@ -255,21 +280,9 @@
               
               <div class="toc-item">
                 
-<div class="tocsection onthispage pt-5 pb-3">
-    <i class="fas fa-list"></i> On this page
-</div>
 
 <nav id="bd-toc-nav">
-    <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#table-of-contents">
-   Table of Contents
-  </a>
-  <ul class="nav section-nav flex-column">
-  </ul>
- </li>
-</ul>
-
+    
 </nav>
               </div>
               
@@ -296,16 +309,25 @@
               
               <div>
                 
-  <section id="apache-arrow-datafusion">
+  <img alt="DataFusion Logo" src="_images/DataFusion-Logo-Background-White.png" />
+<section id="apache-arrow-datafusion">
 <h1>Apache Arrow DataFusion<a class="headerlink" href="#apache-arrow-datafusion" title="Permalink to this heading">¶</a></h1>
-<section id="table-of-contents">
-<h2>Table of Contents<a class="headerlink" href="#table-of-contents" title="Permalink to this heading">¶</a></h2>
+<p>DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
+<a class="reference external" href="http://rustlang.org">Rust</a>, using the <a class="reference external" href="https://arrow.apache.org">Apache Arrow</a>
+in-memory format.</p>
+<p>DataFusion offers SQL and Dataframe APIs, excellent
+<a class="reference external" href="https://benchmark.clickhouse.com">performance</a>, built-in support for
+CSV, Parquet, JSON, and Avro, extensive customization, and a great
+community.</p>
 <div class="toctree-wrapper compound" id="toc-guide">
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">User Guide</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="user-guide/introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="user-guide/introduction.html">Features, and Usecases</a></li>
 <li class="toctree-l1"><a class="reference internal" href="user-guide/example-usage.html">Example Usage</a></li>
 <li class="toctree-l1"><a class="reference internal" href="user-guide/example-usage.html#identifiers-and-capitalization">Identifiers and Capitalization</a></li>
+<li class="toctree-l1"><a class="reference internal" href="user-guide/users.html">Known Users</a></li>
+<li class="toctree-l1"><a class="reference internal" href="user-guide/comparison.html">Comparisons to Other Projects</a></li>
+<li class="toctree-l1"><a class="reference internal" href="user-guide/integration.html">Integrations and Extensions</a></li>
 <li class="toctree-l1"><a class="reference internal" href="user-guide/library.html">Using DataFusion as a library</a></li>
 <li class="toctree-l1"><a class="reference internal" href="user-guide/cli.html">DataFusion Command-line SQL Utility</a></li>
 <li class="toctree-l1"><a class="reference internal" href="user-guide/dataframe.html">DataFrame API</a></li>
@@ -320,19 +342,10 @@
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Contributor Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="contributor-guide/index.html">Introduction</a></li>
-<li class="toctree-l1"><a class="reference internal" href="contributor-guide/index.html#pull-requests">Pull Requests</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#merging-prs">Merging PRs</a></li>
-</ul>
-</li>
 <li class="toctree-l1"><a class="reference internal" href="contributor-guide/index.html#developer-s-guide">Developer’s guide</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#windows-setup">Windows setup</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#protoc-installation">Protoc Installation</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#bootstrap-environment">Bootstrap environment</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#test-organization">Test Organization</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#benchmarks">Benchmarks</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#how-to-add-a-new-scalar-function">How to add a new scalar function</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#how-to-add-a-new-aggregate-function">How to add a new aggregate function</a></li>
-<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#how-to-display-plans-graphically">How to display plans graphically</a></li>
+<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#pull-requests">Pull Requests</a></li>
+<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#getting-started">Getting Started</a></li>
+<li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#howtos">HOWTOs</a></li>
 <li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#specifications">Specifications</a></li>
 <li class="toctree-l2"><a class="reference internal" href="contributor-guide/index.html#how-to-format-md-document">How to format <code class="docutils literal notranslate"><span class="pre">.md</span></code> document</a></li>
 </ul>
@@ -341,6 +354,7 @@
 <li class="toctree-l2"><a class="reference internal" href="contributor-guide/communication.html#questions">Questions?</a></li>
 </ul>
 </li>
+<li class="toctree-l1"><a class="reference internal" href="contributor-guide/architecture.html">Architecture</a></li>
 <li class="toctree-l1"><a class="reference internal" href="contributor-guide/roadmap.html">Roadmap</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="contributor-guide/roadmap.html#datafusion">DataFusion</a></li>
 <li class="toctree-l2"><a class="reference internal" href="contributor-guide/roadmap.html#ballista">Ballista</a></li>
@@ -355,11 +369,11 @@
 <li class="toctree-l2"><a class="reference internal" href="contributor-guide/specification/output-field-name-semantic.html">Output field name semantics</a></li>
 </ul>
 </li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/arrow-datafusion">Github</a></li>
 <li class="toctree-l1"><a class="reference external" href="https://github.com/apache/arrow-datafusion/issues">Issue tracker</a></li>
 <li class="toctree-l1"><a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li>
 </ul>
 </div>
-</section>
 </section>
 
 
@@ -371,7 +385,7 @@
     <a class='right-next' id="next-link" href="user-guide/introduction.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Introduction</p>
+        <p class="prev-next-title">Features, and Usecases</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>

@@ -74,12 +74,27 @@
 <ul class="nav bd-sidenav">
  <li class="toctree-l1">
   <a class="reference internal" href="../user-guide/introduction.html">
-   Introduction
+   Features, and Usecases
   </a>
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="../user-guide/example-usage.html">
    Example Usage
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/users.html">
+   Known Users
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/comparison.html">
+   Comparisons to Other Projects
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/integration.html">
+   Integrations and Extensions
   </a>
  </li>
  <li class="toctree-l1">
@@ -192,6 +207,11 @@
   </a>
  </li>
  <li class="toctree-l1">
+  <a class="reference internal" href="architecture.html">
+   Architecture
+  </a>
+ </li>
+ <li class="toctree-l1">
   <a class="reference internal" href="roadmap.html">
    Roadmap
   </a>
@@ -222,6 +242,11 @@
     </a>
    </li>
   </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/arrow-datafusion">
+   Github
+  </a>
  </li>
  <li class="toctree-l1">
   <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues">
@@ -268,97 +293,102 @@
   </a>
  </li>
  <li class="toc-h1 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#pull-requests">
-   Pull Requests
-  </a>
-  <ul class="visible nav section-nav flex-column">
-   <li class="toc-h2 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#merging-prs">
-     Merging PRs
-    </a>
-   </li>
-  </ul>
- </li>
- <li class="toc-h1 nav-item toc-entry">
   <a class="reference internal nav-link" href="#developer-s-guide">
    Developer’s guide
   </a>
   <ul class="visible nav section-nav flex-column">
    <li class="toc-h2 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#windows-setup">
-     Windows setup
+    <a class="reference internal nav-link" href="#pull-requests">
+     Pull Requests
     </a>
    </li>
    <li class="toc-h2 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#protoc-installation">
-     Protoc Installation
-    </a>
-   </li>
-   <li class="toc-h2 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#bootstrap-environment">
-     Bootstrap environment
-    </a>
-   </li>
-   <li class="toc-h2 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#test-organization">
-     Test Organization
+    <a class="reference internal nav-link" href="#getting-started">
+     Getting Started
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h3 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#unit-tests">
-       Unit tests
+      <a class="reference internal nav-link" href="#windows-setup">
+       Windows setup
       </a>
      </li>
      <li class="toc-h3 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#rust-integration-tests">
-       Rust Integration Tests
+      <a class="reference internal nav-link" href="#protoc-installation">
+       Protoc Installation
       </a>
      </li>
      <li class="toc-h3 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#sqllogictests-tests">
-       sqllogictests Tests
+      <a class="reference internal nav-link" href="#bootstrap-environment">
+       Bootstrap environment
       </a>
      </li>
-    </ul>
-   </li>
-   <li class="toc-h2 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#benchmarks">
-     Benchmarks
-    </a>
-    <ul class="nav section-nav flex-column">
      <li class="toc-h3 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#criterion-benchmarks">
-       Criterion Benchmarks
+      <a class="reference internal nav-link" href="#test-organization">
+       Test Organization
       </a>
       <ul class="nav section-nav flex-column">
        <li class="toc-h4 nav-item toc-entry">
-        <a class="reference internal nav-link" href="#parquet-sql-benchmarks">
-         Parquet SQL Benchmarks
+        <a class="reference internal nav-link" href="#unit-tests">
+         Unit tests
+        </a>
+       </li>
+       <li class="toc-h4 nav-item toc-entry">
+        <a class="reference internal nav-link" href="#rust-integration-tests">
+         Rust Integration Tests
+        </a>
+       </li>
+       <li class="toc-h4 nav-item toc-entry">
+        <a class="reference internal nav-link" href="#sqllogictests-tests">
+         sqllogictests Tests
         </a>
        </li>
       </ul>
      </li>
      <li class="toc-h3 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#upstream-benchmark-suites">
-       Upstream Benchmark Suites
+      <a class="reference internal nav-link" href="#benchmarks">
+       Benchmarks
       </a>
+      <ul class="nav section-nav flex-column">
+       <li class="toc-h4 nav-item toc-entry">
+        <a class="reference internal nav-link" href="#criterion-benchmarks">
+         Criterion Benchmarks
+        </a>
+       </li>
+       <li class="toc-h4 nav-item toc-entry">
+        <a class="reference internal nav-link" href="#parquet-sql-benchmarks">
+         Parquet SQL Benchmarks
+        </a>
+       </li>
+       <li class="toc-h4 nav-item toc-entry">
+        <a class="reference internal nav-link" href="#upstream-benchmark-suites">
+         Upstream Benchmark Suites
+        </a>
+       </li>
+      </ul>
      </li>
     </ul>
    </li>
    <li class="toc-h2 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#how-to-add-a-new-scalar-function">
-     How to add a new scalar function
+    <a class="reference internal nav-link" href="#howtos">
+     HOWTOs
     </a>
-   </li>
-   <li class="toc-h2 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#how-to-add-a-new-aggregate-function">
-     How to add a new aggregate function
-    </a>
-   </li>
-   <li class="toc-h2 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#how-to-display-plans-graphically">
-     How to display plans graphically
-    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h3 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#how-to-add-a-new-scalar-function">
+       How to add a new scalar function
+      </a>
+     </li>
+     <li class="toc-h3 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#how-to-add-a-new-aggregate-function">
+       How to add a new aggregate function
+      </a>
+     </li>
+     <li class="toc-h3 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#how-to-display-plans-graphically">
+       How to display plans graphically
+      </a>
+     </li>
+    </ul>
    </li>
    <li class="toc-h2 nav-item toc-entry">
     <a class="reference internal nav-link" href="#specifications">
@@ -437,13 +467,13 @@
 <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22">good-first-issue</a>
 list to help you get started.</p>
 </section>
+<section id="developer-s-guide">
+<h1>Developer’s guide<a class="headerlink" href="#developer-s-guide" title="Permalink to this heading">¶</a></h1>
 <section id="pull-requests">
-<h1>Pull Requests<a class="headerlink" href="#pull-requests" title="Permalink to this heading">¶</a></h1>
+<h2>Pull Requests<a class="headerlink" href="#pull-requests" title="Permalink to this heading">¶</a></h2>
 <p>We welcome pull requests (PRs) from anyone from the community.</p>
 <p>DataFusion is a very active fast-moving project and we try to review and merge PRs quickly to keep the review backlog down and the pace up. After review and approval, one of the <a class="reference external" href="https://arrow.apache.org/committers/">many people with commit access</a> will merge your PR.</p>
 <p>Review bandwidth is currently our most limited resource, and we highly encourage reviews by the broader community. If you are waiting for your PR to be reviewed, consider helping review other PRs that are waiting. Such review both helps the reviewer to learn the codebase and become more expert, as well as helps identify issues in the PR (such as lack of test coverage), that can be addressed and make future reviews faster and more efficient.</p>
-<section id="merging-prs">
-<h2>Merging PRs<a class="headerlink" href="#merging-prs" title="Permalink to this heading">¶</a></h2>
 <p>Since we are a worldwide community, we have contributors in many timezones who review and comment. To ensure anyone who wishes has an opportunity to review a PR, our committers try to ensure that at least 24 hours passes between when a “major” PR is approved and when it is merged.</p>
 <p>A “major” PR means there is a substantial change in design or a change in the API. Committers apply their best judgment to determine what constitutes a substantial change. A “minor” PR might be merged without a 24 hour delay, again subject to the judgment of the committer. Examples of potential “minor” PRs are:</p>
 <ol class="arabic simple">
@@ -453,12 +483,11 @@ list to help you get started.</p>
 <li><p>Smaller non-controversial feature additions</p></li>
 </ol>
 </section>
-</section>
-<section id="developer-s-guide">
-<h1>Developer’s guide<a class="headerlink" href="#developer-s-guide" title="Permalink to this heading">¶</a></h1>
+<section id="getting-started">
+<h2>Getting Started<a class="headerlink" href="#getting-started" title="Permalink to this heading">¶</a></h2>
 <p>This section describes how you can get started at developing DataFusion.</p>
 <section id="windows-setup">
-<h2>Windows setup<a class="headerlink" href="#windows-setup" title="Permalink to this heading">¶</a></h2>
+<h3>Windows setup<a class="headerlink" href="#windows-setup" title="Permalink to this heading">¶</a></h3>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>wget<span class="w"> </span>https://az792536.vo.msecnd.net/vms/VMBuild_20190311/VirtualBox/MSEdge/MSEdge.Win10.VirtualBox.zip
 choco<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>git<span class="w"> </span>rustup.install<span class="w"> </span>visualcpp-build-tools
 git-bash.exe
@@ -467,7 +496,7 @@ cargo<span class="w"> </span>build
 </div>
 </section>
 <section id="protoc-installation">
-<h2>Protoc Installation<a class="headerlink" href="#protoc-installation" title="Permalink to this heading">¶</a></h2>
+<h3>Protoc Installation<a class="headerlink" href="#protoc-installation" title="Permalink to this heading">¶</a></h3>
 <p>Compiling DataFusion from sources requires an installed version of the protobuf compiler, <code class="docutils literal notranslate"><span class="pre">protoc</span></code>.</p>
 <p>On most platforms this can be installed from your system’s package manager</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>$ apt install -y protobuf-compiler
@@ -484,7 +513,7 @@ libprotoc<span class="w"> </span><span class="m">3</span>.12.4
 <p>Alternatively a binary release can be downloaded from the <a class="reference external" href="https://github.com/protocolbuffers/protobuf/releases">Release Page</a> or <a class="reference external" href="https://github.com/protocolbuffers/protobuf/blob/main/src/README.md">built from source</a>.</p>
 </section>
 <section id="bootstrap-environment">
-<h2>Bootstrap environment<a class="headerlink" href="#bootstrap-environment" title="Permalink to this heading">¶</a></h2>
+<h3>Bootstrap environment<a class="headerlink" href="#bootstrap-environment" title="Permalink to this heading">¶</a></h3>
 <p>DataFusion is written in Rust and it uses a standard rust toolkit:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">build</span></code></p></li>
@@ -510,18 +539,18 @@ libprotoc<span class="w"> </span><span class="m">3</span>.12.4
 </ul>
 </section>
 <section id="test-organization">
-<h2>Test Organization<a class="headerlink" href="#test-organization" title="Permalink to this heading">¶</a></h2>
+<h3>Test Organization<a class="headerlink" href="#test-organization" title="Permalink to this heading">¶</a></h3>
 <p>DataFusion has several levels of tests in its <a class="reference external" href="https://martinfowler.com/articles/practical-test-pyramid.html">Test
 Pyramid</a>
 and tries to follow <a class="reference external" href="https://doc.rust-lang.org/book/ch11-03-test-organization.html">Testing Organization</a> in the The Book.</p>
 <p>This section highlights the most important test modules that exist</p>
 <section id="unit-tests">
-<h3>Unit tests<a class="headerlink" href="#unit-tests" title="Permalink to this heading">¶</a></h3>
+<h4>Unit tests<a class="headerlink" href="#unit-tests" title="Permalink to this heading">¶</a></h4>
 <p>Tests for the code in an individual module are defined in the same source file with a <code class="docutils literal notranslate"><span class="pre">test</span></code> module, following Rust convention</p>
 </section>
 <section id="rust-integration-tests">
-<h3>Rust Integration Tests<a class="headerlink" href="#rust-integration-tests" title="Permalink to this heading">¶</a></h3>
-<p>There are several tests of the public interface of the DataFusion library in the <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests">tests</a> directory.</p>
+<h4>Rust Integration Tests<a class="headerlink" href="#rust-integration-tests" title="Permalink to this heading">¶</a></h4>
+<p>There are several tests of the public interface of the DataFusion library in the <a class="reference external" href="https://github.com/apache/arrow-datafusion/tree/main/datafusion/core/tests">tests</a> directory.</p>
 <p>You can run these tests individually using a command such as</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-p<span class="w"> </span>datafusion<span class="w"> </span>--tests<span class="w"> </span>sql_integration
 </pre></div>
@@ -529,23 +558,24 @@ and tries to follow <a class="reference external" href="https://doc.rust-lang.or
 <p>One very important test is the <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sql_integration.rs">sql_integration</a> test which validates DataFusion’s ability to run a large assortment of SQL queries against an assortment of data setups.</p>
 </section>
 <section id="sqllogictests-tests">
-<h3>sqllogictests Tests<a class="headerlink" href="#sqllogictests-tests" title="Permalink to this heading">¶</a></h3>
-<p>The <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sqllogictests">sqllogictests</a> also validate DataFusion SQL against an assortment of data setups.</p>
+<h4>sqllogictests Tests<a class="headerlink" href="#sqllogictests-tests" title="Permalink to this heading">¶</a></h4>
+<p>The <a class="reference external" href="https://github.com/apache/arrow-datafusion/tree/main/datafusion/core/tests/sqllogictests">sqllogictests</a> also validate DataFusion SQL against an assortment of data setups.</p>
 <p>Data Driven tests have many benefits including being easier to write and maintain. We are in the process of <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues/4460">migrating sql_integration tests</a> and encourage
 you to add new tests using sqllogictests if possible.</p>
 </section>
 </section>
 <section id="benchmarks">
-<h2>Benchmarks<a class="headerlink" href="#benchmarks" title="Permalink to this heading">¶</a></h2>
+<h3>Benchmarks<a class="headerlink" href="#benchmarks" title="Permalink to this heading">¶</a></h3>
 <section id="criterion-benchmarks">
-<h3>Criterion Benchmarks<a class="headerlink" href="#criterion-benchmarks" title="Permalink to this heading">¶</a></h3>
+<h4>Criterion Benchmarks<a class="headerlink" href="#criterion-benchmarks" title="Permalink to this heading">¶</a></h4>
 <p><a class="reference external" href="https://docs.rs/criterion/latest/criterion/index.html">Criterion</a> is a statistics-driven micro-benchmarking framework used by DataFusion for evaluating the performance of specific code-paths. In particular, the criterion benchmarks help to both guide optimisation efforts, and prevent performance regressions within DataFusion.</p>
 <p>Criterion integrates with Cargo’s built-in <a class="reference external" href="https://doc.rust-lang.org/cargo/commands/cargo-bench.html">benchmark support</a> and a given benchmark can be run with</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cargo</span> <span class="n">bench</span> <span class="o">--</span><span class="n">bench</span> <span class="n">BENCHMARK_NAME</span>
 </pre></div>
 </div>
-<p>A full list of benchmarks can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/benches">here</a>.</p>
+<p>A full list of benchmarks can be found <a class="reference external" href="https://github.com/apache/arrow-datafusion/tree/main/datafusion/core/benches">here</a>.</p>
 <p><em><a class="reference external" href="https://github.com/bheisler/cargo-criterion">cargo-criterion</a> may also be used for more advanced reporting.</em></p>
+</section>
 <section id="parquet-sql-benchmarks">
 <h4>Parquet SQL Benchmarks<a class="headerlink" href="#parquet-sql-benchmarks" title="Permalink to this heading">¶</a></h4>
 <p>The parquet SQL benchmarks can be run with</p>
@@ -556,15 +586,17 @@ you to add new tests using sqllogictests if possible.</p>
 <p>If the environment variable <code class="docutils literal notranslate"><span class="pre">PARQUET_FILE</span></code> is set, the benchmark will run queries against this file instead of a randomly generated one. This can be useful for performing multiple runs, potentially with different code, against the same source data, or for testing against a custom dataset.</p>
 <p>The benchmark will automatically remove any generated parquet file on exit, however, if interrupted (e.g. by CTRL+C) it will not. This can be useful for analysing the particular file after the fact, or preserving it to use with <code class="docutils literal notranslate"><span class="pre">PARQUET_FILE</span></code> in subsequent runs.</p>
 </section>
-</section>
 <section id="upstream-benchmark-suites">
-<h3>Upstream Benchmark Suites<a class="headerlink" href="#upstream-benchmark-suites" title="Permalink to this heading">¶</a></h3>
-<p>Instructions and tooling for running upstream benchmark suites against DataFusion can be found in <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/benchmarks">benchmarks</a>.</p>
+<h4>Upstream Benchmark Suites<a class="headerlink" href="#upstream-benchmark-suites" title="Permalink to this heading">¶</a></h4>
+<p>Instructions and tooling for running upstream benchmark suites against DataFusion can be found in <a class="reference external" href="https://github.com/apache/arrow-datafusion/tree/main/benchmarks">benchmarks</a>.</p>
 <p>These are valuable for comparative evaluation against alternative Arrow implementations and query engines.</p>
 </section>
 </section>
+</section>
+<section id="howtos">
+<h2>HOWTOs<a class="headerlink" href="#howtos" title="Permalink to this heading">¶</a></h2>
 <section id="how-to-add-a-new-scalar-function">
-<h2>How to add a new scalar function<a class="headerlink" href="#how-to-add-a-new-scalar-function" title="Permalink to this heading">¶</a></h2>
+<h3>How to add a new scalar function<a class="headerlink" href="#how-to-add-a-new-scalar-function" title="Permalink to this heading">¶</a></h3>
 <p>Below is a checklist of what you need to do to add a new scalar function to DataFusion:</p>
 <ul class="simple">
 <li><p>Add the actual implementation of the function:</p>
@@ -594,7 +626,7 @@ you to add new tests using sqllogictests if possible.</p>
 </ul>
 </section>
 <section id="how-to-add-a-new-aggregate-function">
-<h2>How to add a new aggregate function<a class="headerlink" href="#how-to-add-a-new-aggregate-function" title="Permalink to this heading">¶</a></h2>
+<h3>How to add a new aggregate function<a class="headerlink" href="#how-to-add-a-new-aggregate-function" title="Permalink to this heading">¶</a></h3>
 <p>Below is a checklist of what you need to do to add a new aggregate function to DataFusion:</p>
 <ul class="simple">
 <li><p>Add the actual implementation of an <code class="docutils literal notranslate"><span class="pre">Accumulator</span></code> and <code class="docutils literal notranslate"><span class="pre">AggregateExpr</span></code>:</p>
@@ -619,7 +651,7 @@ you to add new tests using sqllogictests if possible.</p>
 </ul>
 </section>
 <section id="how-to-display-plans-graphically">
-<h2>How to display plans graphically<a class="headerlink" href="#how-to-display-plans-graphically" title="Permalink to this heading">¶</a></h2>
+<h3>How to display plans graphically<a class="headerlink" href="#how-to-display-plans-graphically" title="Permalink to this heading">¶</a></h3>
 <p>The query plans represented by <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code> nodes can be graphically
 rendered using <a class="reference external" href="https://www.graphviz.org/">Graphviz</a>.</p>
 <p>To do so, save the output of the <code class="docutils literal notranslate"><span class="pre">display_graphviz</span></code> function to a file.:</p>
@@ -634,6 +666,7 @@ can be displayed. For example, the following command creates a
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dot<span class="w"> </span>-Tpdf<span class="w"> </span>&lt;<span class="w"> </span>/tmp/plan.dot<span class="w"> </span>&gt;<span class="w"> </span>/tmp/plan.pdf
 </pre></div>
 </div>
+</section>
 </section>
 <section id="specifications">
 <h2>Specifications<a class="headerlink" href="#specifications" title="Permalink to this heading">¶</a></h2>
