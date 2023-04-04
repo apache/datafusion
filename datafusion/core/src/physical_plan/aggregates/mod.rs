@@ -256,16 +256,10 @@ fn get_working_mode(
 
 // Util function to get iteration order information stored inside the `GroupByOrderMode`.
 fn get_ordered_indices(working_mode: &Option<GroupByOrderMode>) -> Option<Vec<usize>> {
-    if let Some(mode) = working_mode {
-        match mode {
-            GroupByOrderMode::Ordered(ordered_indices)
-            | GroupByOrderMode::PartiallyOrdered(ordered_indices) => {
-                Some(ordered_indices.clone())
-            }
-        }
-    } else {
-        None
-    }
+    working_mode.as_ref().map(|mode| match mode {
+        GroupByOrderMode::Ordered(ordered_indices)
+        | GroupByOrderMode::PartiallyOrdered(ordered_indices) => ordered_indices.clone(),
+    })
 }
 
 impl AggregateExec {

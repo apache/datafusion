@@ -141,6 +141,7 @@ impl GroupedHashAggregateStream {
         ordering: Option<Vec<PhysicalSortExpr>>,
     ) -> Result<Self> {
         let timer = baseline_metrics.elapsed_compute().timer();
+
         let mut start_idx = group_by.expr.len();
         let mut row_aggr_expr = vec![];
         let mut row_agg_indices = vec![];
@@ -204,6 +205,7 @@ impl GroupedHashAggregateStream {
         timer.done();
 
         let exec_state = ExecutionState::ReadingInput;
+
         let is_fully_sorted = ordered_indices
             .as_ref()
             .map(|indices| indices.len() == group_by.expr.len())
