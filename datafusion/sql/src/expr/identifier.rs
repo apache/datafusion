@@ -58,9 +58,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 Err(_) => {
                     // check the outer_query_schema and try to find a match
-                    let outer_query_schema_opt =
-                        planner_context.outer_query_schema.as_ref();
-                    if let Some(outer) = outer_query_schema_opt {
+                    if let Some(outer) = planner_context.outer_query_schema() {
                         match outer.field_with_unqualified_name(normalize_ident.as_str())
                         {
                             Ok(field) => {
@@ -159,10 +157,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             "Unsupported compound identifier: {ids:?}"
                         )))
                     } else {
-                        let outer_query_schema_opt =
-                            planner_context.outer_query_schema.as_ref();
                         // check the outer_query_schema and try to find a match
-                        if let Some(outer) = outer_query_schema_opt {
+                        if let Some(outer) = planner_context.outer_query_schema() {
                             let search_result = search_dfschema(&ids, outer);
                             match search_result {
                                 // found matching field with spare identifier(s) for nested field(s) in structure

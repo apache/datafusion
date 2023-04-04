@@ -120,7 +120,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         match sql {
             SQLExpr::Value(value) => {
-                self.parse_value(value, &planner_context.prepare_param_data_types)
+                self.parse_value(value, planner_context.prepare_param_data_types())
             }
             SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
                 fun: BuiltinScalarFunction::DatePart,

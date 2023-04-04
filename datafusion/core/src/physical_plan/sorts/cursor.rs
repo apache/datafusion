@@ -32,9 +32,6 @@ pub struct SortKeyCursor {
     cur_row: usize,
     num_rows: usize,
 
-    // An id uniquely identifying the record batch scanned by this cursor.
-    batch_id: usize,
-
     rows: Rows,
 }
 
@@ -43,19 +40,17 @@ impl std::fmt::Debug for SortKeyCursor {
         f.debug_struct("SortKeyCursor")
             .field("cur_row", &self.cur_row)
             .field("num_rows", &self.num_rows)
-            .field("batch_id", &self.batch_id)
             .finish()
     }
 }
 
 impl SortKeyCursor {
     /// Create a new SortKeyCursor
-    pub fn new(stream_idx: usize, batch_id: usize, rows: Rows) -> Self {
+    pub fn new(stream_idx: usize, rows: Rows) -> Self {
         Self {
             stream_idx,
             cur_row: 0,
             num_rows: rows.num_rows(),
-            batch_id,
             rows,
         }
     }
@@ -64,12 +59,6 @@ impl SortKeyCursor {
     /// Return the stream index of this cursor
     pub fn stream_idx(&self) -> usize {
         self.stream_idx
-    }
-
-    #[inline(always)]
-    /// Return the batch id of this cursor
-    pub fn batch_id(&self) -> usize {
-        self.batch_id
     }
 
     #[inline(always)]

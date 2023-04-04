@@ -1144,20 +1144,6 @@ async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordB
     ctx.sql(sql).await?.collect().await
 }
 
-/// Execute query and return results as a Vec of RecordBatches or an error
-async fn try_execute_to_batches(
-    ctx: &SessionContext,
-    sql: &str,
-) -> Result<Vec<RecordBatch>> {
-    let dataframe = ctx.sql(sql).await?;
-    let logical_schema = dataframe.schema().clone();
-    let (state, plan) = dataframe.into_parts();
-
-    let optimized = state.optimize(&plan)?;
-    assert_eq!(&logical_schema, optimized.schema().as_ref());
-    DataFrame::new(state, optimized).collect().await
-}
-
 /// Execute query and return results as a Vec of RecordBatches
 async fn execute_to_batches(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
     let df = ctx.sql(sql).await.unwrap();
@@ -1377,10 +1363,6 @@ where
     )?;
     let table = MemTable::try_new(schema, vec![vec![data]])?;
     Ok(Arc::new(table))
-}
-
-fn make_timestamp_nano_table() -> Result<Arc<MemTable>> {
-    make_timestamp_table::<TimestampNanosecondType>()
 }
 
 /// Return a new table provider that has a single Int32 column with
