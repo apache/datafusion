@@ -602,7 +602,7 @@ fn analyze_window_sort_removal(
         // Because length of window_exec requirement is n_req.
         let required_ordering = &sort_output_ordering[0..n_req];
         if let Some(physical_ordering) = physical_ordering {
-            if let Some(should_reverse) = can_skip_sort_before_window(
+            if let Some(should_reverse) = can_skip_sort(
                 window_expr[0].partition_by(),
                 required_ordering,
                 &sort_input.schema(),
@@ -795,7 +795,7 @@ pub struct ColumnInfo {
 /// `None` indicates `PhysicalSortExpr`s cannot be removed from the physical plan.
 /// `Some(bool)` is a flag indicating whether we should reverse the sort direction in order to
 /// remove physical sort expressions from the plan.
-pub fn can_skip_sort_before_window(
+pub fn can_skip_sort(
     partition_keys: &[Arc<dyn PhysicalExpr>],
     required: &[PhysicalSortExpr],
     input_schema: &SchemaRef,
