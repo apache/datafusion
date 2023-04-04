@@ -288,8 +288,8 @@ impl Stream for GroupedHashAggregateStream {
                         Ok(Some(result)) => {
                             let batch = result.record_output(&self.baseline_metrics);
                             self.row_group_skip_position += batch.num_rows();
-                            self.exec_state = ExecutionState::ReadingInput;
                             if self.ordered_indices.is_some() {
+                                self.exec_state = ExecutionState::ReadingInput;
                                 self.prune()?;
                             }
                             return Poll::Ready(Some(Ok(batch)));
@@ -413,6 +413,7 @@ impl GroupedHashAggregateStream {
                     let group_state = &row_group_states[*group_idx];
                     owned_row.row() == group_state.group_by_values.row()
                 });
+
                 match entry {
                     // Existing entry for this group value
                     Some((_hash, group_idx)) => {
@@ -422,9 +423,10 @@ impl GroupedHashAggregateStream {
                         if group_state.indices.is_empty() {
                             groups_with_rows.push(*group_idx);
                         };
+
                         for row in indices {
-                            group_state.indices.push_accounted(row, &mut allocated);
                             // remember this row
+                            group_state.indices.push_accounted(row, &mut allocated);
                         }
                     }
                     //  1.2 Need to create new entry
@@ -489,11 +491,6 @@ impl GroupedHashAggregateStream {
                     }
                 };
             }
-
-            let RowAggregationState {
-                group_states: row_group_states,
-                ..
-            } = &mut self.row_aggr_state;
 
             // Collect all indices + offsets based on keys in this vec
             let mut batch_indices: UInt32Builder = UInt32Builder::with_capacity(0);
