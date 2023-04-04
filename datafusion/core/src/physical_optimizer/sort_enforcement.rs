@@ -50,10 +50,9 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{reverse_sort_options, DataFusionError};
 use datafusion_physical_expr::utils::{
-    make_sort_exprs_from_requirements, ordering_satisfy,
-    ordering_satisfy_requirement_concrete,
+    ordering_satisfy, ordering_satisfy_requirement_concrete,
 };
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
 use itertools::{concat, izip};
 use std::iter::zip;
 use std::sync::Arc;
@@ -468,7 +467,8 @@ fn ensure_sorting(
                 ) {
                     // Make sure we preserve the ordering requirements:
                     update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
-                    let sort_expr = make_sort_exprs_from_requirements(&required_ordering);
+                    let sort_expr =
+                        PhysicalSortRequirement::to_sort_exprs(required_ordering);
                     add_sort_above(child, sort_expr)?;
                     if is_sort(child) {
                         *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
@@ -479,7 +479,7 @@ fn ensure_sorting(
             }
             (Some(required), None) => {
                 // Ordering requirement is not met, we should add a `SortExec` to the plan.
-                let sort_expr = make_sort_exprs_from_requirements(&required);
+                let sort_expr = PhysicalSortRequirement::to_sort_exprs(required);
                 add_sort_above(child, sort_expr)?;
                 *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
             }

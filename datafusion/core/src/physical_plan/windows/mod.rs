@@ -194,18 +194,12 @@ pub(crate) fn calc_requirements(
 ) -> Option<Vec<PhysicalSortRequirement>> {
     let mut sort_reqs = vec![];
     for partition_by in partition_by_exprs {
-        sort_reqs.push(PhysicalSortRequirement {
-            expr: partition_by.clone(),
-            options: None,
-        });
+        sort_reqs.push(PhysicalSortRequirement::new_expr_only(partition_by.clone()))
     }
-    for PhysicalSortExpr { expr, options } in orderby_sort_exprs {
-        let contains = sort_reqs.iter().any(|e| expr.eq(&e.expr));
+    for sort_expr in orderby_sort_exprs {
+        let contains = sort_reqs.iter().any(|e| sort_expr.expr.eq(e.expr()));
         if !contains {
-            sort_reqs.push(PhysicalSortRequirement {
-                expr: expr.clone(),
-                options: Some(*options),
-            });
+            sort_reqs.push(PhysicalSortRequirement::from(sort_expr));
         }
     }
     // Convert empty result to None. Otherwise wrap result inside Some()
@@ -297,7 +291,11 @@ mod tests {
                     nulls_first,
                 });
                 let expr = col(col_name, &schema)?;
-                let res = PhysicalSortRequirement { expr, options };
+                let res = if let Some(options) = options {
+                    PhysicalSortRequirement::new_exact(expr, options)
+                } else {
+                    PhysicalSortRequirement::new_expr_only(expr)
+                };
                 if let Some(expected) = &mut expected {
                     expected.push(res);
                 } else {
