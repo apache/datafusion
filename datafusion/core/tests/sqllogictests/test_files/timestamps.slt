@@ -670,13 +670,24 @@ drop table foo;
 statement ok
 drop table bar;
 
-# timestamptz to utf8 conversion
+# timestamptz <=> utf8 conversion
 query BBBB
 SELECT
   '2000-01-01T00:00:00'::timestamp::timestamptz = '2000-01-01T00:00:00',
   '2000-01-01T00:00:00'::timestamp::timestamptz != '2000-01-01T00:00:00',
   '2000-01-01T00:00:00'::timestamp::timestamptz >= '2000-01-01T00:00:00',
   '2000-01-01T00:00:00'::timestamp::timestamptz <= '2000-01-01T00:00:00'
+;
+----
+true false true true
+
+# timestamptz <=> timestamp conversion
+query BBBB
+SELECT
+  '2000-01-01T00:00:00'::timestamp::timestamptz = '2000-01-01T00:00:00'::timestamp,
+  '2000-01-01T00:00:00'::timestamp::timestamptz != '2000-01-01T00:00:00'::timestamp,
+  '2000-01-01T00:00:00'::timestamp::timestamptz >= '2000-01-01T00:00:00'::timestamp,
+  '2000-01-01T00:00:00'::timestamp::timestamptz <= '2000-01-01T00:00:00'::timestamp
 ;
 ----
 true false true true
