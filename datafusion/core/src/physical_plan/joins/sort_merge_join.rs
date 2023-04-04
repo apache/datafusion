@@ -301,7 +301,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         if self.left.output_partitioning() != self.right.output_partitioning() {
-            return Err(DataFusionError::Plan(format!(
+            return Err(DataFusionError::Internal(format!(
                 "Invalid SortMergeExec, partition count mismatch between children executors, consider using RepartitionExec",
             )));
         }

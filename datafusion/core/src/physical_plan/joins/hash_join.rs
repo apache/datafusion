@@ -373,7 +373,7 @@ impl ExecutionPlan for HashJoinExec {
         if self.mode == PartitionMode::Partitioned
             && self.left.output_partitioning() != self.right.output_partitioning()
         {
-            return Err(DataFusionError::Plan(format!(
+            return Err(DataFusionError::Internal(format!(
                 "Invalid HashJoinExec, partition count mismatch between children executors, consider using RepartitionExec",
             )));
         }
