@@ -84,15 +84,16 @@ pub(crate) fn find_match_indices<T: PartialEq>(
     to_search: &[T],
     searched: &[T],
 ) -> Result<Vec<usize>> {
-    let mut result = vec![];
-    for item in to_search {
-        if let Some(idx) = searched.iter().position(|e| e.eq(item)) {
-            result.push(idx);
-        } else {
-            return Err(DataFusionError::Execution("item not found".to_string()));
-        }
-    }
-    Ok(result)
+    to_search
+        .iter()
+        .map(|item| {
+            if let Some(idx) = searched.iter().position(|e| e.eq(item)) {
+                Ok(idx)
+            } else {
+                Err(DataFusionError::Execution("item not found".to_string()))
+            }
+        })
+        .collect::<Result<Vec<_>>>()
 }
 
 /// Merges vectors `in1` and `in2` (removes duplicates) then sorts the result.
