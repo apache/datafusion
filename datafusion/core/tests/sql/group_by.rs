@@ -933,7 +933,7 @@ async fn query_group_by_with_filter() -> Result<()> {
         ],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = use_postgres_dialect();
     ctx.register_batch("test", data)?;
     let sql =
         "SELECT c1, SUM(c2) FILTER (WHERE c2 >= 20) as result FROM test GROUP BY c1";
@@ -969,7 +969,7 @@ async fn query_group_by_avg_with_filter() -> Result<()> {
         ],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = use_postgres_dialect();
     ctx.register_batch("test", data)?;
 
     let sql =
@@ -1006,7 +1006,7 @@ async fn query_group_by_with_multiple_filters() -> Result<()> {
         ],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = use_postgres_dialect();
     ctx.register_batch("test", data)?;
 
     let sql = "SELECT c1, SUM(c2) FILTER (WHERE c2 >= 20) AS sum_c2, AVG(c3) FILTER (WHERE c3 <= 70) AS avg_c3 FROM test GROUP BY c1";
@@ -1040,7 +1040,7 @@ async fn query_group_by_distinct_with_filter() -> Result<()> {
         ],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = use_postgres_dialect();
     ctx.register_batch("test", data)?;
     let sql = "SELECT c1, COUNT(DISTINCT c2) FILTER (WHERE c2 >= 20) AS distinct_c2_count FROM test GROUP BY c1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -1071,7 +1071,7 @@ async fn query_without_group_by_with_filter() -> Result<()> {
         ],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = use_postgres_dialect();
     ctx.register_batch("test", data)?;
     let sql = "SELECT SUM(c2) FILTER (WHERE c2 >= 20) AS sum_c2 FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -1102,7 +1102,7 @@ async fn count_without_group_by_with_filter() -> Result<()> {
         ],
     )?;
 
-    let ctx = SessionContext::new();
+    let ctx = use_postgres_dialect();
     ctx.register_batch("test", data)?;
     let sql = "SELECT COUNT(c2) FILTER (WHERE c2 >= 20) AS count_c2 FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -1115,4 +1115,10 @@ async fn count_without_group_by_with_filter() -> Result<()> {
     ];
     assert_batches_sorted_eq!(expected, &actual);
     Ok(())
+}
+
+fn use_postgres_dialect() -> SessionContext {
+    let mut config = ConfigOptions::new();
+    config.sql_parser.dialect = "Postgres".to_string();
+    SessionContext::with_config(config.into())
 }

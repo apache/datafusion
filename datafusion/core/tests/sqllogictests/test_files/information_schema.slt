@@ -164,6 +164,7 @@ datafusion.optimizer.skip_failed_rules true
 datafusion.optimizer.top_down_join_key_reordering true
 datafusion.sql_parser.enable_ident_normalization true
 datafusion.sql_parser.parse_float_as_decimal false
+datafusion.sql_parser.dialect generic
 
 # show_variable_in_config_options
 query TT
