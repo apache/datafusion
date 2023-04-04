@@ -273,6 +273,7 @@ mod tests {
         let agg = DistinctCount::new(
             arrays[0].data_type().clone(),
             Arc::new(NoOp::new()),
+            None,
             String::from("__col_name__"),
         );
 
@@ -289,6 +290,7 @@ mod tests {
         let agg = DistinctCount::new(
             data_types[0].clone(),
             Arc::new(NoOp::new()),
+            None,
             String::from("__col_name__"),
         );
 

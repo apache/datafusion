@@ -330,6 +330,7 @@ mod tests {
 
         let agg = Arc::new(Stddev::new(
             col("a", &schema)?,
+            None,
             "bla".to_string(),
             DataType::Float64,
         ));
@@ -364,6 +365,7 @@ mod tests {
 
         let agg = Arc::new(Stddev::new(
             col("a", &schema)?,
+            None,
             "bla".to_string(),
             DataType::Float64,
         ));
@@ -384,12 +386,14 @@ mod tests {
 
         let agg1 = Arc::new(StddevPop::new(
             col("a", &schema)?,
+            None,
             "bla".to_string(),
             DataType::Float64,
         ));
 
         let agg2 = Arc::new(StddevPop::new(
             col("a", &schema)?,
+            None,
             "bla".to_string(),
             DataType::Float64,
         ));
@@ -412,12 +416,14 @@ mod tests {
 
         let agg1 = Arc::new(StddevPop::new(
             col("a", &schema)?,
+            None,
             "bla".to_string(),
             DataType::Float64,
         ));
 
         let agg2 = Arc::new(StddevPop::new(
             col("a", &schema)?,
+            None,
             "bla".to_string(),
             DataType::Float64,
         ));

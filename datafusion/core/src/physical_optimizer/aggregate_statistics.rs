@@ -373,6 +373,7 @@ mod tests {
         fn count_expr(&self) -> Arc<dyn AggregateExpr> {
             Arc::new(Count::new(
                 self.column(),
+                None,
                 self.column_name(),
                 DataType::Int64,
             ))

@@ -3044,8 +3044,8 @@ fn hive_aggregate_with_filter() -> Result<()> {
     let dialect = &HiveDialect {};
     let sql = "SELECT SUM(age) FILTER (WHERE age > 4) FROM person";
     let plan = logical_plan_with_dialect(sql, dialect)?;
-    let expected = "Projection: SUM(person.age) FILTER (WHERE age > Int64(4))\
-        \n  Aggregate: groupBy=[[]], aggr=[[SUM(person.age) FILTER (WHERE age > Int64(4))]]\
+    let expected = "Projection: SUM(person.age) FILTER (WHERE person.age > Int64(4))\
+        \n  Aggregate: groupBy=[[]], aggr=[[SUM(person.age) FILTER (WHERE person.age > Int64(4))]]\
         \n    TableScan: person"
         .to_string();
     assert_eq!(plan.display_indent().to_string(), expected);

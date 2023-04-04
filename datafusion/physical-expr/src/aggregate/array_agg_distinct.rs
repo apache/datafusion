@@ -191,6 +191,7 @@ mod tests {
 
         let agg = Arc::new(DistinctArrayAgg::new(
             col("a", &schema)?,
+            None,
             "bla".to_string(),
             datatype,
         ));

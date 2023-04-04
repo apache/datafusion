@@ -402,6 +402,7 @@ mod tests {
 
         let agg = Arc::new(Variance::new(
             col("a", &schema)?,
+            None,
             "bla".to_string(),
             DataType::Float64,
         ));
@@ -436,6 +437,7 @@ mod tests {
 
         let agg = Arc::new(Variance::new(
             col("a", &schema)?,
+            None,
             "bla".to_string(),
             DataType::Float64,
         ));
@@ -457,12 +459,14 @@ mod tests {
 
         let agg1 = Arc::new(VariancePop::new(
             col("a", &schema)?,
+            None,
             "bla".to_string(),
             DataType::Float64,
         ));
 
         let agg2 = Arc::new(VariancePop::new(
             col("a", &schema)?,
+            None,
             "bla".to_string(),
             DataType::Float64,
         ));
@@ -485,12 +489,14 @@ mod tests {
 
         let agg1 = Arc::new(VariancePop::new(
             col("a", &schema)?,
+            None,
             "bla".to_string(),
             DataType::Float64,
         ));
 
         let agg2 = Arc::new(VariancePop::new(
             col("a", &schema)?,
+            None,
             "bla".to_string(),
             DataType::Float64,
         ));

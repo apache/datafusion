@@ -1386,6 +1386,7 @@ mod roundtrip_tests {
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
             col("b", &schema)?,
+            None,
             "AVG(b)".to_string(),
             DataType::Float64,
         ))];
@@ -1599,6 +1600,7 @@ mod roundtrip_tests {
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(DistinctCount::new(
             DataType::Int64,
             col("b", &schema)?,
+            None,
             "COUNT(DISTINCT b)".to_string(),
         ))];
 

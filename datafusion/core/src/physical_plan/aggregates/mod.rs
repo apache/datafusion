@@ -828,6 +828,7 @@ mod tests {
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Count::new(
             lit(1i8),
+            None,
             "COUNT(1)".to_string(),
             DataType::Int64,
         ))];
@@ -933,6 +934,7 @@ mod tests {
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
             col("b", &input_schema)?,
+            None,
             "AVG(b)".to_string(),
             DataType::Float64,
         ))];
@@ -1163,6 +1165,7 @@ mod tests {
         // something that allocates within the aggregator
         let aggregates_v0: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Median::new(
             col("a", &input_schema)?,
+            None,
             "MEDIAN(a)".to_string(),
             DataType::UInt32,
         ))];
@@ -1171,6 +1174,7 @@ mod tests {
         let aggregates_v1: Vec<Arc<dyn AggregateExpr>> =
             vec![Arc::new(ApproxDistinct::new(
                 col("a", &input_schema)?,
+                None,
                 "APPROX_DISTINCT(a)".to_string(),
                 DataType::UInt32,
             ))];
@@ -1178,6 +1182,7 @@ mod tests {
         // use fast-path in `row_hash.rs`.
         let aggregates_v2: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
             col("b", &input_schema)?,
+            None,
             "AVG(b)".to_string(),
             DataType::Float64,
         ))];
@@ -1236,6 +1241,7 @@ mod tests {
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
             col("a", &schema)?,
+            None,
             "AVG(a)".to_string(),
             DataType::Float64,
         ))];
@@ -1274,6 +1280,7 @@ mod tests {
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
             col("b", &schema)?,
+            None,
             "AVG(b)".to_string(),
             DataType::Float64,
         ))];

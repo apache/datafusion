@@ -193,7 +193,8 @@ mod tests {
         return_type: DataType,
         arrays: &[ArrayRef],
     ) -> Result<(Vec<ScalarValue>, ScalarValue)> {
-        let agg = DistinctSum::new(vec![], String::from("__col_name__"), return_type);
+        let agg =
+            DistinctSum::new(vec![], None, String::from("__col_name__"), return_type);
 
         let mut accum = agg.create_accumulator()?;
         accum.update_batch(arrays)?;
@@ -209,6 +210,7 @@ mod tests {
 
             let agg = Arc::new(DistinctSum::new(
                 vec![col("a", &schema)?],
+                None,
                 "count_distinct_a".to_string(),
                 $EXPECTED.get_datatype(),
             ));

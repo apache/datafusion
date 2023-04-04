@@ -435,6 +435,7 @@ mod tests {
         let agg1 = Arc::new(Correlation::new(
             col("a", &schema)?,
             col("b", &schema)?,
+            None,
             "bla".to_string(),
             DataType::Float64,
         ));
@@ -442,6 +443,7 @@ mod tests {
         let agg2 = Arc::new(Correlation::new(
             col("a", &schema)?,
             col("b", &schema)?,
+            None,
             "bla".to_string(),
             DataType::Float64,
         ));
@@ -470,6 +472,7 @@ mod tests {
         let agg1 = Arc::new(Correlation::new(
             col("a", &schema)?,
             col("b", &schema)?,
+            None,
             "bla".to_string(),
             DataType::Float64,
         ));
@@ -477,6 +480,7 @@ mod tests {
         let agg2 = Arc::new(Correlation::new(
             col("a", &schema)?,
             col("b", &schema)?,
+            None,
             "bla".to_string(),
             DataType::Float64,
         ));
