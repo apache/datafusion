@@ -601,7 +601,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             right_sorted_filter_expr,
             null_equals_null: self.null_equals_null,
             final_result: false,
-            probe_side: JoinSide::Left,
         }))
     }
 }
@@ -636,8 +635,6 @@ struct SymmetricHashJoinStream {
     metrics: SymmetricHashJoinMetrics,
     /// Flag indicating whether there is nothing to process anymore
     final_result: bool,
-    /// The current probe side. We choose build and probe side according to this attribute.
-    probe_side: JoinSide,
 }
 
 impl RecordBatchStream for SymmetricHashJoinStream {
@@ -652,7 +649,7 @@ impl Stream for SymmetricHashJoinStream {
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
+    ) -> Poll<Option<Self::Item>> {
         self.poll_next_impl(cx)
     }
 }
@@ -1037,8 +1034,6 @@ struct OneSideHashJoiner {
     offset: usize,
     /// Deleted offset
     deleted_offset: usize,
-    /// Side is exhausted
-    exhausted: bool,
 }
 
 impl OneSideHashJoiner {
@@ -1053,7 +1048,6 @@ impl OneSideHashJoiner {
             visited_rows: HashSet::new(),
             offset: 0,
             deleted_offset: 0,
-            exhausted: false,
         }
     }
 
@@ -1363,7 +1357,6 @@ impl SymmetricHashJoinStream {
                         build_hash_joiner,
                         probe_side_sorted_filter_expr,
                         build_side_sorted_filter_expr,
-                        build_join_side,
                         probe_side_metrics,
                     ) = if side.eq(&JoinSide::Left) {
                         (
@@ -1371,7 +1364,6 @@ impl SymmetricHashJoinStream {
                             &mut self.right,
                             &mut self.left_sorted_filter_expr,
                             &mut self.right_sorted_filter_expr,
-                            JoinSide::Right,
                             &mut self.metrics.left,
                         )
                     } else {
@@ -1380,7 +1372,6 @@ impl SymmetricHashJoinStream {
                             &mut self.left,
                             &mut self.right_sorted_filter_expr,
                             &mut self.left_sorted_filter_expr,
-                            JoinSide::Left,
                             &mut self.metrics.right,
                         )
                     };
@@ -1447,11 +1438,6 @@ impl SymmetricHashJoinStream {
                     // Combine results:
                     let result =
                         combine_two_batches(&self.schema, equal_result, anti_result)?;
-                    // Choose next poll side. If the other side is not exhausted,
-                    // switch the probe side before returning the result.
-                    if !build_hash_joiner.exhausted {
-                        self.probe_side = build_join_side;
-                    }
                     // Update the metrics if we have a batch; otherwise, continue the loop.
                     if let Some(batch) = &result {
                         self.metrics.output_batches.add(1);
