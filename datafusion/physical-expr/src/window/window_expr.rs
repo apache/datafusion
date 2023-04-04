@@ -19,7 +19,6 @@ use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::window_frame_state::WindowFrameContext;
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::{new_empty_array, Array, ArrayRef};
-use arrow::compute::kernels::partition::lexicographical_partition_ranges;
 use arrow::compute::kernels::sort::SortColumn;
 use arrow::compute::{concat, SortOptions};
 use arrow::datatypes::Field;
@@ -78,25 +77,6 @@ pub trait WindowExpr: Send + Sync + Debug {
             "evaluate_stateful is not implemented for {}",
             self.name()
         )))
-    }
-
-    /// Evaluate the partition points given the sort columns; if the sort columns are
-    /// empty then the result will be a single element `Vec` of the whole column rows.
-    fn evaluate_partition_points(
-        &self,
-        num_rows: usize,
-        partition_columns: &[SortColumn],
-    ) -> Result<Vec<Range<usize>>> {
-        if partition_columns.is_empty() {
-            Ok(vec![Range {
-                start: 0,
-                end: num_rows,
-            }])
-        } else {
-            Ok(lexicographical_partition_ranges(partition_columns)
-                .map_err(DataFusionError::ArrowError)?
-                .collect::<Vec<_>>())
-        }
     }
 
     /// Expressions that's from the window function's partition by clause, empty if absent

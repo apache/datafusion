@@ -30,22 +30,20 @@ use crate::physical_plan::{
     ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
-use arrow::compute::{
-    concat, concat_batches, lexicographical_partition_ranges, SortColumn,
-};
+use arrow::compute::{concat, concat_batches};
 use arrow::error::ArrowError;
 use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_common::utils::evaluate_partition_points;
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use log::debug;
 use std::any::Any;
-use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -339,7 +337,7 @@ impl WindowAggStream {
             .map(|elem| elem.evaluate_to_sort_column(&batch))
             .collect::<Result<Vec<_>>>()?;
         let partition_points =
-            self.evaluate_partition_points(batch.num_rows(), &partition_by_sort_keys)?;
+            evaluate_partition_points(batch.num_rows(), &partition_by_sort_keys)?;
 
         let mut partition_results = vec![];
         // Calculate window cols
@@ -364,25 +362,6 @@ impl WindowAggStream {
         // calculate window cols
         batch_columns.extend_from_slice(&columns);
         Ok(RecordBatch::try_new(self.schema.clone(), batch_columns)?)
-    }
-
-    /// Evaluates the partition points given the sort columns. If the sort columns are
-    /// empty, then the result will be a single element vector spanning the entire batch.
-    fn evaluate_partition_points(
-        &self,
-        num_rows: usize,
-        partition_columns: &[SortColumn],
-    ) -> Result<Vec<Range<usize>>> {
-        Ok(if partition_columns.is_empty() {
-            vec![Range {
-                start: 0,
-                end: num_rows,
-            }]
-        } else {
-            lexicographical_partition_ranges(partition_columns)
-                .map_err(DataFusionError::ArrowError)?
-                .collect::<Vec<_>>()
-        })
     }
 }
 
