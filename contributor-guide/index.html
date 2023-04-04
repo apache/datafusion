@@ -552,7 +552,7 @@ and tries to follow <a class="reference external" href="https://doc.rust-lang.or
 <h4>Rust Integration Tests<a class="headerlink" href="#rust-integration-tests" title="Permalink to this heading">¶</a></h4>
 <p>There are several tests of the public interface of the DataFusion library in the <a class="reference external" href="https://github.com/apache/arrow-datafusion/tree/main/datafusion/core/tests">tests</a> directory.</p>
 <p>You can run these tests individually using a command such as</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-p<span class="w"> </span>datafusion<span class="w"> </span>--tests<span class="w"> </span>sql_integration
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-p<span class="w"> </span>datafusion<span class="w"> </span>--test<span class="w"> </span>sql_integration
 </pre></div>
 </div>
 <p>One very important test is the <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sql_integration.rs">sql_integration</a> test which validates DataFusion’s ability to run a large assortment of SQL queries against an assortment of data setups.</p>

@@ -129,7 +129,7 @@ There are several tests of the public interface of the DataFusion library in the
 You can run these tests individually using a command such as
 
 ```shell
-cargo test -p datafusion --tests sql_integration
+cargo test -p datafusion --test sql_integration
 ```
 
 One very important test is the [sql_integration](https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sql_integration.rs) test which validates DataFusion's ability to run a large assortment of SQL queries against an assortment of data setups.
