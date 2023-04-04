@@ -272,7 +272,7 @@ impl<'a> TableReference<'a> {
     /// ```
     /// # use datafusion_common::TableReference;
     /// let table_reference = TableReference::partial("myschema", "mytable");
-    /// assert_eq!(table_reference.to_quoted_string(), r#"myschema.mytable"#);
+    /// assert_eq!(table_reference.to_quoted_string(), "myschema.mytable");
     ///
     /// let table_reference = TableReference::partial("MySchema", "MyTable");
     /// assert_eq!(table_reference.to_quoted_string(), r#""MySchema"."MyTable""#);
