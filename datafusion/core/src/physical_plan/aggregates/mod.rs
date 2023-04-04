@@ -70,14 +70,15 @@ pub enum AggregateMode {
     FinalPartitioned,
 }
 
+/// Group By expression modes
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum GroupByOrderMode {
-    // It means that some of the expressions in the GROUP BY clause is ordered.
-    // `Vec<usize>` stores indices such that when iterated in this order GROUP BY expressions would match input ordering.
+pub enum GroupByOrderMode {
+    /// It means that some of the expressions in the GROUP BY clause is ordered.
+    /// `Vec<usize>` stores indices such that when iterated in this order GROUP BY expressions would match input ordering.
     // For instance, in input is ordered by a, b and GROUP BY c, b, a is entered Vec<usize> would be vec![2, 1]
     PartiallyOrdered(Vec<usize>),
-    // It means that all of the expressions in the GROUP BY clause is ordered.
-    // Similarly, `Vec<usize>` stores indices such that when iterated in this order GROUP BY expressions would match input ordering.
+    /// It means that all of the expressions in the GROUP BY clause is ordered.
+    /// Vec<usize>` stores indices such that when iterated in this order GROUP BY expressions would match input ordering.
     Ordered(Vec<usize>),
 }
 
@@ -199,6 +200,7 @@ pub struct AggregateExec {
     metrics: ExecutionPlanMetricsSet,
     out_ordering: Option<Vec<PhysicalSortExpr>>,
     ordered_indices: Option<Vec<usize>>,
+    working_mode: Option<GroupByOrderMode>,
 }
 
 /// Calculates the working mode for `GROUP BY` queries.
@@ -294,8 +296,8 @@ impl AggregateExec {
         }
         let working_mode = get_working_mode(&input, &group_by);
         let ordered_indices = get_ordered_indices(&working_mode);
-        let existing_ordering = input.output_ordering().unwrap_or(&[]);
 
+        let existing_ordering = input.output_ordering().unwrap_or(&[]);
         // Output ordering information for the executor.
         let out_ordering = ordered_indices
             .as_deref()
@@ -325,6 +327,7 @@ impl AggregateExec {
             metrics: ExecutionPlanMetricsSet::new(),
             out_ordering,
             ordered_indices,
+            working_mode,
         })
     }
 
@@ -397,8 +400,8 @@ impl AggregateExec {
                     batch_size,
                     context,
                     partition,
-                    self.ordered_indices.clone(),
                     self.out_ordering.clone(),
+                    self.working_mode.clone(),
                 )?,
             ))
         }

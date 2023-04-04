@@ -33,7 +33,7 @@ use crate::execution::context::TaskContext;
 use crate::execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, group_schema, AccumulatorItem, AggregateMode,
-    PhysicalGroupBy, RowAccumulatorItem,
+    GroupByOrderMode, PhysicalGroupBy, RowAccumulatorItem,
 };
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
@@ -102,10 +102,9 @@ pub(crate) struct GroupedHashAggregateStream {
     /// first element in the array corresponds to normal accumulators
     /// second element in the array corresponds to row accumulators
     indices: [Vec<Range<usize>>; 2],
-    ordered_indices: Option<Vec<usize>>,
     ordering: Option<Vec<PhysicalSortExpr>>,
+    working_mode: Option<GroupByOrderMode>,
     is_end: bool,
-    is_fully_sorted: bool,
 }
 
 #[derive(Debug)]
@@ -137,8 +136,8 @@ impl GroupedHashAggregateStream {
         batch_size: usize,
         context: Arc<TaskContext>,
         partition: usize,
-        ordered_indices: Option<Vec<usize>>,
         ordering: Option<Vec<PhysicalSortExpr>>,
+        working_mode: Option<GroupByOrderMode>,
     ) -> Result<Self> {
         let timer = baseline_metrics.elapsed_compute().timer();
 
@@ -206,10 +205,6 @@ impl GroupedHashAggregateStream {
 
         let exec_state = ExecutionState::ReadingInput;
 
-        let is_fully_sorted = ordered_indices
-            .as_ref()
-            .map(|indices| indices.len() == group_by.expr.len())
-            .unwrap_or(false);
         Ok(GroupedHashAggregateStream {
             schema: Arc::clone(&schema),
             mode,
@@ -229,10 +224,9 @@ impl GroupedHashAggregateStream {
             batch_size,
             row_group_skip_position: 0,
             indices: [normal_agg_indices, row_agg_indices],
-            ordered_indices,
             is_end: false,
             ordering,
-            is_fully_sorted,
+            working_mode,
         })
     }
 }
@@ -288,7 +282,7 @@ impl Stream for GroupedHashAggregateStream {
                         Ok(Some(result)) => {
                             let batch = result.record_output(&self.baseline_metrics);
                             self.row_group_skip_position += batch.num_rows();
-                            if self.ordered_indices.is_some() {
+                            if self.working_mode.is_some() {
                                 self.exec_state = ExecutionState::ReadingInput;
                                 self.prune()?;
                             }
@@ -326,8 +320,7 @@ impl GroupedHashAggregateStream {
         let mut batch_hashes = vec![0; n_rows];
         create_hashes(group_values, &self.random_state, &mut batch_hashes)?;
         let mut res: Vec<(OwnedRow, u64, Vec<u32>)> = vec![];
-        if self.is_fully_sorted {
-            let ordered_indices = self.ordered_indices.as_deref().unwrap_or(&[]);
+        if let Some(GroupByOrderMode::Ordered(ordered_indices)) = &self.working_mode {
             let ordering = self.ordering.as_deref().unwrap_or(&[]);
             let sort_column = ordered_indices
                 .iter()
@@ -433,22 +426,24 @@ impl GroupedHashAggregateStream {
                     None => {
                         let accumulator_set =
                             aggregates::create_accumulators(&self.normal_aggr_expr)?;
-                        let ordered_columns = if let Some(ordered_indices) =
-                            &self.ordered_indices
-                        {
-                            let row = get_row_at_idx(group_values, indices[0] as usize)?;
-                            ordered_indices
-                                .iter()
-                                .map(|idx| row[*idx].clone())
-                                .collect::<Vec<_>>()
-                        } else {
-                            vec![]
+                        let ordered_columns = match &self.working_mode {
+                            Some(GroupByOrderMode::Ordered(ordered_indices))
+                            | Some(GroupByOrderMode::PartiallyOrdered(ordered_indices)) =>
+                            {
+                                let row =
+                                    get_row_at_idx(group_values, indices[0] as usize)?;
+                                ordered_indices
+                                    .iter()
+                                    .map(|idx| row[*idx].clone())
+                                    .collect::<Vec<_>>()
+                            }
+                            _ => vec![],
                         };
                         // Add new entry to group_states and save newly created index
                         let group_state = RowGroupState {
                             group_by_values: owned_row,
                             ordered_columns,
-                            emit_status: GroupStatus::CanEmit(false),
+                            emit_status: GroupStatus::CannotEmit,
                             hash,
                             aggregation_buffer: vec![
                                 0;
@@ -497,7 +492,9 @@ impl GroupedHashAggregateStream {
             let mut offsets = vec![0];
             let mut offset_so_far = 0;
 
-            let (row_values, normal_values) = if self.is_fully_sorted {
+            let (row_values, normal_values) = if let Some(GroupByOrderMode::Ordered(_)) =
+                &self.working_mode
+            {
                 for &group_idx in groups_with_rows.iter() {
                     let indices = &row_group_states[group_idx].indices;
                     let start = indices[0];
@@ -615,7 +612,7 @@ impl GroupedHashAggregateStream {
             .size()
             .saturating_sub(row_converter_size_pre);
 
-        if self.ordered_indices.is_some() {
+        if self.working_mode.is_some() {
             let mut new_result = false;
             let last_ordered_columns = self
                 .row_aggr_state
@@ -626,9 +623,9 @@ impl GroupedHashAggregateStream {
             if let Some(last_ordered_columns) = last_ordered_columns {
                 for cur_group in &mut self.row_aggr_state.group_states {
                     if cur_group.ordered_columns != last_ordered_columns {
-                        // We will no longer receive value. Set status to GroupStatus::CanEmit(true)
+                        // We will no longer receive value. Set status to GroupStatus::CanEmit
                         // meaning we can generate result for this group.
-                        cur_group.emit_status = GroupStatus::CanEmit(true);
+                        cur_group.emit_status = GroupStatus::CanEmit;
                         new_result = true;
                     }
                 }
@@ -644,9 +641,10 @@ impl GroupedHashAggregateStream {
 
 #[derive(Debug, PartialEq)]
 enum GroupStatus {
-    // `CanEmit(true)` means data for current group is completed. And its result can emitted.
-    // `CanEmit(false)` means data for current group is completed. And its result can emitted.
-    CanEmit(bool),
+    // `CannotEmit` means data for current group is not complete. New data may arrive.
+    CannotEmit,
+    // `CanEmit` means data for current group is completed. And its result can emitted.
+    CanEmit,
     // Emitted means that result for the groups is outputted. Group can be pruned from state.
     Emitted,
 }
@@ -722,7 +720,7 @@ impl GroupedHashAggregateStream {
         self.row_aggr_state
             .group_states
             .iter_mut()
-            .for_each(|elem| elem.emit_status = GroupStatus::CanEmit(true));
+            .for_each(|elem| elem.emit_status = GroupStatus::CanEmit);
         Ok(())
     }
 
@@ -748,7 +746,7 @@ impl GroupedHashAggregateStream {
         // Consider only the groups that can be emitted. (The ones we are sure that will not receive new entry.)
         let group_state_chunk = &group_state_chunk
             .iter()
-            .filter(|elem| elem.emit_status == GroupStatus::CanEmit(true))
+            .filter(|elem| elem.emit_status == GroupStatus::CanEmit)
             .collect::<Vec<_>>();
 
         if group_state_chunk.is_empty() {
@@ -860,7 +858,7 @@ impl GroupedHashAggregateStream {
         self.row_aggr_state.group_states[skip_items..end_idx]
             .iter_mut()
             .for_each(|elem| {
-                if elem.emit_status == GroupStatus::CanEmit(true) {
+                if elem.emit_status == GroupStatus::CanEmit {
                     elem.emit_status = GroupStatus::Emitted;
                 }
             });
