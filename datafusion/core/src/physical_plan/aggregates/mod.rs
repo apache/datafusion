@@ -303,22 +303,22 @@ impl AggregateExec {
         let existing_ordering = input.output_ordering().unwrap_or(&[]);
 
         // Output ordering information for the executor.
-        let out_ordering = ordered_indices.as_deref().map(|indices| {
-            indices
-                .iter()
-                .zip(existing_ordering)
-                .map(|(idx, input_col)| {
-                    let name = group_by.expr[*idx].1.as_str();
-                    let col_expr = col(name, &schema)?;
-                    let options = input_col.options;
-                    Ok(PhysicalSortExpr {
-                        expr: col_expr,
-                        options,
+        let out_ordering = ordered_indices
+            .as_deref()
+            .map(|indices| {
+                indices
+                    .iter()
+                    .zip(existing_ordering)
+                    .map(|(idx, input_col)| {
+                        let name = group_by.expr[*idx].1.as_str();
+                        Ok(PhysicalSortExpr {
+                            expr: col(name, &schema)?,
+                            options: input_col.options,
+                        })
                     })
-                })
-                .collect::<Result<Vec<_>>>()
-                .unwrap()
-        });
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?;
 
         Ok(AggregateExec {
             mode,
