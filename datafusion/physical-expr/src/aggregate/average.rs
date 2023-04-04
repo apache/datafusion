@@ -44,6 +44,7 @@ use datafusion_row::accessor::RowAccessor;
 pub struct Avg {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
     data_type: DataType,
 }
 
@@ -51,6 +52,7 @@ impl Avg {
     /// Create a new AVG aggregate function
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
+        filter: Option<Arc<dyn PhysicalExpr>>,
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
@@ -62,6 +64,7 @@ impl Avg {
         Self {
             name: name.into(),
             expr,
+            filter,
             data_type,
         }
     }
@@ -101,6 +104,10 @@ impl AggregateExpr for Avg {
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         vec![self.expr.clone()]
+    }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.filter.clone()
     }
 
     fn name(&self) -> &str {

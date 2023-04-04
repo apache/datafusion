@@ -32,8 +32,8 @@ use futures::stream::{Stream, StreamExt};
 use crate::execution::context::TaskContext;
 use crate::execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use crate::physical_plan::aggregates::{
-    evaluate_group_by, evaluate_many, group_schema, AccumulatorItem, AggregateMode,
-    PhysicalGroupBy, RowAccumulatorItem,
+    evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AccumulatorItem,
+    AggregateMode, PhysicalGroupBy, RowAccumulatorItem,
 };
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
@@ -42,10 +42,11 @@ use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use arrow::array::{new_null_array, PrimitiveArray};
 use arrow::array::{Array, UInt32Builder};
-use arrow::compute::cast;
+use arrow::compute::{cast, filter};
 use arrow::datatypes::{DataType, Schema, UInt32Type};
 use arrow::{array::ArrayRef, compute};
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use datafusion_row::accessor::RowAccessor;
@@ -74,21 +75,26 @@ pub(crate) struct GroupedHashAggregateStream {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
     mode: AggregateMode,
-    exec_state: ExecutionState,
+
     normal_aggr_expr: Vec<Arc<dyn AggregateExpr>>,
-    row_aggr_state: RowAggregationState,
     /// Aggregate expressions not supporting row accumulation
     normal_aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    /// Filter expression for each normal aggregate expression
+    normal_filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
+
     /// Aggregate expressions supporting row accumulation
     row_aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-
-    group_by: PhysicalGroupBy,
+    /// Filter expression for each row aggregate expression
+    row_filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
     row_accumulators: Vec<RowAccumulatorItem>,
-
     row_converter: RowConverter,
     row_aggr_schema: SchemaRef,
     row_aggr_layout: Arc<RowLayout>,
 
+    group_by: PhysicalGroupBy,
+
+    aggr_state: AggregationState,
+    exec_state: ExecutionState,
     baseline_metrics: BaselineMetrics,
     random_state: RandomState,
     /// size to be used for resulting RecordBatches
@@ -138,15 +144,21 @@ impl GroupedHashAggregateStream {
         let mut row_aggr_expr = vec![];
         let mut row_agg_indices = vec![];
         let mut row_aggregate_expressions = vec![];
+        let mut row_filter_expressions = vec![];
         let mut normal_aggr_expr = vec![];
         let mut normal_agg_indices = vec![];
         let mut normal_aggregate_expressions = vec![];
+        let mut normal_filter_expressions = vec![];
         // The expressions to evaluate the batch, one vec of expressions per aggregation.
         // Assuming create_schema() always puts group columns in front of aggregation columns, we set
         // col_idx_base to the group expression count.
         let all_aggregate_expressions =
             aggregates::aggregate_expressions(&aggr_expr, &mode, start_idx)?;
-        for (expr, others) in aggr_expr.iter().zip(all_aggregate_expressions.into_iter())
+        let filter_expressions = aggregates::filter_expressions(&aggr_expr, &mode)?;
+        for ((expr, others), filter) in aggr_expr
+            .iter()
+            .zip(all_aggregate_expressions.into_iter())
+            .zip(filter_expressions.into_iter())
         {
             let n_fields = match mode {
                 // In partial aggregation, we keep additional fields in order to successfully
@@ -161,10 +173,12 @@ impl GroupedHashAggregateStream {
             };
             if expr.row_accumulator_supported() {
                 row_aggregate_expressions.push(others);
+                row_filter_expressions.push(filter.clone());
                 row_agg_indices.push(aggr_range);
                 row_aggr_expr.push(expr.clone());
             } else {
                 normal_aggregate_expressions.push(others);
+                normal_filter_expressions.push(filter.clone());
                 normal_agg_indices.push(aggr_range);
                 normal_aggr_expr.push(expr.clone());
             }
@@ -188,7 +202,7 @@ impl GroupedHashAggregateStream {
             Arc::new(RowLayout::new(&row_aggr_schema, RowType::WordAligned));
 
         let name = format!("GroupedHashAggregateStream[{partition}]");
-        let row_aggr_state = RowAggregationState {
+        let aggr_state = AggregationState {
             reservation: MemoryConsumer::new(name).register(context.memory_pool()),
             map: RawTable::with_capacity(0),
             group_states: Vec::with_capacity(0),
@@ -200,19 +214,21 @@ impl GroupedHashAggregateStream {
 
         Ok(GroupedHashAggregateStream {
             schema: Arc::clone(&schema),
-            mode,
-            exec_state,
             input,
-            group_by,
+            mode,
             normal_aggr_expr,
+            normal_aggregate_expressions,
+            normal_filter_expressions,
+            row_aggregate_expressions,
+            row_filter_expressions,
             row_accumulators,
             row_converter,
             row_aggr_schema,
             row_aggr_layout,
+            group_by,
+            aggr_state,
+            exec_state,
             baseline_metrics,
-            normal_aggregate_expressions,
-            row_aggregate_expressions,
-            row_aggr_state,
             random_state: Default::default(),
             batch_size,
             row_group_skip_position: 0,
@@ -244,7 +260,7 @@ impl Stream for GroupedHashAggregateStream {
                             // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with
                             // overshooting a bit. Also this means we either store the whole record batch or not.
                             let result = result.and_then(|allocated| {
-                                self.row_aggr_state.reservation.try_grow(allocated)
+                                self.aggr_state.reservation.try_grow(allocated)
                             });
 
                             if let Err(e) = result {
@@ -303,11 +319,11 @@ impl GroupedHashAggregateStream {
         let group_by_values = evaluate_group_by(&self.group_by, &batch)?;
         // Keep track of memory allocated:
         let mut allocated = 0usize;
-        let RowAggregationState {
+        let AggregationState {
             map: row_map,
             group_states: row_group_states,
             ..
-        } = &mut self.row_aggr_state;
+        } = &mut self.aggr_state;
 
         // Evaluate the aggregation expressions.
         // We could evaluate them after the `take`, but since we need to evaluate all
@@ -316,6 +332,9 @@ impl GroupedHashAggregateStream {
             evaluate_many(&self.row_aggregate_expressions, &batch)?;
         let normal_aggr_input_values =
             evaluate_many(&self.normal_aggregate_expressions, &batch)?;
+        let row_filter_values = evaluate_optional(&self.row_filter_expressions, &batch)?;
+        let normal_filter_values =
+            evaluate_optional(&self.normal_filter_expressions, &batch)?;
 
         let row_converter_size_pre = self.row_converter.size();
         for group_values in &group_by_values {
@@ -360,7 +379,7 @@ impl GroupedHashAggregateStream {
                         let accumulator_set =
                             aggregates::create_accumulators(&self.normal_aggr_expr)?;
                         // Add new entry to group_states and save newly created index
-                        let group_state = RowGroupState {
+                        let group_state = GroupState {
                             group_by_values: group_rows.row(row).owned(),
                             aggregation_buffer: vec![
                                 0;
@@ -372,7 +391,7 @@ impl GroupedHashAggregateStream {
                         };
                         let group_idx = row_group_states.len();
 
-                        // NOTE: do NOT include the `RowGroupState` struct size in here because this is captured by
+                        // NOTE: do NOT include the `GroupState` struct size in here because this is captured by
                         // `group_states` (see allocation down below)
                         allocated += (std::mem::size_of::<u8>()
                             * group_state.group_by_values.as_ref().len())
@@ -418,6 +437,10 @@ impl GroupedHashAggregateStream {
 
             let row_values = get_at_indices(&row_aggr_input_values, &batch_indices);
             let normal_values = get_at_indices(&normal_aggr_input_values, &batch_indices);
+            let row_filter_values =
+                get_optional_filters(&row_filter_values, &batch_indices);
+            let normal_filter_values =
+                get_optional_filters(&normal_filter_values, &batch_indices);
 
             // 2.1 for each key in this batch
             // 2.2 for each aggregation
@@ -430,22 +453,18 @@ impl GroupedHashAggregateStream {
                 .try_for_each(|(group_idx, offsets)| {
                     let group_state = &mut row_group_states[*group_idx];
                     // 2.2
+                    // Process row accumulators
                     self.row_accumulators
                         .iter_mut()
                         .zip(row_values.iter())
-                        .map(|(accumulator, aggr_array)| {
-                            (
-                                accumulator,
-                                aggr_array
-                                    .iter()
-                                    .map(|array| {
-                                        // 2.3
-                                        array.slice(offsets[0], offsets[1] - offsets[0])
-                                    })
-                                    .collect::<Vec<ArrayRef>>(),
-                            )
-                        })
-                        .try_for_each(|(accumulator, values)| {
+                        .zip(row_filter_values.iter())
+                        .try_for_each(|((accumulator, aggr_array), filter_opt)| {
+                            let values = slice_and_maybe_filter(
+                                aggr_array,
+                                filter_opt.as_ref(),
+                                offsets,
+                            )?;
+
                             let mut state_accessor = RowAccessor::new_from_layout(
                                 self.row_aggr_layout.clone(),
                             );
@@ -463,27 +482,20 @@ impl GroupedHashAggregateStream {
                                     accumulator.merge_batch(&values, &mut state_accessor)
                                 }
                             }
-                        })
-                        // 2.5
-                        .and(Ok(()))?;
+                        })?;
                     // normal accumulators
                     group_state
                         .accumulator_set
                         .iter_mut()
                         .zip(normal_values.iter())
-                        .map(|(accumulator, aggr_array)| {
-                            (
-                                accumulator,
-                                aggr_array
-                                    .iter()
-                                    .map(|array| {
-                                        // 2.3
-                                        array.slice(offsets[0], offsets[1] - offsets[0])
-                                    })
-                                    .collect::<Vec<ArrayRef>>(),
-                            )
-                        })
-                        .try_for_each(|(accumulator, values)| {
+                        .zip(normal_filter_values.iter())
+                        .try_for_each(|((accumulator, aggr_array), filter_opt)| {
+                            let values = slice_and_maybe_filter(
+                                aggr_array,
+                                filter_opt.as_ref(),
+                                offsets,
+                            )?;
+
                             let size_pre = accumulator.size();
                             let res = match self.mode {
                                 AggregateMode::Partial => {
@@ -516,7 +528,7 @@ impl GroupedHashAggregateStream {
 
 /// The state that is built for each output group.
 #[derive(Debug)]
-pub struct RowGroupState {
+pub struct GroupState {
     /// The actual group by values, stored sequentially
     group_by_values: OwnedRow,
 
@@ -532,7 +544,7 @@ pub struct RowGroupState {
 }
 
 /// The state of all the groups
-pub struct RowAggregationState {
+pub struct AggregationState {
     pub reservation: MemoryReservation,
 
     /// Logically maps group values to an index in `group_states`
@@ -545,10 +557,10 @@ pub struct RowAggregationState {
     pub map: RawTable<(u64, usize)>,
 
     /// State for each group
-    pub group_states: Vec<RowGroupState>,
+    pub group_states: Vec<GroupState>,
 }
 
-impl std::fmt::Debug for RowAggregationState {
+impl std::fmt::Debug for AggregationState {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         // hashes are not store inline, so could only get values
         let map_string = "RawTable";
@@ -563,19 +575,19 @@ impl GroupedHashAggregateStream {
     /// Create a RecordBatch with all group keys and accumulator' states or values.
     fn create_batch_from_map(&mut self) -> Result<Option<RecordBatch>> {
         let skip_items = self.row_group_skip_position;
-        if skip_items > self.row_aggr_state.group_states.len() {
+        if skip_items > self.aggr_state.group_states.len() {
             return Ok(None);
         }
-        if self.row_aggr_state.group_states.is_empty() {
+        if self.aggr_state.group_states.is_empty() {
             let schema = self.schema.clone();
             return Ok(Some(RecordBatch::new_empty(schema)));
         }
 
         let end_idx = min(
             skip_items + self.batch_size,
-            self.row_aggr_state.group_states.len(),
+            self.aggr_state.group_states.len(),
         );
-        let group_state_chunk = &self.row_aggr_state.group_states[skip_items..end_idx];
+        let group_state_chunk = &self.aggr_state.group_states[skip_items..end_idx];
 
         if group_state_chunk.is_empty() {
             let schema = self.schema.clone();
@@ -718,4 +730,48 @@ fn get_at_indices(
                 .collect()
         })
         .collect()
+}
+
+fn get_optional_filters(
+    original_values: &[Option<Arc<dyn Array>>],
+    batch_indices: &PrimitiveArray<UInt32Type>,
+) -> Vec<Option<Arc<dyn Array>>> {
+    original_values
+        .iter()
+        .map(|array| {
+            array.as_ref().map(|array| {
+                compute::take(
+                    array.as_ref(),
+                    batch_indices,
+                    None, // None: no index check
+                )
+                .unwrap()
+            })
+        })
+        .collect()
+}
+
+fn slice_and_maybe_filter(
+    aggr_array: &[ArrayRef],
+    filter_opt: Option<&Arc<dyn Array>>,
+    offsets: &[usize],
+) -> Result<Vec<ArrayRef>> {
+    let sliced_arrays: Vec<ArrayRef> = aggr_array
+        .iter()
+        .map(|array| array.slice(offsets[0], offsets[1] - offsets[0]))
+        .collect();
+
+    let filtered_arrays = match filter_opt.as_ref() {
+        Some(f) => {
+            let sliced = f.slice(offsets[0], offsets[1] - offsets[0]);
+            let filter_array = as_boolean_array(&sliced)?;
+
+            sliced_arrays
+                .iter()
+                .map(|array| filter(array, filter_array).unwrap())
+                .collect::<Vec<ArrayRef>>()
+        }
+        None => sliced_arrays,
+    };
+    Ok(filtered_arrays)
 }

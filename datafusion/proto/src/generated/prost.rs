@@ -1425,7 +1425,7 @@ pub mod physical_expr_node {
         BinaryExpr(::prost::alloc::boxed::Box<super::PhysicalBinaryExprNode>),
         /// aggregate expressions
         #[prost(message, tag = "4")]
-        AggregateExpr(super::PhysicalAggregateExprNode),
+        AggregateExpr(::prost::alloc::boxed::Box<super::PhysicalAggregateExprNode>),
         /// null checks
         #[prost(message, tag = "5")]
         IsNullExpr(::prost::alloc::boxed::Box<super::PhysicalIsNull>),
@@ -1483,6 +1483,8 @@ pub struct PhysicalAggregateExprNode {
     pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(bool, tag = "3")]
     pub distinct: bool,
+    #[prost(message, optional, boxed, tag = "4")]
+    pub filter: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

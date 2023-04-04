@@ -77,6 +77,9 @@ pub trait AggregateExpr: Send + Sync + Debug {
     /// Single-column aggregations such as `sum` return a single value, others (e.g. `cov`) return many.
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
 
+    /// FILTER (WHERE clause) expression for this aggregate
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>>;
+
     /// Human readable name such as `"MIN(c2)"`. The default
     /// implementation returns placeholder text.
     fn name(&self) -> &str {

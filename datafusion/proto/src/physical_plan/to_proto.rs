@@ -140,13 +140,18 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
             .iter()
             .map(|e| e.clone().try_into())
             .collect::<Result<Vec<_>>>()?;
+        let filter: Option<Box<protobuf::PhysicalExprNode>> = a
+            .filter()
+            .map(|e| e.clone().try_into().map(Box::new))
+            .transpose()?;
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
-                protobuf::PhysicalAggregateExprNode {
+                Box::new(protobuf::PhysicalAggregateExprNode {
                     aggr_function,
                     expr: expressions,
                     distinct,
-                },
+                    filter,
+                }),
             )),
         })
     }

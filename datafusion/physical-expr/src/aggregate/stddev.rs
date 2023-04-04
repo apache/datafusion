@@ -34,6 +34,7 @@ use datafusion_expr::Accumulator;
 pub struct Stddev {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
 }
 
 /// STDDEV_POP population aggregate expression
@@ -41,12 +42,14 @@ pub struct Stddev {
 pub struct StddevPop {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
 }
 
 impl Stddev {
     /// Create a new STDDEV aggregate function
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
+        filter: Option<Arc<dyn PhysicalExpr>>,
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
@@ -55,6 +58,7 @@ impl Stddev {
         Self {
             name: name.into(),
             expr,
+            filter,
         }
     }
 }
@@ -100,12 +104,17 @@ impl AggregateExpr for Stddev {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.filter.clone()
+    }
 }
 
 impl StddevPop {
     /// Create a new STDDEV aggregate function
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
+        filter: Option<Arc<dyn PhysicalExpr>>,
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
@@ -114,6 +123,7 @@ impl StddevPop {
         Self {
             name: name.into(),
             expr,
+            filter,
         }
     }
 }
@@ -158,6 +168,10 @@ impl AggregateExpr for StddevPop {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.filter.clone()
     }
 }
 /// An accumulator to compute the average

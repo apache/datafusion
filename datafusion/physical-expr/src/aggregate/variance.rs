@@ -39,6 +39,7 @@ use datafusion_expr::Accumulator;
 pub struct Variance {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
 }
 
 /// VAR_POP aggregate expression
@@ -46,12 +47,14 @@ pub struct Variance {
 pub struct VariancePop {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
 }
 
 impl Variance {
     /// Create a new VARIANCE aggregate function
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
+        filter: Option<Arc<dyn PhysicalExpr>>,
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
@@ -60,6 +63,7 @@ impl Variance {
         Self {
             name: name.into(),
             expr,
+            filter,
         }
     }
 }
@@ -105,12 +109,17 @@ impl AggregateExpr for Variance {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.filter.clone()
+    }
 }
 
 impl VariancePop {
     /// Create a new VAR_POP aggregate function
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
+        filter: Option<Arc<dyn PhysicalExpr>>,
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
@@ -119,6 +128,7 @@ impl VariancePop {
         Self {
             name: name.into(),
             expr,
+            filter,
         }
     }
 }
@@ -167,6 +177,10 @@ impl AggregateExpr for VariancePop {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.filter.clone()
     }
 }
 

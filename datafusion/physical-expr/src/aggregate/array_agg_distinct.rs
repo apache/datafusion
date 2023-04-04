@@ -40,12 +40,14 @@ pub struct DistinctArrayAgg {
     input_data_type: DataType,
     /// The input expression
     expr: Arc<dyn PhysicalExpr>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
 }
 
 impl DistinctArrayAgg {
     /// Create a new DistinctArrayAgg aggregate function
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
+        filter: Option<Arc<dyn PhysicalExpr>>,
         name: impl Into<String>,
         input_data_type: DataType,
     ) -> Self {
@@ -53,6 +55,7 @@ impl DistinctArrayAgg {
         Self {
             name,
             expr,
+            filter,
             input_data_type,
         }
     }
@@ -96,6 +99,10 @@ impl AggregateExpr for DistinctArrayAgg {
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         vec![self.expr.clone()]
+    }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.filter.clone()
     }
 
     fn name(&self) -> &str {

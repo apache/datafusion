@@ -30,6 +30,7 @@ use std::sync::Arc;
 pub struct ApproxMedian {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
     data_type: DataType,
     approx_percentile: ApproxPercentileCont,
 }
@@ -38,18 +39,21 @@ impl ApproxMedian {
     /// Create a new APPROX_MEDIAN aggregate function
     pub fn try_new(
         expr: Arc<dyn PhysicalExpr>,
+        filter: Option<Arc<dyn PhysicalExpr>>,
         name: impl Into<String>,
         data_type: DataType,
     ) -> Result<Self> {
         let name: String = name.into();
         let approx_percentile = ApproxPercentileCont::new(
             vec![expr.clone(), lit(0.5_f64)],
+            filter.clone(),
             name.clone(),
             data_type.clone(),
         )?;
         Ok(Self {
             name,
             expr,
+            filter,
             data_type,
             approx_percentile,
         })
@@ -76,6 +80,10 @@ impl AggregateExpr for ApproxMedian {
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         vec![self.expr.clone()]
+    }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.filter.clone()
     }
 
     fn name(&self) -> &str {

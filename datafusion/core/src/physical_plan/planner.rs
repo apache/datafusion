@@ -1631,7 +1631,7 @@ pub fn create_aggregate_expr_with_name(
             fun,
             distinct,
             args,
-            ..
+            filter,
         }) => {
             let args = args
                 .iter()
@@ -1644,15 +1644,25 @@ pub fn create_aggregate_expr_with_name(
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
+            let filter = match filter {
+                Some(e) => Some(create_physical_expr(
+                    e,
+                    logical_input_schema,
+                    physical_input_schema,
+                    execution_props,
+                )?),
+                None => None,
+            };
             aggregates::create_aggregate_expr(
                 fun,
                 *distinct,
                 &args,
+                filter.as_ref(),
                 physical_input_schema,
                 name,
             )
         }
-        Expr::AggregateUDF { fun, args, .. } => {
+        Expr::AggregateUDF { fun, args, filter } => {
             let args = args
                 .iter()
                 .map(|e| {
@@ -1665,7 +1675,23 @@ pub fn create_aggregate_expr_with_name(
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            udaf::create_aggregate_expr(fun, &args, physical_input_schema, name)
+            let filter = match filter {
+                Some(e) => Some(create_physical_expr(
+                    e,
+                    logical_input_schema,
+                    physical_input_schema,
+                    execution_props,
+                )?),
+                None => None,
+            };
+
+            udaf::create_aggregate_expr(
+                fun,
+                &args,
+                filter.as_ref(),
+                physical_input_schema,
+                name,
+            )
         }
         other => Err(DataFusionError::Internal(format!(
             "Invalid aggregate expression '{other:?}'"
@@ -1797,7 +1823,10 @@ impl DefaultPhysicalPlanner {
             "Input physical plan:\n{}\n",
             displayable(plan.as_ref()).indent()
         );
-        trace!("Detailed input physical plan:\n{:?}", plan);
+        trace!(
+            "Detailed input physical plan:\n{}",
+            displayable(plan.as_ref()).indent()
+        );
 
         let mut new_plan = plan;
         for optimizer in optimizers {

@@ -41,6 +41,7 @@ pub struct DistinctCount {
     state_data_type: DataType,
     /// The input arguments
     expr: Arc<dyn PhysicalExpr>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
 }
 
 impl DistinctCount {
@@ -48,12 +49,14 @@ impl DistinctCount {
     pub fn new(
         input_data_type: DataType,
         expr: Arc<dyn PhysicalExpr>,
+        filter: Option<Arc<dyn PhysicalExpr>>,
         name: String,
     ) -> Self {
         Self {
             name,
             state_data_type: input_data_type,
             expr,
+            filter,
         }
     }
 }
@@ -93,6 +96,10 @@ impl AggregateExpr for DistinctCount {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.filter.clone()
     }
 }
 

@@ -572,6 +572,28 @@ fn aggregate_expressions(
     }
 }
 
+/// returns filter expressions to evaluate against a batch
+/// The expressions are different depending on `mode`:
+/// * Partial: AggregateExpr::filter
+/// * Final | FinalPartitioned: empty
+fn filter_expressions(
+    aggr_expr: &[Arc<dyn AggregateExpr>],
+    mode: &AggregateMode,
+) -> Result<Vec<Option<Arc<dyn PhysicalExpr>>>> {
+    match mode {
+        AggregateMode::Partial => {
+            let filters = aggr_expr
+                .iter()
+                .map(|agg| agg.filter())
+                .collect::<Vec<Option<Arc<dyn PhysicalExpr>>>>();
+            Ok(filters)
+        }
+        AggregateMode::Final | AggregateMode::FinalPartitioned => {
+            Ok(vec![None; aggr_expr.len()])
+        }
+    }
+}
+
 /// uses `state_fields` to build a vec of physical column expressions required to merge the
 /// AggregateExpr' accumulator's state.
 ///
@@ -664,6 +686,20 @@ fn evaluate_many(
 ) -> Result<Vec<Vec<ArrayRef>>> {
     expr.iter()
         .map(|expr| evaluate(expr, batch))
+        .collect::<Result<Vec<_>>>()
+}
+
+fn evaluate_optional(
+    expr: &[Option<Arc<dyn PhysicalExpr>>],
+    batch: &RecordBatch,
+) -> Result<Vec<Option<ArrayRef>>> {
+    expr.iter()
+        .map(|expr| {
+            expr.as_ref()
+                .map(|expr| expr.evaluate(batch))
+                .transpose()
+                .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+        })
         .collect::<Result<Vec<_>>>()
 }
 

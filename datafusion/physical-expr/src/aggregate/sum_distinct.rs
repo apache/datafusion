@@ -39,12 +39,14 @@ pub struct DistinctSum {
     data_type: DataType,
     /// The input arguments, only contains 1 item for sum
     exprs: Vec<Arc<dyn PhysicalExpr>>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
 }
 
 impl DistinctSum {
     /// Create a SUM(DISTINCT) aggregate function.
     pub fn new(
         exprs: Vec<Arc<dyn PhysicalExpr>>,
+        filter: Option<Arc<dyn PhysicalExpr>>,
         name: String,
         data_type: DataType,
     ) -> Self {
@@ -52,6 +54,7 @@ impl DistinctSum {
             name,
             data_type,
             exprs,
+            filter,
         }
     }
 }
@@ -84,6 +87,10 @@ impl AggregateExpr for DistinctSum {
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(DistinctSumAccumulator::try_new(&self.data_type)?))
+    }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.filter.clone()
     }
 }
 

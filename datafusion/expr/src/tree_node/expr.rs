@@ -297,7 +297,7 @@ impl TreeNode for Expr {
                 fun,
                 transform_vec(args, &mut transform)?,
                 distinct,
-                filter,
+                transform_option_box(filter, &mut transform)?,
             )),
             Expr::GroupingSet(grouping_set) => match grouping_set {
                 GroupingSet::Rollup(exprs) => Expr::GroupingSet(GroupingSet::Rollup(
@@ -318,7 +318,7 @@ impl TreeNode for Expr {
             Expr::AggregateUDF { args, fun, filter } => Expr::AggregateUDF {
                 args: transform_vec(args, &mut transform)?,
                 fun,
-                filter,
+                filter: transform_option_box(filter, &mut transform)?,
             },
             Expr::InList {
                 expr,

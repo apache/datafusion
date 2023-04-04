@@ -44,12 +44,14 @@ pub struct ApproxDistinct {
     name: String,
     input_data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
 }
 
 impl ApproxDistinct {
     /// Create a new ApproxDistinct aggregate function.
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
+        filter: Option<Arc<dyn PhysicalExpr>>,
         name: impl Into<String>,
         input_data_type: DataType,
     ) -> Self {
@@ -57,6 +59,7 @@ impl ApproxDistinct {
             name: name.into(),
             input_data_type,
             expr,
+            filter,
         }
     }
 }
@@ -111,6 +114,10 @@ impl AggregateExpr for ApproxDistinct {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.filter.clone()
     }
 }
 

@@ -1048,6 +1048,7 @@ message PhysicalAggregateExprNode {
   AggregateFunction aggr_function = 1;
   repeated PhysicalExprNode expr = 2;
   bool distinct = 3;
+  PhysicalExprNode filter = 4;
 }
 
 message PhysicalWindowExprNode {

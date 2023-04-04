@@ -19,8 +19,8 @@
 
 use crate::execution::context::TaskContext;
 use crate::physical_plan::aggregates::{
-    aggregate_expressions, create_accumulators, finalize_aggregation, AccumulatorItem,
-    AggregateMode,
+    aggregate_expressions, create_accumulators, filter_expressions, finalize_aggregation,
+    AccumulatorItem, AggregateMode,
 };
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
@@ -33,6 +33,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use crate::physical_plan::filter::batch_filter;
 use futures::stream::{Stream, StreamExt};
 
 /// stream struct for aggregation without grouping columns
@@ -52,6 +53,7 @@ struct AggregateStreamInner {
     input: SendableRecordBatchStream,
     baseline_metrics: BaselineMetrics,
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
     accumulators: Vec<AccumulatorItem>,
     reservation: MemoryReservation,
     finished: bool,
@@ -69,6 +71,7 @@ impl AggregateStream {
         partition: usize,
     ) -> Result<Self> {
         let aggregate_expressions = aggregate_expressions(&aggr_expr, &mode, 0)?;
+        let filter_expressions = filter_expressions(&aggr_expr, &mode)?;
         let accumulators = create_accumulators(&aggr_expr)?;
 
         let reservation = MemoryConsumer::new(format!("AggregateStream[{partition}]"))
@@ -80,6 +83,7 @@ impl AggregateStream {
             input,
             baseline_metrics,
             aggregate_expressions,
+            filter_expressions,
             accumulators,
             reservation,
             finished: false,
@@ -100,6 +104,7 @@ impl AggregateStream {
                             &batch,
                             &mut this.accumulators,
                             &this.aggregate_expressions,
+                            &this.filter_expressions,
                         );
 
                         timer.done();
@@ -172,26 +177,34 @@ fn aggregate_batch(
     batch: &RecordBatch,
     accumulators: &mut [AccumulatorItem],
     expressions: &[Vec<Arc<dyn PhysicalExpr>>],
+    filters: &[Option<Arc<dyn PhysicalExpr>>],
 ) -> Result<usize> {
     let mut allocated = 0usize;
 
     // 1.1 iterate accumulators and respective expressions together
-    // 1.2 evaluate expressions
-    // 1.3 update / merge accumulators with the expressions' values
+    // 1.2 filter the batch if necessary
+    // 1.3 evaluate expressions
+    // 1.4 update / merge accumulators with the expressions' values
 
     // 1.1
     accumulators
         .iter_mut()
         .zip(expressions)
-        .try_for_each(|(accum, expr)| {
+        .zip(filters)
+        .try_for_each(|((accum, expr), filter)| {
             // 1.2
+            let batch = match filter {
+                Some(filter) => batch_filter(batch, filter)?,
+                None => batch.clone(),
+            };
+            // 1.3
             let values = &expr
                 .iter()
-                .map(|e| e.evaluate(batch))
+                .map(|e| e.evaluate(&batch))
                 .map(|r| r.map(|v| v.into_array(batch.num_rows())))
                 .collect::<Result<Vec<_>>>()?;
 
-            // 1.3
+            // 1.4
             let size_pre = accum.size();
             let res = match mode {
                 AggregateMode::Partial => accum.update_batch(values),

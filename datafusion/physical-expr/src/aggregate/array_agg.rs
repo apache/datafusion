@@ -33,18 +33,21 @@ pub struct ArrayAgg {
     name: String,
     input_data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
 }
 
 impl ArrayAgg {
     /// Create a new ArrayAgg aggregate function
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
+        filter: Option<Arc<dyn PhysicalExpr>>,
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
         Self {
             name: name.into(),
             expr,
+            filter,
             input_data_type: data_type,
         }
     }
@@ -87,6 +90,10 @@ impl AggregateExpr for ArrayAgg {
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         vec![self.expr.clone()]
+    }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.filter.clone()
     }
 
     fn name(&self) -> &str {

@@ -37,12 +37,14 @@ pub struct ApproxPercentileContWithWeight {
     column_expr: Arc<dyn PhysicalExpr>,
     weight_expr: Arc<dyn PhysicalExpr>,
     percentile_expr: Arc<dyn PhysicalExpr>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
 }
 
 impl ApproxPercentileContWithWeight {
     /// Create a new [`ApproxPercentileContWithWeight`] aggregate function.
     pub fn new(
         expr: Vec<Arc<dyn PhysicalExpr>>,
+        filter: Option<Arc<dyn PhysicalExpr>>,
         name: impl Into<String>,
         return_type: DataType,
     ) -> Result<Self> {
@@ -51,13 +53,14 @@ impl ApproxPercentileContWithWeight {
 
         let sub_expr = vec![expr[0].clone(), expr[2].clone()];
         let approx_percentile_cont =
-            ApproxPercentileCont::new(sub_expr, name, return_type)?;
+            ApproxPercentileCont::new(sub_expr, filter.clone(), name, return_type)?;
 
         Ok(Self {
             approx_percentile_cont,
             column_expr: expr[0].clone(),
             weight_expr: expr[1].clone(),
             percentile_expr: expr[2].clone(),
+            filter,
         })
     }
 }
@@ -97,6 +100,10 @@ impl AggregateExpr for ApproxPercentileContWithWeight {
 
     fn name(&self) -> &str {
         self.approx_percentile_cont.name()
+    }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.filter.clone()
     }
 }
 

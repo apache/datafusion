@@ -34,6 +34,7 @@ use std::sync::Arc;
 pub struct Median {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
     data_type: DataType,
 }
 
@@ -41,12 +42,14 @@ impl Median {
     /// Create a new MEDIAN aggregate function
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
+        filter: Option<Arc<dyn PhysicalExpr>>,
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
         Self {
             name: name.into(),
             expr,
+            filter,
             data_type,
         }
     }
@@ -83,6 +86,10 @@ impl AggregateExpr for Median {
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         vec![self.expr.clone()]
+    }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.filter.clone()
     }
 
     fn name(&self) -> &str {

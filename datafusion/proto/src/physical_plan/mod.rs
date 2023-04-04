@@ -430,10 +430,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 let input_phy_expr: Vec<Arc<dyn PhysicalExpr>> = agg_node.expr.iter()
                                     .map(|e| parse_physical_expr(e, registry, &physical_schema).unwrap()).collect();
 
+                                let filter = agg_node.filter.as_ref().map(|f| {
+                                    parse_physical_expr(f, registry, &physical_schema).unwrap()
+                                });
+
                                 Ok(create_aggregate_expr(
                                     &aggr_function.into(),
                                     agg_node.distinct,
                                     input_phy_expr.as_slice(),
+                                    filter.as_ref(),
                                     &physical_schema,
                                     name.to_string(),
                                 )?)

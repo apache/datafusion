@@ -38,6 +38,7 @@ use std::sync::Arc;
 pub fn create_aggregate_expr(
     fun: &AggregateUDF,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
+    filter: Option<&Arc<dyn PhysicalExpr>>,
     input_schema: &Schema,
     name: impl Into<String>,
 ) -> Result<Arc<dyn AggregateExpr>> {
@@ -48,6 +49,7 @@ pub fn create_aggregate_expr(
 
     Ok(Arc::new(AggregateFunctionExpr {
         fun: fun.clone(),
+        filter: filter.cloned(),
         args: input_phy_exprs.to_vec(),
         data_type: (fun.return_type)(&input_exprs_types)?.as_ref().clone(),
         name: name.into(),
@@ -59,6 +61,7 @@ pub fn create_aggregate_expr(
 pub struct AggregateFunctionExpr {
     fun: AggregateUDF,
     args: Vec<Arc<dyn PhysicalExpr>>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
     /// Output / return type of this aggregate
     data_type: DataType,
     name: String,
@@ -100,5 +103,9 @@ impl AggregateExpr for AggregateFunctionExpr {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        self.filter.clone()
     }
 }
