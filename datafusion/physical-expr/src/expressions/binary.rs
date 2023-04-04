@@ -1252,7 +1252,7 @@ pub fn ts_scalar_ts_op(array: ArrayRef, scalar: &ScalarValue) -> Result<Columnar
         ) => {
             let prim_array = as_timestamp_second_array(&array)?;
             let ret: PrimitiveArray<IntervalDayTimeType> =
-                arrow::compute::try_unary(prim_array, |lhs| {
+                try_unary(prim_array, |lhs| {
                     let (parsed_lhs_tz, parsed_rhs_tz) =
                         (parse_timezones(opt_tz_lhs)?, parse_timezones(opt_tz_rhs)?);
                     let (naive_lhs, naive_rhs) = calculate_naives::<MILLISECOND_MODE>(
@@ -1274,7 +1274,7 @@ pub fn ts_scalar_ts_op(array: ArrayRef, scalar: &ScalarValue) -> Result<Columnar
         ) => {
             let prim_array = as_timestamp_millisecond_array(&array)?;
             let ret: PrimitiveArray<IntervalDayTimeType> =
-                arrow::compute::try_unary(prim_array, |lhs| {
+                try_unary(prim_array, |lhs| {
                     let (parsed_lhs_tz, parsed_rhs_tz) =
                         (parse_timezones(opt_tz_lhs)?, parse_timezones(opt_tz_rhs)?);
                     let (naive_lhs, naive_rhs) = calculate_naives::<MILLISECOND_MODE>(
@@ -1296,7 +1296,7 @@ pub fn ts_scalar_ts_op(array: ArrayRef, scalar: &ScalarValue) -> Result<Columnar
         ) => {
             let prim_array = as_timestamp_microsecond_array(&array)?;
             let ret: PrimitiveArray<IntervalMonthDayNanoType> =
-                arrow::compute::try_unary(prim_array, |lhs| {
+                try_unary(prim_array, |lhs| {
                     let (parsed_lhs_tz, parsed_rhs_tz) =
                         (parse_timezones(opt_tz_lhs)?, parse_timezones(opt_tz_rhs)?);
                     let (naive_lhs, naive_rhs) = calculate_naives::<NANOSECOND_MODE>(
@@ -1318,7 +1318,7 @@ pub fn ts_scalar_ts_op(array: ArrayRef, scalar: &ScalarValue) -> Result<Columnar
         ) => {
             let prim_array = as_timestamp_nanosecond_array(&array)?;
             let ret: PrimitiveArray<IntervalMonthDayNanoType> =
-                arrow::compute::try_unary(prim_array, |lhs| {
+                try_unary(prim_array, |lhs| {
                     let (parsed_lhs_tz, parsed_rhs_tz) =
                         (parse_timezones(opt_tz_lhs)?, parse_timezones(opt_tz_rhs)?);
                     let (naive_lhs, naive_rhs) = calculate_naives::<NANOSECOND_MODE>(

@@ -238,18 +238,6 @@ pub fn evaluate_temporal_array(
     scalar: &ScalarValue,
 ) -> Result<ColumnarValue> {
     match (array.data_type(), scalar.get_datatype()) {
-        // Timestamp - Timestamp
-        (DataType::Timestamp(_, _), DataType::Timestamp(_, _)) if sign == -1 => {
-            ts_scalar_ts_op(array, scalar)
-        }
-        // Interval +- Interval
-        (DataType::Interval(_), DataType::Interval(_)) => {
-            interval_scalar_interval_op(array, sign, scalar)
-        }
-        // Timestamp +- Interval
-        (DataType::Timestamp(_, _), DataType::Interval(_)) => {
-            ts_scalar_interval_op(array, sign, scalar)
-        }
         // Date +- Interval
         (DataType::Date32, DataType::Interval(_)) => {
             let array = as_date32_array(&array)?;
@@ -264,6 +252,18 @@ pub fn evaluate_temporal_array(
                 Ok(date64_add(ms, scalar, sign)?)
             })?) as ArrayRef;
             Ok(ColumnarValue::Array(ret))
+        }
+        // Timestamp - Timestamp
+        (DataType::Timestamp(_, _), DataType::Timestamp(_, _)) if sign == -1 => {
+            ts_scalar_ts_op(array, scalar)
+        }
+        // Interval +- Interval
+        (DataType::Interval(_), DataType::Interval(_)) => {
+            interval_scalar_interval_op(array, sign, scalar)
+        }
+        // Timestamp +- Interval
+        (DataType::Timestamp(_, _), DataType::Interval(_)) => {
+            ts_scalar_interval_op(array, sign, scalar)
         }
         (_, _) => Err(DataFusionError::Execution(format!(
             "Invalid lhs type for DateIntervalExpr: {}",
