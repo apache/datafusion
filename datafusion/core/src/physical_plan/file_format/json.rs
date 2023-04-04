@@ -191,7 +191,8 @@ impl FileOpener for JsonOpener {
                         .build_decoder()?;
 
                     let s = s.map_err(DataFusionError::from);
-                    let mut input = file_compression_type.convert_stream(s)?.fuse();
+                    let mut input =
+                        file_compression_type.convert_stream(s.boxed())?.fuse();
                     let mut buffered = Bytes::new();
 
                     let s = stream::poll_fn(move |cx| {
