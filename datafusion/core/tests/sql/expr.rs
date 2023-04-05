@@ -1630,7 +1630,6 @@ async fn csv_query_sqrt_sqrt() -> Result<()> {
     Ok(())
 }
 
-// this query used to deadlock due to the call udf(udf())
 #[tokio::test]
 async fn csv_query_cbrt_cbrt() -> Result<()> {
     let ctx = create_ctx();
