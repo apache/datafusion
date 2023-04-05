@@ -33,23 +33,22 @@ use crate::execution::context::TaskContext;
 use crate::execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, group_schema, AccumulatorItem, AggregateMode,
-    GroupByOrderMode, PhysicalGroupBy, RowAccumulatorItem,
+    AggregateState, GroupByOrderMode, PhysicalGroupBy, RowAccumulatorItem,
 };
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 
 use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use arrow::array::{new_null_array, PrimitiveArray};
-use arrow::array::{Array, UInt32Builder};
+use arrow::array::{new_null_array, Array, ArrayRef, PrimitiveArray, UInt32Builder};
 use arrow::compute::{cast, SortColumn};
 use arrow::datatypes::{DataType, Schema, UInt32Type};
-use arrow::{array::ArrayRef, compute};
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_common::utils::{evaluate_partition_points, get_row_at_idx};
+use datafusion_common::utils::{
+    evaluate_partition_points, get_arrayref_at_indices, get_row_at_idx,
+};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
-use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_row::accessor::RowAccessor;
 use datafusion_row::layout::RowLayout;
 use datafusion_row::reader::{read_row, RowReader};
@@ -102,8 +101,7 @@ pub(crate) struct GroupedHashAggregateStream {
     /// first element in the array corresponds to normal accumulators
     /// second element in the array corresponds to row accumulators
     indices: [Vec<Range<usize>>; 2],
-    ordering: Option<Vec<PhysicalSortExpr>>,
-    working_mode: Option<GroupByOrderMode>,
+    state: Option<AggregateState>,
     is_end: bool,
 }
 
@@ -136,8 +134,8 @@ impl GroupedHashAggregateStream {
         batch_size: usize,
         context: Arc<TaskContext>,
         partition: usize,
-        ordering: Option<Vec<PhysicalSortExpr>>,
-        working_mode: Option<GroupByOrderMode>,
+        // Stores algorithm mode and output ordering
+        state: Option<AggregateState>,
     ) -> Result<Self> {
         let timer = baseline_metrics.elapsed_compute().timer();
 
@@ -225,8 +223,7 @@ impl GroupedHashAggregateStream {
             row_group_skip_position: 0,
             indices: [normal_agg_indices, row_agg_indices],
             is_end: false,
-            ordering,
-            working_mode,
+            state,
         })
     }
 }
@@ -282,7 +279,7 @@ impl Stream for GroupedHashAggregateStream {
                         Ok(Some(result)) => {
                             let batch = result.record_output(&self.baseline_metrics);
                             self.row_group_skip_position += batch.num_rows();
-                            if self.working_mode.is_some() {
+                            if self.state.is_some() {
                                 self.exec_state = ExecutionState::ReadingInput;
                                 self.prune()?;
                             }
@@ -320,8 +317,11 @@ impl GroupedHashAggregateStream {
         let mut batch_hashes = vec![0; n_rows];
         create_hashes(group_values, &self.random_state, &mut batch_hashes)?;
         let mut res: Vec<(OwnedRow, u64, Vec<u32>)> = vec![];
-        if let Some(GroupByOrderMode::Ordered(ordered_indices)) = &self.working_mode {
-            let ordering = self.ordering.as_deref().unwrap_or(&[]);
+        if let Some(AggregateState {
+            mode: GroupByOrderMode::Ordered(ordered_indices),
+            ordering,
+        }) = &self.state
+        {
             let sort_column = ordered_indices
                 .iter()
                 .enumerate()
@@ -363,6 +363,203 @@ impl GroupedHashAggregateStream {
         Ok(res)
     }
 
+    fn update_group_state(
+        &mut self,
+        group_values: &[ArrayRef],
+        allocated: &mut usize,
+    ) -> Result<Vec<usize>> {
+        // 1.1 construct the key from the group values
+        // 1.2 construct the mapping key if it does not exist
+        // 1.3 add the row' index to `indices`
+
+        // track which entries in `aggr_state` have rows in this batch to aggregate
+        let mut groups_with_rows = vec![];
+
+        let per_group_indices = self.get_per_group_indices(group_values)?;
+
+        let RowAggregationState {
+            map: row_map,
+            group_states: row_group_states,
+            ..
+        } = &mut self.row_aggr_state;
+
+        for (owned_row, hash, indices) in per_group_indices {
+            let entry = row_map.get_mut(hash, |(_hash, group_idx)| {
+                // verify that a group that we are inserting with hash is
+                // actually the same key value as the group in
+                // existing_idx  (aka group_values @ row)
+                let group_state = &row_group_states[*group_idx];
+                owned_row.row() == group_state.group_by_values.row()
+            });
+
+            match entry {
+                // Existing entry for this group value
+                Some((_hash, group_idx)) => {
+                    let group_state = &mut row_group_states[*group_idx];
+
+                    // 1.3
+                    if group_state.indices.is_empty() {
+                        groups_with_rows.push(*group_idx);
+                    };
+
+                    for row in indices {
+                        // remember this row
+                        group_state.indices.push_accounted(row, allocated);
+                    }
+                }
+                //  1.2 Need to create new entry
+                None => {
+                    let accumulator_set =
+                        aggregates::create_accumulators(&self.normal_aggr_expr)?;
+                    let ordered_columns = match &self.state {
+                        Some(state) => {
+                            let row = get_row_at_idx(group_values, indices[0] as usize)?;
+                            state
+                                .ordered_indices()
+                                .iter()
+                                .map(|idx| row[*idx].clone())
+                                .collect::<Vec<_>>()
+                        }
+                        _ => vec![],
+                    };
+                    // Add new entry to group_states and save newly created index
+                    let group_state = RowGroupState {
+                        group_by_values: owned_row,
+                        ordered_columns,
+                        emit_status: GroupStatus::CannotEmit,
+                        hash,
+                        aggregation_buffer: vec![
+                            0;
+                            self.row_aggr_layout.fixed_part_width()
+                        ],
+                        accumulator_set,
+                        indices, // 1.3
+                    };
+                    let group_idx = row_group_states.len();
+
+                    // NOTE: do NOT include the `RowGroupState` struct size in here because this is captured by
+                    // `group_states` (see allocation down below)
+                    *allocated += (std::mem::size_of::<u8>()
+                        * group_state.group_by_values.as_ref().len())
+                        + (std::mem::size_of::<u8>()
+                            * group_state.aggregation_buffer.capacity())
+                        + (std::mem::size_of::<u32>() * group_state.indices.capacity());
+
+                    // Allocation done by normal accumulators
+                    *allocated += (std::mem::size_of::<Box<dyn Accumulator>>()
+                        * group_state.accumulator_set.capacity())
+                        + group_state
+                            .accumulator_set
+                            .iter()
+                            .map(|accu| accu.size())
+                            .sum::<usize>();
+
+                    // for hasher function, use precomputed hash value
+                    row_map.insert_accounted(
+                        (hash, group_idx),
+                        |(hash, _group_index)| *hash,
+                        allocated,
+                    );
+
+                    row_group_states.push_accounted(group_state, allocated);
+
+                    groups_with_rows.push(group_idx);
+                }
+            };
+        }
+        Ok(groups_with_rows)
+    }
+
+    fn update_accumulators(
+        &mut self,
+        groups_with_rows: &[usize],
+        offsets: &[usize],
+        row_values: &[Vec<ArrayRef>],
+        normal_values: &[Vec<ArrayRef>],
+        allocated: &mut usize,
+    ) -> Result<()> {
+        // 2.1 for each key in this batch
+        // 2.2 for each aggregation
+        // 2.3 `slice` from each of its arrays the keys' values
+        // 2.4 update / merge the accumulator with the values
+        // 2.5 clear indices
+        groups_with_rows
+            .iter()
+            .zip(offsets.windows(2))
+            .try_for_each(|(group_idx, offsets)| {
+                let group_state = &mut self.row_aggr_state.group_states[*group_idx];
+                // 2.2
+                self.row_accumulators
+                    .iter_mut()
+                    .zip(row_values.iter())
+                    .map(|(accumulator, aggr_array)| {
+                        (
+                            accumulator,
+                            aggr_array
+                                .iter()
+                                .map(|array| {
+                                    // 2.3
+                                    array.slice(offsets[0], offsets[1] - offsets[0])
+                                })
+                                .collect::<Vec<ArrayRef>>(),
+                        )
+                    })
+                    .try_for_each(|(accumulator, values)| {
+                        let mut state_accessor =
+                            RowAccessor::new_from_layout(self.row_aggr_layout.clone());
+                        state_accessor
+                            .point_to(0, group_state.aggregation_buffer.as_mut_slice());
+                        match self.mode {
+                            AggregateMode::Partial => {
+                                accumulator.update_batch(&values, &mut state_accessor)
+                            }
+                            AggregateMode::FinalPartitioned | AggregateMode::Final => {
+                                // note: the aggregation here is over states, not values, thus the merge
+                                accumulator.merge_batch(&values, &mut state_accessor)
+                            }
+                        }
+                    })
+                    // 2.5
+                    .and(Ok(()))?;
+                // normal accumulators
+                group_state
+                    .accumulator_set
+                    .iter_mut()
+                    .zip(normal_values.iter())
+                    .map(|(accumulator, aggr_array)| {
+                        (
+                            accumulator,
+                            aggr_array
+                                .iter()
+                                .map(|array| {
+                                    // 2.3
+                                    array.slice(offsets[0], offsets[1] - offsets[0])
+                                })
+                                .collect::<Vec<ArrayRef>>(),
+                        )
+                    })
+                    .try_for_each(|(accumulator, values)| {
+                        let size_pre = accumulator.size();
+                        let res = match self.mode {
+                            AggregateMode::Partial => accumulator.update_batch(&values),
+                            AggregateMode::FinalPartitioned | AggregateMode::Final => {
+                                // note: the aggregation here is over states, not values, thus the merge
+                                accumulator.merge_batch(&values)
+                            }
+                        };
+                        let size_post = accumulator.size();
+                        *allocated += size_post.saturating_sub(size_pre);
+                        res
+                    })
+                    // 2.5
+                    .and({
+                        group_state.indices.clear();
+                        Ok(())
+                    })
+            })?;
+        Ok(())
+    }
+
     /// Perform group-by aggregation for the given [`RecordBatch`].
     ///
     /// If successful, this returns the additional number of bytes that were allocated during this process.
@@ -383,236 +580,60 @@ impl GroupedHashAggregateStream {
 
         let row_converter_size_pre = self.row_converter.size();
         for group_values in &group_by_values {
-            // 1.1 construct the key from the group values
-            // 1.2 construct the mapping key if it does not exist
-            // 1.3 add the row' index to `indices`
-
-            // track which entries in `aggr_state` have rows in this batch to aggregate
-            let mut groups_with_rows = vec![];
-
-            let per_group_indices = self.get_per_group_indices(group_values)?;
-
-            let RowAggregationState {
-                map: row_map,
-                group_states: row_group_states,
-                ..
-            } = &mut self.row_aggr_state;
-
-            for (owned_row, hash, indices) in per_group_indices {
-                let entry = row_map.get_mut(hash, |(_hash, group_idx)| {
-                    // verify that a group that we are inserting with hash is
-                    // actually the same key value as the group in
-                    // existing_idx  (aka group_values @ row)
-                    let group_state = &row_group_states[*group_idx];
-                    owned_row.row() == group_state.group_by_values.row()
-                });
-
-                match entry {
-                    // Existing entry for this group value
-                    Some((_hash, group_idx)) => {
-                        let group_state = &mut row_group_states[*group_idx];
-
-                        // 1.3
-                        if group_state.indices.is_empty() {
-                            groups_with_rows.push(*group_idx);
-                        };
-
-                        for row in indices {
-                            // remember this row
-                            group_state.indices.push_accounted(row, &mut allocated);
-                        }
-                    }
-                    //  1.2 Need to create new entry
-                    None => {
-                        let accumulator_set =
-                            aggregates::create_accumulators(&self.normal_aggr_expr)?;
-                        let ordered_columns = match &self.working_mode {
-                            Some(GroupByOrderMode::Ordered(ordered_indices))
-                            | Some(GroupByOrderMode::PartiallyOrdered(ordered_indices)) =>
-                            {
-                                let row =
-                                    get_row_at_idx(group_values, indices[0] as usize)?;
-                                ordered_indices
-                                    .iter()
-                                    .map(|idx| row[*idx].clone())
-                                    .collect::<Vec<_>>()
-                            }
-                            _ => vec![],
-                        };
-                        // Add new entry to group_states and save newly created index
-                        let group_state = RowGroupState {
-                            group_by_values: owned_row,
-                            ordered_columns,
-                            emit_status: GroupStatus::CannotEmit,
-                            hash,
-                            aggregation_buffer: vec![
-                                0;
-                                self.row_aggr_layout
-                                    .fixed_part_width()
-                            ],
-                            accumulator_set,
-                            indices, // 1.3
-                        };
-                        let group_idx = row_group_states.len();
-
-                        // NOTE: do NOT include the `RowGroupState` struct size in here because this is captured by
-                        // `group_states` (see allocation down below)
-                        allocated += (std::mem::size_of::<u8>()
-                            * group_state.group_by_values.as_ref().len())
-                            + (std::mem::size_of::<u8>()
-                                * group_state.aggregation_buffer.capacity())
-                            + (std::mem::size_of::<u32>()
-                                * group_state.indices.capacity());
-
-                        // Allocation done by normal accumulators
-                        allocated += (std::mem::size_of::<Box<dyn Accumulator>>()
-                            * group_state.accumulator_set.capacity())
-                            + group_state
-                                .accumulator_set
-                                .iter()
-                                .map(|accu| accu.size())
-                                .sum::<usize>();
-
-                        // for hasher function, use precomputed hash value
-                        row_map.insert_accounted(
-                            (hash, group_idx),
-                            |(hash, _group_index)| *hash,
-                            &mut allocated,
-                        );
-
-                        row_group_states.push_accounted(group_state, &mut allocated);
-
-                        groups_with_rows.push(group_idx);
-                    }
-                };
-            }
+            let groups_with_rows =
+                self.update_group_state(group_values, &mut allocated)?;
 
             // Collect all indices + offsets based on keys in this vec
             let mut batch_indices: UInt32Builder = UInt32Builder::with_capacity(0);
             let mut offsets = vec![0];
             let mut offset_so_far = 0;
 
-            let (row_values, normal_values) = if let Some(GroupByOrderMode::Ordered(_)) =
-                &self.working_mode
+            if let Some(AggregateState {
+                mode: GroupByOrderMode::Ordered(_),
+                ..
+            }) = &self.state
             {
                 for &group_idx in groups_with_rows.iter() {
-                    let indices = &row_group_states[group_idx].indices;
+                    let indices = &self.row_aggr_state.group_states[group_idx].indices;
                     let start = indices[0];
                     // Contains at least 1 element.
                     let end = indices[indices.len() - 1] + 1;
                     offset_so_far += (end - start) as usize;
                     offsets.push(offset_so_far);
                 }
-                let row_values = row_aggr_input_values.clone();
-                let normal_values = normal_aggr_input_values.clone();
-                (row_values, normal_values)
+                self.update_accumulators(
+                    &groups_with_rows,
+                    &offsets,
+                    &row_aggr_input_values,
+                    &normal_aggr_input_values,
+                    &mut allocated,
+                )?;
             } else {
                 for &group_idx in groups_with_rows.iter() {
-                    let indices = &row_group_states[group_idx].indices;
+                    let indices = &self.row_aggr_state.group_states[group_idx].indices;
                     batch_indices.append_slice(indices);
                     offset_so_far += indices.len();
                     offsets.push(offset_so_far);
                 }
                 let batch_indices = batch_indices.finish();
-                let row_values = get_at_indices(&row_aggr_input_values, &batch_indices);
+                let row_values = get_at_indices(&row_aggr_input_values, &batch_indices)?;
                 let normal_values =
-                    get_at_indices(&normal_aggr_input_values, &batch_indices);
-                (row_values, normal_values)
+                    get_at_indices(&normal_aggr_input_values, &batch_indices)?;
+                self.update_accumulators(
+                    &groups_with_rows,
+                    &offsets,
+                    &row_values,
+                    &normal_values,
+                    &mut allocated,
+                )?;
             };
-
-            // 2.1 for each key in this batch
-            // 2.2 for each aggregation
-            // 2.3 `slice` from each of its arrays the keys' values
-            // 2.4 update / merge the accumulator with the values
-            // 2.5 clear indices
-            groups_with_rows
-                .iter()
-                .zip(offsets.windows(2))
-                .try_for_each(|(group_idx, offsets)| {
-                    let group_state = &mut row_group_states[*group_idx];
-                    // 2.2
-                    self.row_accumulators
-                        .iter_mut()
-                        .zip(row_values.iter())
-                        .map(|(accumulator, aggr_array)| {
-                            (
-                                accumulator,
-                                aggr_array
-                                    .iter()
-                                    .map(|array| {
-                                        // 2.3
-                                        array.slice(offsets[0], offsets[1] - offsets[0])
-                                    })
-                                    .collect::<Vec<ArrayRef>>(),
-                            )
-                        })
-                        .try_for_each(|(accumulator, values)| {
-                            let mut state_accessor = RowAccessor::new_from_layout(
-                                self.row_aggr_layout.clone(),
-                            );
-                            state_accessor.point_to(
-                                0,
-                                group_state.aggregation_buffer.as_mut_slice(),
-                            );
-                            match self.mode {
-                                AggregateMode::Partial => {
-                                    accumulator.update_batch(&values, &mut state_accessor)
-                                }
-                                AggregateMode::FinalPartitioned
-                                | AggregateMode::Final => {
-                                    // note: the aggregation here is over states, not values, thus the merge
-                                    accumulator.merge_batch(&values, &mut state_accessor)
-                                }
-                            }
-                        })
-                        // 2.5
-                        .and(Ok(()))?;
-                    // normal accumulators
-                    group_state
-                        .accumulator_set
-                        .iter_mut()
-                        .zip(normal_values.iter())
-                        .map(|(accumulator, aggr_array)| {
-                            (
-                                accumulator,
-                                aggr_array
-                                    .iter()
-                                    .map(|array| {
-                                        // 2.3
-                                        array.slice(offsets[0], offsets[1] - offsets[0])
-                                    })
-                                    .collect::<Vec<ArrayRef>>(),
-                            )
-                        })
-                        .try_for_each(|(accumulator, values)| {
-                            let size_pre = accumulator.size();
-                            let res = match self.mode {
-                                AggregateMode::Partial => {
-                                    accumulator.update_batch(&values)
-                                }
-                                AggregateMode::FinalPartitioned
-                                | AggregateMode::Final => {
-                                    // note: the aggregation here is over states, not values, thus the merge
-                                    accumulator.merge_batch(&values)
-                                }
-                            };
-                            let size_post = accumulator.size();
-                            allocated += size_post.saturating_sub(size_pre);
-                            res
-                        })
-                        // 2.5
-                        .and({
-                            group_state.indices.clear();
-                            Ok(())
-                        })
-                })?;
         }
         allocated += self
             .row_converter
             .size()
             .saturating_sub(row_converter_size_pre);
 
-        if self.working_mode.is_some() {
+        if self.state.is_some() {
             let mut new_result = false;
             let last_ordered_columns = self
                 .row_aggr_state
@@ -883,21 +904,9 @@ fn read_as_batch(rows: &[Vec<u8>], schema: &Schema, row_type: RowType) -> Vec<Ar
 fn get_at_indices(
     input_values: &[Vec<ArrayRef>],
     batch_indices: &PrimitiveArray<UInt32Type>,
-) -> Vec<Vec<ArrayRef>> {
+) -> Result<Vec<Vec<ArrayRef>>> {
     input_values
         .iter()
-        .map(|array| {
-            array
-                .iter()
-                .map(|array| {
-                    compute::take(
-                        array.as_ref(),
-                        batch_indices,
-                        None, // None: no index check
-                    )
-                    .unwrap()
-                })
-                .collect()
-        })
-        .collect()
+        .map(|array| get_arrayref_at_indices(array, batch_indices))
+        .collect::<Result<Vec<_>>>()
 }
