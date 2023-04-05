@@ -150,7 +150,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 subquery,
                 negated,
             } => {
+                let expr_type = expr.get_type(&self.schema)?;
                 let new_plan = optimize_internal(&self.schema, &subquery.subquery)?;
+                let subquery_type = new_plan.schema().field(0).data_type();
+                let expr = if &expr_type == subquery_type {
+                    expr
+                } else {
+                    Box::new(expr.cast_to(subquery_type, &self.schema)?)
+                };
                 Ok(Expr::InSubquery {
                     expr,
                     subquery: Subquery {
@@ -249,6 +256,17 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     ) => {
                         // this is a workaround for https://github.com/apache/arrow-datafusion/issues/3419
                         Ok(expr.clone())
+                    }
+                    (DataType::Timestamp(_, _), DataType::Timestamp(_, _))
+                        if op.is_numerical_operators() =>
+                    {
+                        if matches!(op, Operator::Minus) {
+                            Ok(expr)
+                        } else {
+                            Err(DataFusionError::Internal(format!(
+                                "Unsupported operation {op:?} between {left_type:?} and {right_type:?}"
+                            )))
+                        }
                     }
                     _ => {
                         let coerced_type = coerce_types(&left_type, &op, &right_type)?;
@@ -718,8 +736,8 @@ mod test {
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true,
         AccumulatorFunctionImplementation, AggregateFunction, AggregateUDF, BinaryExpr,
-        BuiltinScalarFunction, Case, ColumnarValue, ExprSchemable, Operator,
-        StateTypeFunction,
+        BuiltinScalarFunction, Case, ColumnarValue, ExprSchemable, Filter, Operator,
+        StateTypeFunction, Subquery,
     };
     use datafusion_expr::{
         lit,
@@ -1408,6 +1426,66 @@ mod test {
         }));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected = "Projection: IntervalYearMonth(\"12\") + CAST(Utf8(\"2000-01-01T00:00:00\") AS Timestamp(Nanosecond, None))\n  EmptyRelation";
+        assert_optimized_plan_eq(&plan, expected)?;
+        Ok(())
+    }
+
+    #[test]
+    fn timestamp_subtract_timestamp() -> Result<()> {
+        let expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(cast(
+                lit("1998-03-18"),
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+            )),
+            Operator::Minus,
+            Box::new(cast(
+                lit("1998-03-18"),
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+            )),
+        ));
+        let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        }));
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        dbg!(&plan);
+        let expected =
+            "Projection: CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None)) - CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None))\n  EmptyRelation";
+        assert_optimized_plan_eq(&plan, expected)?;
+        Ok(())
+    }
+
+    #[test]
+    fn in_subquery() -> Result<()> {
+        let empty_inside = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::new_with_metadata(
+                vec![DFField::new_unqualified("a_int32", DataType::Int32, true)],
+                std::collections::HashMap::new(),
+            )?),
+        }));
+        let empty_outside = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::new_with_metadata(
+                vec![DFField::new_unqualified("a_int64", DataType::Int64, true)],
+                std::collections::HashMap::new(),
+            )?),
+        }));
+        let in_subquery_expr = Expr::InSubquery {
+            expr: Box::new(col("a_int64")),
+            subquery: Subquery {
+                subquery: empty_inside,
+                outer_ref_columns: vec![],
+            },
+            negated: false,
+        };
+        let plan = LogicalPlan::Filter(Filter::try_new(in_subquery_expr, empty_outside)?);
+        // add cast for
+        let expected = "\
+        Filter: CAST(a_int64 AS Int32) IN (<subquery>)\
+        \n  Subquery:\
+        \n    EmptyRelation\
+        \n  EmptyRelation";
         assert_optimized_plan_eq(&plan, expected)?;
         Ok(())
     }
