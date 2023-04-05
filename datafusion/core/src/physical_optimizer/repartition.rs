@@ -462,12 +462,9 @@ mod tests {
             expr: col("c1", &schema()).unwrap(),
             options: SortOptions::default(),
         }];
-        Arc::new(SortExec::new_with_partitioning(
-            sort_exprs,
-            input,
-            preserve_partitioning,
-            None,
-        ))
+        let new_sort = SortExec::new(sort_exprs, input, None)
+            .with_preserve_partitioning(preserve_partitioning);
+        Arc::new(new_sort)
     }
 
     fn projection_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {

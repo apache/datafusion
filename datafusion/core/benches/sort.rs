@@ -201,7 +201,7 @@ impl SortBenchCase {
         let projection = None;
         let exec = MemoryExec::try_new(partitions, schema, projection).unwrap();
         let exec = Arc::new(CoalescePartitionsExec::new(Arc::new(exec)));
-        let plan = Arc::new(SortExec::try_new(sort, exec, None).unwrap());
+        let plan = Arc::new(SortExec::new(sort, exec, None));
 
         Self {
             runtime,
@@ -250,12 +250,10 @@ impl SortBenchCasePreservePartitioning {
 
         let projection = None;
         let exec = MemoryExec::try_new(partitions, schema, projection).unwrap();
-        let plan = Arc::new(SortExec::new_with_partitioning(
-            sort,
-            Arc::new(exec),
-            true,
-            None,
-        ));
+        let new_sort =
+            SortExec::new(sort, Arc::new(exec), None).with_preserve_partitioning(true);
+
+        let plan = Arc::new(new_sort);
 
         Self {
             runtime,

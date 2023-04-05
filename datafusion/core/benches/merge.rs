@@ -276,7 +276,7 @@ impl MergeBenchCase {
 
         let projection = None;
         let exec = Arc::new(MemoryExec::try_new(partitions, schema, projection).unwrap());
-        let sort_exec = SortExec::try_new(sort.to_owned(), exec, None).unwrap();
+        let sort_exec = SortExec::new(sort.to_owned(), exec, None);
         let plan = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(sort_exec)));
 
         Self {

@@ -325,7 +325,7 @@ async fn exec_sort(
 ) -> Result<(usize, std::time::Duration)> {
     let start = Instant::now();
     let scan = test_file.create_scan(None).await?;
-    let exec = Arc::new(SortExec::try_new(expr.to_owned(), scan, None)?);
+    let exec = Arc::new(SortExec::new(expr.to_owned(), scan, None));
     let task_ctx = ctx.task_ctx();
     let result = collect(exec, task_ctx).await?;
     let elapsed = start.elapsed();
