@@ -39,7 +39,6 @@ pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
     SharedResult,
 };
-pub use parsers::parse_interval;
 pub use scalar::{ScalarType, ScalarValue};
 pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{OwnedTableReference, ResolvedTableReference, TableReference};

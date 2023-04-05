@@ -288,7 +288,7 @@ async fn run_filter_benchmarks(opt: Opt, test_file: &TestParquetFile) -> Result<
                 let (rows, elapsed) =
                     exec_scan(&ctx, test_file, filter_expr.clone(), opt.debug).await?;
                 let ms = elapsed.as_secs_f64() * 1000.0;
-                println!("Iteration {} returned {} rows in {ms} ms", i, rows);
+                println!("Iteration {i} returned {rows} rows in {ms} ms");
                 rundata.write_iter(elapsed, rows);
             }
         }

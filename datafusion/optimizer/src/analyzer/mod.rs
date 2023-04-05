@@ -17,10 +17,12 @@
 
 mod count_wildcard_rule;
 mod inline_table_scan;
+pub(crate) mod type_coercion;
 
 use crate::analyzer::count_wildcard_rule::CountWildcardRule;
 use crate::analyzer::inline_table_scan::InlineTableScan;
 
+use crate::analyzer::type_coercion::TypeCoercion;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{DataFusionError, Result};
@@ -64,8 +66,9 @@ impl Analyzer {
     /// Create a new analyzer using the recommended list of rules
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
-            Arc::new(CountWildcardRule::new()),
             Arc::new(InlineTableScan::new()),
+            Arc::new(TypeCoercion::new()),
+            Arc::new(CountWildcardRule::new()),
         ];
         Self::with_rules(rules)
     }
