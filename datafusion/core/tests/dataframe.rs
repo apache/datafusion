@@ -331,7 +331,7 @@ async fn sort_on_ambiguous_column() -> Result<()> {
         .sort(vec![col("b").sort(true, true)])
         .unwrap_err();
 
-    let expected = "Schema error: Ambiguous reference to unqualified field \"b\"";
+    let expected = "Schema error: Ambiguous reference to unqualified field b";
     assert_eq!(err.to_string(), expected);
     Ok(())
 }
@@ -350,7 +350,7 @@ async fn group_by_ambiguous_column() -> Result<()> {
         .aggregate(vec![col("b")], vec![max(col("a"))])
         .unwrap_err();
 
-    let expected = "Schema error: Ambiguous reference to unqualified field \"b\"";
+    let expected = "Schema error: Ambiguous reference to unqualified field b";
     assert_eq!(err.to_string(), expected);
     Ok(())
 }
@@ -369,7 +369,7 @@ async fn filter_on_ambiguous_column() -> Result<()> {
         .filter(col("b").eq(lit(1)))
         .unwrap_err();
 
-    let expected = "Schema error: Ambiguous reference to unqualified field \"b\"";
+    let expected = "Schema error: Ambiguous reference to unqualified field b";
     assert_eq!(err.to_string(), expected);
     Ok(())
 }
@@ -388,7 +388,7 @@ async fn select_ambiguous_column() -> Result<()> {
         .select(vec![col("b")])
         .unwrap_err();
 
-    let expected = "Schema error: Ambiguous reference to unqualified field \"b\"";
+    let expected = "Schema error: Ambiguous reference to unqualified field b";
     assert_eq!(err.to_string(), expected);
     Ok(())
 }
