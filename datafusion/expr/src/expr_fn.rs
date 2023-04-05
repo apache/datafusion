@@ -446,6 +446,7 @@ macro_rules! nary_scalar_expr {
 
 // math functions
 scalar_expr!(Sqrt, sqrt, num, "square root of a number");
+scalar_expr!(Cbrt, cbrt, num, "cube root of a number");
 scalar_expr!(Sin, sin, num, "sine");
 scalar_expr!(Cos, cos, num, "cosine");
 scalar_expr!(Tan, tan, num, "tangent");
@@ -464,7 +465,7 @@ scalar_expr!(
     num,
     "nearest integer greater than or equal to argument"
 );
-scalar_expr!(Round, round, num, "round to nearest integer");
+nary_scalar_expr!(Round, round, "round to nearest integer");
 scalar_expr!(Trunc, trunc, num, "truncate toward zero");
 scalar_expr!(Abs, abs, num, "absolute value");
 scalar_expr!(Signum, signum, num, "sign of the argument (-1, 0, +1) ");
@@ -758,6 +759,7 @@ mod test {
     #[test]
     fn scalar_function_definitions() {
         test_unary_scalar_expr!(Sqrt, sqrt);
+        test_unary_scalar_expr!(Cbrt, cbrt);
         test_unary_scalar_expr!(Sin, sin);
         test_unary_scalar_expr!(Cos, cos);
         test_unary_scalar_expr!(Tan, tan);
@@ -766,7 +768,8 @@ mod test {
         test_unary_scalar_expr!(Atan, atan);
         test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
-        test_unary_scalar_expr!(Round, round);
+        test_nary_scalar_expr!(Round, round, input);
+        test_nary_scalar_expr!(Round, round, input, decimal_places);
         test_unary_scalar_expr!(Trunc, trunc);
         test_unary_scalar_expr!(Abs, abs);
         test_unary_scalar_expr!(Signum, signum);

@@ -51,14 +51,16 @@ async fn window_frame_creation_type_checking() -> Result<()> {
     // Error is returned from the physical plan.
     check_query(
         true,
-        "Internal error: Operator - is not implemented for types UInt32(1) and Utf8(\"1 DAY\")."
-    ).await?;
+        r#"Execution error: Cannot cast Utf8("1 DAY") to UInt32"#,
+    )
+    .await?;
 
     // Error is returned from the logical plan.
     check_query(
         false,
-        "Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: Execution error: Cannot cast Utf8(\"1 DAY\") to UInt32."
-    ).await
+        r#"Execution error: Cannot cast Utf8("1 DAY") to UInt32"#,
+    )
+    .await
 }
 
 fn split_record_batch(batch: RecordBatch, n_split: usize) -> Vec<RecordBatch> {

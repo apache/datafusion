@@ -46,7 +46,9 @@ use crate::physical_plan::{
     Distribution, ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{
+    make_sort_requirements_from_exprs, EquivalenceProperties, PhysicalSortRequirement,
+};
 
 /// Sort preserving merge execution plan
 ///
@@ -125,12 +127,16 @@ impl ExecutionPlan for SortPreservingMergeExec {
         vec![Distribution::UnspecifiedDistribution]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
-        vec![Some(&self.expr)]
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+        vec![Some(make_sort_requirements_from_exprs(&self.expr))]
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        Some(&self.expr)
+        self.input.output_ordering()
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
@@ -312,9 +318,6 @@ pub(crate) struct SortPreservingMergeStream {
     /// If the stream has encountered an error
     aborted: bool,
 
-    /// An id to uniquely identify the input stream batch
-    next_batch_id: usize,
-
     /// Vector that holds all [`SortKeyCursor`]s
     cursors: Vec<Option<SortKeyCursor>>,
 
@@ -375,7 +378,6 @@ impl SortPreservingMergeStream {
             tracking_metrics,
             aborted: false,
             in_progress: vec![],
-            next_batch_id: 0,
             cursors: (0..stream_count).map(|_| None).collect(),
             loser_tree: Vec::with_capacity(stream_count),
             loser_tree_adjusted: false,
@@ -430,12 +432,7 @@ impl SortPreservingMergeStream {
                             }
                         };
 
-                        self.cursors[idx] = Some(SortKeyCursor::new(
-                            idx,
-                            self.next_batch_id, // assign this batch an ID
-                            rows,
-                        ));
-                        self.next_batch_id += 1;
+                        self.cursors[idx] = Some(SortKeyCursor::new(idx, rows));
                         self.batches[idx].push_back(batch)
                     } else {
                         empty_batch = true;

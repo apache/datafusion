@@ -35,6 +35,9 @@ use arrow::compute::{concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
+use datafusion_physical_expr::{
+    make_sort_requirements_from_exprs, PhysicalSortRequirement,
+};
 use futures::{Stream, StreamExt};
 
 use crate::error::DataFusionError;
@@ -225,8 +228,11 @@ impl ExecutionPlan for SortMergeJoinExec {
         ]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
-        vec![Some(&self.left_sort_exprs), Some(&self.right_sort_exprs)]
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+        vec![
+            Some(make_sort_requirements_from_exprs(&self.left_sort_exprs)),
+            Some(make_sort_requirements_from_exprs(&self.right_sort_exprs)),
+        ]
     }
 
     fn output_partitioning(&self) -> Partitioning {
@@ -241,6 +247,17 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.output_ordering.as_deref()
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        match self.join_type {
+            JoinType::Inner => vec![true, true],
+            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => vec![true, false],
+            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+                vec![false, true]
+            }
+            _ => vec![false, false],
+        }
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {

@@ -670,7 +670,7 @@ async fn sort_on_window_null_string() -> Result<()> {
     ])
     .unwrap();
 
-    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(2));
+    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(1));
     ctx.register_batch("test", batch)?;
 
     let sql =
@@ -689,7 +689,8 @@ async fn sort_on_window_null_string() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-    let sql = "SELECT d2, row_number() OVER (partition by d2) as rn1 FROM test";
+    let sql =
+        "SELECT d2, row_number() OVER (partition by d2) as rn1 FROM test ORDER BY d2 asc";
     let actual = execute_to_batches(&ctx, sql).await;
     // NULLS LAST
     let expected = vec![
@@ -704,7 +705,7 @@ async fn sort_on_window_null_string() -> Result<()> {
     assert_batches_eq!(expected, &actual);
 
     let sql =
-        "SELECT d2, row_number() OVER (partition by d2 order by d2 desc) as rn1 FROM test";
+        "SELECT d2, row_number() OVER (partition by d2 order by d2 desc) as rn1 FROM test ORDER BY d2 desc";
 
     let actual = execute_to_batches(&ctx, sql).await;
     // NULLS FIRST

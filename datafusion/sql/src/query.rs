@@ -57,7 +57,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     cte.alias.name.clone(),
                     self.options.enable_ident_normalization,
                 );
-                if planner_context.ctes.contains_key(&cte_name) {
+                if planner_context.contains_cte(&cte_name) {
                     return Err(DataFusionError::SQL(ParserError(format!(
                         "WITH query name {cte_name:?} specified more than once"
                     ))));
@@ -71,7 +71,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // projection (e.g. "WITH table(t1, t2) AS SELECT 1, 2").
                 let logical_plan = self.apply_table_alias(logical_plan, cte.alias)?;
 
-                planner_context.ctes.insert(cte_name, logical_plan);
+                planner_context.insert_cte(cte_name, logical_plan);
             }
         }
         let plan = self.set_expr_to_plan(*set_expr, planner_context)?;
