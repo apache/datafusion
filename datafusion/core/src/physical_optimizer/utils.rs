@@ -106,13 +106,9 @@ pub(crate) fn get_ordered_merged_indices(in1: &[usize], in2: &[usize]) -> Vec<us
 
 /// Checks whether `in1` is ascending ordered. (monotonically non-decreasing)
 pub(crate) fn is_ascending_ordered(in1: &[usize]) -> bool {
-    if !in1.is_empty() {
-        in1.iter()
-            .zip(in1.iter().skip(1))
-            .all(|(prev, cur)| cur >= prev)
-    } else {
-        true
-    }
+    in1.iter()
+        .zip(in1.iter().skip(1))
+        .all(|(prev, cur)| cur >= prev)
 }
 
 /// Returns the vector consisting of elements inside `in1` that are not inside `in2`.
@@ -128,15 +124,12 @@ pub(crate) fn get_set_diff_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
 // For 0,1,2,4,5 we would produce 3. meaning 0,1,2 is the largest consecutive range (starting from zero).
 // For 1,2,3,4 we would produce 0. Meaning there is no consecutive range (starting from zero).
 pub(crate) fn calc_ordering_range(in1: &[usize]) -> usize {
-    let mut count = 0;
     for (idx, elem) in in1.iter().enumerate() {
         if idx != *elem {
-            break;
-        } else {
-            count += 1
+            return idx;
         }
     }
-    count
+    in1.len()
 }
 
 /// Checks whether the given operator is a limit;
