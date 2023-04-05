@@ -352,8 +352,18 @@
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#querying-s3-data-sources">
-   Querying S3 Data Sources
+  <a class="reference internal nav-link" href="#registering-s3-data-sources">
+   Registering S3 Data Sources
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#registering-oss-data-sources">
+   Registering OSS Data Sources
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#registering-gcs-data-sources">
+   Registering GCS Data Sources
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -560,35 +570,34 @@ via <code class="docutils literal notranslate"><span class="pre">CREATE</span> <
 </pre></div>
 </div>
 </section>
-<section id="querying-s3-data-sources">
-<h2>Querying S3 Data Sources<a class="headerlink" href="#querying-s3-data-sources" title="Permalink to this heading">¶</a></h2>
-<p>The CLI can query data in S3 if the following environment variables are defined:</p>
+<section id="registering-s3-data-sources">
+<h2>Registering S3 Data Sources<a class="headerlink" href="#registering-s3-data-sources" title="Permalink to this heading">¶</a></h2>
+<p><a class="reference external" href="https://aws.amazon.com/s3/">AWS S3</a> data sources can be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">OPTIONS</span><span class="p">(</span>
+<span class="w">    </span><span class="s1">&#39;access_key_id&#39;</span><span class="w"> </span><span class="s1">&#39;******&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;secret_access_key&#39;</span><span class="w"> </span><span class="s1">&#39;******&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;region&#39;</span><span class="w"> </span><span class="s1">&#39;us-east-2&#39;</span>
+<span class="p">)</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;s3://bucket/path/file.parquet&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>The supported OPTIONS are:</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">AWS_DEFAULT_REGION</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">AWS_ACCESS_KEY_ID</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">AWS_SECRET_ACCESS_KEY</span></code></p></li>
+<li><p>access_key_id</p></li>
+<li><p>secret_access_key</p></li>
+<li><p>session_token</p></li>
+<li><p>region</p></li>
 </ul>
-<p>Details of the environment variables that can be used are</p>
-<ul class="simple">
-<li><p>AWS_ACCESS_KEY_ID -&gt; access_key_id</p></li>
-<li><p>AWS_SECRET_ACCESS_KEY -&gt; secret_access_key</p></li>
-<li><p>AWS_DEFAULT_REGION -&gt; region</p></li>
-<li><p>AWS_ENDPOINT -&gt; endpoint</p></li>
-<li><p>AWS_SESSION_TOKEN -&gt; token</p></li>
-<li><p>AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -&gt; <a class="reference external" href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html">https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html</a></p></li>
-<li><p>AWS_ALLOW_HTTP -&gt; set to “true” to permit HTTP connections without TLS</p></li>
-</ul>
-<p>Example:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>aws<span class="w"> </span>s3<span class="w"> </span>cp<span class="w"> </span>test.csv<span class="w"> </span>s3://my-bucket/
-upload:<span class="w"> </span>./test.csv<span class="w"> </span>to<span class="w"> </span>s3://my-bucket/test.csv
-
-$<span class="w"> </span><span class="nb">export</span><span class="w"> </span><span class="nv">AWS_DEFAULT_REGION</span><span class="o">=</span>us-east-2
-$<span class="w"> </span><span class="nb">export</span><span class="w"> </span><span class="nv">AWS_SECRET_ACCESS_KEY</span><span class="o">=</span>***************************
-$<span class="w"> </span><span class="nb">export</span><span class="w"> </span><span class="nv">AWS_ACCESS_KEY_ID</span><span class="o">=</span>**************
+<p>It is also possible to simplify sql statements by environment variables.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span><span class="nb">export</span><span class="w"> </span><span class="nv">AWS_DEFAULT_REGION</span><span class="o">=</span>us-east-2
+$<span class="w"> </span><span class="nb">export</span><span class="w"> </span><span class="nv">AWS_SECRET_ACCESS_KEY</span><span class="o">=</span>******
+$<span class="w"> </span><span class="nb">export</span><span class="w"> </span><span class="nv">AWS_ACCESS_KEY_ID</span><span class="o">=</span>******
 
 $<span class="w"> </span>datafusion-cli
-DataFusion<span class="w"> </span>CLI<span class="w"> </span>v14.0.0
-❯<span class="w"> </span>create<span class="w"> </span>external<span class="w"> </span>table<span class="w"> </span><span class="nb">test</span><span class="w"> </span>stored<span class="w"> </span>as<span class="w"> </span>csv<span class="w"> </span>location<span class="w"> </span><span class="s1">&#39;s3://my-bucket/test.csv&#39;</span><span class="p">;</span>
+DataFusion<span class="w"> </span>CLI<span class="w"> </span>v21.0.0
+❯<span class="w"> </span>create<span class="w"> </span>external<span class="w"> </span>table<span class="w"> </span><span class="nb">test</span><span class="w"> </span>stored<span class="w"> </span>as<span class="w"> </span>parquet<span class="w"> </span>location<span class="w"> </span><span class="s1">&#39;s3://bucket/path/file.parquet&#39;</span><span class="p">;</span>
 <span class="m">0</span><span class="w"> </span>rows<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.374<span class="w"> </span>seconds.
 ❯<span class="w"> </span><span class="k">select</span><span class="w"> </span>*<span class="w"> </span>from<span class="w"> </span>test<span class="p">;</span>
 +----------+----------+
@@ -599,6 +608,80 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v14.0.0
 <span class="m">1</span><span class="w"> </span>row<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.171<span class="w"> </span>seconds.
 </pre></div>
 </div>
+<p>Details of the environment variables that can be used are:</p>
+<ul class="simple">
+<li><p>AWS_ACCESS_KEY_ID -&gt; access_key_id</p></li>
+<li><p>AWS_SECRET_ACCESS_KEY -&gt; secret_access_key</p></li>
+<li><p>AWS_DEFAULT_REGION -&gt; region</p></li>
+<li><p>AWS_ENDPOINT -&gt; endpoint</p></li>
+<li><p>AWS_SESSION_TOKEN -&gt; token</p></li>
+<li><p>AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -&gt; <a class="reference external" href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html">https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html</a></p></li>
+<li><p>AWS_ALLOW_HTTP -&gt; set to “true” to permit HTTP connections without TLS</p></li>
+</ul>
+</section>
+<section id="registering-oss-data-sources">
+<h2>Registering OSS Data Sources<a class="headerlink" href="#registering-oss-data-sources" title="Permalink to this heading">¶</a></h2>
+<p><a class="reference external" href="https://www.alibabacloud.com/product/object-storage-service">Alibaba cloud OSS</a> data sources can be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">OPTIONS</span><span class="p">(</span>
+<span class="w">    </span><span class="s1">&#39;access_key_id&#39;</span><span class="w"> </span><span class="s1">&#39;******&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;secret_access_key&#39;</span><span class="w"> </span><span class="s1">&#39;******&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;endpoint&#39;</span><span class="w"> </span><span class="s1">&#39;https://bucket.oss-cn-hangzhou.aliyuncs.com&#39;</span>
+<span class="p">)</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;oss://bucket/path/file.parquet&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>The supported OPTIONS are:</p>
+<ul class="simple">
+<li><p>access_key_id</p></li>
+<li><p>secret_access_key</p></li>
+<li><p>endpoint</p></li>
+</ul>
+<p>Note that the <code class="docutils literal notranslate"><span class="pre">endpoint</span></code> format of oss needs to be: <code class="docutils literal notranslate"><span class="pre">https://{bucket}.{oss-region-endpoint}</span></code></p>
+</section>
+<section id="registering-gcs-data-sources">
+<h2>Registering GCS Data Sources<a class="headerlink" href="#registering-gcs-data-sources" title="Permalink to this heading">¶</a></h2>
+<p><a class="reference external" href="https://cloud.google.com/storage">Google Cloud Storage</a> data sources can be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">OPTIONS</span><span class="p">(</span>
+<span class="w">    </span><span class="s1">&#39;service_account_path&#39;</span><span class="w"> </span><span class="s1">&#39;/tmp/gcs.json&#39;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;gs://bucket/path/file.parquet&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>The supported OPTIONS are:</p>
+<ul class="simple">
+<li><p>service_account_path -&gt; location of service account file</p></li>
+<li><p>service_account_key -&gt; JSON serialized service account key</p></li>
+<li><p>application_credentials_path -&gt; location of application credentials file</p></li>
+</ul>
+<p>It is also possible to simplify sql statements by environment variables.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span><span class="nb">export</span><span class="w"> </span><span class="nv">GOOGLE_SERVICE_ACCOUNT</span><span class="o">=</span>/tmp/gcs.json
+
+$<span class="w"> </span>datafusion-cli
+DataFusion<span class="w"> </span>CLI<span class="w"> </span>v21.0.0
+❯<span class="w"> </span>create<span class="w"> </span>external<span class="w"> </span>table<span class="w"> </span><span class="nb">test</span><span class="w"> </span>stored<span class="w"> </span>as<span class="w"> </span>parquet<span class="w"> </span>location<span class="w"> </span><span class="s1">&#39;gs://bucket/path/file.parquet&#39;</span><span class="p">;</span>
+<span class="m">0</span><span class="w"> </span>rows<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.374<span class="w"> </span>seconds.
+❯<span class="w"> </span><span class="k">select</span><span class="w"> </span>*<span class="w"> </span>from<span class="w"> </span>test<span class="p">;</span>
++----------+----------+
+<span class="p">|</span><span class="w"> </span>column_1<span class="w"> </span><span class="p">|</span><span class="w"> </span>column_2<span class="w"> </span><span class="p">|</span>
++----------+----------+
+<span class="p">|</span><span class="w"> </span><span class="m">1</span><span class="w">        </span><span class="p">|</span><span class="w"> </span><span class="m">2</span><span class="w">        </span><span class="p">|</span>
++----------+----------+
+<span class="m">1</span><span class="w"> </span>row<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.171<span class="w"> </span>seconds.
+</pre></div>
+</div>
+<p>Details of the environment variables that can be used are:</p>
+<ul class="simple">
+<li><p>GOOGLE_SERVICE_ACCOUNT: location of service account file</p></li>
+<li><p>GOOGLE_SERVICE_ACCOUNT_PATH: (alias) location of service account file</p></li>
+<li><p>SERVICE_ACCOUNT: (alias) location of service account file</p></li>
+<li><p>GOOGLE_SERVICE_ACCOUNT_KEY: JSON serialized service account key</p></li>
+<li><p>GOOGLE_BUCKET: bucket name</p></li>
+<li><p>GOOGLE_BUCKET_NAME: (alias) bucket name</p></li>
+</ul>
 </section>
 <section id="commands">
 <h2>Commands<a class="headerlink" href="#commands" title="Permalink to this heading">¶</a></h2>
