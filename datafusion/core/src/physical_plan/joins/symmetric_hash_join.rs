@@ -1678,10 +1678,10 @@ mod tests {
                 Operator::Minus,
                 Operator::Minus,
                 Operator::Minus,
-                ScalarValue::IntervalDayTime(Some(100)), // 100 ms
-                ScalarValue::IntervalDayTime(Some(200)), // 200 ms
-                ScalarValue::IntervalDayTime(Some(450)), // 450 ms
-                ScalarValue::IntervalDayTime(Some(300)), // 300 ms
+                ScalarValue::new_interval_dt(0, 100), // 100 ms
+                ScalarValue::new_interval_dt(0, 200), // 200 ms
+                ScalarValue::new_interval_dt(0, 450), // 450 ms
+                ScalarValue::new_interval_dt(0, 300), // 300 ms
                 schema,
             ),
             1 => gen_conjunctive_temporal_expr(
