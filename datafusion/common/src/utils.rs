@@ -19,12 +19,13 @@
 
 use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::ArrayRef;
-use arrow::compute::SortOptions;
+use arrow::compute::{lexicographical_partition_ranges, SortColumn, SortOptions};
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::{Token, TokenWithLocation};
 use std::cmp::Ordering;
+use std::ops::Range;
 
 /// Create a new vector from the elements at the `indices` of `searched` vector
 pub fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec<T>> {
@@ -175,6 +176,23 @@ where
     Ok(low)
 }
 
+/// This function finds the partition points according to `partition_columns`.
+/// If there are no sort columns, then the result will be a single element
+/// vector containing one partition range spanning all data.
+pub fn evaluate_partition_points(
+    num_rows: usize,
+    partition_columns: &[SortColumn],
+) -> Result<Vec<Range<usize>>> {
+    Ok(if partition_columns.is_empty() {
+        vec![Range {
+            start: 0,
+            end: num_rows,
+        }]
+    } else {
+        lexicographical_partition_ranges(partition_columns)?.collect()
+    })
+}
+
 /// Wraps identifier string in double quotes, escaping any double quotes in
 /// the identifier by replacing it with two double quotes
 ///
@@ -250,6 +268,7 @@ pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use arrow::array::Float64Array;
+    use std::ops::Range;
     use std::sync::Arc;
 
     use crate::from_slice::FromSlice;
@@ -427,6 +446,40 @@ mod tests {
         assert_eq!(res, 2);
         let res = linear_search::<true>(&arrays, &search_tuple, &ords)?;
         assert_eq!(res, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_evaluate_partition_points() -> Result<()> {
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(Float64Array::from_slice([1.0, 1.0, 1.0, 2.0, 2.0, 2.0])),
+            Arc::new(Float64Array::from_slice([4.0, 4.0, 3.0, 2.0, 1.0, 1.0])),
+        ];
+        let n_row = arrays[0].len();
+        let options: Vec<SortOptions> = vec![
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        ];
+        let sort_columns = arrays
+            .into_iter()
+            .zip(options)
+            .map(|(values, options)| SortColumn {
+                values,
+                options: Some(options),
+            })
+            .collect::<Vec<_>>();
+        let ranges = evaluate_partition_points(n_row, &sort_columns)?;
+        assert_eq!(ranges.len(), 4);
+        assert_eq!(ranges[0], Range { start: 0, end: 2 });
+        assert_eq!(ranges[1], Range { start: 2, end: 3 });
+        assert_eq!(ranges[2], Range { start: 3, end: 4 });
+        assert_eq!(ranges[3], Range { start: 4, end: 6 });
         Ok(())
     }
 
