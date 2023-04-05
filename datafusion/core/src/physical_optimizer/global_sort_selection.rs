@@ -59,9 +59,12 @@ impl PhysicalOptimizerRule for GlobalSortSelection {
                         // It's already preserving the partitioning so that it can be regarded as a local sort
                         && !sort_exec.preserve_partitioning()
                         && (sort_exec.fetch().is_some() ||  config.optimizer.repartition_sorts)
-                        {
-                            let sort = SortExec::from_other(sort_exec)
-                                .with_preserve_partitioning(true);
+                    {
+                            let sort = SortExec::new(
+                                sort_exec.expr().to_vec(),
+                                sort_exec.input().clone(),
+                                sort_exec.fetch(),
+                            ).with_preserve_partitioning(true);
                             let global_sort: Arc<dyn ExecutionPlan> =
                                 Arc::new(SortPreservingMergeExec::new(
                                     sort_exec.expr().to_vec(),

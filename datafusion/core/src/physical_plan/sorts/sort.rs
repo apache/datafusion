@@ -680,18 +680,6 @@ impl SortExec {
         Self::new(expr, input, fetch).with_preserve_partitioning(preserve_partitioning)
     }
 
-    /// Create a new sort execution plan that is the same as `sort_exec`
-    /// but does not share a metrics set.
-    pub fn from_other(sort_exec: &SortExec) -> Self {
-        Self {
-            expr: sort_exec.expr().to_vec(),
-            input: sort_exec.input().clone(),
-            metrics_set: CompositeMetricsSet::new(),
-            preserve_partitioning: sort_exec.preserve_partitioning(),
-            fetch: sort_exec.fetch(),
-        }
-    }
-
     /// Whether this `SortExec` preserves partitioning of the children
     pub fn preserve_partitioning(&self) -> bool {
         self.preserve_partitioning
