@@ -105,7 +105,7 @@ pub struct PhysicalSortRequirement {
     /// Physical expression representing the column to sort
     expr: Arc<dyn PhysicalExpr>,
     /// Option to specify how the given column should be sorted.
-    /// If unspecified, there are constraints on sort options.
+    /// If unspecified, there are no constraints on sort options.
     options: Option<SortOptions>,
 }
 
