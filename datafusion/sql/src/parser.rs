@@ -24,7 +24,7 @@ use sqlparser::{
         ColumnDef, ColumnOptionDef, ObjectName, Statement as SQLStatement,
         TableConstraint,
     },
-    dialect::{keywords::Keyword, Dialect, GenericDialect, PostgreSqlDialect},
+    dialect::{keywords::Keyword, Dialect, GenericDialect},
     parser::{Parser, ParserError},
     tokenizer::{Token, TokenWithLocation, Tokenizer},
 };
@@ -134,7 +134,7 @@ impl<'a> DFParser<'a> {
     /// Parse a sql string into one or [`Statement`]s using the
     /// [`GenericDialect`].
     pub fn parse_sql(sql: &str) -> Result<VecDeque<Statement>, ParserError> {
-        let dialect = &PostgreSqlDialect {};
+        let dialect = &GenericDialect {};
         DFParser::parse_sql_with_dialect(sql, dialect)
     }
 
