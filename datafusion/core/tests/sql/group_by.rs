@@ -916,8 +916,7 @@ async fn test_source_sorted_groupby() -> Result<()> {
     let sql = "SELECT a, b,
            SUM(c) as summation1
            FROM annotated_data
-           GROUP BY b, a
-           ORDER BY a, b";
+           GROUP BY b, a";
 
     let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
@@ -963,8 +962,7 @@ async fn test_source_sorted_groupby2() -> Result<()> {
     let sql = "SELECT a, d,
            SUM(c) as summation1
            FROM annotated_data
-           GROUP BY d, a
-           ORDER BY a";
+           GROUP BY d, a";
 
     let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
