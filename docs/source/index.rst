@@ -31,8 +31,19 @@ DataFusion offers SQL and Dataframe APIs, excellent
 CSV, Parquet, JSON, and Avro, extensive customization, and a great
 community.
 
-.. _toc.guide:
 
+.. _toc.links:
+.. toctree::
+   :maxdepth: 1
+   :caption: Links
+
+   Issue tracker <https://github.com/apache/arrow-datafusion/issues>
+   crates.io <https://crates.io/crates/datafusion>
+   API Docs <https://docs.rs/datafusion/21.1.0/datafusion/>
+   Github <https://github.com/apache/arrow-datafusion>
+   Code of conduct <https://github.com/apache/arrow-datafusion/blob/main/CODE_OF_CONDUCT.md>
+
+.. _toc.guide:
 .. toctree::
    :maxdepth: 1
    :caption: User Guide
@@ -63,6 +74,3 @@ community.
    contributor-guide/roadmap
    contributor-guide/quarterly_roadmap
    contributor-guide/specification/index
-   Github <https://github.com/apache/arrow-datafusion>
-   Issue tracker <https://github.com/apache/arrow-datafusion/issues>
-   Code of conduct <https://github.com/apache/arrow-datafusion/blob/main/CODE_OF_CONDUCT.md>
