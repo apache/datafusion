@@ -123,7 +123,7 @@ impl From<&PhysicalSortRequirement> for PhysicalSortExpr {
 
 impl From<PhysicalSortExpr> for PhysicalSortRequirement {
     fn from(value: PhysicalSortExpr) -> Self {
-        PhysicalSortRequirement::new_exact(value.expr, value.options)
+        PhysicalSortRequirement::new(value.expr, Some(value.options))
     }
 }
 
@@ -147,24 +147,17 @@ impl std::fmt::Display for PhysicalSortRequirement {
 }
 
 impl PhysicalSortRequirement {
-    /// Creates a new `exact` requirement, which must match the
-    /// required options and expression. See
-    /// [`PhysicalSortRequirement`] for examples.
-    pub fn new_exact(expr: Arc<dyn PhysicalExpr>, options: SortOptions) -> Self {
-        Self {
-            expr,
-            options: Some(options),
-        }
-    }
-
-    /// Creates a new `expr_only` requirement, which must match the
-    /// required expression. See [`PhysicalSortRequirement`] for
-    /// examples.
-    pub fn new_expr_only(expr: Arc<dyn PhysicalExpr>) -> Self {
-        Self {
-            expr,
-            options: None,
-        }
+    /// Creates a new requirement.
+    ///
+    /// If `options` is `Some(..)`, creates an `exact` requirement,
+    /// which must match both `options` and `expr`.
+    ///
+    /// If `options` is `None`, Creates a new `expr_only` requirement,
+    /// which must match only `expr`.
+    ///
+    /// See [`PhysicalSortRequirement`] for examples.
+    pub fn new(expr: Arc<dyn PhysicalExpr>, options: Option<SortOptions>) -> Self {
+        Self { expr, options }
     }
 
     /// Replace the required expression for this requirement with the new one
