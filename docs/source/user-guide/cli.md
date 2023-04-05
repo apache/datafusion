@@ -182,7 +182,7 @@ LOCATION '/path/to/aggregate_test_100.csv';
 
 ## Registering S3 Data Sources
 
-S3 data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement.
+[AWS S3](https://aws.amazon.com/s3/) data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement.
 
 ```sql
 CREATE EXTERNAL TABLE test
@@ -202,7 +202,7 @@ The supported OPTIONS are:
 - session_token
 - region
 
-It is also simplify sql statements by environment variables.
+It is also possible to simplify sql statements by environment variables.
 
 ```bash
 $ export AWS_DEFAULT_REGION=us-east-2
@@ -234,7 +234,7 @@ Details of the environment variables that can be used are:
 
 ## Registering OSS Data Sources
 
-OSS data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement.
+[Alibaba cloud OSS](https://www.alibabacloud.com/product/object-storage-service) data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement.
 
 ```sql
 CREATE EXTERNAL TABLE test
@@ -257,7 +257,7 @@ Note that the `endpoint` format of oss needs to be: `https://{bucket}.{oss-regio
 
 ## Registering GCS Data Sources
 
-GCS data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement.
+[Google Cloud Storage](https://cloud.google.com/storage) data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement.
 
 ```sql
 CREATE EXTERNAL TABLE test
@@ -274,7 +274,7 @@ The supported OPTIONS are:
 - service_account_key -> JSON serialized service account key
 - application_credentials_path -> location of application credentials file
 
-It is also simplify sql statements by environment variables.
+It is also possible to simplify sql statements by environment variables.
 
 ```bash
 $ export GOOGLE_SERVICE_ACCOUNT=/tmp/gcs.json
