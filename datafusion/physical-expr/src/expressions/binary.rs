@@ -1447,7 +1447,7 @@ pub fn interval_scalar_interval_op(
         ) => {
             let array = as_interval_dt_array(&array)?;
             let ret: PrimitiveArray<IntervalDayTimeType> =
-                unary(array, |lhs| op_dt(*rhs, lhs, sign));
+                unary(array, |lhs| op_dt(lhs, *rhs, sign));
             Arc::new(ret) as ArrayRef
         }
         (
@@ -1483,7 +1483,7 @@ pub fn interval_scalar_interval_op(
         ) => {
             let array = as_interval_mdn_array(&array)?;
             let ret: PrimitiveArray<IntervalMonthDayNanoType> =
-                unary(array, |lhs| op_mdn(*rhs, lhs, sign));
+                unary(array, |lhs| op_mdn(lhs, *rhs, sign));
             Arc::new(ret) as ArrayRef
         }
         _ => Err(DataFusionError::Internal(format!(

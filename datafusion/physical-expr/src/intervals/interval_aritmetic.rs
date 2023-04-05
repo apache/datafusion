@@ -202,15 +202,21 @@ impl Interval {
     /// one can choose single values arbitrarily from each of the operands.
     pub fn add<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
-        let datatype =
-            coerce_types(&self.get_datatype(), &Operator::Plus, &rhs.get_datatype())?;
         let lower = if self.lower.is_null() || rhs.lower.is_null() {
-            ScalarValue::try_from(&datatype)
+            ScalarValue::try_from(&coerce_types(
+                &self.get_datatype(),
+                &Operator::Plus,
+                &rhs.get_datatype(),
+            )?)
         } else {
             self.lower.add(&rhs.lower)
         }?;
         let upper = if self.upper.is_null() || rhs.upper.is_null() {
-            ScalarValue::try_from(&datatype)
+            ScalarValue::try_from(coerce_types(
+                &self.get_datatype(),
+                &Operator::Plus,
+                &rhs.get_datatype(),
+            )?)
         } else {
             self.upper.add(&rhs.upper)
         }?;
@@ -223,15 +229,21 @@ impl Interval {
     /// if one can choose single values arbitrarily from each of the operands.
     pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
-        let datatype =
-            coerce_types(&self.get_datatype(), &Operator::Minus, &rhs.get_datatype())?;
         let lower = if self.lower.is_null() || rhs.upper.is_null() {
-            ScalarValue::try_from(&datatype)
+            ScalarValue::try_from(coerce_types(
+                &self.get_datatype(),
+                &Operator::Minus,
+                &rhs.get_datatype(),
+            )?)
         } else {
             self.lower.sub(&rhs.upper)
         }?;
         let upper = if self.upper.is_null() || rhs.lower.is_null() {
-            ScalarValue::try_from(&datatype)
+            ScalarValue::try_from(coerce_types(
+                &self.get_datatype(),
+                &Operator::Minus,
+                &rhs.get_datatype(),
+            )?)
         } else {
             self.upper.sub(&rhs.lower)
         }?;

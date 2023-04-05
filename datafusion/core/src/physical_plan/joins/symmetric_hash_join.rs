@@ -1431,7 +1431,7 @@ mod tests {
     use arrow::array::{Int32Array, TimestampMillisecondArray};
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
-    use arrow::util::pretty::{pretty_format_batches, print_batches};
+    use arrow::util::pretty::pretty_format_batches;
     use rstest::*;
     use tempfile::TempDir;
 
@@ -1832,8 +1832,6 @@ mod tests {
             left, right, on, filter, &join_type, false, task_ctx,
         )
         .await?;
-        print_batches(&first_batches);
-        print_batches(&second_batches);
         compare_batches(&first_batches, &second_batches);
         Ok(())
     }
