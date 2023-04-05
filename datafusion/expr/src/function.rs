@@ -266,8 +266,12 @@ pub fn return_type(
         | BuiltinScalarFunction::Acos
         | BuiltinScalarFunction::Asin
         | BuiltinScalarFunction::Atan
+        | BuiltinScalarFunction::Acosh
+        | BuiltinScalarFunction::Asinh
+        | BuiltinScalarFunction::Atanh
         | BuiltinScalarFunction::Ceil
         | BuiltinScalarFunction::Cos
+        | BuiltinScalarFunction::Cosh
         | BuiltinScalarFunction::Exp
         | BuiltinScalarFunction::Floor
         | BuiltinScalarFunction::Ln
@@ -276,9 +280,11 @@ pub fn return_type(
         | BuiltinScalarFunction::Round
         | BuiltinScalarFunction::Signum
         | BuiltinScalarFunction::Sin
+        | BuiltinScalarFunction::Sinh
         | BuiltinScalarFunction::Sqrt
         | BuiltinScalarFunction::Cbrt
         | BuiltinScalarFunction::Tan
+        | BuiltinScalarFunction::Tanh
         | BuiltinScalarFunction::Trunc => match input_expr_types[0] {
             DataType::Float32 => Ok(DataType::Float32),
             _ => Ok(DataType::Float64),
