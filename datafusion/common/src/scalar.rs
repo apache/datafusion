@@ -44,12 +44,14 @@ use arrow::{
     },
 };
 use arrow_array::timezone::Tz;
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, TimeZone};
+use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 
 // Constants we use throughout this file:
 const MILLISECS_IN_ONE_DAY: i64 = 86_400_000;
 const NANOSECS_IN_ONE_DAY: i64 = 86_400_000_000_000;
+const SECS_IN_ONE_MONTH: i64 = 2_592_000; // assuming 30 days.
 const MILLISECS_IN_ONE_MONTH: i64 = 2_592_000_000; // assuming 30 days.
+const MICROSECS_IN_ONE_MONTH: i64 = 2_592_000_000_000; // assuming 30 days.
 const NANOSECS_IN_ONE_MONTH: i128 = 2_592_000_000_000_000; // assuming 30 days.
 
 /// Represents a dynamically typed, nullable single value.
@@ -378,41 +380,111 @@ impl PartialOrd for ScalarValue {
 /// This function computes the duration (in milliseconds) of the given
 /// year-month-interval.
 #[inline]
-fn ym_to_milli(val: &Option<i32>) -> Option<i64> {
+pub fn ym_to_sec(val: &Option<i32>) -> Option<i64> {
+    val.map(|value| (value as i64) * SECS_IN_ONE_MONTH)
+}
+
+/// This function computes the duration (in milliseconds) of the given
+/// year-month-interval.
+#[inline]
+pub fn ym_to_milli(val: &Option<i32>) -> Option<i64> {
     val.map(|value| (value as i64) * MILLISECS_IN_ONE_MONTH)
+}
+
+/// This function computes the duration (in milliseconds) of the given
+/// year-month-interval.
+#[inline]
+pub fn ym_to_micro(val: &Option<i32>) -> Option<i64> {
+    val.map(|value| (value as i64) * MICROSECS_IN_ONE_MONTH)
 }
 
 /// This function computes the duration (in nanoseconds) of the given
 /// year-month-interval.
 #[inline]
-fn ym_to_nano(val: &Option<i32>) -> Option<i128> {
+pub fn ym_to_nano(val: &Option<i32>) -> Option<i128> {
     val.map(|value| (value as i128) * NANOSECS_IN_ONE_MONTH)
+}
+
+/// This function computes the duration (in seconds) of the given
+/// daytime-interval.
+#[inline]
+pub fn dt_to_sec(val: &Option<i64>) -> Option<i64> {
+    val.map(|val| {
+        let (days, millis) = IntervalDayTimeType::to_parts(val);
+        (days as i64) * MILLISECS_IN_ONE_DAY + (millis as i64 / 1_000)
+    })
 }
 
 /// This function computes the duration (in milliseconds) of the given
 /// daytime-interval.
 #[inline]
-fn dt_to_milli(val: &Option<i64>) -> Option<i64> {
+pub fn dt_to_milli(val: &Option<i64>) -> Option<i64> {
     val.map(|val| {
         let (days, millis) = IntervalDayTimeType::to_parts(val);
         (days as i64) * MILLISECS_IN_ONE_DAY + (millis as i64)
     })
 }
 
+/// This function computes the duration (in microseconds) of the given
+/// daytime-interval.
+#[inline]
+pub fn dt_to_micro(val: &Option<i64>) -> Option<i128> {
+    val.map(|val| {
+        let (days, millis) = IntervalDayTimeType::to_parts(val);
+        (days as i128) * (NANOSECS_IN_ONE_DAY as i128) + (millis as i128) * 1_000
+    })
+}
+
 /// This function computes the duration (in nanoseconds) of the given
 /// daytime-interval.
 #[inline]
-fn dt_to_nano(val: &Option<i64>) -> Option<i128> {
+pub fn dt_to_nano(val: &Option<i64>) -> Option<i128> {
     val.map(|val| {
         let (days, millis) = IntervalDayTimeType::to_parts(val);
         (days as i128) * (NANOSECS_IN_ONE_DAY as i128) + (millis as i128) * 1_000_000
     })
 }
 
+/// This function computes the duration (in seconds) of the given
+/// month-day-nano-interval. Assumes a month is 30 days long.
+#[inline]
+pub fn mdn_to_sec(val: &Option<i128>) -> Option<i128> {
+    val.map(|val| {
+        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(val);
+        (months as i128) * NANOSECS_IN_ONE_MONTH
+            + (days as i128) * (NANOSECS_IN_ONE_DAY as i128)
+            + (nanos as i128) / 1_000_000_000
+    })
+}
+
+/// This function computes the duration (in milliseconds) of the given
+/// month-day-nano-interval. Assumes a month is 30 days long.
+#[inline]
+pub fn mdn_to_milli(val: &Option<i128>) -> Option<i128> {
+    val.map(|val| {
+        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(val);
+        (months as i128) * NANOSECS_IN_ONE_MONTH
+            + (days as i128) * (NANOSECS_IN_ONE_DAY as i128)
+            + (nanos as i128) / 1_000_000
+    })
+}
+
+/// This function computes the duration (in microseconds) of the given
+/// month-day-nano-interval. Assumes a month is 30 days long.
+#[inline]
+pub fn mdn_to_micro(val: &Option<i128>) -> Option<i128> {
+    val.map(|val| {
+        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(val);
+        (months as i128) * NANOSECS_IN_ONE_MONTH
+            + (days as i128) * (NANOSECS_IN_ONE_DAY as i128)
+            + (nanos as i128) / 1_000
+    })
+}
+
 /// This function computes the duration (in nanoseconds) of the given
 /// month-day-nano-interval. Assumes a month is 30 days long.
 #[inline]
-fn mdn_to_nano(val: &Option<i128>) -> Option<i128> {
+pub fn mdn_to_nano(val: &Option<i128>) -> Option<i128> {
     val.map(|val| {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(val);
         (months as i128) * NANOSECS_IN_ONE_MONTH
@@ -567,23 +639,21 @@ macro_rules! impl_op {
                         "Overflow while converting seconds to milliseconds".to_string(),
                     )
                 };
-                ts_sub_to_interval(
+                ts_sub_to_interval::<MILLISECOND_MODE>(
                     ts_lhs.checked_mul(1_000).ok_or_else(err)?,
                     ts_rhs.checked_mul(1_000).ok_or_else(err)?,
                     &tz_lhs,
                     &tz_rhs,
-                    IntervalMode::Milli,
                 )
             },
             (
                 ScalarValue::TimestampMillisecond(Some(ts_lhs), tz_lhs),
                 ScalarValue::TimestampMillisecond(Some(ts_rhs), tz_rhs),
-            ) => ts_sub_to_interval(
+            ) => ts_sub_to_interval::<MILLISECOND_MODE>(
                 *ts_lhs,
                 *ts_rhs,
                 tz_lhs,
                 tz_rhs,
-                IntervalMode::Milli,
             ),
             (
                 ScalarValue::TimestampMicrosecond(Some(ts_lhs), tz_lhs),
@@ -594,23 +664,21 @@ macro_rules! impl_op {
                         "Overflow while converting microseconds to nanoseconds".to_string(),
                     )
                 };
-                ts_sub_to_interval(
+                ts_sub_to_interval::<NANOSECOND_MODE>(
                     ts_lhs.checked_mul(1_000).ok_or_else(err)?,
                     ts_rhs.checked_mul(1_000).ok_or_else(err)?,
                     tz_lhs,
                     tz_rhs,
-                    IntervalMode::Nano,
                 )
             },
             (
                 ScalarValue::TimestampNanosecond(Some(ts_lhs), tz_lhs),
                 ScalarValue::TimestampNanosecond(Some(ts_rhs), tz_rhs),
-            ) => ts_sub_to_interval(
+            ) => ts_sub_to_interval::<NANOSECOND_MODE>(
                 *ts_lhs,
                 *ts_rhs,
                 tz_lhs,
                 tz_rhs,
-                IntervalMode::Nano,
             ),
             _ => impl_op_arithmetic!($LHS, $RHS, -)
         }
@@ -660,37 +728,27 @@ macro_rules! impl_op_arithmetic {
             (
                 ScalarValue::IntervalYearMonth(Some(lhs)),
                 ScalarValue::IntervalYearMonth(Some(rhs)),
-            ) => Ok(ScalarValue::new_interval_ym(
-                0,
-                lhs + rhs * get_sign!($OPERATION),
-            )),
+            ) => Ok(ScalarValue::IntervalYearMonth(Some(op_ym(
+                *lhs,
+                *rhs,
+                get_sign!($OPERATION),
+            )))),
             (
                 ScalarValue::IntervalDayTime(Some(lhs)),
                 ScalarValue::IntervalDayTime(Some(rhs)),
-            ) => {
-                let sign = get_sign!($OPERATION);
-                let (lhs_days, lhs_millis) = IntervalDayTimeType::to_parts(*lhs);
-                let (rhs_days, rhs_millis) = IntervalDayTimeType::to_parts(*rhs);
-                Ok(ScalarValue::new_interval_dt(
-                    lhs_days + rhs_days * sign,
-                    lhs_millis + rhs_millis * sign,
-                ))
-            }
+            ) => Ok(ScalarValue::IntervalDayTime(Some(op_dt(
+                *lhs,
+                *rhs,
+                get_sign!($OPERATION),
+            )))),
             (
                 ScalarValue::IntervalMonthDayNano(Some(lhs)),
                 ScalarValue::IntervalMonthDayNano(Some(rhs)),
-            ) => {
-                let sign = get_sign!($OPERATION);
-                let (lhs_months, lhs_days, lhs_nanos) =
-                    IntervalMonthDayNanoType::to_parts(*lhs);
-                let (rhs_months, rhs_days, rhs_nanos) =
-                    IntervalMonthDayNanoType::to_parts(*rhs);
-                Ok(ScalarValue::new_interval_mdn(
-                    lhs_months + rhs_months * sign,
-                    lhs_days + rhs_days * sign,
-                    lhs_nanos + rhs_nanos * (sign as i64),
-                ))
-            }
+            ) => Ok(ScalarValue::IntervalMonthDayNano(Some(op_mdn(
+                *lhs,
+                *rhs,
+                get_sign!($OPERATION),
+            )))),
             // Binary operations on arguments with different types:
             (ScalarValue::Date32(Some(days)), _) => {
                 let value = date32_add(*days, $RHS, get_sign!($OPERATION))?;
@@ -735,27 +793,57 @@ macro_rules! impl_op_arithmetic {
             (
                 ScalarValue::IntervalYearMonth(Some(lhs)),
                 ScalarValue::IntervalDayTime(Some(rhs)),
-            ) => op_ym_dt(*lhs, *rhs, get_sign!($OPERATION), false),
+            ) => Ok(ScalarValue::IntervalMonthDayNano(Some(op_ym_dt(
+                *lhs,
+                *rhs,
+                get_sign!($OPERATION),
+                false,
+            )))),
             (
                 ScalarValue::IntervalYearMonth(Some(lhs)),
                 ScalarValue::IntervalMonthDayNano(Some(rhs)),
-            ) => op_ym_mdn(*lhs, *rhs, get_sign!($OPERATION), false),
+            ) => Ok(ScalarValue::IntervalMonthDayNano(Some(op_ym_mdn(
+                *lhs,
+                *rhs,
+                get_sign!($OPERATION),
+                false,
+            )))),
             (
                 ScalarValue::IntervalDayTime(Some(lhs)),
                 ScalarValue::IntervalYearMonth(Some(rhs)),
-            ) => op_ym_dt(*rhs, *lhs, get_sign!($OPERATION), true),
+            ) => Ok(ScalarValue::IntervalMonthDayNano(Some(op_ym_dt(
+                *rhs,
+                *lhs,
+                get_sign!($OPERATION),
+                true,
+            )))),
             (
                 ScalarValue::IntervalDayTime(Some(lhs)),
                 ScalarValue::IntervalMonthDayNano(Some(rhs)),
-            ) => op_dt_mdn(*lhs, *rhs, get_sign!($OPERATION), false),
+            ) => Ok(ScalarValue::IntervalMonthDayNano(Some(op_dt_mdn(
+                *lhs,
+                *rhs,
+                get_sign!($OPERATION),
+                false,
+            )))),
             (
                 ScalarValue::IntervalMonthDayNano(Some(lhs)),
                 ScalarValue::IntervalYearMonth(Some(rhs)),
-            ) => op_ym_mdn(*rhs, *lhs, get_sign!($OPERATION), true),
+            ) => Ok(ScalarValue::IntervalMonthDayNano(Some(op_ym_mdn(
+                *rhs,
+                *lhs,
+                get_sign!($OPERATION),
+                true,
+            )))),
             (
                 ScalarValue::IntervalMonthDayNano(Some(lhs)),
                 ScalarValue::IntervalDayTime(Some(rhs)),
-            ) => op_dt_mdn(*rhs, *lhs, get_sign!($OPERATION), true),
+            ) => Ok(ScalarValue::IntervalMonthDayNano(Some(op_dt_mdn(
+                *rhs,
+                *lhs,
+                get_sign!($OPERATION),
+                true,
+            )))),
             _ => Err(DataFusionError::Internal(format!(
                 "Operator {} is not implemented for types {:?} and {:?}",
                 stringify!($OPERATION),
@@ -769,10 +857,10 @@ macro_rules! impl_op_arithmetic {
 /// This function adds/subtracts two "raw" intervals (`lhs` and `rhs`) of different
 /// types ([`IntervalYearMonthType`] and [`IntervalDayTimeType`], respectively).
 /// The argument `sign` chooses between addition and subtraction, the argument
-/// `commute` swaps `lhs` and `rhs`. The return value is an interval [`ScalarValue`]
-/// with type data type [`IntervalMonthDayNanoType`].
+/// `commute` swaps `lhs` and `rhs`. The return value is an 128-bit integer.
+/// It can be involved in a [`IntervalMonthDayNanoType`] in the outer scope.
 #[inline]
-fn op_ym_dt(mut lhs: i32, rhs: i64, sign: i32, commute: bool) -> Result<ScalarValue> {
+pub fn op_ym_dt(mut lhs: i32, rhs: i64, sign: i32, commute: bool) -> i128 {
     let (mut days, millis) = IntervalDayTimeType::to_parts(rhs);
     let mut nanos = (millis as i64) * 1_000_000;
     if commute {
@@ -781,16 +869,16 @@ fn op_ym_dt(mut lhs: i32, rhs: i64, sign: i32, commute: bool) -> Result<ScalarVa
         days *= sign;
         nanos *= sign as i64;
     };
-    Ok(ScalarValue::new_interval_mdn(lhs, days, nanos))
+    IntervalMonthDayNanoType::make_value(lhs, days, nanos)
 }
 
 /// This function adds/subtracts two "raw" intervals (`lhs` and `rhs`) of different
 /// types ([`IntervalYearMonthType`] and [`IntervalMonthDayNanoType`], respectively).
 /// The argument `sign` chooses between addition and subtraction, the argument
-/// `commute` swaps `lhs` and `rhs`. The return value is an interval [`ScalarValue`]
-/// with type data type [`IntervalMonthDayNanoType`].
+/// `commute` swaps `lhs` and `rhs`. The return value is an 128-bit integer.
+/// It can be involved in a [`IntervalMonthDayNanoType`] in the outer scope.
 #[inline]
-fn op_ym_mdn(lhs: i32, rhs: i128, sign: i32, commute: bool) -> Result<ScalarValue> {
+pub fn op_ym_mdn(lhs: i32, rhs: i128, sign: i32, commute: bool) -> i128 {
     let (mut months, mut days, mut nanos) = IntervalMonthDayNanoType::to_parts(rhs);
     if commute {
         months += lhs * sign;
@@ -799,20 +887,19 @@ fn op_ym_mdn(lhs: i32, rhs: i128, sign: i32, commute: bool) -> Result<ScalarValu
         days *= sign;
         nanos *= sign as i64;
     }
-    Ok(ScalarValue::new_interval_mdn(months, days, nanos))
+    IntervalMonthDayNanoType::make_value(months, days, nanos)
 }
 
 /// This function adds/subtracts two "raw" intervals (`lhs` and `rhs`) of different
 /// types ([`IntervalDayTimeType`] and [`IntervalMonthDayNanoType`], respectively).
 /// The argument `sign` chooses between addition and subtraction, the argument
-/// `commute` swaps `lhs` and `rhs`. The return value is an interval [`ScalarValue`]
-/// with type data type [`IntervalMonthDayNanoType`].
+/// `commute` swaps `lhs` and `rhs`. The return value is an 128-bit integer.
+/// It can be involved in a [`IntervalMonthDayNanoType`] in the outer scope.
 #[inline]
-fn op_dt_mdn(lhs: i64, rhs: i128, sign: i32, commute: bool) -> Result<ScalarValue> {
+pub fn op_dt_mdn(lhs: i64, rhs: i128, sign: i32, commute: bool) -> i128 {
     let (lhs_days, lhs_millis) = IntervalDayTimeType::to_parts(lhs);
     let (rhs_months, rhs_days, rhs_nanos) = IntervalMonthDayNanoType::to_parts(rhs);
-
-    let result = if commute {
+    if commute {
         IntervalMonthDayNanoType::make_value(
             rhs_months,
             lhs_days * sign + rhs_days,
@@ -824,8 +911,45 @@ fn op_dt_mdn(lhs: i64, rhs: i128, sign: i32, commute: bool) -> Result<ScalarValu
             lhs_days + rhs_days * sign,
             (lhs_millis as i64) * 1_000_000 + rhs_nanos * (sign as i64),
         )
-    };
-    Ok(ScalarValue::IntervalMonthDayNano(Some(result)))
+    }
+}
+
+/// This function adds/subtracts two "raw" intervals (`lhs` and `rhs`) of
+/// the same type [`IntervalYearMonthType`]. The argument `sign` chooses between
+/// addition and subtraction. The return value is an 32-bit integer. It can be
+/// involved in a [`IntervalYearMonthType`] in the outer scope.
+#[inline]
+pub fn op_ym(lhs: i32, rhs: i32, sign: i32) -> i32 {
+    lhs + rhs * sign
+}
+
+/// This function adds/subtracts two "raw" intervals (`lhs` and `rhs`) of
+/// the same type [`IntervalDayTimeType`]. The argument `sign` chooses between
+/// addition and subtraction. The return value is an 64-bit integer. It can be
+/// involved in a [`IntervalDayTimeType`] in the outer scope.
+#[inline]
+pub fn op_dt(lhs: i64, rhs: i64, sign: i32) -> i64 {
+    let (lhs_days, lhs_millis) = IntervalDayTimeType::to_parts(lhs);
+    let (rhs_days, rhs_millis) = IntervalDayTimeType::to_parts(rhs);
+    IntervalDayTimeType::make_value(
+        lhs_days + rhs_days * sign,
+        lhs_millis + rhs_millis * sign,
+    )
+}
+
+/// This function adds/subtracts two "raw" intervals (`lhs` and `rhs`) of
+/// the same type [`IntervalMonthDayNanoType`]. The argument `sign` chooses between
+/// addition and subtraction. The return value is an 128-bit integer. It can be
+/// involved in a [`IntervalMonthDayNanoType`] in the outer scope.
+#[inline]
+pub fn op_mdn(lhs: i128, rhs: i128, sign: i32) -> i128 {
+    let (lhs_months, lhs_days, lhs_nanos) = IntervalMonthDayNanoType::to_parts(lhs);
+    let (rhs_months, rhs_days, rhs_nanos) = IntervalMonthDayNanoType::to_parts(rhs);
+    IntervalMonthDayNanoType::make_value(
+        lhs_months + rhs_months * sign,
+        lhs_days + rhs_days * sign,
+        lhs_nanos + rhs_nanos * (sign as i64),
+    )
 }
 
 macro_rules! get_sign {
@@ -837,40 +961,42 @@ macro_rules! get_sign {
     };
 }
 
-#[derive(Clone, Copy)]
-enum IntervalMode {
-    Milli,
-    Nano,
-}
+pub const YM_MODE: i8 = 0;
+pub const DT_MODE: i8 = 1;
+pub const MDN_MODE: i8 = 2;
 
+pub const MILLISECOND_MODE: bool = false;
+pub const NANOSECOND_MODE: bool = true;
 /// This function computes subtracts `rhs_ts` from `lhs_ts`, taking timezones
 /// into account when given. Units of the resulting interval is specified by
-/// the argument `mode`.
+/// the constant `TIME_MODE`.
 /// The default behavior of Datafusion is the following:
 /// - When subtracting timestamps at seconds/milliseconds precision, the output
 ///   interval will have the type [`IntervalDayTimeType`].
 /// - When subtracting timestamps at microseconds/nanoseconds precision, the
 ///   output interval will have the type [`IntervalMonthDayNanoType`].
-fn ts_sub_to_interval(
+fn ts_sub_to_interval<const TIME_MODE: bool>(
     lhs_ts: i64,
     rhs_ts: i64,
     lhs_tz: &Option<String>,
     rhs_tz: &Option<String>,
-    mode: IntervalMode,
 ) -> Result<ScalarValue> {
-    let lhs_dt = with_timezone_to_naive_datetime(lhs_ts, lhs_tz, mode)?;
-    let rhs_dt = with_timezone_to_naive_datetime(rhs_ts, rhs_tz, mode)?;
-    let delta_secs = lhs_dt.signed_duration_since(rhs_dt);
+    let parsed_lhs_tz = parse_timezones(lhs_tz)?;
+    let parsed_rhs_tz = parse_timezones(rhs_tz)?;
 
-    match mode {
-        IntervalMode::Milli => {
+    let (naive_lhs, naive_rhs) =
+        calculate_naives::<TIME_MODE>(lhs_ts, parsed_lhs_tz, rhs_ts, parsed_rhs_tz)?;
+    let delta_secs = naive_lhs.signed_duration_since(naive_rhs);
+
+    match TIME_MODE {
+        MILLISECOND_MODE => {
             let as_millisecs = delta_secs.num_milliseconds();
             Ok(ScalarValue::new_interval_dt(
                 (as_millisecs / MILLISECS_IN_ONE_DAY) as i32,
                 (as_millisecs % MILLISECS_IN_ONE_DAY) as i32,
             ))
         }
-        IntervalMode::Nano => {
+        NANOSECOND_MODE => {
             let as_nanosecs = delta_secs.num_nanoseconds().ok_or_else(|| {
                 DataFusionError::Execution(String::from(
                     "Can not compute timestamp differences with nanosecond precision",
@@ -885,50 +1011,83 @@ fn ts_sub_to_interval(
     }
 }
 
-/// This function creates the [`NaiveDateTime`] object corresponding to the
-/// given timestamp using the units (tick size) implied by argument `mode`.
-#[inline]
-fn with_timezone_to_naive_datetime(
-    ts: i64,
-    tz: &Option<String>,
-    mode: IntervalMode,
-) -> Result<NaiveDateTime> {
-    let datetime = if let IntervalMode::Milli = mode {
-        ticks_to_naive_datetime::<1_000_000>(ts)
-    } else {
-        ticks_to_naive_datetime::<1>(ts)
-    }?;
-
+/// This function parses the timezone from string to Tz.
+/// If it cannot parse or timezone field is [`None`], it returns [`None`].
+pub fn parse_timezones(tz: &Option<String>) -> Result<Option<Tz>> {
     if let Some(tz) = tz {
         let parsed_tz: Tz = FromStr::from_str(tz).map_err(|_| {
             DataFusionError::Execution("cannot parse given timezone".to_string())
         })?;
-        let offset = parsed_tz
-            .offset_from_local_datetime(&datetime)
-            .single()
-            .ok_or_else(|| {
-                DataFusionError::Execution(
-                    "error conversion result of timezone offset".to_string(),
-                )
-            })?;
-        return Ok(DateTime::<Tz>::from_local(datetime, offset).naive_utc());
+        Ok(Some(parsed_tz))
+    } else {
+        Ok(None)
     }
-    Ok(datetime)
 }
 
-/// This function creates the [`NaiveDateTime`] object corresponding to the
-/// given timestamp, whose tick size is specified by `UNIT_NANOS`.
-#[inline]
-fn ticks_to_naive_datetime<const UNIT_NANOS: i64>(ticks: i64) -> Result<NaiveDateTime> {
-    NaiveDateTime::from_timestamp_opt(
-        (ticks * UNIT_NANOS) / 1_000_000_000,
-        ((ticks * UNIT_NANOS) % 1_000_000_000) as u32,
-    )
-    .ok_or_else(|| {
-        DataFusionError::Execution(
-            "Can not convert given timestamp to a NaiveDateTime".to_string(),
-        )
-    })
+/// This function takes two timestamps with an optional timezone,
+/// and returns the duration between them. If one of the timestamps
+/// has a [`None`] timezone, the other one is also treated as having [`None`].
+pub fn calculate_naives<const TIME_MODE: bool>(
+    lhs_ts: i64,
+    parsed_lhs_tz: Option<Tz>,
+    rhs_ts: i64,
+    parsed_rhs_tz: Option<Tz>,
+) -> Result<(NaiveDateTime, NaiveDateTime)> {
+    let err = || {
+        DataFusionError::Execution(String::from(
+            "error while converting Int64 to DateTime in timestamp subtraction",
+        ))
+    };
+    match (parsed_lhs_tz, parsed_rhs_tz, TIME_MODE) {
+        (Some(lhs_tz), Some(rhs_tz), MILLISECOND_MODE) => {
+            let lhs = arrow_array::temporal_conversions::as_datetime_with_timezone::<
+                arrow_array::types::TimestampMillisecondType,
+            >(lhs_ts, rhs_tz)
+            .ok_or_else(err)?
+            .naive_local();
+            let rhs = arrow_array::temporal_conversions::as_datetime_with_timezone::<
+                arrow_array::types::TimestampMillisecondType,
+            >(rhs_ts, lhs_tz)
+            .ok_or_else(err)?
+            .naive_local();
+            Ok((lhs, rhs))
+        }
+        (Some(lhs_tz), Some(rhs_tz), NANOSECOND_MODE) => {
+            let lhs = arrow_array::temporal_conversions::as_datetime_with_timezone::<
+                arrow_array::types::TimestampNanosecondType,
+            >(lhs_ts, rhs_tz)
+            .ok_or_else(err)?
+            .naive_local();
+            let rhs = arrow_array::temporal_conversions::as_datetime_with_timezone::<
+                arrow_array::types::TimestampNanosecondType,
+            >(rhs_ts, lhs_tz)
+            .ok_or_else(err)?
+            .naive_local();
+            Ok((lhs, rhs))
+        }
+        (_, _, MILLISECOND_MODE) => {
+            let lhs = arrow_array::temporal_conversions::as_datetime::<
+                arrow_array::types::TimestampMillisecondType,
+            >(lhs_ts)
+            .ok_or_else(err)?;
+            let rhs = arrow_array::temporal_conversions::as_datetime::<
+                arrow_array::types::TimestampMillisecondType,
+            >(rhs_ts)
+            .ok_or_else(err)?;
+            Ok((lhs, rhs))
+        }
+        (_, _, NANOSECOND_MODE) => {
+            let lhs = arrow_array::temporal_conversions::as_datetime::<
+                arrow_array::types::TimestampNanosecondType,
+            >(lhs_ts)
+            .ok_or_else(err)?;
+            let rhs = arrow_array::temporal_conversions::as_datetime::<
+                arrow_array::types::TimestampNanosecondType,
+            >(rhs_ts)
+            .ok_or_else(err)?;
+            Ok((lhs, rhs))
+        }
+    }
 }
 
 #[inline]
@@ -951,10 +1110,36 @@ pub fn seconds_add(ts_s: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
 }
 
 #[inline]
+pub fn seconds_add_array<const INTERVAL_MODE: i8>(
+    ts_s: i64,
+    interval: i128,
+    sign: i32,
+) -> Result<i64> {
+    do_date_time_math_array::<INTERVAL_MODE>(ts_s, 0, interval, sign)
+        .map(|dt| dt.timestamp())
+}
+
+#[inline]
 pub fn milliseconds_add(ts_ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
     let secs = ts_ms / 1000;
     let nsecs = ((ts_ms % 1000) * 1_000_000) as u32;
     do_date_time_math(secs, nsecs, scalar, sign).map(|dt| dt.timestamp_millis())
+}
+
+#[inline]
+pub fn milliseconds_add_array<const INTERVAL_MODE: i8>(
+    ts_ms: i64,
+    interval: i128,
+    sign: i32,
+) -> Result<i64> {
+    let mut secs = ts_ms / 1000;
+    let mut nsecs = ((ts_ms % 1000) * 1_000_000) as i32;
+    if nsecs < 0 {
+        secs -= 1;
+        nsecs += 1_000_000_000;
+    }
+    do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs as u32, interval, sign)
+        .map(|dt| dt.timestamp_millis())
 }
 
 #[inline]
@@ -965,10 +1150,71 @@ pub fn microseconds_add(ts_us: i64, scalar: &ScalarValue, sign: i32) -> Result<i
 }
 
 #[inline]
+pub fn microseconds_add_array<const INTERVAL_MODE: i8>(
+    ts_us: i64,
+    interval: i128,
+    sign: i32,
+) -> Result<i64> {
+    let mut secs = ts_us / 1_000_000;
+    let mut nsecs = ((ts_us % 1_000_000) * 1000) as i32;
+    if nsecs < 0 {
+        secs -= 1;
+        nsecs += 1_000_000_000;
+    }
+    do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs as u32, interval, sign)
+        .map(|dt| dt.timestamp_nanos() / 1000)
+}
+
+#[inline]
 pub fn nanoseconds_add(ts_ns: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
     let secs = ts_ns / 1_000_000_000;
     let nsecs = (ts_ns % 1_000_000_000) as u32;
     do_date_time_math(secs, nsecs, scalar, sign).map(|dt| dt.timestamp_nanos())
+}
+
+#[inline]
+pub fn nanoseconds_add_array<const INTERVAL_MODE: i8>(
+    ts_ns: i64,
+    interval: i128,
+    sign: i32,
+) -> Result<i64> {
+    let mut secs = ts_ns / 1_000_000_000;
+    let mut nsecs = (ts_ns % 1_000_000_000) as i32;
+    if nsecs < 0 {
+        secs -= 1;
+        nsecs += 1_000_000_000;
+    }
+    do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs as u32, interval, sign)
+        .map(|dt| dt.timestamp_nanos())
+}
+
+#[inline]
+pub fn seconds_sub(ts_lhs: i64, ts_rhs: i64) -> i64 {
+    let diff_ms = (ts_lhs - ts_rhs) * 1000;
+    let days = (diff_ms / MILLISECS_IN_ONE_DAY) as i32;
+    let millis = (diff_ms % MILLISECS_IN_ONE_DAY) as i32;
+    IntervalDayTimeType::make_value(days, millis)
+}
+#[inline]
+pub fn milliseconds_sub(ts_lhs: i64, ts_rhs: i64) -> i64 {
+    let diff_ms = ts_lhs - ts_rhs;
+    let days = (diff_ms / MILLISECS_IN_ONE_DAY) as i32;
+    let millis = (diff_ms % MILLISECS_IN_ONE_DAY) as i32;
+    IntervalDayTimeType::make_value(days, millis)
+}
+#[inline]
+pub fn microseconds_sub(ts_lhs: i64, ts_rhs: i64) -> i128 {
+    let diff_ns = (ts_lhs - ts_rhs) * 1000;
+    let days = (diff_ns / NANOSECS_IN_ONE_DAY) as i32;
+    let nanos = diff_ns % NANOSECS_IN_ONE_DAY;
+    IntervalMonthDayNanoType::make_value(0, days, nanos)
+}
+#[inline]
+pub fn nanoseconds_sub(ts_lhs: i64, ts_rhs: i64) -> i128 {
+    let diff_ns = ts_lhs - ts_rhs;
+    let days = (diff_ns / NANOSECS_IN_ONE_DAY) as i32;
+    let nanos = diff_ns % NANOSECS_IN_ONE_DAY;
+    IntervalMonthDayNanoType::make_value(0, days, nanos)
 }
 
 #[inline]
@@ -986,6 +1232,21 @@ fn do_date_time_math(
     do_date_math(prior, scalar, sign)
 }
 
+#[inline]
+fn do_date_time_math_array<const INTERVAL_MODE: i8>(
+    secs: i64,
+    nsecs: u32,
+    interval: i128,
+    sign: i32,
+) -> Result<NaiveDateTime> {
+    let prior = NaiveDateTime::from_timestamp_opt(secs, nsecs).ok_or_else(|| {
+        DataFusionError::Internal(format!(
+            "Could not conert to NaiveDateTime: secs {secs} nsecs {nsecs}"
+        ))
+    })?;
+    do_date_math_array::<_, INTERVAL_MODE>(prior, interval, sign)
+}
+
 fn do_date_math<D>(prior: D, scalar: &ScalarValue, sign: i32) -> Result<D>
 where
     D: Datelike + Add<Duration, Output = D>,
@@ -997,6 +1258,26 @@ where
         other => Err(DataFusionError::Execution(format!(
             "DateIntervalExpr does not support non-interval type {other:?}"
         )))?,
+    })
+}
+
+fn do_date_math_array<D, const INTERVAL_MODE: i8>(
+    prior: D,
+    interval: i128,
+    sign: i32,
+) -> Result<D>
+where
+    D: Datelike + Add<Duration, Output = D>,
+{
+    Ok(match INTERVAL_MODE {
+        YM_MODE => shift_months(prior, interval as i32 * sign),
+        DT_MODE => add_day_time(prior, interval as i64, sign),
+        MDN_MODE => add_m_d_nano(prior, interval, sign),
+        _ => {
+            return Err(DataFusionError::Internal(
+                "Undefined interval mode for interval calculations".to_string(),
+            ));
+        }
     })
 }
 
@@ -1424,6 +1705,28 @@ impl ScalarValue {
         })
     }
 
+    /// Create an one value in the given type.
+    pub fn new_one(datatype: &DataType) -> Result<ScalarValue> {
+        assert!(datatype.is_primitive());
+        Ok(match datatype {
+            DataType::Int8 => ScalarValue::Int8(Some(1)),
+            DataType::Int16 => ScalarValue::Int16(Some(1)),
+            DataType::Int32 => ScalarValue::Int32(Some(1)),
+            DataType::Int64 => ScalarValue::Int64(Some(1)),
+            DataType::UInt8 => ScalarValue::UInt8(Some(1)),
+            DataType::UInt16 => ScalarValue::UInt16(Some(1)),
+            DataType::UInt32 => ScalarValue::UInt32(Some(1)),
+            DataType::UInt64 => ScalarValue::UInt64(Some(1)),
+            DataType::Float32 => ScalarValue::Float32(Some(1.0)),
+            DataType::Float64 => ScalarValue::Float64(Some(1.0)),
+            _ => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Can't create an one scalar from data_type \"{datatype:?}\""
+                )));
+            }
+        })
+    }
+
     /// Create a negative one value in the given type.
     pub fn new_negative_one(datatype: &DataType) -> Result<ScalarValue> {
         assert!(datatype.is_primitive());
@@ -1434,6 +1737,27 @@ impl ScalarValue {
             DataType::Int64 | DataType::UInt64 => ScalarValue::Int64(Some(-1)),
             DataType::Float32 => ScalarValue::Float32(Some(-1.0)),
             DataType::Float64 => ScalarValue::Float64(Some(-1.0)),
+            _ => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Can't create a negative one scalar from data_type \"{datatype:?}\""
+                )));
+            }
+        })
+    }
+
+    pub fn new_ten(datatype: &DataType) -> Result<ScalarValue> {
+        assert!(datatype.is_primitive());
+        Ok(match datatype {
+            DataType::Int8 => ScalarValue::Int8(Some(10)),
+            DataType::Int16 => ScalarValue::Int16(Some(10)),
+            DataType::Int32 => ScalarValue::Int32(Some(10)),
+            DataType::Int64 => ScalarValue::Int64(Some(10)),
+            DataType::UInt8 => ScalarValue::UInt8(Some(10)),
+            DataType::UInt16 => ScalarValue::UInt16(Some(10)),
+            DataType::UInt32 => ScalarValue::UInt32(Some(10)),
+            DataType::UInt64 => ScalarValue::UInt64(Some(10)),
+            DataType::Float32 => ScalarValue::Float32(Some(10.0)),
+            DataType::Float64 => ScalarValue::Float64(Some(10.0)),
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Can't create a negative one scalar from data_type \"{datatype:?}\""
@@ -1874,6 +2198,9 @@ impl ScalarValue {
             DataType::Interval(IntervalUnit::YearMonth) => {
                 build_array_primitive!(IntervalYearMonthArray, IntervalYearMonth)
             }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                build_array_primitive!(IntervalMonthDayNanoArray, IntervalMonthDayNano)
+            }
             DataType::List(fields) if fields.data_type() == &DataType::Int8 => {
                 build_array_list_primitive!(Int8Type, Int8, i8)
             }
@@ -2023,7 +2350,6 @@ impl ScalarValue {
             | DataType::Time64(TimeUnit::Millisecond)
             | DataType::Duration(_)
             | DataType::FixedSizeList(_, _)
-            | DataType::Interval(_)
             | DataType::LargeList(_)
             | DataType::Union(_, _, _)
             | DataType::Map(_, _)
@@ -2563,6 +2889,20 @@ impl ScalarValue {
                         true => None,
                         false => Some(array.value(index).into()),
                     },
+                )
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                typed_cast!(array, index, IntervalDayTimeArray, IntervalDayTime)
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                typed_cast!(array, index, IntervalYearMonthArray, IntervalYearMonth)
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                typed_cast!(
+                    array,
+                    index,
+                    IntervalMonthDayNanoArray,
+                    IntervalMonthDayNano
                 )
             }
             other => {
@@ -3436,10 +3776,6 @@ mod tests {
         assert_eq!(
             ScalarValue::Decimal128(None, 10, 2),
             ScalarValue::try_from_array(&array, 3).unwrap()
-        );
-        assert_eq!(
-            ScalarValue::Decimal128(None, 10, 2),
-            ScalarValue::try_from_array(&array, 4).unwrap()
         );
 
         Ok(())
@@ -5307,6 +5643,30 @@ mod tests {
                     Some("America/Los_Angeles".to_string()),
                 ),
                 ScalarValue::new_interval_dt(0, 0),
+            ),
+            // 11th test case, negative results
+            (
+                ScalarValue::TimestampMillisecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 3, 17)
+                            .unwrap()
+                            .and_hms_milli_opt(4, 10, 0, 0)
+                            .unwrap()
+                            .timestamp_millis(),
+                    ),
+                    None,
+                ),
+                ScalarValue::TimestampMillisecond(
+                    Some(
+                        NaiveDate::from_ymd_opt(2023, 3, 17)
+                            .unwrap()
+                            .and_hms_milli_opt(4, 10, 0, 1)
+                            .unwrap()
+                            .timestamp_millis(),
+                    ),
+                    None,
+                ),
+                ScalarValue::new_interval_dt(0, -sign),
             ),
         ]
     }

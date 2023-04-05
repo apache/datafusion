@@ -32,11 +32,11 @@ mod physical_expr;
 pub mod planner;
 #[cfg(feature = "regex_expressions")]
 pub mod regex_expressions;
-pub mod rewrite;
 mod scalar_function;
 mod sort_expr;
 pub mod string_expressions;
 pub mod struct_expressions;
+pub mod tree_node;
 pub mod type_coercion;
 pub mod udf;
 #[cfg(feature = "unicode_expressions")]
@@ -53,7 +53,9 @@ pub use equivalence::EquivalentClass;
 pub use physical_expr::{AnalysisContext, ExprBoundaries, PhysicalExpr, PhysicalExprRef};
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
-pub use sort_expr::PhysicalSortExpr;
+pub use sort_expr::{
+    make_sort_requirements_from_exprs, PhysicalSortExpr, PhysicalSortRequirement,
+};
 pub use utils::{
     expr_list_eq_any_order, expr_list_eq_strict_order,
     normalize_expr_with_equivalence_properties, normalize_out_expr_with_alias_schema,

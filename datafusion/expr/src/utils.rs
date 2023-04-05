@@ -18,10 +18,6 @@
 //! Expression utilities
 
 use crate::expr::{Sort, WindowFunction};
-use crate::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
-use crate::expr_visitor::{
-    inspect_expr_pre, ExprVisitable, ExpressionVisitor, Recursion,
-};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, Distinct, Extension, Filter, Join,
@@ -33,6 +29,9 @@ use crate::{
     LogicalPlanBuilder, Operator, TableScan, TryCast,
 };
 use arrow::datatypes::{DataType, TimeUnit};
+use datafusion_common::tree_node::{
+    RewriteRecursion, TreeNode, TreeNodeRewriter, VisitRecursion,
+};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
     TableReference,
@@ -113,7 +112,7 @@ fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>, String> {
 fn check_grouping_set_size_limit(size: usize) -> Result<()> {
     let max_grouping_set_size = 65535;
     if size > max_grouping_set_size {
-        return Err(DataFusionError::Plan(format!("The number of group_expression in grouping_set exceeds the maximum limit {}, found {}", max_grouping_set_size, size)));
+        return Err(DataFusionError::Plan(format!("The number of group_expression in grouping_set exceeds the maximum limit {max_grouping_set_size}, found {size}")));
     }
 
     Ok(())
@@ -123,7 +122,7 @@ fn check_grouping_set_size_limit(size: usize) -> Result<()> {
 fn check_grouping_sets_size_limit(size: usize) -> Result<()> {
     let max_grouping_sets_size = 4096;
     if size > max_grouping_sets_size {
-        return Err(DataFusionError::Plan(format!("The number of grouping_set in grouping_sets exceeds the maximum limit {}, found {}", max_grouping_sets_size, size)));
+        return Err(DataFusionError::Plan(format!("The number of grouping_set in grouping_sets exceeds the maximum limit {max_grouping_sets_size}, found {size}")));
     }
 
     Ok(())
@@ -592,50 +591,43 @@ fn find_exprs_in_expr<F>(expr: &Expr, test_fn: &F) -> Vec<Expr>
 where
     F: Fn(&Expr) -> bool,
 {
-    let Finder { exprs, .. } = expr
-        .accept(Finder::new(test_fn))
-        // pre_visit always returns OK, so this will always too
-        .expect("no way to return error during recursion");
+    let mut exprs = vec![];
+    expr.apply(&mut |expr| {
+        if test_fn(expr) {
+            if !(exprs.contains(expr)) {
+                exprs.push(expr.clone())
+            }
+            // stop recursing down this expr once we find a match
+            return Ok(VisitRecursion::Skip);
+        }
+
+        Ok(VisitRecursion::Continue)
+    })
+    // pre_visit always returns OK, so this will always too
+    .expect("no way to return error during recursion");
     exprs
 }
 
-// Visitor that find expressions that match a particular predicate
-struct Finder<'a, F>
+/// Recursively inspect an [`Expr`] and all its children.
+pub fn inspect_expr_pre<F, E>(expr: &Expr, mut f: F) -> Result<(), E>
 where
-    F: Fn(&Expr) -> bool,
+    F: FnMut(&Expr) -> Result<(), E>,
 {
-    test_fn: &'a F,
-    exprs: Vec<Expr>,
-}
-
-impl<'a, F> Finder<'a, F>
-where
-    F: Fn(&Expr) -> bool,
-{
-    /// Create a new finder with the `test_fn`
-    fn new(test_fn: &'a F) -> Self {
-        Self {
-            test_fn,
-            exprs: Vec::new(),
+    let mut err = Ok(());
+    expr.apply(&mut |expr| {
+        if let Err(e) = f(expr) {
+            // save the error for later (it may not be a DataFusionError
+            err = Err(e);
+            Ok(VisitRecursion::Stop)
+        } else {
+            // keep going
+            Ok(VisitRecursion::Continue)
         }
-    }
-}
+    })
+    // The closure always returns OK, so this will always too
+    .expect("no way to return error during recursion");
 
-impl<'a, F> ExpressionVisitor for Finder<'a, F>
-where
-    F: Fn(&Expr) -> bool,
-{
-    fn pre_visit(mut self, expr: &Expr) -> Result<Recursion<Self>> {
-        if (self.test_fn)(expr) {
-            if !(self.exprs.contains(expr)) {
-                self.exprs.push(expr.clone())
-            }
-            // stop recursing down this expr once we find a match
-            return Ok(Recursion::Stop(self));
-        }
-
-        Ok(Recursion::Continue(self))
-    }
+    err
 }
 
 /// Returns a new logical plan based on the original one with inputs
@@ -706,7 +698,9 @@ pub fn from_plan(
 
             struct RemoveAliases {}
 
-            impl ExprRewriter for RemoveAliases {
+            impl TreeNodeRewriter for RemoveAliases {
+                type N = Expr;
+
                 fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
                     match expr {
                         Expr::Exists { .. }
@@ -849,6 +843,7 @@ pub fn from_plan(
             ..
         }) => Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
             input: Arc::new(inputs[0].clone()),
+            primary_key: vec![],
             name: name.clone(),
             if_not_exists: *if_not_exists,
             or_replace: *or_replace,
@@ -919,7 +914,7 @@ pub fn from_plan(
         | LogicalPlan::CreateExternalTable(_)
         | LogicalPlan::DropTable(_)
         | LogicalPlan::DropView(_)
-        | LogicalPlan::SetVariable(_)
+        | LogicalPlan::Statement(_)
         | LogicalPlan::CreateCatalogSchema(_)
         | LogicalPlan::CreateCatalog(_) => {
             // All of these plan types have no inputs / exprs so should not be called
@@ -1080,8 +1075,7 @@ pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
         }
         Ok(()) as Result<()>
     })
-    // As the `ExpressionVisitor` impl above always returns Ok, this
-    // "can't" error
+    // As the closure always returns Ok, this "can't" error
     .expect("Unexpected error");
     exprs
 }

@@ -24,10 +24,9 @@ use std::usize;
 
 use arrow::datatypes::SchemaRef;
 
-use datafusion_common::DataFusionError;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::Interval;
-use datafusion_physical_expr::rewrite::TreeNodeRewritable;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
@@ -77,19 +76,21 @@ pub fn map_origin_col_to_filter_col(
     Ok(col_to_col_map)
 }
 
-/// This function analyzes [PhysicalSortExpr] graphs with respect to monotonicity
+/// This function analyzes [`PhysicalSortExpr`] graphs with respect to monotonicity
 /// (sorting) properties. This is necessary since monotonically increasing and/or
 /// decreasing expressions are required when using join filter expressions for
 /// data pruning purposes.
 ///
 /// The method works as follows:
-/// 1. Maps the original columns to the filter columns using the `map_origin_col_to_filter_col` function.
-/// 2. Collects all columns in the sort expression using the `PhysicalExprColumnCollector` visitor.
-/// 3. Checks if all columns are included in the `column_mapping_information` map.
-/// 4. If all columns are included, the sort expression is converted into a filter expression using the `transform_up` and `convert_filter_columns` functions.
-/// 5. Searches the converted filter expression in the filter expression using the `check_filter_expr_contains_sort_information`.
-/// 6. If an exact match is encountered, returns the converted filter expression as `Some(Arc<dyn PhysicalExpr>)`.
-/// 7. If all columns are not included or the exact match is not encountered, returns `None`.
+/// 1. Maps the original columns to the filter columns using the [`map_origin_col_to_filter_col`] function.
+/// 2. Collects all columns in the sort expression using the [`collect_columns`] function.
+/// 3. Checks if all columns are included in the map we obtain in the first step.
+/// 4. If all columns are included, the sort expression is converted into a filter expression using
+///    the [`convert_filter_columns`] function.
+/// 5. Searches for the converted filter expression in the filter expression using the
+///    [`check_filter_expr_contains_sort_information`] function.
+/// 6. If an exact match is found, returns the converted filter expression as [`Some(Arc<dyn PhysicalExpr>)`].
+/// 7. If all columns are not included or an exact match is not found, returns [`None`].
 ///
 /// Examples:
 /// Consider the filter expression "a + b > c + 10 AND a + b < c + 100".
@@ -113,8 +114,14 @@ pub fn convert_sort_expr_with_filter_schema(
     if all_columns_are_included {
         // Since we are sure that one to one column mapping includes all columns, we convert
         // the sort expression into a filter expression.
-        let converted_filter_expr =
-            expr.transform_up(&|p| convert_filter_columns(p, &column_map))?;
+        let converted_filter_expr = expr.transform_up(&|p| {
+            convert_filter_columns(p.as_ref(), &column_map).map(|transformed| {
+                match transformed {
+                    Some(transformed) => Transformed::Yes(transformed),
+                    None => Transformed::No(p),
+                }
+            })
+        })?;
         // Search the converted `PhysicalExpr` in filter expression; if an exact
         // match is found, use this sorted expression in graph traversals.
         if check_filter_expr_contains_sort_information(
@@ -129,34 +136,27 @@ pub fn convert_sort_expr_with_filter_schema(
 
 /// This function is used to build the filter expression based on the sort order of input columns.
 ///
-/// It first calls the [convert_sort_expr_with_filter_schema] method to determine if the sort
-/// order of columns can be used in the filter expression. If it returns a [Some] value, the
-/// method wraps the result in a [SortedFilterExpr] instance with the original sort expression and
+/// It first calls the [`convert_sort_expr_with_filter_schema`] method to determine if the sort
+/// order of columns can be used in the filter expression. If it returns a [`Some`] value, the
+/// method wraps the result in a [`SortedFilterExpr`] instance with the original sort expression and
 /// the converted filter expression. Otherwise, this function returns an error.
 ///
-/// The [SortedFilterExpr] instance contains information about the sort order of columns that can
+/// The `SortedFilterExpr` instance contains information about the sort order of columns that can
 /// be used in the filter expression, which can be used to optimize the query execution process.
 pub fn build_filter_input_order(
     side: JoinSide,
     filter: &JoinFilter,
     schema: &SchemaRef,
     order: &PhysicalSortExpr,
-) -> Result<SortedFilterExpr> {
-    if let Some(expr) =
-        convert_sort_expr_with_filter_schema(&side, filter, schema, order)?
-    {
-        Ok(SortedFilterExpr::new(order.clone(), expr))
-    } else {
-        Err(DataFusionError::Plan(format!(
-            "The {side} side of the join does not have an expression sorted."
-        )))
-    }
+) -> Result<Option<SortedFilterExpr>> {
+    let opt_expr = convert_sort_expr_with_filter_schema(&side, filter, schema, order)?;
+    Ok(opt_expr.map(|filter_expr| SortedFilterExpr::new(order.clone(), filter_expr)))
 }
 
 /// Convert a physical expression into a filter expression using the given
 /// column mapping information.
 fn convert_filter_columns(
-    input: Arc<dyn PhysicalExpr>,
+    input: &dyn PhysicalExpr,
     column_map: &HashMap<Column, Column>,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     // Attempt to downcast the input expression to a Column type.
@@ -165,7 +165,7 @@ fn convert_filter_columns(
         column_map.get(col).map(|c| Arc::new(c.clone()) as _)
     } else {
         // If the downcast fails, return the input expression as is.
-        Some(input)
+        None
     })
 }
 
@@ -358,7 +358,8 @@ pub mod tests {
             &filter,
             &Arc::new(left_child_schema),
             &left_child_sort_expr,
-        )?;
+        )?
+        .unwrap();
         assert!(left_child_sort_expr.eq(left_sort_filter_expr.origin_sorted_expr()));
 
         let right_sort_filter_expr = build_filter_input_order(
@@ -366,7 +367,8 @@ pub mod tests {
             &filter,
             &Arc::new(right_child_schema),
             &right_child_sort_expr,
-        )?;
+        )?
+        .unwrap();
         assert!(right_child_sort_expr.eq(right_sort_filter_expr.origin_sorted_expr()));
 
         // Assert that adjusted (left) filter expression matches with `left_child_sort_expr`:
@@ -489,8 +491,8 @@ pub mod tests {
                 expr: col("la1", left_schema.as_ref())?,
                 options: SortOptions::default(),
             }
-        )
-        .is_ok());
+        )?
+        .is_some());
         assert!(build_filter_input_order(
             JoinSide::Left,
             &filter,
@@ -499,8 +501,8 @@ pub mod tests {
                 expr: col("lt1", left_schema.as_ref())?,
                 options: SortOptions::default(),
             }
-        )
-        .is_err());
+        )?
+        .is_none());
         assert!(build_filter_input_order(
             JoinSide::Right,
             &filter,
@@ -509,8 +511,8 @@ pub mod tests {
                 expr: col("ra1", right_schema.as_ref())?,
                 options: SortOptions::default(),
             }
-        )
-        .is_ok());
+        )?
+        .is_some());
         assert!(build_filter_input_order(
             JoinSide::Right,
             &filter,
@@ -519,8 +521,8 @@ pub mod tests {
                 expr: col("rb1", right_schema.as_ref())?,
                 options: SortOptions::default(),
             }
-        )
-        .is_err());
+        )?
+        .is_none());
 
         Ok(())
     }

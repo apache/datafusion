@@ -150,11 +150,11 @@ async fn main() -> Result<()> {
             let compression = match opt.compression.as_str() {
                 "none" => Compression::UNCOMPRESSED,
                 "snappy" => Compression::SNAPPY,
-                "brotli" => Compression::BROTLI,
-                "gzip" => Compression::GZIP,
+                "brotli" => Compression::BROTLI(Default::default()),
+                "gzip" => Compression::GZIP(Default::default()),
                 "lz4" => Compression::LZ4,
                 "lz0" => Compression::LZO,
-                "zstd" => Compression::ZSTD,
+                "zstd" => Compression::ZSTD(Default::default()),
                 other => {
                     return Err(DataFusionError::NotImplemented(format!(
                         "Invalid compression format: {other}"
@@ -404,6 +404,7 @@ struct QueryResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::config::ConfigOptions;
     use datafusion::sql::TableReference;
     use std::fs::File;
     use std::io::{BufRead, BufReader};
@@ -525,13 +526,24 @@ mod tests {
         let mut actual = String::new();
         let sql = get_query_sql(query)?;
         for sql in &sql {
-            let df = ctx.sql(sql.as_str()).await?;
-            let plan = df.into_optimized_plan()?;
-            if !actual.is_empty() {
-                actual += "\n";
+            // handle special q15 which contains "create view" sql statement
+            if sql.starts_with("select") {
+                let explain = "explain ".to_string() + sql;
+                let result_batch =
+                    execute_query(&ctx, explain.as_str(), false, false).await?;
+                if !actual.is_empty() {
+                    actual += "\n";
+                }
+                use std::fmt::Write as _;
+                write!(actual, "{}", pretty::pretty_format_batches(&result_batch)?)
+                    .unwrap();
+                // write to file for debugging
+                // use std::io::Write;
+                // let mut file = File::create(format!("expected-plans/q{}.txt", query))?;
+                // file.write_all(actual.as_bytes())?;
+            } else {
+                execute_query(&ctx, sql.as_str(), false, false).await?;
             }
-            use std::fmt::Write as _;
-            write!(actual, "{}", plan.display_indent()).unwrap();
         }
 
         let possibilities = vec![
@@ -556,7 +568,10 @@ mod tests {
     }
 
     fn create_context() -> Result<SessionContext> {
-        let ctx = SessionContext::new();
+        let mut config = ConfigOptions::new();
+        // Ensure that the generated physical plans are the same in different machines.
+        config.execution.target_partitions = 2;
+        let ctx = SessionContext::with_config(config.into());
         for table in TPCH_TABLES {
             let table = table.to_string();
             let schema = get_tpch_table_schema(&table);
@@ -748,7 +763,7 @@ mod ci {
         let queries = get_query_sql(query)?;
         for query in queries {
             let plan = ctx.sql(&query).await?;
-            let plan = plan.to_logical_plan()?;
+            let plan = plan.into_optimized_plan()?;
             let bytes = logical_plan_to_bytes(&plan)?;
             let plan2 = logical_plan_from_bytes(&bytes, &ctx)?;
             let plan_formatted = format!("{}", plan.display_indent());
@@ -1091,12 +1106,25 @@ mod ci {
             let actual_row = &actual_vec[i];
             assert_eq!(expected_row.len(), actual_row.len());
 
-            for j in 0..expected.len() {
+            let tolerance = 0.1;
+            for j in 0..expected_row.len() {
                 match (&expected_row[j], &actual_row[j]) {
                     (ScalarValue::Float64(Some(l)), ScalarValue::Float64(Some(r))) => {
                         // allow for rounding errors until we move to decimal types
-                        let tolerance = 0.1;
                         if (l - r).abs() > tolerance {
+                            panic!(
+                                "Expected: {}; Actual: {}; Tolerance: {}",
+                                l, r, tolerance
+                            )
+                        }
+                    }
+                    (
+                        ScalarValue::Decimal128(Some(l), _, s),
+                        ScalarValue::Decimal128(Some(r), _, _),
+                    ) => {
+                        if ((l - r) as f64 / 10_i32.pow(*s as u32) as f64).abs()
+                            > tolerance
+                        {
                             panic!(
                                 "Expected: {}; Actual: {}; Tolerance: {}",
                                 l, r, tolerance

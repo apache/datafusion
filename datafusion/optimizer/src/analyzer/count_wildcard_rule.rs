@@ -16,13 +16,13 @@
 // under the License.
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::Result;
 use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::{aggregate_function, lit, Aggregate, Expr, LogicalPlan, Window};
 
 use crate::analyzer::AnalyzerRule;
-use crate::rewrite::TreeNodeRewritable;
 
 /// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
 /// Resolve issue: https://github.com/apache/arrow-datafusion/issues/5473.
@@ -35,8 +35,8 @@ impl CountWildcardRule {
 }
 
 impl AnalyzerRule for CountWildcardRule {
-    fn analyze(&self, plan: &LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
-        plan.clone().transform_down(&analyze_internal)
+    fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
+        plan.transform_down(&analyze_internal)
     }
 
     fn name(&self) -> &str {
@@ -44,11 +44,11 @@ impl AnalyzerRule for CountWildcardRule {
     }
 }
 
-fn analyze_internal(plan: LogicalPlan) -> Result<Option<LogicalPlan>> {
+fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     match plan {
         LogicalPlan::Window(window) => {
             let window_expr = handle_wildcard(&window.window_expr);
-            Ok(Some(LogicalPlan::Window(Window {
+            Ok(Transformed::Yes(LogicalPlan::Window(Window {
                 input: window.input.clone(),
                 window_expr,
                 schema: window.schema,
@@ -56,7 +56,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Option<LogicalPlan>> {
         }
         LogicalPlan::Aggregate(agg) => {
             let aggr_expr = handle_wildcard(&agg.aggr_expr);
-            Ok(Some(LogicalPlan::Aggregate(
+            Ok(Transformed::Yes(LogicalPlan::Aggregate(
                 Aggregate::try_new_with_schema(
                     agg.input.clone(),
                     agg.group_expr.clone(),
@@ -65,7 +65,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Option<LogicalPlan>> {
                 )?,
             )))
         }
-        _ => Ok(None),
+        _ => Ok(Transformed::No(plan)),
     }
 }
 

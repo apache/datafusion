@@ -29,6 +29,7 @@ pub mod scalar;
 pub mod stats;
 mod table_reference;
 pub mod test_util;
+pub mod tree_node;
 pub mod utils;
 
 use arrow::compute::SortOptions;
@@ -38,7 +39,6 @@ pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
     SharedResult,
 };
-pub use parsers::parse_interval;
 pub use scalar::{ScalarType, ScalarValue};
 pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{OwnedTableReference, ResolvedTableReference, TableReference};

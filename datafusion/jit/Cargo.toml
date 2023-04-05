@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-jit"
 description = "Just In Time (JIT) compilation support for DataFusion query engine"
-keywords = [ "arrow", "query", "sql" ]
+keywords = ["arrow", "query", "sql"]
 version = { workspace = true }
 edition = { workspace = true }
 readme = { workspace = true }
@@ -36,12 +36,12 @@ path = "src/lib.rs"
 jit = []
 
 [dependencies]
-arrow = { workspace = true, default-features = false }
+arrow = { workspace = true }
 cranelift = "0.89.0"
 cranelift-jit = "0.89.0"
 cranelift-module = "0.89.0"
 cranelift-native = "0.89.0"
-datafusion-common = { path = "../common", version = "21.0.0", features = ["jit"] }
-datafusion-expr = { path = "../expr", version = "21.0.0" }
+datafusion-common = { path = "../common", version = "21.1.0", features = ["jit"] }
+datafusion-expr = { path = "../expr", version = "21.1.0" }
 
 parking_lot = "0.12"

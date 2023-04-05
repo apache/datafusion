@@ -25,9 +25,9 @@ use arrow::datatypes::{
     DataType, TimeUnit, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
+use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, Cast, TryCast};
-use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, Operator,
@@ -122,7 +122,9 @@ struct UnwrapCastExprRewriter {
     schema: DFSchemaRef,
 }
 
-impl ExprRewriter for UnwrapCastExprRewriter {
+impl TreeNodeRewriter for UnwrapCastExprRewriter {
+    type N = Expr;
+
     fn pre_visit(&mut self, _expr: &Expr) -> Result<RewriteRecursion> {
         Ok(RewriteRecursion::Continue)
     }
@@ -482,8 +484,8 @@ mod tests {
     use crate::unwrap_cast_in_comparison::UnwrapCastExprRewriter;
     use arrow::compute::{cast_with_options, CastOptions};
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::tree_node::TreeNode;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, ScalarValue};
-    use datafusion_expr::expr_rewriter::ExprRewritable;
     use datafusion_expr::{cast, col, in_list, lit, try_cast, Expr};
     use std::collections::HashMap;
     use std::sync::Arc;

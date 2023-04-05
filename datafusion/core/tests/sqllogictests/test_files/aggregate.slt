@@ -758,9 +758,9 @@ NULL NULL NULL 3833.525
 
 # csv_query_groupingsets_avg
 query TIIR
-SELECT c1, c2, c3, AVG(c4) 
-FROM aggregate_test_100_by_sql 
-WHERE c1 IN ('a', 'b', NULL) 
+SELECT c1, c2, c3, AVG(c4)
+FROM aggregate_test_100_by_sql
+WHERE c1 IN ('a', 'b', NULL)
 GROUP BY GROUPING SETS ((c1), (c1,c2), (c1,c2,c3))
 ORDER BY c1, c2, c3
 ----
@@ -818,9 +818,9 @@ b NULL NULL 7732.315789473684
 
 # csv_query_singlecol_with_rollup_avg
 query TIIR
-SELECT c1, c2, c3, AVG(c4) 
-FROM aggregate_test_100_by_sql 
-WHERE c1 IN ('a', 'b', NULL) 
+SELECT c1, c2, c3, AVG(c4)
+FROM aggregate_test_100_by_sql
+WHERE c1 IN ('a', 'b', NULL)
 GROUP BY c1, ROLLUP (c2, c3)
 ORDER BY c1, c2, c3
 ----
@@ -1387,7 +1387,7 @@ as values
  ('2018-11-13T17:11:10.011375885995', 'Row 0'),
  ('2011-12-13T11:13:10.12345', 'Row 1'),
  (null, 'Row 2'),
- ('2021-1-1T05:11:10.432', 'Row 3');
+ ('2021-01-01T05:11:10.432', 'Row 3');
 
 
 statement ok
@@ -1524,3 +1524,17 @@ NULL
 
 query error DataFusion error: Execution error: aggregate function needs at least one non-null element
 select approx_median(a) from (select 1 as a where 1=0);
+
+
+# aggregate_decimal_sum
+query RT
+select sum(c1), arrow_typeof(sum(c1)) from d_table;
+----
+100 Decimal128(20, 3)
+
+
+# aggregate_decimal_avg
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from d_table
+----
+5 Decimal128(14, 7)
