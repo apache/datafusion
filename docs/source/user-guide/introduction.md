@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Introduction
+# Features, and Usecases
 
 DataFusion is a very fast, extensible query engine for building
 high-quality data-centric systems in [Rust](http://rustlang.org),

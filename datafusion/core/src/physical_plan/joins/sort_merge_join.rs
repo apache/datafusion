@@ -35,6 +35,9 @@ use arrow::compute::{concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
+use datafusion_physical_expr::{
+    make_sort_requirements_from_exprs, PhysicalSortRequirement,
+};
 use futures::{Stream, StreamExt};
 
 use crate::error::DataFusionError;
@@ -55,9 +58,6 @@ use crate::physical_plan::{
 };
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_physical_expr::{
-    make_sort_requirements_from_exprs, PhysicalSortRequirement,
-};
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -247,6 +247,17 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.output_ordering.as_deref()
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        match self.join_type {
+            JoinType::Inner => vec![true, true],
+            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => vec![true, false],
+            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+                vec![false, true]
+            }
+            _ => vec![false, false],
+        }
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {

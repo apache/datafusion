@@ -31,7 +31,9 @@ use crate::{
         optimizer::PhysicalOptimizerRule,
     },
 };
-use datafusion_expr::{DescribeTable, DmlStatement, StringifiedPlan, WriteOp};
+use datafusion_expr::{
+    logical_plan::Statement, DescribeTable, DmlStatement, StringifiedPlan, WriteOp,
+};
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
@@ -344,7 +346,15 @@ impl SessionContext {
                 input,
                 if_not_exists,
                 or_replace,
+                primary_key,
             }) => {
+                if !primary_key.is_empty() {
+                    Err(DataFusionError::Execution(
+                        "Primary keys on MemoryTables are not currently supported!"
+                            .to_string(),
+                    ))?;
+                }
+
                 let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
                 let table = self.table(&name).await;
 
@@ -436,9 +446,11 @@ impl SessionContext {
                 }
             }
 
-            LogicalPlan::SetVariable(SetVariable {
-                variable, value, ..
-            }) => {
+            LogicalPlan::Statement(Statement::SetVariable(SetVariable {
+                variable,
+                value,
+                ..
+            })) => {
                 let mut state = self.state.write();
                 state.config.options_mut().set(&variable, &value)?;
                 drop(state);

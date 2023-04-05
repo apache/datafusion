@@ -235,8 +235,7 @@ pub fn temporal_add_sub_coercion(
         // if two date/timestamp are being added/subtracted, return an error indicating that the operation is not supported
         (lhs, rhs, _) if (is_date(lhs) || is_timestamp(lhs)) && (is_date(rhs) || is_timestamp(rhs)) => {
             Err(DataFusionError::Plan(format!(
-                "{:?} {:?} is an unsupported operation. addition/subtraction on dates/timestamps only supported with interval types",
-                lhs_type, rhs_type
+                "{lhs_type:?} {rhs_type:?} is an unsupported operation. addition/subtraction on dates/timestamps only supported with interval types"
             )))
         }
         // return None if no coercion is possible

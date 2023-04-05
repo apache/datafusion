@@ -70,13 +70,15 @@ pub use logical_plan::{
     builder::{
         build_join_schema, union, wrap_projection_for_join_if_necessary, UNNAMED_TABLE,
     },
-    Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
+    Aggregate, Analyze, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
     CreateMemoryTable, CreateView, CrossJoin, DescribeTable, Distinct, DmlStatement,
     DropTable, DropView, EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint,
-    JoinType, Limit, LogicalPlan, LogicalPlanBuilder, Partitioning, PlanType, Projection,
-    Repartition, SetVariable, Sort, StringifiedPlan, Subquery, SubqueryAlias, TableScan,
-    ToStringifiedPlan, Union, Unnest, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
-    Values, Window, WriteOp,
+    JoinType, Limit, LogicalPlan, LogicalPlanBuilder, Partitioning, PlanType, Prepare,
+    Projection, Repartition, SetVariable, Sort, Statement, StringifiedPlan, Subquery,
+    SubqueryAlias, TableScan, ToStringifiedPlan, TransactionAccessMode,
+    TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
+    Union, Unnest, UserDefinedLogicalNode, UserDefinedLogicalNodeCore, Values, Window,
+    WriteOp,
 };
 pub use nullif::SUPPORTED_NULLIF_TYPES;
 pub use operator::Operator;

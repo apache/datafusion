@@ -21,6 +21,7 @@ use crate::expr::{
 };
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::binary_operator_data_type;
+use crate::type_coercion::other::get_coerce_type_for_case_expression;
 use crate::{aggregate_function, function, window_function};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
@@ -68,7 +69,26 @@ impl ExprSchemable for Expr {
             Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l) => Ok(l.get_datatype()),
-            Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
+            Expr::Case(case) => {
+                // https://github.com/apache/arrow-datafusion/issues/5821
+                // when #5681 will be fixed, this code can be reverted to:
+                // case.when_then_expr[0].1.get_type(schema)
+                let then_types = case
+                    .when_then_expr
+                    .iter()
+                    .map(|when_then| when_then.1.get_type(schema))
+                    .collect::<Result<Vec<_>>>()?;
+                let else_type = match &case.else_expr {
+                    None => Ok(None),
+                    Some(expr) => expr.get_type(schema).map(Some),
+                }?;
+                get_coerce_type_for_case_expression(&then_types, else_type.as_ref())
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(String::from(
+                            "Cannot infer type for CASE statement",
+                        ))
+                    })
+            }
             Expr::Cast(Cast { data_type, .. })
             | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
             Expr::ScalarUDF { fun, args } => {
