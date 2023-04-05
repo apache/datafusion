@@ -106,8 +106,10 @@ const BATCH_SIZE: usize = 1024;
 /// Total number of input rows to generate
 const INPUT_SIZE: u64 = 100000;
 
+type PartitionedBatches = Vec<Vec<RecordBatch>>;
+
 fn criterion_benchmark(c: &mut Criterion) {
-    let cases: Vec<(&str, &dyn Fn(bool) -> Vec<Vec<RecordBatch>>)> = vec![
+    let cases: Vec<(&str, &dyn Fn(bool) -> PartitionedBatches)> = vec![
         ("i64", &i64_streams),
         ("f64", &f64_streams),
         ("utf8 low cardinality", &utf8_low_cardinality_streams),
@@ -264,7 +266,7 @@ fn make_sort_exprs(schema: &Schema) -> Vec<PhysicalSortExpr> {
 }
 
 /// Create streams of int64 (where approximately 1/3 values is repeated)
-fn i64_streams(sorted: bool) -> Vec<Vec<RecordBatch>> {
+fn i64_streams(sorted: bool) -> PartitionedBatches {
     let mut values = DataGenerator::new().i64_values();
     if sorted {
         values.sort_unstable();
@@ -278,7 +280,7 @@ fn i64_streams(sorted: bool) -> Vec<Vec<RecordBatch>> {
 
 /// Create streams of f64 (where approximately 1/3 values are repeated)
 /// with the same distribution as i64_streams
-fn f64_streams(sorted: bool) -> Vec<Vec<RecordBatch>> {
+fn f64_streams(sorted: bool) -> PartitionedBatches {
     let mut values = DataGenerator::new().f64_values();
     if sorted {
         values.sort_unstable_by(|a, b| a.total_cmp(b));
@@ -291,7 +293,7 @@ fn f64_streams(sorted: bool) -> Vec<Vec<RecordBatch>> {
 }
 
 /// Create streams of random low cardinality utf8 values
-fn utf8_low_cardinality_streams(sorted: bool) -> Vec<Vec<RecordBatch>> {
+fn utf8_low_cardinality_streams(sorted: bool) -> PartitionedBatches {
     let mut values = DataGenerator::new().utf8_low_cardinality_values();
     if sorted {
         values.sort_unstable();
@@ -303,7 +305,7 @@ fn utf8_low_cardinality_streams(sorted: bool) -> Vec<Vec<RecordBatch>> {
 }
 
 /// Create streams of high  cardinality (~ no duplicates) utf8 values
-fn utf8_high_cardinality_streams(sorted: bool) -> Vec<Vec<RecordBatch>> {
+fn utf8_high_cardinality_streams(sorted: bool) -> PartitionedBatches {
     let mut values = DataGenerator::new().utf8_high_cardinality_values();
     if sorted {
         values.sort_unstable();
@@ -315,7 +317,7 @@ fn utf8_high_cardinality_streams(sorted: bool) -> Vec<Vec<RecordBatch>> {
 }
 
 /// Create a batch of (utf8_low, utf8_low, utf8_high)
-fn utf8_tuple_streams(sorted: bool) -> Vec<Vec<RecordBatch>> {
+fn utf8_tuple_streams(sorted: bool) -> PartitionedBatches {
     let mut gen = DataGenerator::new();
 
     // need to sort by the combined key, so combine them together
@@ -348,7 +350,7 @@ fn utf8_tuple_streams(sorted: bool) -> Vec<Vec<RecordBatch>> {
 }
 
 /// Create a batch of (f64, utf8_low, utf8_low, i64)
-fn mixed_tuple_streams(sorted: bool) -> Vec<Vec<RecordBatch>> {
+fn mixed_tuple_streams(sorted: bool) -> PartitionedBatches {
     let mut gen = DataGenerator::new();
 
     // need to sort by the combined key, so combine them together
@@ -386,7 +388,7 @@ fn mixed_tuple_streams(sorted: bool) -> Vec<Vec<RecordBatch>> {
 }
 
 /// Create a batch of (utf8_dict)
-fn dictionary_streams(sorted: bool) -> Vec<Vec<RecordBatch>> {
+fn dictionary_streams(sorted: bool) -> PartitionedBatches {
     let mut gen = DataGenerator::new();
     let mut values = gen.utf8_low_cardinality_values();
     if sorted {
@@ -402,7 +404,7 @@ fn dictionary_streams(sorted: bool) -> Vec<Vec<RecordBatch>> {
 }
 
 /// Create a batch of (utf8_dict, utf8_dict, utf8_dict)
-fn dictionary_tuple_streams(sorted: bool) -> Vec<Vec<RecordBatch>> {
+fn dictionary_tuple_streams(sorted: bool) -> PartitionedBatches {
     let mut gen = DataGenerator::new();
     let mut tuples: Vec<_> = gen
         .utf8_low_cardinality_values()
@@ -433,7 +435,7 @@ fn dictionary_tuple_streams(sorted: bool) -> Vec<Vec<RecordBatch>> {
 }
 
 /// Create a batch of (utf8_dict, utf8_dict, utf8_dict, i64)
-fn mixed_dictionary_tuple_streams(sorted: bool) -> Vec<Vec<RecordBatch>> {
+fn mixed_dictionary_tuple_streams(sorted: bool) -> PartitionedBatches {
     let mut gen = DataGenerator::new();
     let mut tuples: Vec<_> = gen
         .utf8_low_cardinality_values()
@@ -542,7 +544,7 @@ impl DataGenerator {
 /// `NUM_STREAMS` partitions, preserving any ordering
 ///
 /// `f` is function that takes a list of tuples and produces a [`RecordBatch`]
-fn split_tuples<T, F>(input: Vec<T>, f: F) -> Vec<Vec<RecordBatch>>
+fn split_tuples<T, F>(input: Vec<T>, f: F) -> PartitionedBatches
 where
     F: Fn(Vec<T>) -> RecordBatch,
 {
@@ -552,7 +554,7 @@ where
     let mut outputs: Vec<Vec<Vec<T>>> = (0..NUM_STREAMS).map(|_| Vec::new()).collect();
 
     for i in input {
-        let stream_idx = rng.gen_range(0..NUM_STREAMS) as usize;
+        let stream_idx = rng.gen_range(0..NUM_STREAMS);
         let stream = &mut outputs[stream_idx];
         match stream.last_mut() {
             Some(x) if x.len() < BATCH_SIZE => x.push(i),
