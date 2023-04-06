@@ -39,6 +39,7 @@ use bzip2::write::BzEncoder;
 #[cfg(feature = "compression")]
 use bzip2::Compression as BzCompression;
 use datafusion_common::{DataFusionError, Statistics};
+use datafusion_physical_expr::PhysicalSortExpr;
 #[cfg(feature = "compression")]
 use flate2::write::GzEncoder;
 #[cfg(feature = "compression")]
@@ -54,7 +55,6 @@ use tempfile::TempDir;
 use xz2::write::XzEncoder;
 #[cfg(feature = "compression")]
 use zstd::Encoder as ZstdEncoder;
-use datafusion_physical_expr::PhysicalSortExpr;
 
 pub fn create_table_dual() -> Arc<dyn TableProvider> {
     let dual_schema = Arc::new(Schema::new(vec![

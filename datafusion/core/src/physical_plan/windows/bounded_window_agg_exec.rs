@@ -31,12 +31,9 @@ use crate::physical_plan::{
     RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
 use ahash::RandomState;
-use arrow::array::{Array, UInt32Builder};
-use arrow::compute::{
-    concat, concat_batches, lexicographical_partition_ranges, SortColumn,
-};
 use arrow::{
-    array::ArrayRef,
+    array::{Array, ArrayRef, UInt32Builder},
+    compute::{concat, concat_batches},
     datatypes::{Schema, SchemaRef},
     record_batch::RecordBatch,
 };
@@ -46,19 +43,20 @@ use futures::{ready, StreamExt};
 use std::any::Any;
 use std::cmp::{min, Ordering};
 use std::collections::{HashMap, VecDeque};
-use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::physical_plan::windows::calc_requirements;
+use crate::physical_plan::windows::{
+    calc_requirements, get_ordered_partition_by_indices,
+};
 use arrow::compute::sort_to_indices;
 use datafusion_common::utils::{
-    get_arrayref_at_indices, get_at_indices, get_record_batch_at_indices, get_row_at_idx,
+    evaluate_partition_ranges, get_arrayref_at_indices, get_at_indices,
+    get_record_batch_at_indices, get_row_at_idx,
 };
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::hash_utils::create_hashes;
-use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 use datafusion_physical_expr::window::{
     PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
     WindowAggState, WindowState,
@@ -149,17 +147,13 @@ impl BoundedWindowAggExec {
         let partition_by_exprs = window_expr[0].partition_by();
         let ordered_partition_by_indices = match &partition_search_mode {
             PartitionSearchMode::Sorted => {
-                let input_ordering = input.output_ordering().unwrap_or(&[]);
-                let input_ordering_exprs = convert_to_expr(input_ordering);
-                let equal_properties = || input.equivalence_properties();
-                let indices = get_indices_of_matching_exprs(
-                    &input_ordering_exprs,
-                    partition_by_exprs,
-                    equal_properties,
+                let indices = get_ordered_partition_by_indices(
+                    window_expr[0].partition_by(),
+                    &input,
                 );
-                if indices.len() == partition_by_exprs.len(){
+                if indices.len() == partition_by_exprs.len() {
                     indices
-                } else{
+                } else {
                     (0..partition_by_exprs.len()).collect::<Vec<_>>()
                 }
             }
@@ -268,7 +262,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
-        match &self.partition_search_mode{
+        match &self.partition_search_mode {
             PartitionSearchMode::Sorted => {
                 if self.ordered_partition_by_indices.len() < partition_bys.len() {
                     vec![calc_requirements(partition_bys, order_keys)]
@@ -809,7 +803,7 @@ impl PartitionSearcher for SortedSearch {
         let partition_columns_ordered =
             get_at_indices(&partition_columns, &self.ordered_partition_by_indices)?;
         let partition_points =
-            self.evaluate_partition_points(num_rows, &partition_columns_ordered)?;
+            evaluate_partition_ranges(num_rows, &partition_columns_ordered)?;
         let partition_bys = partition_columns
             .into_iter()
             .map(|arr| arr.values)
@@ -887,23 +881,6 @@ impl SortedSearch {
         } else {
             Ok(0)
         }
-    }
-
-    /// evaluate the partition points given the sort columns; if the sort columns are
-    /// empty then the result will be a single element vec of the whole column rows.
-    fn evaluate_partition_points(
-        &self,
-        num_rows: usize,
-        partition_columns: &[SortColumn],
-    ) -> Result<Vec<Range<usize>>> {
-        Ok(if partition_columns.is_empty() {
-            vec![Range {
-                start: 0,
-                end: num_rows,
-            }]
-        } else {
-            lexicographical_partition_ranges(partition_columns)?.collect()
-        })
     }
 }
 

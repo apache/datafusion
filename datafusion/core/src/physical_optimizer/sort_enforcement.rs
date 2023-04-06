@@ -45,11 +45,10 @@ use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::{
     BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
 };
-use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan, displayable};
+use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::utils::get_at_indices;
@@ -917,29 +916,24 @@ fn check_alignments(
     })
 }
 
-/// Compares `physical_ordering` and `required` ordering, returns a tuple
-/// indicating (1) whether this column requires sorting, and (2) whether we
-/// should reverse the window expression in order to avoid sorting.
+/// Compares `physical_ordering` and `required` ordering, decides whether
+/// alignments match. A `None` return value indicates that current column is
+/// not aligned. A `Some(bool)` value indicates otherwise, and signals whether
+/// we should reverse the window expression in order to avoid sorting.
 fn check_alignment(
     input_schema: &SchemaRef,
     physical_ordering: &PhysicalSortExpr,
     required: &PhysicalSortExpr,
 ) -> Result<Option<bool>> {
     Ok(if required.expr.eq(&physical_ordering.expr) {
-        let nullable = required.expr.nullable(input_schema)?;
         let physical_opts = physical_ordering.options;
         let required_opts = required.options;
-        if nullable {
-            let is_reversed = physical_opts == !required_opts;
-            if is_reversed || (physical_opts == required_opts) {
-                Some(is_reversed)
-            } else {
-                None
-            }
+        if required.expr.nullable(input_schema)? {
+            let reverse = physical_opts == !required_opts;
+            (reverse || physical_opts == required_opts).then_some(reverse)
         } else {
             // If the column is not nullable, NULLS FIRST/LAST is not important.
-            let is_reversed = physical_opts.descending != required_opts.descending;
-            Some(is_reversed)
+            Some(physical_opts.descending != required_opts.descending)
         }
     } else {
         None

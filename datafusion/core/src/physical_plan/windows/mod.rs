@@ -18,12 +18,16 @@
 //! Physical expressions for window functions
 
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{aggregates, expressions::{
-    cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
-    PhysicalSortExpr, RowNumber,
-}, type_coercion::coerce, udaf, PhysicalExpr, ExecutionPlan};
+use crate::physical_plan::{
+    aggregates,
+    expressions::{
+        cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
+        PhysicalSortExpr, RowNumber,
+    },
+    type_coercion::coerce,
+    udaf, ExecutionPlan, PhysicalExpr,
+};
 use crate::scalar::ScalarValue;
-use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
 use datafusion_expr::{
     window_function::{signature_for_built_in, BuiltInWindowFunction, WindowFunction},
@@ -40,11 +44,11 @@ mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
 pub use bounded_window_agg_exec::PartitionSearchMode;
+use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
 use datafusion_physical_expr::PhysicalSortRequirement;
-use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 pub use window_agg_exec::WindowAggExec;
 
 /// Create a physical expression for window function
@@ -210,7 +214,6 @@ pub(crate) fn calc_requirements(
     (!sort_reqs.is_empty()).then_some(sort_reqs)
 }
 
-
 pub(crate) fn get_ordered_partition_by_indices(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     input: &Arc<dyn ExecutionPlan>,
@@ -220,8 +223,8 @@ pub(crate) fn get_ordered_partition_by_indices(
     let input_ordering_exprs = convert_to_expr(input_ordering);
     let equal_properties = || input.equivalence_properties();
     get_indices_of_matching_exprs(
-        partition_by_exprs,
         &input_ordering_exprs,
+        partition_by_exprs,
         equal_properties,
     )
 }
