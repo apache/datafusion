@@ -30,12 +30,9 @@ use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
-use arrow::array::Array;
-use arrow::compute::{
-    concat, concat_batches, lexicographical_partition_ranges, SortColumn,
-};
 use arrow::{
-    array::ArrayRef,
+    array::{Array, ArrayRef},
+    compute::{concat, concat_batches, SortColumn},
     datatypes::{Schema, SchemaRef},
     record_batch::RecordBatch,
 };
@@ -45,12 +42,12 @@ use futures::{ready, StreamExt};
 use std::any::Any;
 use std::cmp::min;
 use std::collections::HashMap;
-use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::physical_plan::windows::calc_requirements;
+use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_physical_expr::window::{
     PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
     WindowAggState, WindowState,
@@ -366,7 +363,7 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
         let num_rows = record_batch.num_rows();
         if num_rows > 0 {
             let partition_points =
-                self.evaluate_partition_points(num_rows, &partition_columns)?;
+                evaluate_partition_ranges(num_rows, &partition_columns)?;
             for partition_range in partition_points {
                 let partition_row = partition_columns
                     .iter()
@@ -627,23 +624,6 @@ impl SortedPartitionByBoundedWindowStream {
             .iter()
             .map(|e| e.evaluate_to_sort_column(batch))
             .collect::<Result<Vec<_>>>()
-    }
-
-    /// evaluate the partition points given the sort columns; if the sort columns are
-    /// empty then the result will be a single element vec of the whole column rows.
-    fn evaluate_partition_points(
-        &self,
-        num_rows: usize,
-        partition_columns: &[SortColumn],
-    ) -> Result<Vec<Range<usize>>> {
-        Ok(if partition_columns.is_empty() {
-            vec![Range {
-                start: 0,
-                end: num_rows,
-            }]
-        } else {
-            lexicographical_partition_ranges(partition_columns)?.collect()
-        })
     }
 }
 
