@@ -372,7 +372,8 @@ impl ExecutionPlan for HashJoinExec {
         let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
-        if left_partitions != right_partitions {
+        if self.mode == PartitionMode::Partitioned && left_partitions != right_partitions
+        {
             return Err(DataFusionError::Internal(format!(
                 "Invalid HashJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
                  consider using RepartitionExec",
