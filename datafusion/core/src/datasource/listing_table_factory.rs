@@ -17,6 +17,14 @@
 
 //! Factory for creating ListingTables with default options
 
+use std::str::FromStr;
+use std::sync::Arc;
+
+use arrow::datatypes::{DataType, SchemaRef};
+use async_trait::async_trait;
+use datafusion_common::DataFusionError;
+use datafusion_expr::CreateExternalTable;
+
 use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::file_format::avro::AvroFormat;
 use crate::datasource::file_format::csv::CsvFormat;
@@ -29,12 +37,6 @@ use crate::datasource::listing::{
 };
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
-use arrow::datatypes::{DataType, SchemaRef};
-use async_trait::async_trait;
-use datafusion_common::DataFusionError;
-use datafusion_expr::CreateExternalTable;
-use std::str::FromStr;
-use std::sync::Arc;
 
 /// A `TableProviderFactory` capable of creating new `ListingTable`s
 pub struct ListingTableFactory {}

@@ -621,52 +621,52 @@ async fn timestamp_array_add_interval() -> Result<()> {
     let sql = "SELECT ts, ts - INTERVAL '8' MILLISECONDS FROM table_a";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------+-----------------------------------+",
-        "| ts                         | table_a.ts - IntervalDayTime(\"8\") |",
-        "+----------------------------+-----------------------------------+",
-        "| 2020-09-08T13:42:29.190855 | 2020-09-08T13:42:29.182855        |",
-        "| 2020-09-08T12:42:29.190855 | 2020-09-08T12:42:29.182855        |",
-        "| 2020-09-08T11:42:29.190855 | 2020-09-08T11:42:29.182855        |",
-        "+----------------------------+-----------------------------------+",
+        "+----------------------------+----------------------------------------------+",
+        "| ts                         | table_a.ts - IntervalMonthDayNano(\"8000000\") |",
+        "+----------------------------+----------------------------------------------+",
+        "| 2020-09-08T13:42:29.190855 | 2020-09-08T13:42:29.182855                   |",
+        "| 2020-09-08T12:42:29.190855 | 2020-09-08T12:42:29.182855                   |",
+        "| 2020-09-08T11:42:29.190855 | 2020-09-08T11:42:29.182855                   |",
+        "+----------------------------+----------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT ts, ts + INTERVAL '1' SECOND FROM table_b";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------+--------------------------------------+",
-        "| ts                         | table_b.ts + IntervalDayTime(\"1000\") |",
-        "+----------------------------+--------------------------------------+",
-        "| 2020-09-08T13:42:29.190855 | 2020-09-08T13:42:30.190855           |",
-        "| 2020-09-08T12:42:29.190855 | 2020-09-08T12:42:30.190855           |",
-        "| 2020-09-08T11:42:29.190855 | 2020-09-08T11:42:30.190855           |",
-        "+----------------------------+--------------------------------------+",
+        "+----------------------------+-------------------------------------------------+",
+        "| ts                         | table_b.ts + IntervalMonthDayNano(\"1000000000\") |",
+        "+----------------------------+-------------------------------------------------+",
+        "| 2020-09-08T13:42:29.190855 | 2020-09-08T13:42:30.190855                      |",
+        "| 2020-09-08T12:42:29.190855 | 2020-09-08T12:42:30.190855                      |",
+        "| 2020-09-08T11:42:29.190855 | 2020-09-08T11:42:30.190855                      |",
+        "+----------------------------+-------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT ts, ts + INTERVAL '2' MONTH FROM table_b";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------+-------------------------------------+",
-        "| ts                         | table_b.ts + IntervalYearMonth(\"2\") |",
-        "+----------------------------+-------------------------------------+",
-        "| 2020-09-08T13:42:29.190855 | 2020-11-08T13:42:29.190855          |",
-        "| 2020-09-08T12:42:29.190855 | 2020-11-08T12:42:29.190855          |",
-        "| 2020-09-08T11:42:29.190855 | 2020-11-08T11:42:29.190855          |",
-        "+----------------------------+-------------------------------------+",
+        "+----------------------------+---------------------------------------------------------------------+",
+        "| ts                         | table_b.ts + IntervalMonthDayNano(\"158456325028528675187087900672\") |",
+        "+----------------------------+---------------------------------------------------------------------+",
+        "| 2020-09-08T13:42:29.190855 | 2020-11-08T13:42:29.190855                                          |",
+        "| 2020-09-08T12:42:29.190855 | 2020-11-08T12:42:29.190855                                          |",
+        "| 2020-09-08T11:42:29.190855 | 2020-11-08T11:42:29.190855                                          |",
+        "+----------------------------+---------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT ts, ts - INTERVAL '16' YEAR FROM table_b";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------+---------------------------------------+",
-        "| ts                         | table_b.ts - IntervalYearMonth(\"192\") |",
-        "+----------------------------+---------------------------------------+",
-        "| 2020-09-08T13:42:29.190855 | 2004-09-08T13:42:29.190855            |",
-        "| 2020-09-08T12:42:29.190855 | 2004-09-08T12:42:29.190855            |",
-        "| 2020-09-08T11:42:29.190855 | 2004-09-08T11:42:29.190855            |",
-        "+----------------------------+---------------------------------------+",
+        "+----------------------------+-----------------------------------------------------------------------+",
+        "| ts                         | table_b.ts - IntervalMonthDayNano(\"15211807202738752817960438464512\") |",
+        "+----------------------------+-----------------------------------------------------------------------+",
+        "| 2020-09-08T13:42:29.190855 | 2004-09-08T13:42:29.190855                                            |",
+        "| 2020-09-08T12:42:29.190855 | 2004-09-08T12:42:29.190855                                            |",
+        "| 2020-09-08T11:42:29.190855 | 2004-09-08T11:42:29.190855                                            |",
+        "+----------------------------+-----------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -925,14 +925,12 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
     let batch = &plan[0];
     let mut res: Option<String> = None;
     for row in 0..batch.num_rows() {
-        if &array_value_to_string(batch.column(0), row)?
-            == "logical_plan after type_coercion"
-        {
+        if &array_value_to_string(batch.column(0), row)? == "initial_logical_plan" {
             res = Some(array_value_to_string(batch.column(1), row)?);
             break;
         }
     }
-    assert_eq!(res, Some("Projection: CAST(Utf8(\"2000-01-01\") AS Timestamp(Nanosecond, None)) >= CAST(CAST(Utf8(\"2000-01-01\") AS Date32) AS Timestamp(Nanosecond, None))\n  EmptyRelation".to_string()));
+    assert_eq!(res, Some("Projection: CAST(Utf8(\"2000-01-01\") AS Timestamp(Nanosecond, None)) >= CAST(Utf8(\"2000-01-01\") AS Date32)\n  EmptyRelation".to_string()));
 
     //test cast path timestamp date using function
     let sql = "select now() >= '2000-01-01'::date";
@@ -942,14 +940,18 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
     let batch = &plan[0];
     let mut res: Option<String> = None;
     for row in 0..batch.num_rows() {
-        if &array_value_to_string(batch.column(0), row)?
-            == "logical_plan after type_coercion"
-        {
+        if &array_value_to_string(batch.column(0), row)? == "initial_logical_plan" {
             res = Some(array_value_to_string(batch.column(1), row)?);
             break;
         }
     }
-    assert_eq!(res, Some("Projection: CAST(now() AS Timestamp(Nanosecond, None)) >= CAST(CAST(Utf8(\"2000-01-01\") AS Date32) AS Timestamp(Nanosecond, None))\n  EmptyRelation".to_string()));
+    assert_eq!(
+        res,
+        Some(
+            "Projection: now() >= CAST(Utf8(\"2000-01-01\") AS Date32)\n  EmptyRelation"
+                .to_string()
+        )
+    );
 
     let sql = "select now() = current_date()";
     let df = ctx.sql(sql).await.unwrap();
@@ -958,14 +960,15 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
     let batch = &plan[0];
     let mut res: Option<String> = None;
     for row in 0..batch.num_rows() {
-        if &array_value_to_string(batch.column(0), row)?
-            == "logical_plan after type_coercion"
-        {
+        if &array_value_to_string(batch.column(0), row)? == "initial_logical_plan" {
             res = Some(array_value_to_string(batch.column(1), row)?);
             break;
         }
     }
-    assert_eq!(res, Some("Projection: CAST(now() AS Timestamp(Nanosecond, None)) = CAST(currentdate() AS Timestamp(Nanosecond, None))\n  EmptyRelation".to_string()));
+    assert_eq!(
+        res,
+        Some("Projection: now() = currentdate()\n  EmptyRelation".to_string())
+    );
 
     Ok(())
 }

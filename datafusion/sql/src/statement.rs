@@ -30,17 +30,15 @@ use datafusion_common::{
 };
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
-use datafusion_expr::logical_plan::{
-    Analyze, Prepare, TransactionAccessMode, TransactionConclusion, TransactionEnd,
-    TransactionIsolationLevel, TransactionStart,
-};
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
-    cast, col, CreateCatalog, CreateCatalogSchema,
+    cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
     DescribeTable, DmlStatement, DropTable, DropView, EmptyRelation, Explain,
-    ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, PlanType, SetVariable,
-    ToStringifiedPlan, WriteOp,
+    ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, PlanType, Prepare,
+    SetVariable, Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
+    TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
+    WriteOp,
 };
 use sqlparser::ast;
 use sqlparser::ast::{
@@ -435,25 +433,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         TransactionAccessMode::ReadWrite
                     }
                 };
-                Ok(LogicalPlan::TransactionStart(TransactionStart {
+                let statement = PlanStatement::TransactionStart(TransactionStart {
                     access_mode,
                     isolation_level,
                     schema: DFSchemaRef::new(DFSchema::empty()),
-                }))
+                });
+                Ok(LogicalPlan::Statement(statement))
             }
             Statement::Commit { chain } => {
-                Ok(LogicalPlan::TransactionEnd(TransactionEnd {
+                let statement = PlanStatement::TransactionEnd(TransactionEnd {
                     conclusion: TransactionConclusion::Commit,
                     chain,
                     schema: DFSchemaRef::new(DFSchema::empty()),
-                }))
+                });
+                Ok(LogicalPlan::Statement(statement))
             }
             Statement::Rollback { chain } => {
-                Ok(LogicalPlan::TransactionEnd(TransactionEnd {
+                let statement = PlanStatement::TransactionEnd(TransactionEnd {
                     conclusion: TransactionConclusion::Rollback,
                     chain,
                     schema: DFSchemaRef::new(DFSchema::empty()),
-                }))
+                });
+                Ok(LogicalPlan::Statement(statement))
             }
 
             _ => Err(DataFusionError::NotImplemented(format!(
@@ -736,11 +737,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        Ok(LogicalPlan::SetVariable(SetVariable {
+        let statement = PlanStatement::SetVariable(SetVariable {
             variable: variable_lower,
             value: value_string,
             schema: DFSchemaRef::new(DFSchema::empty()),
-        }))
+        });
+
+        Ok(LogicalPlan::Statement(statement))
     }
 
     fn delete_to_plan(
@@ -824,11 +827,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut assign_map = assignments
             .iter()
             .map(|assign| {
-                let col_name: &Ident = assign
-                    .id
-                    .iter()
-                    .last()
-                    .ok_or(DataFusionError::Plan("Empty column id".to_string()))?;
+                let col_name: &Ident = assign.id.iter().last().ok_or_else(|| {
+                    DataFusionError::Plan("Empty column id".to_string())
+                })?;
                 // Validate that the assignment target column exists
                 table_schema.field_with_unqualified_name(&col_name.value)?;
                 Ok((col_name.value.clone(), assign.value.clone()))
