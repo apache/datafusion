@@ -640,28 +640,24 @@ pub struct SortExec {
 
 impl SortExec {
     /// Create a new sort execution plan
-    #[deprecated(since = "22.0.0", note = "please use `new`")]
+    #[deprecated(since = "22.0.0", note = "use `new` and `with_fetch`")]
     pub fn try_new(
         expr: Vec<PhysicalSortExpr>,
         input: Arc<dyn ExecutionPlan>,
         fetch: Option<usize>,
     ) -> Result<Self> {
-        Ok(Self::new(expr, input, fetch))
+        Ok(Self::new(expr, input).with_fetch(fetch))
     }
 
     /// Create a new sort execution plan that produces a single,
     /// sorted output partition.
-    pub fn new(
-        expr: Vec<PhysicalSortExpr>,
-        input: Arc<dyn ExecutionPlan>,
-        fetch: Option<usize>,
-    ) -> Self {
+    pub fn new(expr: Vec<PhysicalSortExpr>, input: Arc<dyn ExecutionPlan>) -> Self {
         Self {
             expr,
             input,
             metrics_set: CompositeMetricsSet::new(),
             preserve_partitioning: false,
-            fetch,
+            fetch: None,
         }
     }
 
@@ -669,7 +665,7 @@ impl SortExec {
     /// the partitioning of the input plan
     #[deprecated(
         since = "22.0.0",
-        note = "please use `new` and `with_preserve_partioning` instead"
+        note = "use `new`, `with_fetch` and `with_preserve_partioning` instead"
     )]
     pub fn new_with_partitioning(
         expr: Vec<PhysicalSortExpr>,
@@ -677,7 +673,9 @@ impl SortExec {
         preserve_partitioning: bool,
         fetch: Option<usize>,
     ) -> Self {
-        Self::new(expr, input, fetch).with_preserve_partitioning(preserve_partitioning)
+        Self::new(expr, input)
+            .with_fetch(fetch)
+            .with_preserve_partitioning(preserve_partitioning)
     }
 
     /// Whether this `SortExec` preserves partitioning of the children
@@ -694,6 +692,12 @@ impl SortExec {
     /// input partitions producing a single, sorted partition.
     pub fn with_preserve_partitioning(mut self, preserve_partitioning: bool) -> Self {
         self.preserve_partitioning = preserve_partitioning;
+        self
+    }
+
+    /// Whether this `SortExec` preserves partitioning of the children
+    pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
+        self.fetch = fetch;
         self
     }
 
@@ -774,7 +778,8 @@ impl ExecutionPlan for SortExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let new_sort = SortExec::new(self.expr.clone(), children[0].clone(), self.fetch)
+        let new_sort = SortExec::new(self.expr.clone(), children[0].clone())
+            .with_fetch(self.fetch)
             .with_preserve_partitioning(self.preserve_partitioning);
 
         Ok(Arc::new(new_sort))
@@ -981,7 +986,6 @@ mod tests {
                 },
             ],
             Arc::new(CoalescePartitionsExec::new(csv)),
-            None,
         ));
 
         let result = collect(sort_exec, task_ctx).await?;
@@ -1041,7 +1045,6 @@ mod tests {
                 },
             ],
             Arc::new(CoalescePartitionsExec::new(csv)),
-            None,
         ));
 
         let task_ctx = session_ctx.task_ctx();
@@ -1106,27 +1109,29 @@ mod tests {
             let csv = test::scan_partitioned_csv(partitions)?;
             let schema = csv.schema();
 
-            let sort_exec = Arc::new(SortExec::new(
-                vec![
-                    // c1 string column
-                    PhysicalSortExpr {
-                        expr: col("c1", &schema)?,
-                        options: SortOptions::default(),
-                    },
-                    // c2 uin32 column
-                    PhysicalSortExpr {
-                        expr: col("c2", &schema)?,
-                        options: SortOptions::default(),
-                    },
-                    // c7 uin8 column
-                    PhysicalSortExpr {
-                        expr: col("c7", &schema)?,
-                        options: SortOptions::default(),
-                    },
-                ],
-                Arc::new(CoalescePartitionsExec::new(csv)),
-                fetch,
-            ));
+            let sort_exec = Arc::new(
+                SortExec::new(
+                    vec![
+                        // c1 string column
+                        PhysicalSortExpr {
+                            expr: col("c1", &schema)?,
+                            options: SortOptions::default(),
+                        },
+                        // c2 uin32 column
+                        PhysicalSortExpr {
+                            expr: col("c2", &schema)?,
+                            options: SortOptions::default(),
+                        },
+                        // c7 uin8 column
+                        PhysicalSortExpr {
+                            expr: col("c7", &schema)?,
+                            options: SortOptions::default(),
+                        },
+                    ],
+                    Arc::new(CoalescePartitionsExec::new(csv)),
+                )
+                .with_fetch(fetch),
+            );
 
             let task_ctx = session_ctx.task_ctx();
             let result = collect(sort_exec.clone(), task_ctx).await?;
@@ -1170,7 +1175,6 @@ mod tests {
                 options: SortOptions::default(),
             }],
             input,
-            None,
         ));
 
         let result: Vec<RecordBatch> = collect(sort_exec, task_ctx).await?;
@@ -1244,7 +1248,6 @@ mod tests {
                 },
             ],
             Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None)?),
-            None,
         ));
 
         assert_eq!(DataType::Float32, *sort_exec.schema().field(0).data_type());
@@ -1312,7 +1315,6 @@ mod tests {
                 options: SortOptions::default(),
             }],
             blocking_exec,
-            None,
         ));
 
         let fut = collect(sort_exec, task_ctx);

@@ -62,9 +62,10 @@ impl PhysicalOptimizerRule for GlobalSortSelection {
                     {
                             let sort = SortExec::new(
                                 sort_exec.expr().to_vec(),
-                                sort_exec.input().clone(),
-                                sort_exec.fetch(),
-                            ).with_preserve_partitioning(true);
+                                sort_exec.input().clone()
+                            )
+                            .with_fetch(sort_exec.fetch())
+                            .with_preserve_partitioning(true);
                             let global_sort: Arc<dyn ExecutionPlan> =
                                 Arc::new(SortPreservingMergeExec::new(
                                     sort_exec.expr().to_vec(),

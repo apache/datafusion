@@ -462,7 +462,7 @@ mod tests {
             expr: col("c1", &schema()).unwrap(),
             options: SortOptions::default(),
         }];
-        let new_sort = SortExec::new(sort_exprs, input, None)
+        let new_sort = SortExec::new(sort_exprs, input)
             .with_preserve_partitioning(preserve_partitioning);
         Arc::new(new_sort)
     }

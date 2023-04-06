@@ -613,7 +613,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 } else {
                     Some(sort.fetch as usize)
                 };
-                let new_sort = SortExec::new(exprs, input, fetch)
+                let new_sort = SortExec::new(exprs, input)
+                    .with_fetch(fetch)
                     .with_preserve_partitioning(sort.preserve_partitioning);
 
                 Ok(Arc::new(new_sort))
@@ -1439,7 +1440,6 @@ mod roundtrip_tests {
         roundtrip_test(Arc::new(SortExec::new(
             sort_exprs,
             Arc::new(EmptyExec::new(false, schema)),
-            None,
         )))
     }
 
@@ -1468,11 +1468,10 @@ mod roundtrip_tests {
         roundtrip_test(Arc::new(SortExec::new(
             sort_exprs.clone(),
             Arc::new(EmptyExec::new(false, schema.clone())),
-            None,
         )))?;
 
         roundtrip_test(Arc::new(
-            SortExec::new(sort_exprs, Arc::new(EmptyExec::new(false, schema)), None)
+            SortExec::new(sort_exprs, Arc::new(EmptyExec::new(false, schema)))
                 .with_preserve_partitioning(true),
         ))
     }

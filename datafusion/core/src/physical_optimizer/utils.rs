@@ -66,7 +66,7 @@ pub fn add_sort_above(
     if !ordering_satisfy(node.output_ordering(), Some(&sort_expr), || {
         node.equivalence_properties()
     }) {
-        let new_sort = SortExec::new(sort_expr, node.clone(), None);
+        let new_sort = SortExec::new(sort_expr, node.clone());
 
         *node = Arc::new(if node.output_partitioning().partition_count() > 1 {
             new_sort.with_preserve_partitioning(true)

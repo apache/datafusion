@@ -1211,7 +1211,7 @@ mod tests {
         ];
         let repartition_exec = repartition_exec(spm);
         let sort2 = Arc::new(
-            SortExec::new(sort_exprs.clone(), repartition_exec, None)
+            SortExec::new(sort_exprs.clone(), repartition_exec)
                 .with_preserve_partitioning(true),
         ) as _;
         let spm2 = sort_preserving_merge_exec(sort_exprs, sort2);
@@ -1252,8 +1252,7 @@ mod tests {
         let sort_exprs = vec![sort_expr("non_nullable_col", &schema)];
         // let sort = sort_exec(sort_exprs.clone(), union);
         let sort = Arc::new(
-            SortExec::new(sort_exprs.clone(), union, None)
-                .with_preserve_partitioning(true),
+            SortExec::new(sort_exprs.clone(), union).with_preserve_partitioning(true),
         ) as _;
         let spm = sort_preserving_merge_exec(sort_exprs, sort);
 
@@ -2260,8 +2259,8 @@ mod tests {
         let window = bounded_window_exec("nullable_col", sort_exprs.clone(), memory_exec);
         let repartition = repartition_exec(window);
 
-        let orig_plan = Arc::new(SortExec::new(sort_exprs, repartition, None))
-            as Arc<dyn ExecutionPlan>;
+        let orig_plan =
+            Arc::new(SortExec::new(sort_exprs, repartition)) as Arc<dyn ExecutionPlan>;
 
         let mut plan = orig_plan.clone();
         let rules = vec![
@@ -2298,7 +2297,7 @@ mod tests {
         let sort_exprs = vec![sort_expr("nullable_col", &schema)];
         // Add local sort
         let sort = Arc::new(
-            SortExec::new(sort_exprs.clone(), repartition, None)
+            SortExec::new(sort_exprs.clone(), repartition)
                 .with_preserve_partitioning(true),
         ) as _;
         let spm = sort_preserving_merge_exec(sort_exprs.clone(), sort);
@@ -2352,7 +2351,7 @@ mod tests {
         input: Arc<dyn ExecutionPlan>,
     ) -> Arc<dyn ExecutionPlan> {
         let sort_exprs = sort_exprs.into_iter().collect();
-        Arc::new(SortExec::new(sort_exprs, input, None))
+        Arc::new(SortExec::new(sort_exprs, input))
     }
 
     fn sort_preserving_merge_exec(
