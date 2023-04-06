@@ -121,6 +121,7 @@ enum FileStreamState {
     Limit,
 }
 
+/// A timer that can be started and stopped.
 struct StartableTime {
     metrics: Time,
     // use for record each part cost time, will eventually add into 'metrics'.
@@ -140,14 +141,31 @@ impl StartableTime {
     }
 }
 
+/// Metrics for [`FileStream`]
+///
+/// Note that all of these metrics are in terms of wall clock time
+/// (not cpu time) so they include time spent waiting on I/O as well
+/// as other operators.
 struct FileStreamMetrics {
-    /// Time elapsed for file opening
+    /// Wall clock time elapsed for file opening.
+    ///
+    /// Time between when [`FileReader::open`] is called and when the
+    /// [`FileStream`] receives a stream for reading.
     pub time_opening: StartableTime,
-    /// Time elapsed for file scanning + first record batch of decompression + decoding
+    /// Wall clock time elapsed for file scanning + first record batch of decompression + decoding
+    ///
+    /// Time between when the [`FileStream`] requests data from the
+    /// stream and when the first [`RecordBatch`] is produced.
     pub time_scanning_until_data: StartableTime,
-    /// Total elapsed time for for scanning + record batch decompression / decoding
+    /// total elapsed wall clock time for for scanning + record batch decompression / decoding
+    ///
+    /// Sum of time between when the [`FileStream`] requests data from
+    /// the stream and when a [`RecordBatch`] is produced for all
+    /// record batches in the stream.
     pub time_scanning_total: StartableTime,
-    /// Time elapsed for data decompression + decoding
+    /// Wall clock time elapsed for data decompression + decoding
+    ///
+    /// Time spent waiting for the FileStream's input.
     pub time_processing: StartableTime,
 }
 
@@ -218,9 +236,10 @@ impl<F: FileOpener> FileStream<F> {
         })
     }
 
-    // Begin opening the next file in parallel while decoding the current file in FileStream.
-    // Since file opening is mostly IO (and may involve a
-    // bunch of sequential IO), it can be parallelized with decoding.
+    /// Begin opening the next file in parallel while decoding the current file in FileStream.
+    ///
+    /// Since file opening is mostly IO (and may involve a
+    /// bunch of sequential IO), it can be parallelized with decoding.
     fn start_next_file(&mut self) -> Option<Result<(FileOpenFuture, Vec<ScalarValue>)>> {
         let part_file = self.file_iter.pop_front()?;
 
