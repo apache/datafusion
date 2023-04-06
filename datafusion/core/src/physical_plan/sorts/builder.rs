@@ -64,7 +64,7 @@ impl BatchBuilder {
         });
     }
 
-    /// Returns the number of rows in this [`BatchBuilder`]
+    /// Returns the number of in-progress rows in this [`BatchBuilder`]
     pub fn len(&self) -> usize {
         self.indices.len()
     }
