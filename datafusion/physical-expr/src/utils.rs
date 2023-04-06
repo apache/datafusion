@@ -419,6 +419,11 @@ pub fn make_sort_exprs_from_requirements(
         .collect()
 }
 
+/// Get `Arc<dyn PhysicalExpr>` content of the `PhysicalSortExpr` for each entry in the vector
+pub fn convert_to_expr(in1: &[PhysicalSortExpr]) -> Vec<Arc<dyn PhysicalExpr>> {
+    in1.iter().map(|elem| elem.expr.clone()).collect::<Vec<_>>()
+}
+
 // implementation for searching after normalization.
 fn get_indices_of_matching_exprs_normalized(
     to_search: &[Arc<dyn PhysicalExpr>],
@@ -455,11 +460,6 @@ pub fn get_indices_of_matching_exprs<F: FnOnce() -> EquivalenceProperties>(
     } else {
         get_indices_of_matching_exprs_normalized(to_search, searched)
     }
-}
-
-/// Get `Arc<dyn PhysicalExpr>` content of the `PhysicalSortExpr` for each entry in the vector
-pub fn convert_to_expr(in1: &[PhysicalSortExpr]) -> Vec<Arc<dyn PhysicalExpr>> {
-    in1.iter().map(|elem| elem.expr.clone()).collect::<Vec<_>>()
 }
 
 #[derive(Clone, Debug)]

@@ -162,7 +162,14 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_sorted_merged_indices() -> Result<()> {
+    async fn test_find_match_indices() -> Result<()> {
+        assert_eq!(find_match_indices(&[0, 3, 4], &[0, 3, 4])?, vec![0, 1, 2]);
+        assert_eq!(find_match_indices(&[0, 4, 3], &[0, 3, 4])?, vec![0, 2, 1]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ordered_merged_indices() -> Result<()> {
         assert_eq!(
             get_ordered_merged_indices(&[0, 3, 4], &[1, 3, 5]),
             vec![0, 1, 3, 4, 5]
@@ -192,13 +199,6 @@ mod tests {
         assert_eq!(get_set_diff_indices(&[0, 3, 4], &[1, 2, 4]), vec![0, 3]);
         // return value should have same ordering with the in1
         assert_eq!(get_set_diff_indices(&[3, 4, 0], &[1, 2, 4]), vec![3, 0]);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_find_match_indices() -> Result<()> {
-        assert_eq!(find_match_indices(&[0, 3, 4], &[0, 3, 4])?, vec![0, 1, 2]);
-        assert_eq!(find_match_indices(&[0, 4, 3], &[0, 3, 4])?, vec![0, 2, 1]);
         Ok(())
     }
 }

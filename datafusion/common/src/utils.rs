@@ -28,19 +28,6 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::ops::Range;
 
-/// Create a new vector from the elements at the `indices` of `searched` vector
-pub fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec<T>> {
-    let result = indices
-        .iter()
-        .map(|idx| searched.get(*idx).cloned())
-        .collect::<Option<Vec<T>>>();
-    result.ok_or_else(|| {
-        DataFusionError::Execution(
-            "Expects indices to be in the range of searched vector".to_string(),
-        )
-    })
-}
-
 /// Given column vectors, returns row at `idx`.
 pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValue>> {
     columns
@@ -284,6 +271,19 @@ pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
+/// Create a new vector from the elements at the `indices` of `searched` vector
+pub fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec<T>> {
+    let result = indices
+        .iter()
+        .map(|idx| searched.get(*idx).cloned())
+        .collect::<Option<Vec<T>>>();
+    result.ok_or_else(|| {
+        DataFusionError::Execution(
+            "Expects indices to be in the range of searched vector".to_string(),
+        )
+    })
+}
+
 /// Find the largest range that satisfy 0,1,2 .. n in the `in1`
 // For 0,1,2,4,5 we would produce 3. meaning 0,1,2 is the largest consecutive range (starting from zero).
 // For 1,2,3,4 we would produce 0. Meaning there is no consecutive range (starting from zero).
@@ -308,16 +308,6 @@ mod tests {
     use crate::ScalarValue::Null;
 
     use super::*;
-
-    #[test]
-    fn test_get_at_indices() -> Result<()> {
-        let in_vec = vec![1, 2, 3, 4, 5, 6, 7];
-        assert_eq!(get_at_indices(&in_vec, &[0, 2])?, vec![1, 3]);
-        assert_eq!(get_at_indices(&in_vec, &[4, 2])?, vec![5, 3]);
-        // 7 is outside the range
-        assert!(get_at_indices(&in_vec, &[7]).is_err());
-        Ok(())
-    }
 
     #[test]
     fn test_bisect_linear_left_and_right() -> Result<()> {
@@ -613,6 +603,16 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_at_indices() -> Result<()> {
+        let in_vec = vec![1, 2, 3, 4, 5, 6, 7];
+        assert_eq!(get_at_indices(&in_vec, &[0, 2])?, vec![1, 3]);
+        assert_eq!(get_at_indices(&in_vec, &[4, 2])?, vec![5, 3]);
+        // 7 is outside the range
+        assert!(get_at_indices(&in_vec, &[7]).is_err());
         Ok(())
     }
 

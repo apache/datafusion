@@ -164,7 +164,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
-        if self.ordered_partition_by_indices.is_empty() {
+        if self.ordered_partition_by_indices.len() < partition_bys.len() {
             vec![calc_requirements(partition_bys, order_keys)]
         } else {
             let partition_bys = self
