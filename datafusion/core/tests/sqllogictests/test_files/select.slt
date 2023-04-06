@@ -230,3 +230,10 @@ select CASE
 END;
 ----
 2
+
+# like and ilike for LargeUtf8
+# issue: https://github.com/apache/arrow-datafusion/issues/5893
+query B
+select arrow_cast('foo', 'LargeUtf8') like '%foo%';
+----
+true
