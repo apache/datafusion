@@ -573,11 +573,21 @@ macro_rules! primitive_op {
         match ($LEFT, $RIGHT) {
             (lhs, None) => Ok(ScalarValue::$SCALAR(*lhs)),
             #[allow(unused_variables)]
+            (None, Some(b)) => { primitive_right!(*b, $OPERATION, $SCALAR) },
+            (Some(a), Some(b)) => Ok(ScalarValue::$SCALAR(Some(*a $OPERATION *b))),
+        }
+    };
+}
+macro_rules! primitive_checked_op {
+    ($LEFT:expr, $RIGHT:expr, $SCALAR:ident, $FUNCTION:ident, $OPERATION:tt) => {
+        match ($LEFT, $RIGHT) {
+            (lhs, None) => Ok(ScalarValue::$SCALAR(*lhs)),
+            #[allow(unused_variables)]
             (None, Some(b)) => {
-                primitive_right!(*b, $OPERATION, $SCALAR)
+                primitive_checked_right!(*b, $OPERATION, $SCALAR)
             }
             (Some(a), Some(b)) => {
-                if let Some(value) = primitive_checked_op!(a, b, $OPERATION, $SCALAR) {
+                if let Some(value) = (*a).$FUNCTION(*b) {
                     Ok(ScalarValue::$SCALAR(Some(value)))
                 } else {
                     Err(DataFusionError::Execution(
@@ -589,24 +599,18 @@ macro_rules! primitive_op {
     };
 }
 
-macro_rules! primitive_checked_op {
-    ($LEFT:expr, $RIGHT:expr, $OPERATION:tt, Float64) => {
-        Some(*$LEFT $OPERATION *$RIGHT)
+macro_rules! primitive_checked_right {
+    ($TERM:expr, -, $SCALAR:ident) => {
+        if let Some(value) = $TERM.checked_neg() {
+            Ok(ScalarValue::$SCALAR(Some(value)))
+        } else {
+            Err(DataFusionError::Execution(
+                "Overflow while calculating ScalarValue.".to_string(),
+            ))
+        }
     };
-    ($LEFT:expr, $RIGHT:expr, $OPERATION:tt, Float32) => {
-        Some(*$LEFT $OPERATION *$RIGHT)
-    };
-    ($LEFT:expr, $RIGHT:expr, +, $SCALAR:ident) => {
-        (*$LEFT).checked_add(*$RIGHT)
-    };
-    ($LEFT:expr, $RIGHT:expr, -, $SCALAR:ident) => {
-        (*$LEFT).checked_sub(*$RIGHT)
-    };
-    ($LEFT:expr, $RIGHT:expr, *, $SCALAR:ident) => {
-        (*$LEFT).checked_mul(*$RIGHT)
-    };
-    ($LEFT:expr, $RIGHT:expr, /, $SCALAR:ident) => {
-        (*$LEFT).checked_div(*$RIGHT)
+    ($TERM:expr, $OPERATION:tt, $SCALAR:ident) => {
+        primitive_right!($TERM, $OPERATION, $SCALAR)
     };
 }
 
@@ -653,6 +657,41 @@ macro_rules! unsigned_subtraction_error {
         );
         Err(DataFusionError::Internal(msg))
     }};
+}
+
+macro_rules! impl_checked_op {
+    ($LHS:expr, $RHS:expr, $FUNCTION:ident, $OPERATION:tt) => {
+        // Only covering primitive types that support checked_* operands, and fall back to raw operation for other types.
+        match ($LHS, $RHS) {
+            (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
+                primitive_checked_op!(lhs, rhs, UInt64, $FUNCTION, $OPERATION)
+            },
+            (ScalarValue::Int64(lhs), ScalarValue::Int64(rhs)) => {
+                primitive_checked_op!(lhs, rhs, Int64, $FUNCTION, $OPERATION)
+            },
+            (ScalarValue::UInt32(lhs), ScalarValue::UInt32(rhs)) => {
+                primitive_checked_op!(lhs, rhs, UInt32, $FUNCTION, $OPERATION)
+            },
+            (ScalarValue::Int32(lhs), ScalarValue::Int32(rhs)) => {
+                primitive_checked_op!(lhs, rhs, Int32, $FUNCTION, $OPERATION)
+            },
+            (ScalarValue::UInt16(lhs), ScalarValue::UInt16(rhs)) => {
+                primitive_checked_op!(lhs, rhs, UInt16, $FUNCTION, $OPERATION)
+            },
+            (ScalarValue::Int16(lhs), ScalarValue::Int16(rhs)) => {
+                primitive_checked_op!(lhs, rhs, Int16, $FUNCTION, $OPERATION)
+            },
+            (ScalarValue::UInt8(lhs), ScalarValue::UInt8(rhs)) => {
+                primitive_checked_op!(lhs, rhs, UInt8, $FUNCTION, $OPERATION)
+            },
+            (ScalarValue::Int8(lhs), ScalarValue::Int8(rhs)) => {
+                primitive_checked_op!(lhs, rhs, Int8, $FUNCTION, $OPERATION)
+            },
+            _ => {
+                impl_op!($LHS, $RHS, $OPERATION)
+            }
+        }
+    };
 }
 
 macro_rules! impl_op {
@@ -1885,9 +1924,19 @@ impl ScalarValue {
         impl_op!(self, rhs, +)
     }
 
+    pub fn add_checked<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let rhs = other.borrow();
+        impl_checked_op!(self, rhs, checked_add, +)
+    }
+
     pub fn sub<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
         let rhs = other.borrow();
         impl_op!(self, rhs, -)
+    }
+
+    pub fn sub_checked<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let rhs = other.borrow();
+        impl_checked_op!(self, rhs, checked_sub, -)
     }
 
     pub fn is_unsigned(&self) -> bool {
@@ -1956,9 +2005,9 @@ impl ScalarValue {
         }
 
         let distance = if self > other {
-            self.sub(other).ok()?
+            self.sub_checked(other).ok()?
         } else {
-            other.sub(self).ok()?
+            other.sub_checked(self).ok()?
         };
 
         match distance {
@@ -3780,7 +3829,7 @@ mod tests {
     where
         T: ArrowNumericType,
     {
-        let scalar_result = left.add(&right);
+        let scalar_result = left.add_checked(&right);
 
         let left_array = left.to_array();
         let right_array = right.to_array();
@@ -5356,6 +5405,11 @@ mod tests {
             (
                 ScalarValue::Decimal128(Some(123), 5, 5),
                 ScalarValue::Decimal128(Some(120), 5, 5),
+            ),
+            // Overflows
+            (
+                ScalarValue::Int8(Some(i8::MAX)),
+                ScalarValue::Int8(Some(i8::MIN)),
             ),
         ];
         for (lhs, rhs) in cases {
