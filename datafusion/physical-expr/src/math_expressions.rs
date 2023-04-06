@@ -340,52 +340,43 @@ pub fn log(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::Float64 => match base {
             ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => {
                 let base = base as f64;
-                return Ok(
+                Ok(
                     Arc::new(make_function_scalar_inputs!(x, "x", Float64Array, {
                         |value: f64| f64::log(value, base)
                     })) as ArrayRef,
-                );
+                )
             }
-            ColumnarValue::Array(base) => {
-                return Ok(Arc::new(make_function_inputs2!(
-                    x,
-                    base,
-                    "x",
-                    "base",
-                    Float64Array,
-                    { f64::log }
-                )) as ArrayRef);
-            }
-            _ => {
-                return Err(DataFusionError::Internal(
-                    "log function requires a scalar or array for base".to_string(),
-                ))
-            }
+            ColumnarValue::Array(base) => Ok(Arc::new(make_function_inputs2!(
+                x,
+                base,
+                "x",
+                "base",
+                Float64Array,
+                { f64::log }
+            )) as ArrayRef),
+            _ => Err(DataFusionError::Internal(
+                "log function requires a scalar or array for base".to_string(),
+            )),
         },
 
         DataType::Float32 => match base {
-            ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => {
-                return Ok(
-                    Arc::new(make_function_scalar_inputs!(x, "x", Float32Array, {
-                        |value: f32| f32::log(value, base)
-                    })) as ArrayRef,
-                );
-            }
-            ColumnarValue::Array(base) => {
-                return Ok(Arc::new(make_function_inputs2!(
-                    x,
-                    base,
-                    "x",
-                    "base",
-                    Float32Array,
-                    { f32::log }
-                )) as ArrayRef);
-            }
-            _ => {
-                return Err(DataFusionError::Internal(
-                    "log function requires a scalar or array for base".to_string(),
-                ))
-            }
+            ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => Ok(Arc::new(
+                make_function_scalar_inputs!(x, "x", Float32Array, {
+                    |value: f32| f32::log(value, base)
+                }),
+            )
+                as ArrayRef),
+            ColumnarValue::Array(base) => Ok(Arc::new(make_function_inputs2!(
+                x,
+                base,
+                "x",
+                "base",
+                Float32Array,
+                { f32::log }
+            )) as ArrayRef),
+            _ => Err(DataFusionError::Internal(
+                "log function requires a scalar or array for base".to_string(),
+            )),
         },
 
         other => Err(DataFusionError::Internal(format!(
