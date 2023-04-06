@@ -159,7 +159,7 @@ struct BenchCase {
 
 impl BenchCase {
     /// Prepare to run a benchmark that merges the specified
-    /// partitions (streams) together using all keyes
+    /// pre-sorted partitions (streams) together using all keys
     fn merge_sorted(partitions: &[Vec<RecordBatch>]) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
         let session_ctx = SessionContext::new();
@@ -178,6 +178,7 @@ impl BenchCase {
         }
     }
 
+    /// Test SortExec in  "partitioned" mode followed by a SortPreservingMerge
     fn sort_merge(partitions: &[Vec<RecordBatch>]) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
         let session_ctx = SessionContext::new();
@@ -198,6 +199,8 @@ impl BenchCase {
         }
     }
 
+    /// Test SortExec in "partitioned" mode which sorts the input streams
+    /// individually into some number of output streams
     fn sort(partitions: &[Vec<RecordBatch>]) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
         let session_ctx = SessionContext::new();
@@ -217,6 +220,8 @@ impl BenchCase {
         }
     }
 
+    /// Test SortExec in "partitioned" mode which sorts the input streams
+    /// individually into some number of output streams
     fn sort_partitioned(partitions: &[Vec<RecordBatch>]) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
         let session_ctx = SessionContext::new();
