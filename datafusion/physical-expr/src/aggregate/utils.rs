@@ -54,7 +54,7 @@ pub fn calculate_result_decimal_for_avg(
             if target_mul >= lit_scale_mul {
                 if let Some(value) = lit_value.checked_mul(target_mul / lit_scale_mul) {
                     let new_value = value / count;
-                    if new_value >= target_min && value <= target_max {
+                    if new_value >= target_min && new_value <= target_max {
                         Ok(ScalarValue::Decimal128(Some(new_value), *p, *s))
                     } else {
                         Err(DataFusionError::Internal(
