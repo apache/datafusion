@@ -18,9 +18,8 @@
 //! Expression simplification API
 
 use super::utils::*;
-use crate::{
-    simplify_expressions::regex::simplify_regex_expr, type_coercion::TypeCoercionRewriter,
-};
+use crate::analyzer::type_coercion::TypeCoercionRewriter;
+use crate::simplify_expressions::regex::simplify_regex_expr;
 use arrow::{
     array::new_null_array,
     datatypes::{DataType, Field, Schema},

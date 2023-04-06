@@ -22,13 +22,12 @@
 mod unix_test {
     use arrow::array::Array;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::execution::options::ReadOptions;
+    use datafusion::test_util::register_unbounded_file_with_ordering;
     use datafusion::{
         prelude::{CsvReadOptions, SessionConfig, SessionContext},
         test_util::{aggr_test_schema, arrow_test_data},
     };
     use datafusion_common::{DataFusionError, Result};
-    use datafusion_expr::Expr;
     use futures::StreamExt;
     use itertools::enumerate;
     use nix::sys::stat;
@@ -36,7 +35,6 @@ mod unix_test {
     use rstest::*;
     use std::fs::{File, OpenOptions};
     use std::io::Write;
-    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -106,7 +104,7 @@ mod unix_test {
         // Create a new temporary FIFO file
         let tmp_dir = TempDir::new()?;
         let fifo_path =
-            create_fifo_file(&tmp_dir, &format!("fifo_{:?}.csv", unbounded_file))?;
+            create_fifo_file(&tmp_dir, &format!("fifo_{unbounded_file:?}.csv"))?;
         // Execution can calculated at least one RecordBatch after the number of
         // "joinable_lines_length" lines are read.
         let joinable_lines_length =
@@ -197,35 +195,6 @@ mod unix_test {
             }
             drop(file);
         })
-    }
-
-    /// This function creates an unbounded sorted file for testing purposes.
-    pub async fn register_unbounded_file_with_ordering(
-        ctx: &SessionContext,
-        schema: arrow::datatypes::SchemaRef,
-        file_path: &Path,
-        table_name: &str,
-        file_sort_order: Option<Vec<Expr>>,
-        with_unbounded_execution: bool,
-    ) -> Result<()> {
-        // Mark infinite and provide schema:
-        let fifo_options = CsvReadOptions::new()
-            .schema(schema.as_ref())
-            .mark_infinite(with_unbounded_execution);
-        // Get listing options:
-        let options_sort = fifo_options
-            .to_listing_options(&ctx.copied_config())
-            .with_file_sort_order(file_sort_order);
-        // Register table:
-        ctx.register_listing_table(
-            table_name,
-            file_path.as_os_str().to_str().unwrap(),
-            options_sort,
-            Some(schema),
-            None,
-        )
-        .await?;
-        Ok(())
     }
 
     // This test provides a relatively realistic end-to-end scenario where
