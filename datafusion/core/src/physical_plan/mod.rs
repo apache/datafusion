@@ -127,7 +127,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     ///
     /// It is safe to return `None` here if your operator does not
     /// have any particular output order here
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>>;
 
     /// Specifies the data distribution requirements for all the
     /// children for this operator, By default it's [[Distribution::UnspecifiedDistribution]] for each child,

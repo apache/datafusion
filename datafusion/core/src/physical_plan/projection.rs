@@ -191,8 +191,8 @@ impl ExecutionPlan for ProjectionExec {
         }
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.output_ordering.as_deref()
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
+        self.output_ordering.clone()
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

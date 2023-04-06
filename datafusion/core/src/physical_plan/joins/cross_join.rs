@@ -200,7 +200,7 @@ impl ExecutionPlan for CrossJoinExec {
     }
 
     // TODO check the output ordering of CrossJoin
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         None
     }
 

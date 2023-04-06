@@ -131,7 +131,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         vec![Some(make_sort_requirements_from_exprs(&self.expr))]
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         self.input.output_ordering()
     }
 

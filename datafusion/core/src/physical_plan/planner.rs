@@ -2420,7 +2420,7 @@ mod tests {
             Partitioning::UnknownPartitioning(1)
         }
 
-        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
             None
         }
 

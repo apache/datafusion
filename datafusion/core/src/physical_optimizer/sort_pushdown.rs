@@ -126,9 +126,11 @@ pub(crate) fn pushdown_sorts(
     let err = || DataFusionError::Plan(ERR_MSG.to_string());
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         let mut new_plan = plan.clone();
-        if !ordering_satisfy_requirement(plan.output_ordering(), parent_required, || {
-            plan.equivalence_properties()
-        }) {
+        if !ordering_satisfy_requirement(
+            plan.output_ordering().as_deref(),
+            parent_required,
+            || plan.equivalence_properties(),
+        ) {
             // If the current plan is a SortExec, modify it to satisfy parent requirements:
             let parent_required_expr =
                 make_sort_exprs_from_requirements(parent_required.ok_or_else(err)?);
@@ -137,6 +139,7 @@ pub(crate) fn pushdown_sorts(
         };
         let required_ordering = new_plan
             .output_ordering()
+            .as_deref()
             .map(make_sort_requirements_from_exprs);
         // Since new_plan is a SortExec, we can safely get the 0th index.
         let child = &new_plan.children()[0];
@@ -155,9 +158,11 @@ pub(crate) fn pushdown_sorts(
         }
     } else {
         // Executors other than SortExec
-        if ordering_satisfy_requirement(plan.output_ordering(), parent_required, || {
-            plan.equivalence_properties()
-        }) {
+        if ordering_satisfy_requirement(
+            plan.output_ordering().as_deref(),
+            parent_required,
+            || plan.equivalence_properties(),
+        ) {
             // Satisfies parent requirements, immediately return.
             return Ok(Transformed::Yes(SortPushDown {
                 required_ordering: None,

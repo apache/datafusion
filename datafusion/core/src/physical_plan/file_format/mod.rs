@@ -704,14 +704,14 @@ impl From<ObjectMeta> for FileMeta {
 ///```
 pub(crate) fn get_output_ordering(
     base_config: &FileScanConfig,
-) -> Option<&[PhysicalSortExpr]> {
+) -> Option<Vec<PhysicalSortExpr>> {
     base_config.output_ordering.as_ref()
         .map(|output_ordering| if base_config.file_groups.iter().any(|group| group.len() > 1) {
             debug!("Skipping specified output ordering {:?}. Some file group had more than one file: {:?}",
                    output_ordering, base_config.file_groups);
             None
         } else {
-            Some(output_ordering.as_slice())
+            Some(output_ordering.to_vec())
         }).unwrap_or_else(|| None)
 }
 

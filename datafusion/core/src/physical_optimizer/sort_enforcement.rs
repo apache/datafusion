@@ -462,7 +462,7 @@ fn ensure_sorting(
         match (required_ordering, physical_ordering) {
             (Some(required_ordering), Some(physical_ordering)) => {
                 if !ordering_satisfy_requirement_concrete(
-                    physical_ordering,
+                    &physical_ordering,
                     &required_ordering,
                     || child.equivalence_properties(),
                 ) {
@@ -527,8 +527,8 @@ fn analyze_immediate_sort_removal(
         let sort_input = sort_exec.input().clone();
         // If this sort is unnecessary, we should remove it:
         if ordering_satisfy(
-            sort_input.output_ordering(),
-            sort_exec.output_ordering(),
+            sort_input.output_ordering().as_deref(),
+            sort_exec.output_ordering().as_deref(),
             || sort_input.equivalence_properties(),
         ) {
             // Since we know that a `SortExec` has exactly one child,
@@ -606,7 +606,7 @@ fn analyze_window_sort_removal(
                 window_expr[0].partition_by(),
                 required_ordering,
                 &sort_input.schema(),
-                physical_ordering,
+                &physical_ordering,
             )? {
                 if should_reverse == *needs_reverse.get_or_insert(should_reverse) {
                     continue;

@@ -379,7 +379,7 @@ impl ExecutionPlan for UnboundedExec {
     fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
         Ok(self.batch_produce.is_none())
     }
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         None
     }
 

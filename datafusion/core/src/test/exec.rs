@@ -146,7 +146,7 @@ impl ExecutionPlan for MockExec {
         Partitioning::UnknownPartitioning(1)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         None
     }
 
@@ -284,7 +284,7 @@ impl ExecutionPlan for BarrierExec {
         Partitioning::UnknownPartitioning(self.data.len())
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         None
     }
 
@@ -384,7 +384,7 @@ impl ExecutionPlan for ErrorExec {
         Partitioning::UnknownPartitioning(1)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         None
     }
 
@@ -462,7 +462,7 @@ impl ExecutionPlan for StatisticsExec {
         Partitioning::UnknownPartitioning(2)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         None
     }
 
@@ -560,7 +560,7 @@ impl ExecutionPlan for BlockingExec {
         Partitioning::UnknownPartitioning(self.n_partitions)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         None
     }
 

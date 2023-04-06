@@ -412,7 +412,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     }
 
     // TODO: Output ordering might be kept for some cases.
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         None
     }
 
@@ -499,13 +499,12 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                         for (join_side, child) in join_sides.iter().zip(children.iter()) {
                             let sorted_expr = child
                                 .output_ordering()
-                                .and_then(|orders| orders.first())
-                                .and_then(|order| {
+                                .and_then(|orders| {
                                     build_filter_input_order(
                                         *join_side,
                                         filter,
                                         &child.schema(),
-                                        order,
+                                        &orders[0],
                                     )
                                     .transpose()
                                 })
