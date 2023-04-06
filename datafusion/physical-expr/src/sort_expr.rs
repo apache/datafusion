@@ -80,23 +80,20 @@ impl PhysicalSortExpr {
 
 /// Represents sort requirement associated with a plan
 ///
-/// If the requirement is *exact*
-/// ([`PhysicalSortRequirement::new_exact`]), then the sort
-/// requirement will only be satisfied if it matches both the
-/// expression *and* the sort options.
+/// If the requirement incudes [`SortOptions`] then both the
+/// expression *and* the sort options must match.
 ///
-/// If the requirement is *`expr_only`
-/// ([`PhysicalSortRequirement::new_expr_only`]) then only the expr
-/// must match, to satisfy the requirement.
+/// If the requirement does not include [`SortOptions`]) then only the
+/// expressions must match.
 ///
 /// # Examples
 ///
-/// Given an `exact` sort requirement of (`A`, `DESC NULLS FIRST`):
+/// With sort options (`A`, `DESC NULLS FIRST`):
 /// * `ORDER BY A DESC NULLS FIRST` matches
 /// * `ORDER BY A ASC  NULLS FIRST` does not match (`ASC` vs `DESC`)
 /// * `ORDER BY B DESC NULLS FIRST` does not match (different expr)
 ///
-/// Given an `expr_only` sort requirement of (`A`, None):
+/// Without sort options (`A`, None):
 /// * `ORDER BY A DESC NULLS FIRST` matches
 /// * `ORDER BY A ASC  NULLS FIRST` matches (`ASC` and `NULL` options ignored)
 /// * `ORDER BY B DESC NULLS FIRST` does not match  (different expr)
