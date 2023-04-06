@@ -166,7 +166,7 @@ where
 /// This function finds the partition points according to `partition_columns`.
 /// If there are no sort columns, then the result will be a single element
 /// vector containing one partition range spanning all data.
-pub fn evaluate_partition_points(
+pub fn evaluate_partition_ranges(
     num_rows: usize,
     partition_columns: &[SortColumn],
 ) -> Result<Vec<Range<usize>>> {
@@ -427,7 +427,7 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_partition_points() -> Result<()> {
+    fn test_evaluate_partition_ranges() -> Result<()> {
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(Float64Array::from_slice([1.0, 1.0, 1.0, 2.0, 2.0, 2.0])),
             Arc::new(Float64Array::from_slice([4.0, 4.0, 3.0, 2.0, 1.0, 1.0])),
@@ -451,7 +451,7 @@ mod tests {
                 options: Some(options),
             })
             .collect::<Vec<_>>();
-        let ranges = evaluate_partition_points(n_row, &sort_columns)?;
+        let ranges = evaluate_partition_ranges(n_row, &sort_columns)?;
         assert_eq!(ranges.len(), 4);
         assert_eq!(ranges[0], Range { start: 0, end: 2 });
         assert_eq!(ranges[1], Range { start: 2, end: 3 });

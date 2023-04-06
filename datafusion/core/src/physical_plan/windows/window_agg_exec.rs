@@ -37,7 +37,7 @@ use arrow::{
     datatypes::{Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use datafusion_common::utils::evaluate_partition_points;
+use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::stream::Stream;
@@ -334,7 +334,7 @@ impl WindowAggStream {
             .map(|elem| elem.evaluate_to_sort_column(&batch))
             .collect::<Result<Vec<_>>>()?;
         let partition_points =
-            evaluate_partition_points(batch.num_rows(), &partition_by_sort_keys)?;
+            evaluate_partition_ranges(batch.num_rows(), &partition_by_sort_keys)?;
 
         let mut partition_results = vec![];
         // Calculate window cols

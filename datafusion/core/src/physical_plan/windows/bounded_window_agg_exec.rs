@@ -47,7 +47,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::physical_plan::windows::calc_requirements;
-use datafusion_common::utils::evaluate_partition_points;
+use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_physical_expr::window::{
     PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
     WindowAggState, WindowState,
@@ -363,7 +363,7 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
         let num_rows = record_batch.num_rows();
         if num_rows > 0 {
             let partition_points =
-                evaluate_partition_points(num_rows, &partition_columns)?;
+                evaluate_partition_ranges(num_rows, &partition_columns)?;
             for partition_range in partition_points {
                 let partition_row = partition_columns
                     .iter()
