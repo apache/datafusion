@@ -370,12 +370,12 @@ impl ExecutionPlan for HashJoinExec {
     ) -> Result<SendableRecordBatchStream> {
         let on_left = self.on.iter().map(|on| on.0.clone()).collect::<Vec<_>>();
         let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
-        if self.mode == PartitionMode::Partitioned
-            && self.left.output_partitioning().partition_count()
-                != self.right.output_partitioning().partition_count()
-        {
+        let left_partitions = self.left.output_partitioning().partition_count();
+        let right_partitions = self.right.output_partitioning().partition_count();
+        if left_partitions != right_partitions {
             return Err(DataFusionError::Internal(format!(
-                "Invalid HashJoinExec, partition count mismatch between children executors, consider using RepartitionExec",
+                "Invalid HashJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
+                 consider using RepartitionExec",
             )));
         }
 
