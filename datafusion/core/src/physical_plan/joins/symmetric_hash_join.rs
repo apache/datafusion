@@ -1505,7 +1505,7 @@ mod tests {
         hash_join_utils::tests::complicated_filter, HashJoinExec, PartitionMode,
     };
     use crate::physical_plan::{
-        common, memory::MemoryExec, repartition::RepartitionExec,
+        common, displayable, memory::MemoryExec, repartition::RepartitionExec,
     };
     use crate::prelude::{CsvReadOptions, SessionConfig, SessionContext};
     use crate::test_util::register_unbounded_file_with_ordering;
@@ -2224,9 +2224,7 @@ mod tests {
         let sql = "SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10";
         let dataframe = ctx.sql(sql).await?;
         let physical_plan = dataframe.create_physical_plan().await?;
-        let formatted = crate::physical_plan::displayable(physical_plan.as_ref())
-            .indent()
-            .to_string();
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
         let expected = {
             [
                 "SymmetricHashJoinExec: join_type=Full, on=[(Column { name: \"a2\", index: 1 }, Column { name: \"a2\", index: 1 })], filter=BinaryExpr { left: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 0 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Gt, right: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 1 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Plus, right: Literal { value: Int64(3) } } }, op: And, right: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 0 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Lt, right: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 1 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Plus, right: Literal { value: Int64(10) } } } }",
@@ -2251,7 +2249,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test]
     async fn join_change_in_planner_without_sort() -> Result<()> {
         let config = SessionConfig::new().with_target_partitions(8);
         let ctx = SessionContext::with_config(config);
@@ -2279,9 +2277,7 @@ mod tests {
         let sql = "SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10";
         let dataframe = ctx.sql(sql).await?;
         let physical_plan = dataframe.create_physical_plan().await?;
-        let formatted = crate::physical_plan::displayable(physical_plan.as_ref())
-            .indent()
-            .to_string();
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
         let expected = {
             [
                 "SymmetricHashJoinExec: join_type=Full, on=[(Column { name: \"a2\", index: 1 }, Column { name: \"a2\", index: 1 })], filter=BinaryExpr { left: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 0 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Gt, right: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 1 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Plus, right: Literal { value: Int64(3) } } }, op: And, right: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 0 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Lt, right: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 1 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Plus, right: Literal { value: Int64(10) } } } }",
@@ -2306,7 +2302,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test]
     async fn join_change_in_planner_without_sort_not_allowed() -> Result<()> {
         let config = SessionConfig::new()
             .with_target_partitions(8)
