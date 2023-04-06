@@ -186,7 +186,13 @@ fn sum_decimal_batch(values: &ArrayRef, precision: u8, scale: i8) -> Result<Scal
 
 // sums the array and returns a ScalarValue of its corresponding type.
 pub(crate) fn sum_batch(values: &ArrayRef, sum_type: &DataType) -> Result<ScalarValue> {
-    let values = &cast(values, sum_type)?;
+    // TODO refine the cast kernel in arrow-rs
+    let cast_values = if values.data_type() != sum_type {
+        Some(cast(values, sum_type)?)
+    } else {
+        None
+    };
+    let values = cast_values.as_ref().unwrap_or(values);
     Ok(match values.data_type() {
         DataType::Decimal128(precision, scale) => {
             sum_decimal_batch(values, *precision, *scale)?
