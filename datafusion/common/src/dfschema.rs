@@ -735,6 +735,8 @@ impl DFField {
 
 #[cfg(test)]
 mod tests {
+    use crate::assert_contains;
+
     use super::*;
     use arrow::datatypes::DataType;
 
@@ -745,8 +747,28 @@ mod tests {
         // lookup with unqualified name "t1.c0"
         let err = schema.index_of_column(&col).unwrap_err();
         assert_eq!(
-            r#"Schema error: No field named "t1.c0". Valid fields are "t1"."c0", "t1"."c1"."#,
-            &format!("{err}")
+            err.to_string(),
+            "Schema error: No field named \"t1.c0\". Valid fields are t1.c0, t1.c1.",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn quoted_qualifiers_in_name() -> Result<()> {
+        let col = Column::from_name("t1.c0");
+        let schema = DFSchema::try_from_qualified_schema(
+            "t1",
+            &Schema::new(vec![
+                Field::new("CapitalColumn", DataType::Boolean, true),
+                Field::new("field.with.period", DataType::Boolean, true),
+            ]),
+        )?;
+
+        // lookup with unqualified name "t1.c0"
+        let err = schema.index_of_column(&col).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Schema error: No field named \"t1.c0\". Valid fields are t1.\"CapitalColumn\", t1.\"field.with.period\".",
         );
         Ok(())
     }
@@ -819,11 +841,9 @@ mod tests {
         let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let right = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let join = left.join(&right);
-        assert!(join.is_err());
         assert_eq!(
-            "Schema error: Schema contains duplicate \
-        qualified field name \"t1\".\"c0\"",
-            &format!("{}", join.err().unwrap())
+            join.unwrap_err().to_string(),
+            "Schema error: Schema contains duplicate qualified field name t1.c0",
         );
         Ok(())
     }
@@ -833,11 +853,9 @@ mod tests {
         let left = DFSchema::try_from(test_schema_1())?;
         let right = DFSchema::try_from(test_schema_1())?;
         let join = left.join(&right);
-        assert!(join.is_err());
         assert_eq!(
-            "Schema error: Schema contains duplicate \
-        unqualified field name \"c0\"",
-            &format!("{}", join.err().unwrap())
+            join.unwrap_err().to_string(),
+            "Schema error: Schema contains duplicate unqualified field name c0",
         );
         Ok(())
     }
@@ -872,12 +890,9 @@ mod tests {
         let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let right = DFSchema::try_from(test_schema_1())?;
         let join = left.join(&right);
-        assert!(join.is_err());
-        assert_eq!(
-            "Schema error: Schema contains qualified \
-        field name \"t1\".\"c0\" and unqualified field name \"c0\" which would be ambiguous",
-            &format!("{}", join.err().unwrap())
-        );
+        assert_contains!(join.unwrap_err().to_string(),
+                         "Schema error: Schema contains qualified \
+                          field name t1.c0 and unqualified field name c0 which would be ambiguous");
         Ok(())
     }
 
@@ -885,29 +900,28 @@ mod tests {
     #[test]
     fn helpful_error_messages() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-        let expected_help = "Valid fields are \"t1\".\"c0\", \"t1\".\"c1\".";
+        let expected_help = "Valid fields are t1.c0, t1.c1.";
         // Pertinent message parts
         let expected_err_msg = "Fully qualified field name 't1.c0'";
-        assert!(schema
-            .field_with_qualified_name(&TableReference::bare("x"), "y")
-            .unwrap_err()
-            .to_string()
-            .contains(expected_help));
-        assert!(schema
-            .field_with_unqualified_name("y")
-            .unwrap_err()
-            .to_string()
-            .contains(expected_help));
-        assert!(schema
-            .index_of("y")
-            .unwrap_err()
-            .to_string()
-            .contains(expected_help));
-        assert!(schema
-            .index_of("t1.c0")
-            .unwrap_err()
-            .to_string()
-            .contains(expected_err_msg));
+        assert_contains!(
+            schema
+                .field_with_qualified_name(&TableReference::bare("x"), "y")
+                .unwrap_err()
+                .to_string(),
+            expected_help
+        );
+        assert_contains!(
+            schema
+                .field_with_unqualified_name("y")
+                .unwrap_err()
+                .to_string(),
+            expected_help
+        );
+        assert_contains!(schema.index_of("y").unwrap_err().to_string(), expected_help);
+        assert_contains!(
+            schema.index_of("t1.c0").unwrap_err().to_string(),
+            expected_err_msg
+        );
         Ok(())
     }
 
@@ -916,16 +930,13 @@ mod tests {
         let schema = DFSchema::empty();
 
         let col = Column::from_qualified_name("t1.c0");
-        let err = schema.index_of_column(&col).err().unwrap();
-        assert_eq!(
-            r#"Schema error: No field named "t1"."c0"."#,
-            &format!("{err}")
-        );
+        let err = schema.index_of_column(&col).unwrap_err();
+        assert_eq!(err.to_string(), "Schema error: No field named t1.c0.");
 
         // the same check without qualifier
         let col = Column::from_name("c0");
         let err = schema.index_of_column(&col).err().unwrap();
-        assert_eq!(r#"Schema error: No field named "c0"."#, &format!("{err}"));
+        assert_eq!("Schema error: No field named c0.", err.to_string());
     }
 
     #[test]

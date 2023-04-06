@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::SchemaRef;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
 use datafusion_common::DFField;
 use datafusion_common::DataFusionError;
@@ -36,7 +35,7 @@ pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
         let mut rows = vec![];
         for batch in batches {
             // Verify schema
-            if !equivalent_names_and_types(&schema, batch.schema()) {
+            if !schema.contains(&batch.schema()) {
                 return Err(DFSqlLogicTestError::DataFusion(DataFusionError::Internal(
                     format!(
                         "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
@@ -136,24 +135,20 @@ fn workspace_root() -> object_store::path::Path {
         .expect("parent of datafusion")
         .to_string_lossy();
 
-    object_store::path::Path::parse(workspace_root).unwrap()
+    let sanitized_workplace_root = if cfg!(windows) {
+        // Object store paths are delimited with `/`, e.g. `D:/a/arrow-datafusion/arrow-datafusion/testing/data/csv/aggregate_test_100.csv`.
+        // The default windows delimiter is `\`, so the workplace path is `D:\a\arrow-datafusion\arrow-datafusion`.
+        workspace_root.replace(std::path::MAIN_SEPARATOR, object_store::path::DELIMITER)
+    } else {
+        workspace_root.to_string()
+    };
+
+    object_store::path::Path::parse(sanitized_workplace_root).unwrap()
 }
 
-// holds the root directory (
+// holds the root directory
 lazy_static! {
     static ref WORKSPACE_ROOT: object_store::path::Path = workspace_root();
-}
-
-/// Check two schemas for being equal for field names/types
-fn equivalent_names_and_types(schema: &SchemaRef, other: SchemaRef) -> bool {
-    if schema.fields().len() != other.fields().len() {
-        return false;
-    }
-    let self_fields = schema.fields().iter();
-    let other_fields = other.fields().iter();
-    self_fields
-        .zip(other_fields)
-        .all(|(f1, f2)| f1.name() == f2.name() && f1.data_type() == f2.data_type())
 }
 
 /// Convert a single batch to a `Vec<Vec<String>>` for comparison

@@ -49,14 +49,16 @@ async fn window_frame_creation_type_checking() -> Result<()> {
     // Error is returned from the physical plan.
     check_query(
         true,
-        "Internal error: Operator - is not implemented for types UInt32(1) and Utf8(\"1 DAY\")."
-    ).await?;
+        r#"Execution error: Cannot cast Utf8("1 DAY") to UInt32"#,
+    )
+    .await?;
 
     // Error is returned from the logical plan.
     check_query(
         false,
-        "Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: Execution error: Cannot cast Utf8(\"1 DAY\") to UInt32."
-    ).await
+        r#"Execution error: Cannot cast Utf8("1 DAY") to UInt32"#,
+    )
+    .await
 }
 
 // Return a static RecordBatch and its ordering for tests. RecordBatch is ordered by ts
@@ -613,7 +615,7 @@ mod tests {
                 "          BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: CurrentRow, end_bound: Following(UInt64(1)) }], mode=[Sorted]",
                 "            SortExec: expr=[low_card_col2@1 ASC NULLS LAST,low_card_col1@0 ASC NULLS LAST,unsorted_col@3 ASC NULLS LAST,inc_col@2 ASC NULLS LAST]",
                 "              BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(5)), end_bound: Following(UInt64(5)) }], mode=[Sorted]",
-                "                SortExec: expr=[low_card_col2@1 ASC NULLS LAST,low_card_col1@0 ASC NULLS LAST,inc_col@2 ASC NULLS LAST]",
+                "                SortExec: expr=[low_card_col1@0 ASC NULLS LAST,low_card_col2@1 ASC NULLS LAST,inc_col@2 ASC NULLS LAST]",
                 "                  BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Following(UInt64(1)), end_bound: Following(UInt64(5)) }], mode=[Sorted]",
                 "                    SortExec: expr=[low_card_col1@0 ASC NULLS LAST,unsorted_col@3 ASC NULLS LAST,low_card_col2@1 ASC NULLS LAST,inc_col@2 ASC NULLS LAST]",
                 "                      BoundedWindowAggExec: wdw=[SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data2.inc_col): Ok(Field { name: \"SUM(annotated_data2.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(5)), end_bound: CurrentRow }], mode=[Sorted]",

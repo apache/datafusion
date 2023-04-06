@@ -51,11 +51,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::physical_optimizer::utils::get_at_indices;
 use crate::physical_plan::windows::calc_requirements;
 use arrow::compute::sort_to_indices;
 use datafusion_common::utils::{
-    get_arrayref_at_indices, get_record_batch_at_indices, get_row_at_idx,
+    get_arrayref_at_indices, get_at_indices, get_record_batch_at_indices, get_row_at_idx,
 };
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::hash_utils::create_hashes;
@@ -64,7 +63,9 @@ use datafusion_physical_expr::window::{
     PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
     WindowAggState, WindowState,
 };
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_expr::{
+    EquivalenceProperties, PhysicalExpr, PhysicalSortRequirement,
+};
 use hashbrown::raw::RawTable;
 use indexmap::IndexMap;
 use log::debug;
@@ -151,11 +152,16 @@ impl BoundedWindowAggExec {
                 let input_ordering = input.output_ordering().unwrap_or(&[]);
                 let input_ordering_exprs = convert_to_expr(input_ordering);
                 let equal_properties = || input.equivalence_properties();
-                get_indices_of_matching_exprs(
-                    partition_by_exprs,
+                let indices = get_indices_of_matching_exprs(
                     &input_ordering_exprs,
+                    partition_by_exprs,
                     equal_properties,
-                )
+                );
+                if indices.len() == partition_by_exprs.len(){
+                    indices
+                } else{
+                    (0..partition_by_exprs.len()).collect::<Vec<_>>()
+                }
             }
             PartitionSearchMode::PartiallySorted(ordered_indices) => {
                 ordered_indices.clone()
@@ -259,12 +265,31 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self.input().output_ordering()
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortExpr>>> {
-        let reqs = calc_requirements(
-            self.window_expr[0].partition_by(),
-            self.window_expr[0].order_by(),
-        );
-        vec![reqs]
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+        let partition_bys = self.window_expr()[0].partition_by();
+        let order_keys = self.window_expr()[0].order_by();
+        match &self.partition_search_mode{
+            PartitionSearchMode::Sorted => {
+                if self.ordered_partition_by_indices.len() < partition_bys.len() {
+                    vec![calc_requirements(partition_bys, order_keys)]
+                } else {
+                    let partition_bys = self
+                        .ordered_partition_by_indices
+                        .iter()
+                        .map(|idx| partition_bys[*idx].clone())
+                        .collect::<Vec<_>>();
+                    vec![calc_requirements(&partition_bys, order_keys)]
+                }
+            }
+            _ => {
+                let partition_bys = self
+                    .ordered_partition_by_indices
+                    .iter()
+                    .map(|idx| partition_bys[*idx].clone())
+                    .collect::<Vec<_>>();
+                vec![calc_requirements(&partition_bys, order_keys)]
+            }
+        }
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -272,7 +297,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
             debug!("No partition defined for BoundedWindowAggExec!!!");
             vec![Distribution::SinglePartition]
         } else {
-            //TODO support PartitionCollections if there is no common partition columns in the window_expr
             vec![Distribution::HashPartitioned(self.partition_keys.clone())]
         }
     }

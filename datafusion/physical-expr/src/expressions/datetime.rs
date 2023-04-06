@@ -17,24 +17,22 @@
 
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
-use arrow::array::{Array, ArrayRef};
-use arrow::compute::unary;
+use arrow::array::{Array, ArrayRef, PrimitiveArray};
+use arrow::compute::{binary, unary};
 use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Schema, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    ArrowNativeTypeOp, DataType, Date32Type, Date64Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalYearMonthType, Schema, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType,
 };
 use arrow::record_batch::RecordBatch;
-use datafusion_common::cast::{
-    as_date32_array, as_date64_array, as_timestamp_microsecond_array,
-    as_timestamp_millisecond_array, as_timestamp_nanosecond_array,
-    as_timestamp_second_array,
-};
-use datafusion_common::scalar::{
-    date32_add, date64_add, microseconds_add, milliseconds_add, nanoseconds_add,
-    seconds_add,
-};
+use arrow_schema::IntervalUnit;
+use chrono::NaiveDateTime;
+use datafusion_common::cast::*;
+use datafusion_common::scalar::*;
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_expr::type_coercion::binary::coerce_types;
 use datafusion_expr::{ColumnarValue, Operator};
 use std::any::Any;
 use std::fmt::{Display, Formatter};
@@ -59,27 +57,29 @@ impl DateTimeIntervalExpr {
         rhs: Arc<dyn PhysicalExpr>,
         input_schema: &Schema,
     ) -> Result<Self> {
-        match lhs.data_type(input_schema)? {
-            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
-                match rhs.data_type(input_schema)? {
-                    DataType::Interval(_) => match &op {
-                        Operator::Plus | Operator::Minus => Ok(Self {
-                            lhs,
-                            op,
-                            rhs,
-                            input_schema: input_schema.clone(),
-                        }),
-                        _ => Err(DataFusionError::Execution(format!(
-                            "Invalid operator '{op}' for DateIntervalExpr"
-                        ))),
-                    },
-                    other => Err(DataFusionError::Execution(format!(
-                        "Operation '{op}' not support for type {other}"
-                    ))),
-                }
-            }
-            other => Err(DataFusionError::Execution(format!(
-                "Invalid lhs type '{other}' for DateIntervalExpr"
+        match (
+            lhs.data_type(input_schema)?,
+            op,
+            rhs.data_type(input_schema)?,
+        ) {
+            (
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
+                Operator::Plus | Operator::Minus,
+                DataType::Interval(_),
+            )
+            | (DataType::Timestamp(_, _), Operator::Minus, DataType::Timestamp(_, _))
+            | (
+                DataType::Interval(_),
+                Operator::Plus | Operator::Minus,
+                DataType::Interval(_),
+            ) => Ok(Self {
+                lhs,
+                op,
+                rhs,
+                input_schema: input_schema.clone(),
+            }),
+            (lhs, _, rhs) => Err(DataFusionError::Execution(format!(
+                "Invalid operation between '{lhs}' and '{rhs}' for DateIntervalExpr"
             ))),
         }
     }
@@ -112,7 +112,11 @@ impl PhysicalExpr for DateTimeIntervalExpr {
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        self.lhs.data_type(input_schema)
+        coerce_types(
+            &self.lhs.data_type(input_schema)?,
+            &Operator::Minus,
+            &self.rhs.data_type(input_schema)?,
+        )
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
@@ -120,18 +124,8 @@ impl PhysicalExpr for DateTimeIntervalExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let dates = self.lhs.evaluate(batch)?;
-        let intervals = self.rhs.evaluate(batch)?;
-
-        // Unwrap interval to add
-        let intervals = match &intervals {
-            ColumnarValue::Scalar(interval) => interval,
-            _ => {
-                let msg = "Columnar execution is not yet supported for DateIntervalExpr";
-                return Err(DataFusionError::Execution(msg.to_string()));
-            }
-        };
-
+        let lhs_value = self.lhs.evaluate(batch)?;
+        let rhs_value = self.rhs.evaluate(batch)?;
         // Invert sign for subtraction
         let sign = match self.op {
             Operator::Plus => 1,
@@ -142,14 +136,30 @@ impl PhysicalExpr for DateTimeIntervalExpr {
                 return Err(DataFusionError::Internal(msg.to_string()));
             }
         };
+        // RHS is first checked. If it is a Scalar, there are 2 options:
+        // Either LHS is also a Scalar and matching operation is applied,
+        // or LHS is an Array and unary operations for related types are
+        // applied in evaluate_array function. If RHS is an Array, then
+        // LHS must also be, moreover; they must be the same Timestamp type.
+        match (lhs_value, rhs_value) {
+            (ColumnarValue::Scalar(operand_lhs), ColumnarValue::Scalar(operand_rhs)) => {
+                Ok(ColumnarValue::Scalar(if sign > 0 {
+                    operand_lhs.add(&operand_rhs)?
+                } else {
+                    operand_lhs.sub(&operand_rhs)?
+                }))
+            }
+            (ColumnarValue::Array(array_lhs), ColumnarValue::Scalar(operand_rhs)) => {
+                evaluate_array(array_lhs, sign, &operand_rhs)
+            }
 
-        match dates {
-            ColumnarValue::Scalar(operand) => Ok(ColumnarValue::Scalar(if sign > 0 {
-                operand.add(intervals)?
-            } else {
-                operand.sub(intervals)?
-            })),
-            ColumnarValue::Array(array) => evaluate_array(array, sign, intervals),
+            (ColumnarValue::Array(array_lhs), ColumnarValue::Array(array_rhs)) => {
+                evaluate_temporal_arrays(&array_lhs, sign, &array_rhs)
+            }
+            (_, _) => {
+                let msg = "If RHS of the operation is an array, then LHS also must be";
+                Err(DataFusionError::Internal(msg.to_string()))
+            }
         }
     }
 
@@ -237,6 +247,487 @@ pub fn evaluate_array(
         )))?,
     };
     Ok(ColumnarValue::Array(ret))
+}
+
+macro_rules! ts_sub_op {
+    ($lhs:ident, $rhs:ident, $lhs_tz:ident, $rhs_tz:ident, $coef:expr, $caster:expr, $op:expr, $ts_unit:expr, $mode:expr, $type_out:ty) => {{
+        let prim_array_lhs = $caster(&$lhs)?;
+        let prim_array_rhs = $caster(&$rhs)?;
+        let ret: PrimitiveArray<$type_out> =
+            arrow::compute::try_binary(prim_array_lhs, prim_array_rhs, |ts1, ts2| {
+                let (parsed_lhs_tz, parsed_rhs_tz) =
+                    (parse_timezones($lhs_tz)?, parse_timezones($rhs_tz)?);
+                let (naive_lhs, naive_rhs) = calculate_naives::<$mode>(
+                    ts1.mul_wrapping($coef),
+                    parsed_lhs_tz,
+                    ts2.mul_wrapping($coef),
+                    parsed_rhs_tz,
+                )?;
+                Ok($op($ts_unit(&naive_lhs), $ts_unit(&naive_rhs)))
+            })?;
+        Arc::new(ret) as ArrayRef
+    }};
+}
+macro_rules! interval_op {
+    ($lhs:ident, $rhs:ident, $caster:expr, $op:expr, $sign:ident, $type_in:ty) => {{
+        let prim_array_lhs = $caster(&$lhs)?;
+        let prim_array_rhs = $caster(&$rhs)?;
+        let ret = Arc::new(binary::<$type_in, $type_in, _, $type_in>(
+            prim_array_lhs,
+            prim_array_rhs,
+            |interval1, interval2| $op(interval1, interval2, $sign),
+        )?) as ArrayRef;
+        ret
+    }};
+}
+macro_rules! interval_cross_op {
+    ($lhs:ident, $rhs:ident, $caster1:expr, $caster2:expr, $op:expr, $sign:ident, $commute:ident, $type_in1:ty, $type_in2:ty) => {{
+        let prim_array_lhs = $caster1(&$lhs)?;
+        let prim_array_rhs = $caster2(&$rhs)?;
+        let ret = Arc::new(binary::<$type_in1, $type_in2, _, IntervalMonthDayNanoType>(
+            prim_array_lhs,
+            prim_array_rhs,
+            |interval1, interval2| $op(interval1, interval2, $sign, $commute),
+        )?) as ArrayRef;
+        ret
+    }};
+}
+macro_rules! ts_interval_op {
+    ($lhs:ident, $rhs:ident, $tz:ident, $caster1:expr, $caster2:expr, $op:expr, $sign:ident, $type_in1:ty, $type_in2:ty) => {{
+        let prim_array_lhs = $caster1(&$lhs)?;
+        let prim_array_rhs = $caster2(&$rhs)?;
+        let ret: PrimitiveArray<$type_in1> = arrow::compute::try_binary(
+            prim_array_lhs,
+            prim_array_rhs,
+            |ts, interval| Ok($op(ts, interval as i128, $sign)?),
+        )?;
+        Arc::new(ret.with_timezone_opt($tz.clone())) as ArrayRef
+    }};
+}
+// This function evaluates temporal array operations, such as timestamp - timestamp, interval + interval,
+// timestamp + interval, and interval + timestamp. It takes two arrays as input and an integer sign representing
+// the operation (+1 for addition and -1 for subtraction). It returns a ColumnarValue as output, which can hold
+// either a scalar or an array.
+pub fn evaluate_temporal_arrays(
+    array_lhs: &ArrayRef,
+    sign: i32,
+    array_rhs: &ArrayRef,
+) -> Result<ColumnarValue> {
+    let ret = match (array_lhs.data_type(), array_rhs.data_type()) {
+        // Timestamp - Timestamp operations, operands of only the same types are supported.
+        (DataType::Timestamp(_, _), DataType::Timestamp(_, _)) => {
+            ts_array_op(array_lhs, array_rhs)?
+        }
+        // Interval (+ , -) Interval operations
+        (DataType::Interval(_), DataType::Interval(_)) => {
+            interval_array_op(array_lhs, array_rhs, sign)?
+        }
+        // Timestamp (+ , -) Interval and Interval + Timestamp operations
+        // Interval - Timestamp operation is not rational hence not supported
+        (DataType::Timestamp(_, _), DataType::Interval(_)) => {
+            ts_interval_array_op(array_lhs, sign, array_rhs)?
+        }
+        (DataType::Interval(_), DataType::Timestamp(_, _)) if sign == 1 => {
+            ts_interval_array_op(array_rhs, sign, array_lhs)?
+        }
+        (_, _) => Err(DataFusionError::Execution(format!(
+            "Invalid array types for DateIntervalExpr: {:?} {} {:?}",
+            array_lhs.data_type(),
+            sign,
+            array_rhs.data_type()
+        )))?,
+    };
+    Ok(ColumnarValue::Array(ret))
+}
+
+/// Performs a timestamp subtraction operation on two arrays and returns the resulting array.
+fn ts_array_op(array_lhs: &ArrayRef, array_rhs: &ArrayRef) -> Result<ArrayRef> {
+    match (array_lhs.data_type(), array_rhs.data_type()) {
+        (
+            DataType::Timestamp(TimeUnit::Second, opt_tz_lhs),
+            DataType::Timestamp(TimeUnit::Second, opt_tz_rhs),
+        ) => Ok(ts_sub_op!(
+            array_lhs,
+            array_rhs,
+            opt_tz_lhs,
+            opt_tz_rhs,
+            1000i64,
+            as_timestamp_second_array,
+            seconds_sub,
+            NaiveDateTime::timestamp,
+            MILLISECOND_MODE,
+            IntervalDayTimeType
+        )),
+        (
+            DataType::Timestamp(TimeUnit::Millisecond, opt_tz_lhs),
+            DataType::Timestamp(TimeUnit::Millisecond, opt_tz_rhs),
+        ) => Ok(ts_sub_op!(
+            array_lhs,
+            array_rhs,
+            opt_tz_lhs,
+            opt_tz_rhs,
+            1i64,
+            as_timestamp_millisecond_array,
+            milliseconds_sub,
+            NaiveDateTime::timestamp_millis,
+            MILLISECOND_MODE,
+            IntervalDayTimeType
+        )),
+        (
+            DataType::Timestamp(TimeUnit::Microsecond, opt_tz_lhs),
+            DataType::Timestamp(TimeUnit::Microsecond, opt_tz_rhs),
+        ) => Ok(ts_sub_op!(
+            array_lhs,
+            array_rhs,
+            opt_tz_lhs,
+            opt_tz_rhs,
+            1000i64,
+            as_timestamp_microsecond_array,
+            microseconds_sub,
+            NaiveDateTime::timestamp_micros,
+            NANOSECOND_MODE,
+            IntervalMonthDayNanoType
+        )),
+        (
+            DataType::Timestamp(TimeUnit::Nanosecond, opt_tz_lhs),
+            DataType::Timestamp(TimeUnit::Nanosecond, opt_tz_rhs),
+        ) => Ok(ts_sub_op!(
+            array_lhs,
+            array_rhs,
+            opt_tz_lhs,
+            opt_tz_rhs,
+            1i64,
+            as_timestamp_nanosecond_array,
+            nanoseconds_sub,
+            NaiveDateTime::timestamp_nanos,
+            NANOSECOND_MODE,
+            IntervalMonthDayNanoType
+        )),
+        (_, _) => Err(DataFusionError::Execution(format!(
+            "Invalid array types for Timestamp subtraction: {:?} - {:?}",
+            array_lhs.data_type(),
+            array_rhs.data_type()
+        ))),
+    }
+}
+/// Performs an interval operation on two arrays and returns the resulting array.
+/// The operation sign determines whether to perform addition or subtraction.
+/// The data type and unit of the two input arrays must match the supported combinations.
+fn interval_array_op(
+    array_lhs: &ArrayRef,
+    array_rhs: &ArrayRef,
+    sign: i32,
+) -> Result<ArrayRef> {
+    match (array_lhs.data_type(), array_rhs.data_type()) {
+        (
+            DataType::Interval(IntervalUnit::YearMonth),
+            DataType::Interval(IntervalUnit::YearMonth),
+        ) => Ok(interval_op!(
+            array_lhs,
+            array_rhs,
+            as_interval_ym_array,
+            op_ym,
+            sign,
+            IntervalYearMonthType
+        )),
+        (
+            DataType::Interval(IntervalUnit::YearMonth),
+            DataType::Interval(IntervalUnit::DayTime),
+        ) => Ok(interval_cross_op!(
+            array_lhs,
+            array_rhs,
+            as_interval_ym_array,
+            as_interval_dt_array,
+            op_ym_dt,
+            sign,
+            false,
+            IntervalYearMonthType,
+            IntervalDayTimeType
+        )),
+        (
+            DataType::Interval(IntervalUnit::YearMonth),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+        ) => Ok(interval_cross_op!(
+            array_lhs,
+            array_rhs,
+            as_interval_ym_array,
+            as_interval_mdn_array,
+            op_ym_mdn,
+            sign,
+            false,
+            IntervalYearMonthType,
+            IntervalMonthDayNanoType
+        )),
+        (
+            DataType::Interval(IntervalUnit::DayTime),
+            DataType::Interval(IntervalUnit::YearMonth),
+        ) => Ok(interval_cross_op!(
+            array_rhs,
+            array_lhs,
+            as_interval_ym_array,
+            as_interval_dt_array,
+            op_ym_dt,
+            sign,
+            true,
+            IntervalYearMonthType,
+            IntervalDayTimeType
+        )),
+        (
+            DataType::Interval(IntervalUnit::DayTime),
+            DataType::Interval(IntervalUnit::DayTime),
+        ) => Ok(interval_op!(
+            array_lhs,
+            array_rhs,
+            as_interval_dt_array,
+            op_dt,
+            sign,
+            IntervalDayTimeType
+        )),
+        (
+            DataType::Interval(IntervalUnit::DayTime),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+        ) => Ok(interval_cross_op!(
+            array_lhs,
+            array_rhs,
+            as_interval_dt_array,
+            as_interval_mdn_array,
+            op_dt_mdn,
+            sign,
+            false,
+            IntervalDayTimeType,
+            IntervalMonthDayNanoType
+        )),
+        (
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            DataType::Interval(IntervalUnit::YearMonth),
+        ) => Ok(interval_cross_op!(
+            array_rhs,
+            array_lhs,
+            as_interval_ym_array,
+            as_interval_mdn_array,
+            op_ym_mdn,
+            sign,
+            true,
+            IntervalYearMonthType,
+            IntervalMonthDayNanoType
+        )),
+        (
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            DataType::Interval(IntervalUnit::DayTime),
+        ) => Ok(interval_cross_op!(
+            array_rhs,
+            array_lhs,
+            as_interval_dt_array,
+            as_interval_mdn_array,
+            op_dt_mdn,
+            sign,
+            true,
+            IntervalDayTimeType,
+            IntervalMonthDayNanoType
+        )),
+        (
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+        ) => Ok(interval_op!(
+            array_lhs,
+            array_rhs,
+            as_interval_mdn_array,
+            op_mdn,
+            sign,
+            IntervalMonthDayNanoType
+        )),
+        (_, _) => Err(DataFusionError::Execution(format!(
+            "Invalid array types for Interval operation: {:?} {} {:?}",
+            array_lhs.data_type(),
+            sign,
+            array_rhs.data_type()
+        ))),
+    }
+}
+/// Performs a timestamp/interval operation on two arrays and returns the resulting array.
+/// The operation sign determines whether to perform addition or subtraction.
+/// The data type and unit of the two input arrays must match the supported combinations.
+fn ts_interval_array_op(
+    array_lhs: &ArrayRef,
+    sign: i32,
+    array_rhs: &ArrayRef,
+) -> Result<ArrayRef> {
+    match (array_lhs.data_type(), array_rhs.data_type()) {
+        (
+            DataType::Timestamp(TimeUnit::Second, tz),
+            DataType::Interval(IntervalUnit::YearMonth),
+        ) => Ok(ts_interval_op!(
+            array_lhs,
+            array_rhs,
+            tz,
+            as_timestamp_second_array,
+            as_interval_ym_array,
+            seconds_add_array::<YM_MODE>,
+            sign,
+            TimestampSecondType,
+            IntervalYearMonthType
+        )),
+        (
+            DataType::Timestamp(TimeUnit::Second, tz),
+            DataType::Interval(IntervalUnit::DayTime),
+        ) => Ok(ts_interval_op!(
+            array_lhs,
+            array_rhs,
+            tz,
+            as_timestamp_second_array,
+            as_interval_dt_array,
+            seconds_add_array::<DT_MODE>,
+            sign,
+            TimestampSecondType,
+            IntervalDayTimeType
+        )),
+        (
+            DataType::Timestamp(TimeUnit::Second, tz),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+        ) => Ok(ts_interval_op!(
+            array_lhs,
+            array_rhs,
+            tz,
+            as_timestamp_second_array,
+            as_interval_mdn_array,
+            seconds_add_array::<MDN_MODE>,
+            sign,
+            TimestampSecondType,
+            IntervalMonthDayNanoType
+        )),
+        (
+            DataType::Timestamp(TimeUnit::Millisecond, tz),
+            DataType::Interval(IntervalUnit::YearMonth),
+        ) => Ok(ts_interval_op!(
+            array_lhs,
+            array_rhs,
+            tz,
+            as_timestamp_millisecond_array,
+            as_interval_ym_array,
+            milliseconds_add_array::<YM_MODE>,
+            sign,
+            TimestampMillisecondType,
+            IntervalYearMonthType
+        )),
+        (
+            DataType::Timestamp(TimeUnit::Millisecond, tz),
+            DataType::Interval(IntervalUnit::DayTime),
+        ) => Ok(ts_interval_op!(
+            array_lhs,
+            array_rhs,
+            tz,
+            as_timestamp_millisecond_array,
+            as_interval_dt_array,
+            milliseconds_add_array::<DT_MODE>,
+            sign,
+            TimestampMillisecondType,
+            IntervalDayTimeType
+        )),
+        (
+            DataType::Timestamp(TimeUnit::Millisecond, tz),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+        ) => Ok(ts_interval_op!(
+            array_lhs,
+            array_rhs,
+            tz,
+            as_timestamp_millisecond_array,
+            as_interval_mdn_array,
+            milliseconds_add_array::<MDN_MODE>,
+            sign,
+            TimestampMillisecondType,
+            IntervalMonthDayNanoType
+        )),
+        (
+            DataType::Timestamp(TimeUnit::Microsecond, tz),
+            DataType::Interval(IntervalUnit::YearMonth),
+        ) => Ok(ts_interval_op!(
+            array_lhs,
+            array_rhs,
+            tz,
+            as_timestamp_microsecond_array,
+            as_interval_ym_array,
+            microseconds_add_array::<YM_MODE>,
+            sign,
+            TimestampMicrosecondType,
+            IntervalYearMonthType
+        )),
+        (
+            DataType::Timestamp(TimeUnit::Microsecond, tz),
+            DataType::Interval(IntervalUnit::DayTime),
+        ) => Ok(ts_interval_op!(
+            array_lhs,
+            array_rhs,
+            tz,
+            as_timestamp_microsecond_array,
+            as_interval_dt_array,
+            microseconds_add_array::<DT_MODE>,
+            sign,
+            TimestampMicrosecondType,
+            IntervalDayTimeType
+        )),
+        (
+            DataType::Timestamp(TimeUnit::Microsecond, tz),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+        ) => Ok(ts_interval_op!(
+            array_lhs,
+            array_rhs,
+            tz,
+            as_timestamp_microsecond_array,
+            as_interval_mdn_array,
+            microseconds_add_array::<MDN_MODE>,
+            sign,
+            TimestampMicrosecondType,
+            IntervalMonthDayNanoType
+        )),
+        (
+            DataType::Timestamp(TimeUnit::Nanosecond, tz),
+            DataType::Interval(IntervalUnit::YearMonth),
+        ) => Ok(ts_interval_op!(
+            array_lhs,
+            array_rhs,
+            tz,
+            as_timestamp_nanosecond_array,
+            as_interval_ym_array,
+            nanoseconds_add_array::<YM_MODE>,
+            sign,
+            TimestampNanosecondType,
+            IntervalYearMonthType
+        )),
+        (
+            DataType::Timestamp(TimeUnit::Nanosecond, tz),
+            DataType::Interval(IntervalUnit::DayTime),
+        ) => Ok(ts_interval_op!(
+            array_lhs,
+            array_rhs,
+            tz,
+            as_timestamp_nanosecond_array,
+            as_interval_dt_array,
+            nanoseconds_add_array::<DT_MODE>,
+            sign,
+            TimestampNanosecondType,
+            IntervalDayTimeType
+        )),
+        (
+            DataType::Timestamp(TimeUnit::Nanosecond, tz),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+        ) => Ok(ts_interval_op!(
+            array_lhs,
+            array_rhs,
+            tz,
+            as_timestamp_nanosecond_array,
+            as_interval_mdn_array,
+            nanoseconds_add_array::<MDN_MODE>,
+            sign,
+            TimestampNanosecondType,
+            IntervalMonthDayNanoType
+        )),
+        (_, _) => Err(DataFusionError::Execution(format!(
+            "Invalid array types for Timestamp Interval operation: {:?} {} {:?}",
+            array_lhs.data_type(),
+            sign,
+            array_rhs.data_type()
+        ))),
+    }
 }
 
 #[cfg(test)]

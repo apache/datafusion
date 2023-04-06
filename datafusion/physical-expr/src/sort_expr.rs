@@ -41,14 +41,7 @@ impl PartialEq for PhysicalSortExpr {
 
 impl std::fmt::Display for PhysicalSortExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let opts_string = match (self.options.descending, self.options.nulls_first) {
-            (true, true) => "DESC",
-            (true, false) => "DESC NULLS LAST",
-            (false, true) => "ASC",
-            (false, false) => "ASC NULLS LAST",
-        };
-
-        write!(f, "{} {}", self.expr, opts_string)
+        write!(f, "{} {}", self.expr, to_str(&self.options))
     }
 }
 
@@ -68,5 +61,74 @@ impl PhysicalSortExpr {
             values: array_to_sort,
             options: Some(self.options),
         })
+    }
+
+    /// Check whether sort expression satisfies `PhysicalSortRequirement`.
+    // If sort options is Some in `PhysicalSortRequirement`, `expr` and `options` field are compared for equality.
+    // If sort options is None in `PhysicalSortRequirement`, only `expr` is compared for equality.
+    pub fn satisfy(&self, requirement: &PhysicalSortRequirement) -> bool {
+        self.expr.eq(&requirement.expr)
+            && requirement
+                .options
+                .map_or(true, |opts| self.options == opts)
+    }
+}
+
+/// Represents sort requirement associated with a plan
+#[derive(Clone, Debug)]
+pub struct PhysicalSortRequirement {
+    /// Physical expression representing the column to sort
+    pub expr: Arc<dyn PhysicalExpr>,
+    /// Option to specify how the given column should be sorted.
+    /// If unspecified, there is no constraint on sort options.
+    pub options: Option<SortOptions>,
+}
+
+impl From<PhysicalSortExpr> for PhysicalSortRequirement {
+    fn from(value: PhysicalSortExpr) -> Self {
+        Self {
+            expr: value.expr,
+            options: Some(value.options),
+        }
+    }
+}
+
+impl PartialEq for PhysicalSortRequirement {
+    fn eq(&self, other: &PhysicalSortRequirement) -> bool {
+        self.options == other.options && self.expr.eq(&other.expr)
+    }
+}
+
+impl std::fmt::Display for PhysicalSortRequirement {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let opts_string = self.options.as_ref().map_or("NA", to_str);
+        write!(f, "{} {}", self.expr, opts_string)
+    }
+}
+
+impl PhysicalSortRequirement {
+    /// Returns whether this requirement is equal or more specific than `other`.
+    pub fn compatible(&self, other: &PhysicalSortRequirement) -> bool {
+        self.expr.eq(&other.expr)
+            && other.options.map_or(true, |other_opts| {
+                self.options.map_or(false, |opts| opts == other_opts)
+            })
+    }
+}
+
+pub fn make_sort_requirements_from_exprs(
+    ordering: &[PhysicalSortExpr],
+) -> Vec<PhysicalSortRequirement> {
+    ordering.iter().map(|e| e.clone().into()).collect()
+}
+
+/// Returns the SQL string representation of the given [SortOptions] object.
+#[inline]
+fn to_str(options: &SortOptions) -> &str {
+    match (options.descending, options.nulls_first) {
+        (true, true) => "DESC",
+        (true, false) => "DESC NULLS LAST",
+        (false, true) => "ASC",
+        (false, false) => "ASC NULLS LAST",
     }
 }

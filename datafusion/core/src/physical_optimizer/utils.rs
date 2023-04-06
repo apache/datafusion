@@ -22,9 +22,12 @@ use std::collections::HashSet;
 
 use crate::config::ConfigOptions;
 use crate::error::Result;
+use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use datafusion_common::tree_node::Transformed;
@@ -92,18 +95,6 @@ pub(crate) fn find_match_indices<T: PartialEq>(
     Ok(result)
 }
 
-/// Create a new vector from the elements at the `indices` of `searched` vector
-pub(crate) fn get_at_indices<T: Clone>(
-    searched: &[T],
-    indices: &[usize],
-) -> Result<Vec<T>> {
-    let mut result = vec![];
-    for idx in indices {
-        result.push(searched[*idx].clone());
-    }
-    Ok(result)
-}
-
 // Merges vectors `in1` and `in2` (removes duplicates) then sorts the result.
 pub(crate) fn get_ordered_merged_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
     let set: HashSet<_> = in1.iter().chain(in2.iter()).copied().collect();
@@ -151,26 +142,41 @@ pub(crate) fn calc_ordering_range(in1: &[usize]) -> usize {
     count
 }
 
-/// Checks whether the given executor is a limit;
-/// i.e. either a `WindowAggExec` or a `BoundedWindowAggExec`.
-pub fn is_window(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.as_any().is::<WindowAggExec>() || plan.as_any().is::<BoundedWindowAggExec>()
-}
-
-/// Checks whether the given executor is a limit;
-/// i.e. either a `LocalLimitExec` or a `GlobalLimitExec`.
+/// Checks whether the given operator is a limit;
+/// i.e. either a [`LocalLimitExec`] or a [`GlobalLimitExec`].
 pub fn is_limit(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<GlobalLimitExec>() || plan.as_any().is::<LocalLimitExec>()
 }
 
-/// Checks whether the given executor is a `SortExec`.
+/// Checks whether the given operator is a window;
+/// i.e. either a [`WindowAggExec`] or a [`BoundedWindowAggExec`].
+pub fn is_window(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<WindowAggExec>() || plan.as_any().is::<BoundedWindowAggExec>()
+}
+
+/// Checks whether the given operator is a [`SortExec`].
 pub fn is_sort(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<SortExec>()
 }
 
-/// Checks whether the given executor is a `SortPreservingMergeExec`.
+/// Checks whether the given operator is a [`SortPreservingMergeExec`].
 pub fn is_sort_preserving_merge(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<SortPreservingMergeExec>()
+}
+
+/// Checks whether the given operator is a [`CoalescePartitionsExec`].
+pub fn is_coalesce_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<CoalescePartitionsExec>()
+}
+
+/// Checks whether the given operator is a [`UnionExec`].
+pub fn is_union(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<UnionExec>()
+}
+
+/// Checks whether the given operator is a [`RepartitionExec`].
+pub fn is_repartition(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<RepartitionExec>()
 }
 
 #[cfg(test)]

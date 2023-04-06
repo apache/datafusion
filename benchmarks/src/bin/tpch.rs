@@ -150,11 +150,11 @@ async fn main() -> Result<()> {
             let compression = match opt.compression.as_str() {
                 "none" => Compression::UNCOMPRESSED,
                 "snappy" => Compression::SNAPPY,
-                "brotli" => Compression::BROTLI,
-                "gzip" => Compression::GZIP,
+                "brotli" => Compression::BROTLI(Default::default()),
+                "gzip" => Compression::GZIP(Default::default()),
                 "lz4" => Compression::LZ4,
                 "lz0" => Compression::LZO,
-                "zstd" => Compression::ZSTD,
+                "zstd" => Compression::ZSTD(Default::default()),
                 other => {
                     return Err(DataFusionError::NotImplemented(format!(
                         "Invalid compression format: {other}"
@@ -763,7 +763,7 @@ mod ci {
         let queries = get_query_sql(query)?;
         for query in queries {
             let plan = ctx.sql(&query).await?;
-            let plan = plan.to_logical_plan()?;
+            let plan = plan.into_optimized_plan()?;
             let bytes = logical_plan_to_bytes(&plan)?;
             let plan2 = logical_plan_from_bytes(&bytes, &ctx)?;
             let plan_formatted = format!("{}", plan.display_indent());
@@ -1106,12 +1106,25 @@ mod ci {
             let actual_row = &actual_vec[i];
             assert_eq!(expected_row.len(), actual_row.len());
 
-            for j in 0..expected.len() {
+            let tolerance = 0.1;
+            for j in 0..expected_row.len() {
                 match (&expected_row[j], &actual_row[j]) {
                     (ScalarValue::Float64(Some(l)), ScalarValue::Float64(Some(r))) => {
                         // allow for rounding errors until we move to decimal types
-                        let tolerance = 0.1;
                         if (l - r).abs() > tolerance {
+                            panic!(
+                                "Expected: {}; Actual: {}; Tolerance: {}",
+                                l, r, tolerance
+                            )
+                        }
+                    }
+                    (
+                        ScalarValue::Decimal128(Some(l), _, s),
+                        ScalarValue::Decimal128(Some(r), _, _),
+                    ) => {
+                        if ((l - r) as f64 / 10_i32.pow(*s as u32) as f64).abs()
+                            > tolerance
+                        {
                             panic!(
                                 "Expected: {}; Actual: {}; Tolerance: {}",
                                 l, r, tolerance

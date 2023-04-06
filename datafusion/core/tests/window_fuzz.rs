@@ -409,29 +409,11 @@ async fn run_window_test(
     }
 
     let concat_input_record = concat_batches(&schema, &input1).unwrap();
-    let source_sort_keys = vec![
-        PhysicalSortExpr {
-            expr: col("a", &schema)?,
-            options: Default::default(),
-        },
-        PhysicalSortExpr {
-            expr: col("b", &schema)?,
-            options: Default::default(),
-        },
-        PhysicalSortExpr {
-            expr: col("c", &schema)?,
-            options: Default::default(),
-        },
-    ];
-    let memory_exec =
-        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None).unwrap();
-    let memory_exec = memory_exec.with_sort_information(source_sort_keys.clone());
-    let mut exec1 = Arc::new(memory_exec) as Arc<dyn ExecutionPlan>;
-    // Table is ordered according to ORDER BY a, b, c In linear test we use PARTITION BY b, ORDER BY a
-    // For WindowAggExec  to produce correct result it need table to be ordered by b,a. Hence add a sort.
-    if is_linear {
-        exec1 = Arc::new(SortExec::try_new(sort_keys.clone(), exec1, None)?) as _;
-    }
+    let exec1 = Arc::new(
+        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None)
+            .unwrap()
+            .with_sort_information(sort_keys.clone()),
+    );
     let usual_window_exec = Arc::new(
         WindowAggExec::try_new(
             vec![create_window_expr(
@@ -449,11 +431,12 @@ async fn run_window_test(
             vec![],
         )
         .unwrap(),
-    ) as _;
-    let memory_exec2 =
-        MemoryExec::try_new(&[input1.clone()], schema.clone(), None).unwrap();
-    let memory_exec2 = memory_exec2.with_sort_information(source_sort_keys.clone());
-    let exec2 = Arc::new(memory_exec2);
+    );
+    let exec2 = Arc::new(
+        MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
+            .unwrap()
+            .with_sort_information(sort_keys),
+    );
     let running_window_exec = Arc::new(
         BoundedWindowAggExec::try_new(
             vec![create_window_expr(

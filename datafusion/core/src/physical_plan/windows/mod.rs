@@ -18,15 +18,10 @@
 //! Physical expressions for window functions
 
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{
-    aggregates,
-    expressions::{
-        cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
-        PhysicalSortExpr, RowNumber,
-    },
-    type_coercion::coerce,
-    udaf, PhysicalExpr,
-};
+use crate::physical_plan::{aggregates, expressions::{
+    cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
+    PhysicalSortExpr, RowNumber,
+}, type_coercion::coerce, udaf, PhysicalExpr, ExecutionPlan};
 use crate::scalar::ScalarValue;
 use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
@@ -48,6 +43,8 @@ pub use bounded_window_agg_exec::PartitionSearchMode;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
+use datafusion_physical_expr::PhysicalSortRequirement;
+use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 pub use window_agg_exec::WindowAggExec;
 
 /// Create a physical expression for window function
@@ -192,28 +189,41 @@ fn create_built_in_window_expr(
 pub(crate) fn calc_requirements(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     orderby_sort_exprs: &[PhysicalSortExpr],
-) -> Option<Vec<PhysicalSortExpr>> {
+) -> Option<Vec<PhysicalSortRequirement>> {
     let mut sort_reqs = vec![];
     for partition_by in partition_by_exprs {
-        sort_reqs.push(PhysicalSortExpr {
+        sort_reqs.push(PhysicalSortRequirement {
             expr: partition_by.clone(),
-            options: SortOptions {
-                descending: false,
-                nulls_first: false,
-            },
+            options: None,
         });
     }
     for PhysicalSortExpr { expr, options } in orderby_sort_exprs {
         let contains = sort_reqs.iter().any(|e| expr.eq(&e.expr));
         if !contains {
-            sort_reqs.push(PhysicalSortExpr {
+            sort_reqs.push(PhysicalSortRequirement {
                 expr: expr.clone(),
-                options: *options,
+                options: Some(*options),
             });
         }
     }
     // Convert empty result to None. Otherwise wrap result inside Some()
     (!sort_reqs.is_empty()).then_some(sort_reqs)
+}
+
+
+pub(crate) fn get_ordered_partition_by_indices(
+    partition_by_exprs: &[Arc<dyn PhysicalExpr>],
+    input: &Arc<dyn ExecutionPlan>,
+) -> Vec<usize> {
+    let input_ordering = input.output_ordering();
+    let input_ordering = input_ordering.unwrap_or(&[]);
+    let input_ordering_exprs = convert_to_expr(input_ordering);
+    let equal_properties = || input.equivalence_properties();
+    get_indices_of_matching_exprs(
+        partition_by_exprs,
+        &input_ordering_exprs,
+        equal_properties,
+    )
 }
 
 #[cfg(test)]
@@ -225,8 +235,9 @@ mod tests {
     use crate::physical_plan::{collect, ExecutionPlan};
     use crate::prelude::SessionContext;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
-    use crate::test::{self, assert_is_pending};
+    use crate::test::{self, assert_is_pending, csv_exec_sorted};
     use arrow::array::*;
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_primitive_array;
@@ -237,6 +248,128 @@ mod tests {
         let csv = test::scan_partitioned_csv(partitions)?;
         let schema = csv.schema();
         Ok((csv, schema))
+    }
+
+    fn create_test_schema2() -> Result<SchemaRef> {
+        let a = Field::new("a", DataType::Int32, true);
+        let b = Field::new("b", DataType::Int32, true);
+        let c = Field::new("c", DataType::Int32, true);
+        let d = Field::new("d", DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![a, b, c, d]));
+        Ok(schema)
+    }
+
+    /// make PhysicalSortExpr with default options
+    fn sort_expr(name: &str, schema: &Schema) -> PhysicalSortExpr {
+        sort_expr_options(name, schema, SortOptions::default())
+    }
+
+    /// PhysicalSortExpr with specified options
+    fn sort_expr_options(
+        name: &str,
+        schema: &Schema,
+        options: SortOptions,
+    ) -> PhysicalSortExpr {
+        PhysicalSortExpr {
+            expr: col(name, schema).unwrap(),
+            options,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_partition_by_ordering() -> Result<()> {
+        let test_schema = create_test_schema2()?;
+        // Columns a,c are nullable whereas b,d are not nullable.
+        // Source is sorted by a ASC NULLS FIRST, b ASC NULLS FIRST, c ASC NULLS FIRST, d ASC NULLS FIRST
+        // Column e is not ordered.
+        let sort_exprs = vec![
+            sort_expr("a", &test_schema),
+            sort_expr("b", &test_schema),
+            sort_expr("c", &test_schema),
+            sort_expr("d", &test_schema),
+        ];
+        // Input is ordered by a,b,c,d
+        let input = csv_exec_sorted(&test_schema, sort_exprs, true);
+        let test_data = vec![
+            (vec!["a", "b"], vec![0, 1]),
+            (vec!["b", "a"], vec![1, 0]),
+            (vec!["b", "a", "c"], vec![1, 0, 2]),
+        ];
+        for (pb_names, expected) in test_data {
+            let pb_exprs = pb_names
+                .iter()
+                .map(|name| col(name, &test_schema))
+                .collect::<Result<Vec<_>>>()?;
+            assert_eq!(
+                get_ordered_partition_by_indices(&pb_exprs, &input),
+                expected
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_calc_requirements() -> Result<()> {
+        let schema = create_test_schema2()?;
+        let test_data = vec![
+            // PARTITION BY a, ORDER BY b ASC NULLS FIRST
+            (
+                vec!["a"],
+                vec![("b", true, true)],
+                vec![("a", None), ("b", Some((true, true)))],
+            ),
+            // PARTITION BY a, ORDER BY a ASC NULLS FIRST
+            (vec!["a"], vec![("a", true, true)], vec![("a", None)]),
+            // PARTITION BY a, ORDER BY b ASC NULLS FIRST, c DESC NULLS LAST
+            (
+                vec!["a"],
+                vec![("b", true, true), ("c", false, false)],
+                vec![
+                    ("a", None),
+                    ("b", Some((true, true))),
+                    ("c", Some((false, false))),
+                ],
+            ),
+            // PARTITION BY a, c, ORDER BY b ASC NULLS FIRST, c DESC NULLS LAST
+            (
+                vec!["a", "c"],
+                vec![("b", true, true), ("c", false, false)],
+                vec![("a", None), ("c", None), ("b", Some((true, true)))],
+            ),
+        ];
+        for (pb_params, ob_params, expected_params) in test_data {
+            let mut partitionbys = vec![];
+            for col_name in pb_params {
+                partitionbys.push(col(col_name, &schema)?);
+            }
+
+            let mut orderbys = vec![];
+            for (col_name, descending, nulls_first) in ob_params {
+                let expr = col(col_name, &schema)?;
+                let options = SortOptions {
+                    descending,
+                    nulls_first,
+                };
+                orderbys.push(PhysicalSortExpr { expr, options });
+            }
+
+            let mut expected: Option<Vec<PhysicalSortRequirement>> = None;
+            for (col_name, reqs) in expected_params {
+                let options = reqs.map(|(descending, nulls_first)| SortOptions {
+                    descending,
+                    nulls_first,
+                });
+                let expr = col(col_name, &schema)?;
+                let res = PhysicalSortRequirement { expr, options };
+                if let Some(expected) = &mut expected {
+                    expected.push(res);
+                } else {
+                    expected = Some(vec![res]);
+                }
+            }
+            assert_eq!(calc_requirements(&partitionbys, &orderbys), expected);
+        }
+        Ok(())
     }
 
     #[tokio::test]

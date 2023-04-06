@@ -29,8 +29,10 @@ use petgraph::stable_graph::{DefaultIx, StableGraph};
 use petgraph::visit::{Bfs, Dfs, DfsPostOrder, EdgeRef};
 use petgraph::Outgoing;
 
-use crate::expressions::Literal;
-use crate::intervals::interval_aritmetic::{apply_operator, Interval};
+use crate::expressions::{BinaryExpr, CastExpr, Column, Literal};
+use crate::intervals::interval_aritmetic::{
+    apply_operator, is_operator_supported, Interval,
+};
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 
@@ -519,6 +521,22 @@ impl ExprIntervalGraph {
             _ => Ok(PropagationResult::CannotPropagate),
         }
     }
+}
+
+/// Indicates whether interval arithmetic is supported for the given expression.
+/// Currently, we do not support all [`PhysicalExpr`]s for interval calculations.
+/// We do not support every type of [`Operator`]s either. Over time, this check
+/// will relax as more types of `PhysicalExpr`s and `Operator`s are supported.
+/// Currently, [`CastExpr`], [`BinaryExpr`], [`Column`] and [`Literal`] are supported.
+pub fn check_support(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    let expr_any = expr.as_any();
+    let expr_supported = if let Some(binary_expr) = expr_any.downcast_ref::<BinaryExpr>()
+    {
+        is_operator_supported(binary_expr.op())
+    } else {
+        expr_any.is::<Column>() || expr_any.is::<Literal>() || expr_any.is::<CastExpr>()
+    };
+    expr_supported && expr.children().iter().all(check_support)
 }
 
 #[cfg(test)]

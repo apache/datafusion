@@ -21,10 +21,14 @@ use crate::expr::{
 };
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::binary_operator_data_type;
-use crate::{aggregate_function, function, window_function};
+use crate::type_coercion::other::get_coerce_type_for_case_expression;
+use crate::{
+    aggregate_function, function, window_function, LogicalPlan, Projection, Subquery,
+};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
 use datafusion_common::{Column, DFField, DFSchema, DataFusionError, ExprSchema, Result};
+use std::sync::Arc;
 
 /// trait to allow expr to typable with respect to a schema
 pub trait ExprSchemable {
@@ -68,7 +72,26 @@ impl ExprSchemable for Expr {
             Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l) => Ok(l.get_datatype()),
-            Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
+            Expr::Case(case) => {
+                // https://github.com/apache/arrow-datafusion/issues/5821
+                // when #5681 will be fixed, this code can be reverted to:
+                // case.when_then_expr[0].1.get_type(schema)
+                let then_types = case
+                    .when_then_expr
+                    .iter()
+                    .map(|when_then| when_then.1.get_type(schema))
+                    .collect::<Result<Vec<_>>>()?;
+                let else_type = match &case.else_expr {
+                    None => Ok(None),
+                    Some(expr) => expr.get_type(schema).map(Some),
+                }?;
+                get_coerce_type_for_case_expression(&then_types, else_type.as_ref())
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(String::from(
+                            "Cannot infer type for CASE statement",
+                        ))
+                    })
+            }
             Expr::Cast(Cast { data_type, .. })
             | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
             Expr::ScalarUDF { fun, args } => {
@@ -270,13 +293,30 @@ impl ExprSchemable for Expr {
     /// This function errors when it is impossible to cast the
     /// expression to the target [arrow::datatypes::DataType].
     fn cast_to<S: ExprSchema>(self, cast_to_type: &DataType, schema: &S) -> Result<Expr> {
+        let this_type = self.get_type(schema)?;
+        if this_type == *cast_to_type {
+            return Ok(self);
+        }
+
         // TODO(kszucs): most of the operations do not validate the type correctness
         // like all of the binary expressions below. Perhaps Expr should track the
         // type of the expression?
-        let this_type = self.get_type(schema)?;
-        if this_type == *cast_to_type {
-            Ok(self)
-        } else if can_cast_types(&this_type, cast_to_type) {
+
+        // TODO(jackwener): Handle subqueries separately, need to refactor it.
+        match self {
+            Expr::ScalarSubquery(subquery) => {
+                return Ok(Expr::ScalarSubquery(cast_subquery(subquery, cast_to_type)?));
+            }
+            Expr::Exists { subquery, negated } => {
+                return Ok(Expr::Exists {
+                    subquery: cast_subquery(subquery, cast_to_type)?,
+                    negated,
+                });
+            }
+            _ => {}
+        }
+
+        if can_cast_types(&this_type, cast_to_type) {
             Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone())))
         } else {
             Err(DataFusionError::Plan(format!(
@@ -284,6 +324,33 @@ impl ExprSchemable for Expr {
             )))
         }
     }
+}
+
+fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subquery> {
+    let plan = subquery.subquery.as_ref();
+    let new_plan = match plan {
+        LogicalPlan::Projection(projection) => {
+            let cast_expr = projection.expr[0]
+                .clone()
+                .cast_to(cast_to_type, projection.input.schema())?;
+            LogicalPlan::Projection(Projection::try_new(
+                vec![cast_expr],
+                projection.input.clone(),
+            )?)
+        }
+        _ => {
+            let cast_expr = Expr::Column(plan.schema().field(0).qualified_column())
+                .cast_to(cast_to_type, subquery.subquery.schema())?;
+            LogicalPlan::Projection(Projection::try_new(
+                vec![cast_expr],
+                subquery.subquery.clone(),
+            )?)
+        }
+    };
+    Ok(Subquery {
+        subquery: Arc::new(new_plan),
+        outer_ref_columns: subquery.outer_ref_columns,
+    })
 }
 
 #[cfg(test)]

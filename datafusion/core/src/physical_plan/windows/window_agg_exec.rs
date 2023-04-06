@@ -19,7 +19,6 @@
 
 use crate::error::Result;
 use crate::execution::context::TaskContext;
-use crate::physical_optimizer::utils::get_at_indices;
 use crate::physical_plan::common::transpose;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
@@ -42,9 +41,9 @@ use arrow::{
 };
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
+use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
-use log::debug;
 use std::any::Any;
 use std::ops::Range;
 use std::pin::Pin;
@@ -122,10 +121,20 @@ impl WindowAggExec {
     // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
     // to calculate partition separation points
     pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
-        // Partition by sort keys indices are stored in self.ordered_partition_by_indices.
-        let sort_keys = self.input.output_ordering();
-        let sort_keys = sort_keys.unwrap_or(&[]);
-        get_at_indices(sort_keys, &self.ordered_partition_by_indices)
+        let mut result = vec![];
+        // All window exprs have the same partition by, so we just use the first one:
+        let partition_by = self.window_expr()[0].partition_by();
+        let sort_keys = self.input.output_ordering().unwrap_or(&[]);
+        for item in partition_by {
+            if let Some(a) = sort_keys.iter().find(|&e| e.expr.eq(item)) {
+                result.push(a.clone());
+            } else {
+                return Err(DataFusionError::Execution(
+                    "Partition key not found in sort keys".to_string(),
+                ));
+            }
+        }
+        Ok(result)
     }
 }
 
@@ -173,20 +182,25 @@ impl ExecutionPlan for WindowAggExec {
         vec![true]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortExpr>>> {
-        let reqs = calc_requirements(
-            self.window_expr[0].partition_by(),
-            self.window_expr()[0].order_by(),
-        );
-        vec![reqs]
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+        let partition_bys = self.window_expr()[0].partition_by();
+        let order_keys = self.window_expr()[0].order_by();
+        if self.ordered_partition_by_indices.len() < partition_bys.len() {
+            vec![calc_requirements(partition_bys, order_keys)]
+        } else {
+            let partition_bys = self
+                .ordered_partition_by_indices
+                .iter()
+                .map(|idx| partition_bys[*idx].clone())
+                .collect::<Vec<_>>();
+            vec![calc_requirements(&partition_bys, order_keys)]
+        }
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         if self.partition_keys.is_empty() {
-            debug!("No partition defined for WindowAggExec!!!");
             vec![Distribution::SinglePartition]
         } else {
-            //TODO support PartitionCollections if there is no common partition columns in the window_expr
             vec![Distribution::HashPartitioned(self.partition_keys.clone())]
         }
     }

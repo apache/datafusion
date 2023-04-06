@@ -27,7 +27,21 @@ use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::{Token, TokenWithLocation};
+use std::borrow::Cow;
 use std::cmp::Ordering;
+
+/// Create a new vector from the elements at the `indices` of `searched` vector
+pub fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec<T>> {
+    let result = indices
+        .iter()
+        .map(|idx| searched.get(*idx).cloned())
+        .collect::<Option<Vec<T>>>();
+    result.ok_or_else(|| {
+        DataFusionError::Execution(
+            "Expects indices to be in the range of searched vector".to_string(),
+        )
+    })
+}
 
 /// Given column vectors, returns row at `idx`.
 pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValue>> {
@@ -197,8 +211,26 @@ where
 /// the identifier by replacing it with two double quotes
 ///
 /// e.g. identifier `tab.le"name` becomes `"tab.le""name"`
-pub fn quote_identifier(s: &str) -> String {
-    format!("\"{}\"", s.replace('"', "\"\""))
+pub fn quote_identifier(s: &str) -> Cow<str> {
+    if needs_quotes(s) {
+        Cow::Owned(format!("\"{}\"", s.replace('"', "\"\"")))
+    } else {
+        Cow::Borrowed(s)
+    }
+}
+
+/// returns true if this identifier needs quotes
+fn needs_quotes(s: &str) -> bool {
+    let mut chars = s.chars();
+
+    // first char can not be a number unless escaped
+    if let Some(first_char) = chars.next() {
+        if !(first_char.is_ascii_lowercase() || first_char == '_') {
+            return true;
+        }
+    }
+
+    !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 // TODO: remove when can use https://github.com/sqlparser-rs/sqlparser-rs/issues/805
@@ -275,6 +307,16 @@ mod tests {
     use crate::ScalarValue::Null;
 
     use super::*;
+
+    #[test]
+    fn test_get_at_indices() -> Result<()> {
+        let in_vec = vec![1, 2, 3, 4, 5, 6, 7];
+        assert_eq!(get_at_indices(&in_vec, &[0, 2])?, vec![1, 3]);
+        assert_eq!(get_at_indices(&in_vec, &[4, 2])?, vec![5, 3]);
+        // 7 is outside the range
+        assert!(get_at_indices(&in_vec, &[7]).is_err());
+        Ok(())
+    }
 
     #[test]
     fn test_bisect_linear_left_and_right() -> Result<()> {
@@ -492,6 +534,49 @@ mod tests {
             "SQL(ParserError(\"Unexpected token following period in identifier: *\"))",
             format!("{err:?}")
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_quote_identifier() -> Result<()> {
+        let cases = vec![
+            ("foo", r#"foo"#),
+            ("_foo", r#"_foo"#),
+            ("foo_bar", r#"foo_bar"#),
+            ("foo-bar", r#""foo-bar""#),
+            // name itself has a period, needs to be quoted
+            ("foo.bar", r#""foo.bar""#),
+            ("Foo", r#""Foo""#),
+            ("Foo.Bar", r#""Foo.Bar""#),
+            // name starting with a number needs to be quoted
+            ("test1", r#"test1"#),
+            ("1test", r#""1test""#),
+        ];
+
+        for (identifier, quoted_identifier) in cases {
+            println!("input: \n{identifier}\nquoted_identifier:\n{quoted_identifier}");
+
+            assert_eq!(quote_identifier(identifier), quoted_identifier);
+
+            // When parsing the quoted identifier, it should be a
+            // a single identifier without normalization, and not in multiple parts
+            let quote_style = if quoted_identifier.starts_with('"') {
+                Some('"')
+            } else {
+                None
+            };
+
+            let expected_parsed = vec![Ident {
+                value: identifier.to_string(),
+                quote_style,
+            }];
+
+            assert_eq!(
+                parse_identifiers(quoted_identifier).unwrap(),
+                expected_parsed
+            );
+        }
 
         Ok(())
     }

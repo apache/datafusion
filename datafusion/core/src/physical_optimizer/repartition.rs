@@ -339,6 +339,9 @@ mod tests {
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::union::UnionExec;
     use crate::physical_plan::{displayable, DisplayFormatType, Statistics};
+    use datafusion_physical_expr::{
+        make_sort_requirements_from_exprs, PhysicalSortRequirement,
+    };
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]))
@@ -397,6 +400,33 @@ mod tests {
                 object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
                 file_schema: schema(),
                 file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering: Some(sort_exprs),
+                infinite_source: false,
+            },
+            None,
+            None,
+        ))
+    }
+
+    // Created a sorted parquet exec with multiple files
+    fn parquet_exec_multiple_sorted() -> Arc<ParquetExec> {
+        let sort_exprs = vec![PhysicalSortExpr {
+            expr: col("c1", &schema()).unwrap(),
+            options: SortOptions::default(),
+        }];
+
+        Arc::new(ParquetExec::new(
+            FileScanConfig {
+                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+                file_schema: schema(),
+                file_groups: vec![
+                    vec![PartitionedFile::new("x".to_string(), 100)],
+                    vec![PartitionedFile::new("y".to_string(), 100)],
+                ],
                 statistics: Statistics::default(),
                 projection: None,
                 limit: None,
@@ -734,12 +764,12 @@ mod tests {
     #[test]
     fn repartition_ignores_sort_preserving_merge() -> Result<()> {
         // sort preserving merge already sorted input,
-        let plan = sort_preserving_merge_exec(parquet_exec_sorted());
+        let plan = sort_preserving_merge_exec(parquet_exec_multiple_sorted());
 
         // should not repartition / sort (as the data was already sorted)
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
+            "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, output_ordering=[c1@0 ASC], projection=[c1]",
         ];
 
         assert_optimized!(expected, plan);
@@ -835,13 +865,14 @@ mod tests {
     #[test]
     fn repartition_ignores_transitively_with_projection() -> Result<()> {
         // sorted input
-        let plan = sort_preserving_merge_exec(projection_exec(parquet_exec_sorted()));
+        let plan =
+            sort_preserving_merge_exec(projection_exec(parquet_exec_multiple_sorted()));
 
         // data should not be repartitioned / resorted
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
             "ProjectionExec: expr=[c1@0 as c1]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
+            "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, output_ordering=[c1@0 ASC], projection=[c1]",
         ];
 
         assert_optimized!(expected, plan);
@@ -854,7 +885,6 @@ mod tests {
             sort_preserving_merge_exec(sort_exec(projection_exec(parquet_exec()), true));
 
         let expected = &[
-            "SortPreservingMergeExec: [c1@0 ASC]",
             "SortExec: expr=[c1@0 ASC]",
             "ProjectionExec: expr=[c1@0 as c1]",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
@@ -1037,7 +1067,6 @@ mod tests {
 
         // parallelization potentially could break sort order
         let expected = &[
-            "SortPreservingMergeExec: [c1@0 ASC]",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
         ];
 
@@ -1087,7 +1116,6 @@ mod tests {
 
         // data should not be repartitioned / resorted
         let expected = &[
-            "SortPreservingMergeExec: [c1@0 ASC]",
             "ProjectionExec: expr=[c1@0 as c1]",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
         ];
@@ -1131,8 +1159,10 @@ mod tests {
         }
 
         // model that it requires the output ordering of its input
-        fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortExpr>>> {
-            vec![self.input.output_ordering().map(|elem| elem.to_vec())]
+        fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+            vec![self
+                .output_ordering()
+                .map(make_sort_requirements_from_exprs)]
         }
 
         fn with_new_children(
