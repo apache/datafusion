@@ -2763,8 +2763,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch.clone(),
             right_batch.clone(),
-            left_sorted,
-            right_sorted,
+            Some(left_sorted),
+            Some(right_sorted),
             13,
         )?;
         let intermediate_schema = Schema::new(vec![
@@ -2796,7 +2796,15 @@ mod tests {
             },
         ];
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
-        experiment(left, right, filter, join_type, on.clone(), task_ctx.clone()).await?;
+        experiment(
+            left,
+            right,
+            Some(filter),
+            join_type,
+            on.clone(),
+            task_ctx.clone(),
+        )
+        .await?;
         Ok(())
     }
     #[tokio::test(flavor = "multi_thread")]
@@ -2829,8 +2837,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch.clone(),
             right_batch.clone(),
-            left_sorted,
-            right_sorted,
+            Some(left_sorted),
+            Some(right_sorted),
             13,
         )?;
         let intermediate_schema = Schema::new(vec![
@@ -2862,7 +2870,15 @@ mod tests {
             },
         ];
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
-        experiment(left, right, filter, join_type, on.clone(), task_ctx.clone()).await?;
+        experiment(
+            left,
+            right,
+            Some(filter),
+            join_type,
+            on.clone(),
+            task_ctx.clone(),
+        )
+        .await?;
         Ok(())
     }
     #[tokio::test(flavor = "multi_thread")]
@@ -2892,8 +2908,13 @@ mod tests {
                 nulls_first: true,
             },
         }];
-        let (left, right) =
-            create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
+        let (left, right) = create_memory_table(
+            left_batch,
+            right_batch,
+            Some(left_sorted),
+            Some(right_sorted),
+            13,
+        )?;
         let intermediate_schema = Schema::new(vec![
             Field::new("left", DataType::Interval(IntervalUnit::DayTime), false),
             Field::new("right", DataType::Interval(IntervalUnit::DayTime), false),
@@ -2915,7 +2936,7 @@ mod tests {
             },
         ];
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
-        experiment(left, right, filter, join_type, on, task_ctx).await?;
+        experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
 
         Ok(())
     }
