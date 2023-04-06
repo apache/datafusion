@@ -188,8 +188,8 @@ impl BenchCase {
         let sort = make_sort_exprs(schema.as_ref());
 
         let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
-        let exec =
-            SortExec::new_with_partitioning(sort.clone(), Arc::new(exec), true, None);
+        let exec = SortExec::new(sort.clone(), Arc::new(exec), None)
+            .with_preserve_partitioning(true);
         let plan = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         Self {
@@ -211,7 +211,7 @@ impl BenchCase {
 
         let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
         let exec = Arc::new(CoalescePartitionsExec::new(Arc::new(exec)));
-        let plan = Arc::new(SortExec::try_new(sort, exec, None).unwrap());
+        let plan = Arc::new(SortExec::new(sort, exec, None));
 
         Self {
             runtime,
@@ -231,7 +231,8 @@ impl BenchCase {
         let sort = make_sort_exprs(schema.as_ref());
 
         let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
-        let exec = SortExec::new_with_partitioning(sort, Arc::new(exec), true, None);
+        let exec =
+            SortExec::new(sort, Arc::new(exec), None).with_preserve_partitioning(true);
         let plan = Arc::new(CoalescePartitionsExec::new(Arc::new(exec)));
 
         Self {
