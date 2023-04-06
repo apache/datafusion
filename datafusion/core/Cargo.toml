@@ -164,10 +164,6 @@ required-features = ["jit"]
 
 [[bench]]
 harness = false
-name = "merge"
-
-[[bench]]
-harness = false
 name = "sort"
 
 [[test]]
