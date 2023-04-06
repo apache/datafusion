@@ -17086,6 +17086,7 @@ impl serde::Serialize for ScalarFunction {
             Self::CurrentDate => "CurrentDate",
             Self::CurrentTime => "CurrentTime",
             Self::Uuid => "Uuid",
+            Self::Cbrt => "Cbrt",
         };
         serializer.serialize_str(variant)
     }
@@ -17170,6 +17171,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "CurrentDate",
             "CurrentTime",
             "Uuid",
+            "Cbrt",
         ];
 
         struct GeneratedVisitor;
@@ -17285,6 +17287,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "CurrentDate" => Ok(ScalarFunction::CurrentDate),
                     "CurrentTime" => Ok(ScalarFunction::CurrentTime),
                     "Uuid" => Ok(ScalarFunction::Uuid),
+                    "Cbrt" => Ok(ScalarFunction::Cbrt),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

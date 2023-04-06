@@ -31,7 +31,9 @@ use crate::{
         optimizer::PhysicalOptimizerRule,
     },
 };
-use datafusion_expr::{DescribeTable, DmlStatement, StringifiedPlan, WriteOp};
+use datafusion_expr::{
+    logical_plan::Statement, DescribeTable, DmlStatement, StringifiedPlan, WriteOp,
+};
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
@@ -318,6 +320,11 @@ impl SessionContext {
         // create a query planner
         let plan = self.state().create_logical_plan(sql).await?;
 
+        self.execute_logical_plan(plan).await
+    }
+
+    /// Execute the [`LogicalPlan`], return a [`DataFrame`]
+    pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
             LogicalPlan::Dml(DmlStatement {
                 table_name,
@@ -345,7 +352,15 @@ impl SessionContext {
                 input,
                 if_not_exists,
                 or_replace,
+                primary_key,
             }) => {
+                if !primary_key.is_empty() {
+                    Err(DataFusionError::Execution(
+                        "Primary keys on MemoryTables are not currently supported!"
+                            .to_string(),
+                    ))?;
+                }
+
                 let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
                 let table = self.table(&name).await;
 
@@ -437,9 +452,11 @@ impl SessionContext {
                 }
             }
 
-            LogicalPlan::SetVariable(SetVariable {
-                variable, value, ..
-            }) => {
+            LogicalPlan::Statement(Statement::SetVariable(SetVariable {
+                variable,
+                value,
+                ..
+            })) => {
                 let mut state = self.state.write();
                 state.config.options_mut().set(&variable, &value)?;
                 drop(state);
@@ -1294,10 +1311,6 @@ impl SessionState {
             // repartitioning and local sorting steps to meet distribution and ordering requirements.
             // Therefore, it should run before EnforceDistribution and EnforceSorting.
             Arc::new(JoinSelection::new()),
-            // Enforce sort before PipelineFixer
-            Arc::new(EnforceDistribution::new()),
-            Arc::new(EnforceSorting::new()),
-            Arc::new(CombinePartialFinalAggregate::new()),
             // If the query is processing infinite inputs, the PipelineFixer rule applies the
             // necessary transformations to make the query runnable (if it is not already runnable).
             // If the query can not be made runnable, the rule emits an error with a diagnostic message.
@@ -1312,6 +1325,9 @@ impl SessionState {
             // Note that one should always run this rule after running the EnforceDistribution rule
             // as the latter may break local sorting requirements.
             Arc::new(EnforceSorting::new()),
+            // The CombinePartialFinalAggregate rule should be applied after the EnforceDistribution
+            // and EnforceSorting rules
+            Arc::new(CombinePartialFinalAggregate::new()),
             // The CoalesceBatches rule will not influence the distribution and ordering of the
             // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
             Arc::new(CoalesceBatches::new()),

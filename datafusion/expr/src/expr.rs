@@ -277,7 +277,7 @@ impl Display for BinaryExpr {
 }
 
 /// CASE expression
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Case {
     /// Optional base expression that can be compared to literal values in the "when" expressions
     pub expr: Option<Box<Expr>>,
