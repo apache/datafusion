@@ -120,18 +120,6 @@ pub(crate) fn get_set_diff_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
         .collect::<Vec<_>>()
 }
 
-/// Find the largest range that satisfy 0,1,2 .. n in the `in1`
-// For 0,1,2,4,5 we would produce 3. meaning 0,1,2 is the largest consecutive range (starting from zero).
-// For 1,2,3,4 we would produce 0. Meaning there is no consecutive range (starting from zero).
-pub(crate) fn calc_ordering_range(in1: &[usize]) -> usize {
-    for (idx, elem) in in1.iter().enumerate() {
-        if idx != *elem {
-            return idx;
-        }
-    }
-    in1.len()
-}
-
 /// Checks whether the given operator is a limit;
 /// i.e. either a [`LocalLimitExec`] or a [`GlobalLimitExec`].
 pub fn is_limit(plan: &Arc<dyn ExecutionPlan>) -> bool {
@@ -204,15 +192,6 @@ mod tests {
         assert_eq!(get_set_diff_indices(&[0, 3, 4], &[1, 2, 4]), vec![0, 3]);
         // return value should have same ordering with the in1
         assert_eq!(get_set_diff_indices(&[3, 4, 0], &[1, 2, 4]), vec![3, 0]);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_calc_ordering_range() -> Result<()> {
-        assert_eq!(calc_ordering_range(&[0, 3, 4]), 1);
-        assert_eq!(calc_ordering_range(&[0, 1, 3, 4]), 2);
-        assert_eq!(calc_ordering_range(&[0, 1, 2, 3, 4]), 5);
-        assert_eq!(calc_ordering_range(&[1, 2, 3, 4]), 0);
         Ok(())
     }
 

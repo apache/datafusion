@@ -284,6 +284,18 @@ pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
+/// Find the largest range that satisfy 0,1,2 .. n in the `in1`
+// For 0,1,2,4,5 we would produce 3. meaning 0,1,2 is the largest consecutive range (starting from zero).
+// For 1,2,3,4 we would produce 0. Meaning there is no consecutive range (starting from zero).
+pub fn calc_ordering_range(in1: &[usize]) -> usize {
+    for (idx, elem) in in1.iter().enumerate() {
+        if idx != *elem {
+            return idx;
+        }
+    }
+    in1.len()
+}
+
 #[cfg(test)]
 mod tests {
     use arrow::array::Float64Array;
@@ -601,6 +613,15 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_calc_ordering_range() -> Result<()> {
+        assert_eq!(calc_ordering_range(&[0, 3, 4]), 1);
+        assert_eq!(calc_ordering_range(&[0, 1, 3, 4]), 2);
+        assert_eq!(calc_ordering_range(&[0, 1, 2, 3, 4]), 5);
+        assert_eq!(calc_ordering_range(&[1, 2, 3, 4]), 0);
         Ok(())
     }
 }

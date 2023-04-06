@@ -36,6 +36,7 @@ use datafusion_expr::{
 use datafusion_physical_expr::window::{
     BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr,
 };
+use itertools::Itertools;
 use std::convert::TryInto;
 use std::sync::Arc;
 
@@ -43,6 +44,7 @@ mod bounded_window_agg_exec;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
+use datafusion_common::utils::calc_ordering_range;
 use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
@@ -221,11 +223,18 @@ pub(crate) fn get_ordered_partition_by_indices(
     let input_ordering = input_ordering.unwrap_or(&[]);
     let input_ordering_exprs = convert_to_expr(input_ordering);
     let equal_properties = || input.equivalence_properties();
-    get_indices_of_matching_exprs(
+    let input_places = get_indices_of_matching_exprs(
+        &input_ordering_exprs,
+        partition_by_exprs,
+        equal_properties,
+    );
+    let partition_places = get_indices_of_matching_exprs(
         partition_by_exprs,
         &input_ordering_exprs,
         equal_properties,
-    )
+    );
+    let first_n = calc_ordering_range(partition_places.into_iter().sorted().as_slice());
+    input_places[0..first_n].to_vec()
 }
 
 #[cfg(test)]
@@ -296,6 +305,7 @@ mod tests {
             (vec!["a", "b"], vec![0, 1]),
             (vec!["b", "a"], vec![1, 0]),
             (vec!["b", "a", "c"], vec![1, 0, 2]),
+            (vec!["d", "b", "a"], vec![2, 1]),
         ];
         for (pb_names, expected) in test_data {
             let pb_exprs = pb_names

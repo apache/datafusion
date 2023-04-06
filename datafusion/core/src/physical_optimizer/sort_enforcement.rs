@@ -37,9 +37,9 @@ use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::sort_pushdown::{pushdown_sorts, SortPushDown};
 use crate::physical_optimizer::utils::{
-    add_sort_above, calc_ordering_range, find_match_indices, get_ordered_merged_indices,
-    get_set_diff_indices, is_ascending_ordered, is_coalesce_partitions, is_limit,
-    is_repartition, is_sort, is_sort_preserving_merge, is_union, is_window,
+    add_sort_above, find_match_indices, get_ordered_merged_indices, get_set_diff_indices,
+    is_ascending_ordered, is_coalesce_partitions, is_limit, is_repartition, is_sort,
+    is_sort_preserving_merge, is_union, is_window,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -49,7 +49,7 @@ use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_common::utils::get_at_indices;
+use datafusion_common::utils::{calc_ordering_range, get_at_indices};
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::utils::{
     convert_to_expr, get_indices_of_matching_exprs, make_sort_exprs_from_requirements,
