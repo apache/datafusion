@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{normalize_ident, ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{Join, JoinConstraint, JoinOperator, TableWithJoins};
@@ -145,12 +145,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinConstraint::Using(idents) => {
                 let keys: Vec<Column> = idents
                     .into_iter()
-                    .map(|x| {
-                        Column::from_name(normalize_ident(
-                            x,
-                            self.options.enable_ident_normalization,
-                        ))
-                    })
+                    .map(|x| Column::from_name(self.normalizer.normalize(x)))
                     .collect();
                 LogicalPlanBuilder::from(left)
                     .join_using(right, join_type, keys)?

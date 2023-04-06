@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{normalize_ident, ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
@@ -53,10 +53,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             for cte in with.cte_tables {
                 // A `WITH` block can't use the same name more than once
-                let cte_name = normalize_ident(
-                    cte.alias.name.clone(),
-                    self.options.enable_ident_normalization,
-                );
+                let cte_name = self.normalizer.normalize(cte.alias.name.clone());
                 if planner_context.contains_cte(&cte_name) {
                     return Err(DataFusionError::SQL(ParserError(format!(
                         "WITH query name {cte_name:?} specified more than once"
