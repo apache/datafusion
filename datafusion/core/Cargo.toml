@@ -19,11 +19,7 @@
 name = "datafusion"
 description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
 keywords = ["arrow", "query", "sql"]
-include = [
-    "benches/*.rs",
-    "src/**/*.rs",
-    "Cargo.toml",
-]
+include = ["benches/*.rs", "src/**/*.rs", "Cargo.toml"]
 version = { workspace = true }
 edition = { workspace = true }
 readme = { workspace = true }
@@ -117,7 +113,7 @@ postgres-protocol = "0.6.4"
 postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
 rstest = "0.17.0"
 rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
-sqllogictest = "0.13.0"
+sqllogictest = "0.13.2"
 test-utils = { path = "../../test-utils" }
 thiserror = "1.0.37"
 tokio-postgres = "0.7.7"

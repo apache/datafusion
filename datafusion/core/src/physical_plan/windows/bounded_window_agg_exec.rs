@@ -30,9 +30,9 @@ use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
-use arrow::compute::{concat, concat_batches, SortColumn};
 use arrow::{
     array::{Array, ArrayRef},
+    compute::{concat, concat_batches, SortColumn},
     datatypes::{Schema, SchemaRef},
     record_batch::RecordBatch,
 };
@@ -49,7 +49,7 @@ use std::task::{Context, Poll};
 use crate::physical_plan::windows::{
     calc_requirements, get_ordered_partition_by_indices,
 };
-use datafusion_common::utils::{evaluate_partition_points, get_at_indices};
+use datafusion_common::utils::{evaluate_partition_ranges, get_at_indices};
 use datafusion_physical_expr::window::{
     PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
     WindowAggState, WindowState,
@@ -371,7 +371,7 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
         let num_rows = record_batch.num_rows();
         if num_rows > 0 {
             let partition_points =
-                evaluate_partition_points(num_rows, &partition_columns)?;
+                evaluate_partition_ranges(num_rows, &partition_columns)?;
             for partition_range in partition_points {
                 let partition_row = partition_columns
                     .iter()

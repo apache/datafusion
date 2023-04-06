@@ -24,6 +24,7 @@ use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::{Token, TokenWithLocation};
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::ops::Range;
 
@@ -179,7 +180,7 @@ where
 /// This function finds the partition points according to `partition_columns`.
 /// If there are no sort columns, then the result will be a single element
 /// vector containing one partition range spanning all data.
-pub fn evaluate_partition_points(
+pub fn evaluate_partition_ranges(
     num_rows: usize,
     partition_columns: &[SortColumn],
 ) -> Result<Vec<Range<usize>>> {
@@ -197,8 +198,26 @@ pub fn evaluate_partition_points(
 /// the identifier by replacing it with two double quotes
 ///
 /// e.g. identifier `tab.le"name` becomes `"tab.le""name"`
-pub fn quote_identifier(s: &str) -> String {
-    format!("\"{}\"", s.replace('"', "\"\""))
+pub fn quote_identifier(s: &str) -> Cow<str> {
+    if needs_quotes(s) {
+        Cow::Owned(format!("\"{}\"", s.replace('"', "\"\"")))
+    } else {
+        Cow::Borrowed(s)
+    }
+}
+
+/// returns true if this identifier needs quotes
+fn needs_quotes(s: &str) -> bool {
+    let mut chars = s.chars();
+
+    // first char can not be a number unless escaped
+    if let Some(first_char) = chars.next() {
+        if !(first_char.is_ascii_lowercase() || first_char == '_') {
+            return true;
+        }
+    }
+
+    !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 // TODO: remove when can use https://github.com/sqlparser-rs/sqlparser-rs/issues/805
@@ -268,6 +287,7 @@ pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use arrow::array::Float64Array;
+    use arrow_array::Array;
     use std::ops::Range;
     use std::sync::Arc;
 
@@ -450,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_partition_points() -> Result<()> {
+    fn test_evaluate_partition_ranges() -> Result<()> {
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(Float64Array::from_slice([1.0, 1.0, 1.0, 2.0, 2.0, 2.0])),
             Arc::new(Float64Array::from_slice([4.0, 4.0, 3.0, 2.0, 1.0, 1.0])),
@@ -474,7 +494,7 @@ mod tests {
                 options: Some(options),
             })
             .collect::<Vec<_>>();
-        let ranges = evaluate_partition_points(n_row, &sort_columns)?;
+        let ranges = evaluate_partition_ranges(n_row, &sort_columns)?;
         assert_eq!(ranges.len(), 4);
         assert_eq!(ranges[0], Range { start: 0, end: 2 });
         assert_eq!(ranges[1], Range { start: 2, end: 3 });
@@ -537,6 +557,49 @@ mod tests {
             "SQL(ParserError(\"Unexpected token following period in identifier: *\"))",
             format!("{err:?}")
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_quote_identifier() -> Result<()> {
+        let cases = vec![
+            ("foo", r#"foo"#),
+            ("_foo", r#"_foo"#),
+            ("foo_bar", r#"foo_bar"#),
+            ("foo-bar", r#""foo-bar""#),
+            // name itself has a period, needs to be quoted
+            ("foo.bar", r#""foo.bar""#),
+            ("Foo", r#""Foo""#),
+            ("Foo.Bar", r#""Foo.Bar""#),
+            // name starting with a number needs to be quoted
+            ("test1", r#"test1"#),
+            ("1test", r#""1test""#),
+        ];
+
+        for (identifier, quoted_identifier) in cases {
+            println!("input: \n{identifier}\nquoted_identifier:\n{quoted_identifier}");
+
+            assert_eq!(quote_identifier(identifier), quoted_identifier);
+
+            // When parsing the quoted identifier, it should be a
+            // a single identifier without normalization, and not in multiple parts
+            let quote_style = if quoted_identifier.starts_with('"') {
+                Some('"')
+            } else {
+                None
+            };
+
+            let expected_parsed = vec![Ident {
+                value: identifier.to_string(),
+                quote_style,
+            }];
+
+            assert_eq!(
+                parse_identifiers(quoted_identifier).unwrap(),
+                expected_parsed
+            );
+        }
 
         Ok(())
     }

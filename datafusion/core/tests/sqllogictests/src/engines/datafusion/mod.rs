@@ -24,7 +24,6 @@ use self::error::{DFSqlLogicTestError, Result};
 use async_trait::async_trait;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
-use datafusion_sql::parser::DFParser;
 use sqllogictest::DBOutput;
 
 mod error;
@@ -64,7 +63,7 @@ impl sqllogictest::AsyncDB for DataFusion {
 
     /// [`Runner`] calls this function to perform sleep.
     ///
-    /// The default implementation is `std::thread::sleep`, which is universial to any async runtime
+    /// The default implementation is `std::thread::sleep`, which is universal to any async runtime
     /// but would block the current thread. If you are running in tokio runtime, you should override
     /// this by `tokio::time::sleep`.
     async fn sleep(dur: Duration) {
@@ -73,12 +72,7 @@ impl sqllogictest::AsyncDB for DataFusion {
 }
 
 async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DFOutput> {
-    let sql = sql.into();
-    // check if the sql is more than one statement
-    if let Ok(mut statements) = DFParser::parse_sql(&sql) {
-        statements.pop_front().expect("at least one SQL statement");
-    }
-    let df = ctx.sql(sql.as_str()).await?;
+    let df = ctx.sql(sql.into().as_str()).await?;
 
     let types = normalize::convert_schema_to_types(df.schema().fields());
     let results: Vec<RecordBatch> = df.collect().await?;

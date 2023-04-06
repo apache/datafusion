@@ -66,6 +66,8 @@ pub enum BuiltinScalarFunction {
     Sin,
     /// sqrt
     Sqrt,
+    /// cbrt
+    Cbrt,
     /// tan
     Tan,
     /// trunc
@@ -212,6 +214,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Signum => Volatility::Immutable,
             BuiltinScalarFunction::Sin => Volatility::Immutable,
             BuiltinScalarFunction::Sqrt => Volatility::Immutable,
+            BuiltinScalarFunction::Cbrt => Volatility::Immutable,
             BuiltinScalarFunction::Tan => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
@@ -304,6 +307,7 @@ impl FromStr for BuiltinScalarFunction {
             "signum" => BuiltinScalarFunction::Signum,
             "sin" => BuiltinScalarFunction::Sin,
             "sqrt" => BuiltinScalarFunction::Sqrt,
+            "cbrt" => BuiltinScalarFunction::Cbrt,
             "tan" => BuiltinScalarFunction::Tan,
             "trunc" => BuiltinScalarFunction::Trunc,
 

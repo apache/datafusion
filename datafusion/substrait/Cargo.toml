@@ -34,7 +34,7 @@ datafusion = { version = "21.1.0", path = "../core" }
 itertools = "0.10.5"
 object_store = "0.5.4"
 prost = "0.11"
-substrait = "0.6.0"
+substrait = "0.7.1"
 tokio = "1.17"
 
 [features]
