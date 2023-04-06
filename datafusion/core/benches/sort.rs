@@ -15,24 +15,77 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Adapted from merge benchmark. Primary difference is that the input data is not ordered.
+//! Benchmarks for Merge and sort performance
+//!
+//! Each benchmark:
+//! 1. Creates a list of tuples (sorted if necessary)
+//!
+//! 2. Divides those tuples across some number of streams of [`RecordBatch`]
+//! preserving any ordering
+//!
+//! 3. Times how long it takes for a given sort plan to process the input
+//!
+//! Pictorially:
+//!
+//! ```
+//!                           Rows are randomly
+//!                          divided into separate
+//!                         RecordBatch "streams",
+//! ┌────┐ ┌────┐ ┌────┐     preserving the order        ┌────┐ ┌────┐ ┌────┐
+//! │    │ │    │ │    │                                 │    │ │    │ │    │
+//! │    │ │    │ │    │ ──────────────┐                 │    │ │    │ │    │
+//! │    │ │    │ │    │               └─────────────▶   │ C1 │ │... │ │ CN │
+//! │    │ │    │ │    │ ───────────────┐                │    │ │    │ │    │
+//! │    │ │    │ │    │               ┌┼─────────────▶  │    │ │    │ │    │
+//! │    │ │    │ │    │               ││                │    │ │    │ │    │
+//! │    │ │    │ │    │               ││                └────┘ └────┘ └────┘
+//! │    │ │    │ │    │               ││                ┌────┐ ┌────┐ ┌────┐
+//! │    │ │    │ │    │               │└───────────────▶│    │ │    │ │    │
+//! │    │ │    │ │    │               │                 │    │ │    │ │    │
+//! │    │ │    │ │    │         ...   │                 │ C1 │ │... │ │ CN │
+//! │    │ │    │ │    │ ──────────────┘                 │    │ │    │ │    │
+//! │    │ │    │ │    │                ┌──────────────▶ │    │ │    │ │    │
+//! │ C1 │ │... │ │ CN │                │                │    │ │    │ │    │
+//! │    │ │    │ │    │───────────────┐│                └────┘ └────┘ └────┘
+//! │    │ │    │ │    │               ││
+//! │    │ │    │ │    │               ││
+//! │    │ │    │ │    │               ││                         ...
+//! │    │ │    │ │    │   ────────────┼┼┐
+//! │    │ │    │ │    │               │││
+//! │    │ │    │ │    │               │││               ┌────┐ ┌────┐ ┌────┐
+//! │    │ │    │ │    │ ──────────────┼┘│               │    │ │    │ │    │
+//! │    │ │    │ │    │               │ │               │    │ │    │ │    │
+//! │    │ │    │ │    │               │ │               │ C1 │ │... │ │ CN │
+//! │    │ │    │ │    │               └─┼────────────▶  │    │ │    │ │    │
+//! │    │ │    │ │    │                 │               │    │ │    │ │    │
+//! │    │ │    │ │    │                 └─────────────▶ │    │ │    │ │    │
+//! └────┘ └────┘ └────┘                                 └────┘ └────┘ └────┘
+//!    Input RecordBatch                                  NUM_STREAMS input
+//!      Columns 1..N                                       RecordBatches
+//! INPUT_SIZE sorted rows                                (still INPUT_SIZE total
+//!     ~10% duplicates                                          rows)
+//! ```
+
 use std::sync::Arc;
 
 use arrow::array::DictionaryArray;
 use arrow::datatypes::Int32Type;
 use arrow::{
-    array::{Float64Array, Int64Array, StringArray, UInt64Array},
-    compute::{self, SortOptions, TakeOptions},
+    array::{Float64Array, Int64Array, StringArray},
+    compute::SortOptions,
     datatypes::Schema,
     record_batch::RecordBatch,
 };
 
-/// Benchmarks for SortExec
+/// Benchmarks for SortPreservingMerge stream
 use criterion::{criterion_group, criterion_main, Criterion};
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::{
     execution::context::TaskContext,
-    physical_plan::{memory::MemoryExec, sorts::sort::SortExec, ExecutionPlan},
+    physical_plan::{
+        memory::MemoryExec, sorts::sort_preserving_merge::SortPreservingMergeExec,
+        ExecutionPlan,
+    },
     prelude::SessionContext,
 };
 use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
@@ -41,145 +94,62 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tokio::runtime::Runtime;
 
-use lazy_static::lazy_static;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 
 /// Total number of streams to divide each input into
 /// models 8 partition plan (should it be 16??)
-const NUM_STREAMS: u64 = 8;
+const NUM_STREAMS: usize = 8;
+
+/// The size of each batch within each stream
+const BATCH_SIZE: usize = 1024;
 
 /// Total number of input rows to generate
 const INPUT_SIZE: u64 = 100000;
-// cases:
 
-// * physical sort expr (X, Y Z, NULLS FIRST, ASC) (not parameterized)
-//
-// streams of distinct values
-// streams with 10% duplicated values (within each stream, and across streams)
-// These cases are intended to model important usecases in TPCH
-// parameters:
-//
-// Input schemas
-lazy_static! {
-    static ref I64_STREAMS: Vec<Vec<RecordBatch>> = i64_streams();
-    static ref F64_STREAMS: Vec<Vec<RecordBatch>> = f64_streams();
-
-    static ref UTF8_LOW_CARDINALITY_STREAMS: Vec<Vec<RecordBatch>> = utf8_low_cardinality_streams();
-    static ref UTF8_HIGH_CARDINALITY_STREAMS: Vec<Vec<RecordBatch>> = utf8_high_cardinality_streams();
-
-    static ref DICTIONARY_STREAMS: Vec<Vec<RecordBatch>> = dictionary_streams();
-    static ref DICTIONARY_TUPLE_STREAMS: Vec<Vec<RecordBatch>> = dictionary_tuple_streams();
-    static ref MIXED_DICTIONARY_TUPLE_STREAMS: Vec<Vec<RecordBatch>> = mixed_dictionary_tuple_streams();
-    // * (string(low), string(low), string(high)) -- tpch q1 + iox
-    static ref UTF8_TUPLE_STREAMS: Vec<Vec<RecordBatch>> = utf8_tuple_streams();
-    // * (f64, string, string, int) -- tpch q2
-    static ref MIXED_TUPLE_STREAMS: Vec<Vec<RecordBatch>> = mixed_tuple_streams();
-
-}
+type PartitionedBatches = Vec<Vec<RecordBatch>>;
 
 fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("sort i64", |b| {
-        let case = SortBenchCase::new(&I64_STREAMS);
+    let cases: Vec<(&str, &dyn Fn(bool) -> PartitionedBatches)> = vec![
+        ("i64", &i64_streams),
+        ("f64", &f64_streams),
+        ("utf8 low cardinality", &utf8_low_cardinality_streams),
+        ("utf8 high cardinality", &utf8_high_cardinality_streams),
+        ("utf8 tuple", &utf8_tuple_streams),
+        ("utf8 dictionary", &dictionary_streams),
+        ("utf8 dictionary tuple", &dictionary_tuple_streams),
+        ("mixed dictionary tuple", &mixed_dictionary_tuple_streams),
+        ("mixed tuple", &mixed_tuple_streams),
+    ];
 
-        b.iter(move || case.run())
-    });
-    c.bench_function("sort i64 preserve partitioning", |b| {
-        let case = SortBenchCasePreservePartitioning::new(&I64_STREAMS);
-
-        b.iter(move || case.run())
-    });
-
-    c.bench_function("sort f64", |b| {
-        let case = SortBenchCase::new(&F64_STREAMS);
-
-        b.iter(move || case.run())
-    });
-    c.bench_function("sort f64 preserve partitioning", |b| {
-        let case = SortBenchCasePreservePartitioning::new(&F64_STREAMS);
-
-        b.iter(move || case.run())
-    });
-
-    c.bench_function("sort utf8 low cardinality", |b| {
-        let case = SortBenchCase::new(&UTF8_LOW_CARDINALITY_STREAMS);
-
-        b.iter(move || case.run())
-    });
-    c.bench_function("sort utf8 low cardinality preserve partitioning", |b| {
-        let case = SortBenchCasePreservePartitioning::new(&UTF8_LOW_CARDINALITY_STREAMS);
-
-        b.iter(move || case.run())
-    });
-
-    c.bench_function("sort utf8 high cardinality", |b| {
-        let case = SortBenchCase::new(&UTF8_HIGH_CARDINALITY_STREAMS);
-
-        b.iter(move || case.run())
-    });
-    c.bench_function("sort utf8 high cardinality preserve partitioning", |b| {
-        let case = SortBenchCasePreservePartitioning::new(&UTF8_HIGH_CARDINALITY_STREAMS);
-
-        b.iter(move || case.run())
-    });
-
-    c.bench_function("sort utf8 tuple", |b| {
-        let case = SortBenchCase::new(&UTF8_TUPLE_STREAMS);
-
-        b.iter(move || case.run())
-    });
-    c.bench_function("sort utf8 tuple preserve partitioning", |b| {
-        let case = SortBenchCasePreservePartitioning::new(&UTF8_TUPLE_STREAMS);
-
-        b.iter(move || case.run())
-    });
-
-    c.bench_function("sort utf8 dictionary", |b| {
-        let case = SortBenchCase::new(&DICTIONARY_STREAMS);
-
-        b.iter(move || case.run())
-    });
-    c.bench_function("sort utf8 dictionary preserve partitioning", |b| {
-        let case = SortBenchCasePreservePartitioning::new(&DICTIONARY_STREAMS);
-
-        b.iter(move || case.run())
-    });
-
-    c.bench_function("sort utf8 dictionary tuple", |b| {
-        let case = SortBenchCase::new(&DICTIONARY_TUPLE_STREAMS);
-        b.iter(move || case.run())
-    });
-    c.bench_function("sort utf8 dictionary tuple preserve partitioning", |b| {
-        let case = SortBenchCasePreservePartitioning::new(&DICTIONARY_TUPLE_STREAMS);
-        b.iter(move || case.run())
-    });
-
-    c.bench_function("sort mixed utf8 dictionary tuple", |b| {
-        let case = SortBenchCase::new(&MIXED_DICTIONARY_TUPLE_STREAMS);
-        b.iter(move || case.run())
-    });
-
-    c.bench_function(
-        "sort mixed utf8 dictionary tuple preserve partitioning",
-        |b| {
-            let case =
-                SortBenchCasePreservePartitioning::new(&MIXED_DICTIONARY_TUPLE_STREAMS);
+    for (name, f) in cases {
+        c.bench_function(&format!("merge sorted {name}"), |b| {
+            let data = f(true);
+            let case = BenchCase::merge_sorted(&data);
             b.iter(move || case.run())
-        },
-    );
+        });
 
-    c.bench_function("sort mixed tuple", |b| {
-        let case = SortBenchCase::new(&MIXED_TUPLE_STREAMS);
+        c.bench_function(&format!("sort merge {name}"), |b| {
+            let data = f(false);
+            let case = BenchCase::sort_merge(&data);
+            b.iter(move || case.run())
+        });
 
-        b.iter(move || case.run())
-    });
-    c.bench_function("sort mixed tuple preserve partitioning", |b| {
-        let case = SortBenchCasePreservePartitioning::new(&MIXED_TUPLE_STREAMS);
+        c.bench_function(&format!("sort {name}"), |b| {
+            let data = f(false);
+            let case = BenchCase::sort(&data);
+            b.iter(move || case.run())
+        });
 
-        b.iter(move || case.run())
-    });
+        c.bench_function(&format!("sort partitioned {name}"), |b| {
+            let data = f(false);
+            let case = BenchCase::sort_partitioned(&data);
+            b.iter(move || case.run())
+        });
+    }
 }
 
-/// Encapsulates running a test case where input partitioning is not preserved.
-struct SortBenchCase {
+/// Encapsulates running each test case
+struct BenchCase {
     runtime: Runtime,
     task_ctx: Arc<TaskContext>,
 
@@ -187,10 +157,10 @@ struct SortBenchCase {
     plan: Arc<dyn ExecutionPlan>,
 }
 
-impl SortBenchCase {
+impl BenchCase {
     /// Prepare to run a benchmark that merges the specified
-    /// partitions (streams) together using all keyes
-    fn new(partitions: &[Vec<RecordBatch>]) -> Self {
+    /// pre-sorted partitions (streams) together using all keys
+    fn merge_sorted(partitions: &[Vec<RecordBatch>]) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
@@ -198,10 +168,71 @@ impl SortBenchCase {
         let schema = partitions[0][0].schema();
         let sort = make_sort_exprs(schema.as_ref());
 
-        let projection = None;
-        let exec = MemoryExec::try_new(partitions, schema, projection).unwrap();
+        let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
+        let plan = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+
+        Self {
+            runtime,
+            task_ctx,
+            plan,
+        }
+    }
+
+    /// Test SortExec in  "partitioned" mode followed by a SortPreservingMerge
+    fn sort_merge(partitions: &[Vec<RecordBatch>]) -> Self {
+        let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+
+        let schema = partitions[0][0].schema();
+        let sort = make_sort_exprs(schema.as_ref());
+
+        let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
+        let exec =
+            SortExec::new_with_partitioning(sort.clone(), Arc::new(exec), true, None);
+        let plan = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+
+        Self {
+            runtime,
+            task_ctx,
+            plan,
+        }
+    }
+
+    /// Test SortExec in "partitioned" mode which sorts the input streams
+    /// individually into some number of output streams
+    fn sort(partitions: &[Vec<RecordBatch>]) -> Self {
+        let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+
+        let schema = partitions[0][0].schema();
+        let sort = make_sort_exprs(schema.as_ref());
+
+        let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
         let exec = Arc::new(CoalescePartitionsExec::new(Arc::new(exec)));
-        let plan = Arc::new(SortExec::new(sort, exec, None));
+        let plan = Arc::new(SortExec::try_new(sort, exec, None).unwrap());
+
+        Self {
+            runtime,
+            task_ctx,
+            plan,
+        }
+    }
+
+    /// Test SortExec in "partitioned" mode which sorts the input streams
+    /// individually into some number of output streams
+    fn sort_partitioned(partitions: &[Vec<RecordBatch>]) -> Self {
+        let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+
+        let schema = partitions[0][0].schema();
+        let sort = make_sort_exprs(schema.as_ref());
+
+        let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
+        let exec = SortExec::new_with_partitioning(sort, Arc::new(exec), true, None);
+        let plan = Arc::new(CoalescePartitionsExec::new(Arc::new(exec)));
 
         Self {
             runtime,
@@ -226,64 +257,6 @@ impl SortBenchCase {
         })
     }
 }
-/// Encapsulates running a test case where input partitioning is not preserved.
-struct SortBenchCasePreservePartitioning {
-    runtime: Runtime,
-    task_ctx: Arc<TaskContext>,
-
-    // The plan to run
-    plan: Arc<dyn ExecutionPlan>,
-    partition_count: usize,
-}
-
-impl SortBenchCasePreservePartitioning {
-    /// Prepare to run a benchmark that merges the specified
-    /// partitions (streams) together using all keyes
-    fn new(partitions: &[Vec<RecordBatch>]) -> Self {
-        let partition_count = partitions.len();
-        let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-
-        let schema = partitions[0][0].schema();
-        let sort = make_sort_exprs(schema.as_ref());
-
-        let projection = None;
-        let exec = MemoryExec::try_new(partitions, schema, projection).unwrap();
-        let new_sort =
-            SortExec::new(sort, Arc::new(exec), None).with_preserve_partitioning(true);
-
-        let plan = Arc::new(new_sort);
-
-        Self {
-            runtime,
-            task_ctx,
-            plan,
-            partition_count,
-        }
-    }
-
-    /// runs the specified plan to completion, draining all input and
-    /// panic'ing on error
-    fn run(&self) {
-        let plan = Arc::clone(&self.plan);
-        let task_ctx = Arc::clone(&self.task_ctx);
-
-        assert_eq!(
-            plan.output_partitioning().partition_count(),
-            self.partition_count
-        );
-
-        self.runtime.block_on(async move {
-            for i in 0..self.partition_count {
-                let mut stream = plan.execute(i, task_ctx.clone()).unwrap();
-                while let Some(b) = stream.next().await {
-                    b.expect("unexpected execution error");
-                }
-            }
-        })
-    }
-}
 
 /// Make sort exprs for each column in `schema`
 fn make_sort_exprs(schema: &Schema) -> Vec<PhysicalSortExpr> {
@@ -298,51 +271,58 @@ fn make_sort_exprs(schema: &Schema) -> Vec<PhysicalSortExpr> {
 }
 
 /// Create streams of int64 (where approximately 1/3 values is repeated)
-fn i64_streams() -> Vec<Vec<RecordBatch>> {
-    let array: Int64Array = DataGenerator::new().i64_values().into_iter().collect();
+fn i64_streams(sorted: bool) -> PartitionedBatches {
+    let mut values = DataGenerator::new().i64_values();
+    if sorted {
+        values.sort_unstable();
+    }
 
-    let batch = RecordBatch::try_from_iter(vec![("i64", Arc::new(array) as _)]).unwrap();
-
-    split_batch(batch)
+    split_tuples(values, |v| {
+        let array = Int64Array::from(v);
+        RecordBatch::try_from_iter(vec![("i64", Arc::new(array) as _)]).unwrap()
+    })
 }
 
 /// Create streams of f64 (where approximately 1/3 values are repeated)
 /// with the same distribution as i64_streams
-fn f64_streams() -> Vec<Vec<RecordBatch>> {
-    let array: Float64Array = DataGenerator::new().f64_values().into_iter().collect();
-    let batch = RecordBatch::try_from_iter(vec![("f64", Arc::new(array) as _)]).unwrap();
+fn f64_streams(sorted: bool) -> PartitionedBatches {
+    let mut values = DataGenerator::new().f64_values();
+    if sorted {
+        values.sort_unstable_by(|a, b| a.total_cmp(b));
+    }
 
-    split_batch(batch)
+    split_tuples(values, |v| {
+        let array = Float64Array::from(v);
+        RecordBatch::try_from_iter(vec![("f64", Arc::new(array) as _)]).unwrap()
+    })
 }
 
 /// Create streams of random low cardinality utf8 values
-fn utf8_low_cardinality_streams() -> Vec<Vec<RecordBatch>> {
-    let array: StringArray = DataGenerator::new()
-        .utf8_low_cardinality_values()
-        .into_iter()
-        .collect();
-
-    let batch =
-        RecordBatch::try_from_iter(vec![("utf_low", Arc::new(array) as _)]).unwrap();
-
-    split_batch(batch)
+fn utf8_low_cardinality_streams(sorted: bool) -> PartitionedBatches {
+    let mut values = DataGenerator::new().utf8_low_cardinality_values();
+    if sorted {
+        values.sort_unstable();
+    }
+    split_tuples(values, |v| {
+        let array: StringArray = v.into_iter().collect();
+        RecordBatch::try_from_iter(vec![("utf_low", Arc::new(array) as _)]).unwrap()
+    })
 }
 
 /// Create streams of high  cardinality (~ no duplicates) utf8 values
-fn utf8_high_cardinality_streams() -> Vec<Vec<RecordBatch>> {
-    let array: StringArray = DataGenerator::new()
-        .utf8_high_cardinality_values()
-        .into_iter()
-        .collect();
-
-    let batch =
-        RecordBatch::try_from_iter(vec![("utf_high", Arc::new(array) as _)]).unwrap();
-
-    split_batch(batch)
+fn utf8_high_cardinality_streams(sorted: bool) -> PartitionedBatches {
+    let mut values = DataGenerator::new().utf8_high_cardinality_values();
+    if sorted {
+        values.sort_unstable();
+    }
+    split_tuples(values, |v| {
+        let array: StringArray = v.into_iter().collect();
+        RecordBatch::try_from_iter(vec![("utf_high", Arc::new(array) as _)]).unwrap()
+    })
 }
 
 /// Create a batch of (utf8_low, utf8_low, utf8_high)
-fn utf8_tuple_streams() -> Vec<Vec<RecordBatch>> {
+fn utf8_tuple_streams(sorted: bool) -> PartitionedBatches {
     let mut gen = DataGenerator::new();
 
     // need to sort by the combined key, so combine them together
@@ -353,27 +333,29 @@ fn utf8_tuple_streams() -> Vec<Vec<RecordBatch>> {
         .zip(gen.utf8_high_cardinality_values().into_iter())
         .collect();
 
-    tuples.sort_unstable();
+    if sorted {
+        tuples.sort_unstable();
+    }
 
-    let (tuples, utf8_high): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
-    let (utf8_low1, utf8_low2): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
+    split_tuples(tuples, |tuples| {
+        let (tuples, utf8_high): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
+        let (utf8_low1, utf8_low2): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
 
-    let utf8_high: StringArray = utf8_high.into_iter().collect();
-    let utf8_low1: StringArray = utf8_low1.into_iter().collect();
-    let utf8_low2: StringArray = utf8_low2.into_iter().collect();
+        let utf8_high: StringArray = utf8_high.into_iter().collect();
+        let utf8_low1: StringArray = utf8_low1.into_iter().collect();
+        let utf8_low2: StringArray = utf8_low2.into_iter().collect();
 
-    let batch = RecordBatch::try_from_iter(vec![
-        ("utf_low1", Arc::new(utf8_low1) as _),
-        ("utf_low2", Arc::new(utf8_low2) as _),
-        ("utf_high", Arc::new(utf8_high) as _),
-    ])
-    .unwrap();
-
-    split_batch(batch)
+        RecordBatch::try_from_iter(vec![
+            ("utf_low1", Arc::new(utf8_low1) as _),
+            ("utf_low2", Arc::new(utf8_low2) as _),
+            ("utf_high", Arc::new(utf8_high) as _),
+        ])
+        .unwrap()
+    })
 }
 
 /// Create a batch of (f64, utf8_low, utf8_low, i64)
-fn mixed_tuple_streams() -> Vec<Vec<RecordBatch>> {
+fn mixed_tuple_streams(sorted: bool) -> PartitionedBatches {
     let mut gen = DataGenerator::new();
 
     // need to sort by the combined key, so combine them together
@@ -384,43 +366,50 @@ fn mixed_tuple_streams() -> Vec<Vec<RecordBatch>> {
         .zip(gen.utf8_low_cardinality_values().into_iter())
         .zip(gen.i64_values().into_iter())
         .collect();
-    tuples.sort_unstable();
 
-    let (tuples, i64_values): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
-    let (tuples, utf8_low2): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
-    let (f64_values, utf8_low1): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
+    if sorted {
+        tuples.sort_unstable();
+    }
 
-    let f64_values: Float64Array = f64_values.into_iter().map(|v| v as f64).collect();
-    let utf8_low1: StringArray = utf8_low1.into_iter().collect();
-    let utf8_low2: StringArray = utf8_low2.into_iter().collect();
-    let i64_values: Int64Array = i64_values.into_iter().collect();
+    split_tuples(tuples, |tuples| {
+        let (tuples, i64_values): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
+        let (tuples, utf8_low2): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
+        let (f64_values, utf8_low1): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
 
-    let batch = RecordBatch::try_from_iter(vec![
-        ("f64", Arc::new(f64_values) as _),
-        ("utf_low1", Arc::new(utf8_low1) as _),
-        ("utf_low2", Arc::new(utf8_low2) as _),
-        ("i64", Arc::new(i64_values) as _),
-    ])
-    .unwrap();
+        let f64_values: Float64Array = f64_values.into_iter().map(|v| v as f64).collect();
 
-    split_batch(batch)
+        let utf8_low1: StringArray = utf8_low1.into_iter().collect();
+        let utf8_low2: StringArray = utf8_low2.into_iter().collect();
+        let i64_values: Int64Array = i64_values.into_iter().collect();
+
+        RecordBatch::try_from_iter(vec![
+            ("f64", Arc::new(f64_values) as _),
+            ("utf_low1", Arc::new(utf8_low1) as _),
+            ("utf_low2", Arc::new(utf8_low2) as _),
+            ("i64", Arc::new(i64_values) as _),
+        ])
+        .unwrap()
+    })
 }
 
 /// Create a batch of (utf8_dict)
-fn dictionary_streams() -> Vec<Vec<RecordBatch>> {
+fn dictionary_streams(sorted: bool) -> PartitionedBatches {
     let mut gen = DataGenerator::new();
-    let values = gen.utf8_low_cardinality_values();
-    let dictionary: DictionaryArray<Int32Type> =
-        values.iter().map(Option::as_deref).collect();
+    let mut values = gen.utf8_low_cardinality_values();
+    if sorted {
+        values.sort_unstable();
+    }
 
-    let batch =
-        RecordBatch::try_from_iter(vec![("dict", Arc::new(dictionary) as _)]).unwrap();
+    split_tuples(values, |v| {
+        let dictionary: DictionaryArray<Int32Type> =
+            v.iter().map(Option::as_deref).collect();
 
-    split_batch(batch)
+        RecordBatch::try_from_iter(vec![("dict", Arc::new(dictionary) as _)]).unwrap()
+    })
 }
 
 /// Create a batch of (utf8_dict, utf8_dict, utf8_dict)
-fn dictionary_tuple_streams() -> Vec<Vec<RecordBatch>> {
+fn dictionary_tuple_streams(sorted: bool) -> PartitionedBatches {
     let mut gen = DataGenerator::new();
     let mut tuples: Vec<_> = gen
         .utf8_low_cardinality_values()
@@ -428,27 +417,30 @@ fn dictionary_tuple_streams() -> Vec<Vec<RecordBatch>> {
         .zip(gen.utf8_low_cardinality_values())
         .zip(gen.utf8_low_cardinality_values())
         .collect();
-    tuples.sort_unstable();
 
-    let (tuples, c): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
-    let (a, b): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
+    if sorted {
+        tuples.sort_unstable();
+    }
 
-    let a: DictionaryArray<Int32Type> = a.iter().map(Option::as_deref).collect();
-    let b: DictionaryArray<Int32Type> = b.iter().map(Option::as_deref).collect();
-    let c: DictionaryArray<Int32Type> = c.iter().map(Option::as_deref).collect();
+    split_tuples(tuples, |tuples| {
+        let (tuples, c): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
+        let (a, b): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
 
-    let batch = RecordBatch::try_from_iter(vec![
-        ("a", Arc::new(a) as _),
-        ("b", Arc::new(b) as _),
-        ("c", Arc::new(c) as _),
-    ])
-    .unwrap();
+        let a: DictionaryArray<Int32Type> = a.iter().map(Option::as_deref).collect();
+        let b: DictionaryArray<Int32Type> = b.iter().map(Option::as_deref).collect();
+        let c: DictionaryArray<Int32Type> = c.iter().map(Option::as_deref).collect();
 
-    split_batch(batch)
+        RecordBatch::try_from_iter(vec![
+            ("a", Arc::new(a) as _),
+            ("b", Arc::new(b) as _),
+            ("c", Arc::new(c) as _),
+        ])
+        .unwrap()
+    })
 }
 
 /// Create a batch of (utf8_dict, utf8_dict, utf8_dict, i64)
-fn mixed_dictionary_tuple_streams() -> Vec<Vec<RecordBatch>> {
+fn mixed_dictionary_tuple_streams(sorted: bool) -> PartitionedBatches {
     let mut gen = DataGenerator::new();
     let mut tuples: Vec<_> = gen
         .utf8_low_cardinality_values()
@@ -457,26 +449,29 @@ fn mixed_dictionary_tuple_streams() -> Vec<Vec<RecordBatch>> {
         .zip(gen.utf8_low_cardinality_values())
         .zip(gen.i64_values())
         .collect();
-    tuples.sort_unstable();
 
-    let (tuples, d): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
-    let (tuples, c): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
-    let (a, b): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
+    if sorted {
+        tuples.sort_unstable();
+    }
 
-    let a: DictionaryArray<Int32Type> = a.iter().map(Option::as_deref).collect();
-    let b: DictionaryArray<Int32Type> = b.iter().map(Option::as_deref).collect();
-    let c: DictionaryArray<Int32Type> = c.iter().map(Option::as_deref).collect();
-    let d: Int64Array = d.into_iter().collect();
+    split_tuples(tuples, |tuples| {
+        let (tuples, d): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
+        let (tuples, c): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
+        let (a, b): (Vec<_>, Vec<_>) = tuples.into_iter().unzip();
 
-    let batch = RecordBatch::try_from_iter(vec![
-        ("a", Arc::new(a) as _),
-        ("b", Arc::new(b) as _),
-        ("c", Arc::new(c) as _),
-        ("d", Arc::new(d) as _),
-    ])
-    .unwrap();
+        let a: DictionaryArray<Int32Type> = a.iter().map(Option::as_deref).collect();
+        let b: DictionaryArray<Int32Type> = b.iter().map(Option::as_deref).collect();
+        let c: DictionaryArray<Int32Type> = c.iter().map(Option::as_deref).collect();
+        let d: Int64Array = d.into_iter().collect();
 
-    split_batch(batch)
+        RecordBatch::try_from_iter(vec![
+            ("a", Arc::new(a) as _),
+            ("b", Arc::new(b) as _),
+            ("c", Arc::new(c) as _),
+            ("d", Arc::new(d) as _),
+        ])
+        .unwrap()
+    })
 }
 
 /// Encapsulates creating data for this test
@@ -491,11 +486,18 @@ impl DataGenerator {
         }
     }
 
-    /// Create an array of i64 unsorted values (where approximately 1/3 values is repeated)
+    /// Create an array of i64 sorted values (where approximately 1/3 values is repeated)
     fn i64_values(&mut self) -> Vec<i64> {
-        (0..INPUT_SIZE)
+        let mut vec: Vec<_> = (0..INPUT_SIZE)
             .map(|_| self.rng.gen_range(0..INPUT_SIZE as i64))
-            .collect()
+            .collect();
+
+        vec.sort_unstable();
+
+        // 6287 distinct / 10000 total
+        //let num_distinct = vec.iter().collect::<HashSet<_>>().len();
+        //println!("{} distinct / {} total", num_distinct, vec.len());
+        vec
     }
 
     /// Create an array of f64 sorted values (with same distribution of `i64_values`)
@@ -510,21 +512,27 @@ impl DataGenerator {
             .collect::<Vec<_>>();
 
         // pick from the 100 strings randomly
-        (0..INPUT_SIZE)
+        let mut input = (0..INPUT_SIZE)
             .map(|_| {
                 let idx = self.rng.gen_range(0..strings.len());
                 let s = Arc::clone(&strings[idx]);
                 Some(s)
             })
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+
+        input.sort_unstable();
+        input
     }
 
-    /// Create values of high  cardinality (~ no duplicates) utf8 values
+    /// Create sorted values of high  cardinality (~ no duplicates) utf8 values
     fn utf8_high_cardinality_values(&mut self) -> Vec<Option<String>> {
         // make random strings
-        (0..INPUT_SIZE)
+        let mut input = (0..INPUT_SIZE)
             .map(|_| Some(self.random_string()))
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+
+        input.sort_unstable();
+        input
     }
 
     fn random_string(&mut self) -> String {
@@ -537,56 +545,36 @@ impl DataGenerator {
     }
 }
 
-/// Splits the `input_batch` randomly into `NUM_STREAMS` approximately evenly sorted streams
-fn split_batch(input_batch: RecordBatch) -> Vec<Vec<RecordBatch>> {
+/// Splits the `input` tuples randomly into batches of `BATCH_SIZE` distributed across
+/// `NUM_STREAMS` partitions, preserving any ordering
+///
+/// `f` is function that takes a list of tuples and produces a [`RecordBatch`]
+fn split_tuples<T, F>(input: Vec<T>, f: F) -> PartitionedBatches
+where
+    F: Fn(Vec<T>) -> RecordBatch,
+{
     // figure out which inputs go where
     let mut rng = StdRng::seed_from_u64(1337);
 
-    // randomly assign rows to streams
-    let stream_assignments = (0..input_batch.num_rows())
-        .map(|_| rng.gen_range(0..NUM_STREAMS))
-        .collect();
+    let mut outputs: Vec<Vec<Vec<T>>> = (0..NUM_STREAMS).map(|_| Vec::new()).collect();
 
-    // split the inputs into streams
-    (0..NUM_STREAMS)
-        .map(|stream| {
-            // make a "stream" of 1 record batch
-            vec![take_columns(&input_batch, &stream_assignments, stream)]
-        })
-        .collect::<Vec<_>>()
-}
-
-/// returns a record batch that contains all there values where
-/// stream_assignment[i] = stream (aka this is the equivalent of
-/// calling take(indicies) where indicies[i] == stream_index)
-fn take_columns(
-    input_batch: &RecordBatch,
-    stream_assignments: &UInt64Array,
-    stream: u64,
-) -> RecordBatch {
-    // find just the indicies needed from record batches to extract
-    let stream_indices: UInt64Array = stream_assignments
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, stream_idx)| {
-            if stream_idx.unwrap() == stream {
-                Some(idx as u64)
-            } else {
-                None
+    for i in input {
+        let stream_idx = rng.gen_range(0..NUM_STREAMS);
+        let stream = &mut outputs[stream_idx];
+        match stream.last_mut() {
+            Some(x) if x.len() < BATCH_SIZE => x.push(i),
+            _ => {
+                let mut v = Vec::with_capacity(BATCH_SIZE);
+                v.push(i);
+                stream.push(v)
             }
-        })
-        .collect();
+        }
+    }
 
-    let options = Some(TakeOptions { check_bounds: true });
-
-    // now, get the columns from each array
-    let new_columns = input_batch
-        .columns()
-        .iter()
-        .map(|array| compute::take(array, &stream_indices, options.clone()).unwrap())
-        .collect();
-
-    RecordBatch::try_new(input_batch.schema(), new_columns).unwrap()
+    outputs
+        .into_iter()
+        .map(|stream| stream.into_iter().map(&f).collect())
+        .collect()
 }
 
 criterion_group!(benches, criterion_benchmark);
