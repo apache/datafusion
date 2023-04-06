@@ -30,23 +30,21 @@ use datafusion_common::{
 };
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
-use datafusion_expr::logical_plan::{
-    Analyze, Prepare, TransactionAccessMode, TransactionConclusion, TransactionEnd,
-    TransactionIsolationLevel, TransactionStart,
-};
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
-    cast, col, CreateCatalog, CreateCatalogSchema,
+    cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
     DescribeTable, DmlStatement, DropTable, DropView, EmptyRelation, Explain,
-    ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, PlanType, SetVariable,
-    ToStringifiedPlan, WriteOp,
+    ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, PlanType, Prepare,
+    SetVariable, Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
+    TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
+    WriteOp,
 };
 use sqlparser::ast;
 use sqlparser::ast::{
     Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, OrderByExpr, Query,
-    SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableFactor,
-    TableWithJoins, TransactionMode, UnaryOperator, Value,
+    SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement,
+    TableConstraint, TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 
 use sqlparser::parser::ParserError::ParserError;
@@ -128,69 +126,67 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if_not_exists,
                 or_replace,
                 ..
-            } if constraints.is_empty()
-                && table_properties.is_empty()
-                && with_options.is_empty() =>
-            {
-                match query {
-                    Some(query) => {
-                        let plan = self.query_to_plan(*query, planner_context)?;
-                        let input_schema = plan.schema();
+            } if table_properties.is_empty() && with_options.is_empty() => match query {
+                Some(query) => {
+                    let primary_key = Self::primary_key_from_constraints(&constraints)?;
 
-                        let plan = if !columns.is_empty() {
-                            let schema = self.build_schema(columns)?.to_dfschema_ref()?;
-                            if schema.fields().len() != input_schema.fields().len() {
-                                return Err(DataFusionError::Plan(format!(
+                    let plan = self.query_to_plan(*query, planner_context)?;
+                    let input_schema = plan.schema();
+
+                    let plan = if !columns.is_empty() {
+                        let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+                        if schema.fields().len() != input_schema.fields().len() {
+                            return Err(DataFusionError::Plan(format!(
                             "Mismatch: {} columns specified, but result has {} columns",
                             schema.fields().len(),
                             input_schema.fields().len()
                         )));
-                            }
-                            let input_fields = input_schema.fields();
-                            let project_exprs = schema
-                                .fields()
-                                .iter()
-                                .zip(input_fields)
-                                .map(|(field, input_field)| {
-                                    cast(
-                                        col(input_field.name()),
-                                        field.data_type().clone(),
-                                    )
+                        }
+                        let input_fields = input_schema.fields();
+                        let project_exprs = schema
+                            .fields()
+                            .iter()
+                            .zip(input_fields)
+                            .map(|(field, input_field)| {
+                                cast(col(input_field.name()), field.data_type().clone())
                                     .alias(field.name())
-                                })
-                                .collect::<Vec<_>>();
-                            LogicalPlanBuilder::from(plan.clone())
-                                .project(project_exprs)?
-                                .build()?
-                        } else {
-                            plan
-                        };
+                            })
+                            .collect::<Vec<_>>();
+                        LogicalPlanBuilder::from(plan.clone())
+                            .project(project_exprs)?
+                            .build()?
+                    } else {
+                        plan
+                    };
 
-                        Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                            name: self.object_name_to_table_reference(name)?,
-                            input: Arc::new(plan),
-                            if_not_exists,
-                            or_replace,
-                        }))
-                    }
-
-                    None => {
-                        let schema = self.build_schema(columns)?.to_dfschema_ref()?;
-                        let plan = EmptyRelation {
-                            produce_one_row: false,
-                            schema,
-                        };
-                        let plan = LogicalPlan::EmptyRelation(plan);
-
-                        Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                            name: self.object_name_to_table_reference(name)?,
-                            input: Arc::new(plan),
-                            if_not_exists,
-                            or_replace,
-                        }))
-                    }
+                    Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+                        name: self.object_name_to_table_reference(name)?,
+                        primary_key,
+                        input: Arc::new(plan),
+                        if_not_exists,
+                        or_replace,
+                    }))
                 }
-            }
+
+                None => {
+                    let primary_key = Self::primary_key_from_constraints(&constraints)?;
+
+                    let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+                    let plan = EmptyRelation {
+                        produce_one_row: false,
+                        schema,
+                    };
+                    let plan = LogicalPlan::EmptyRelation(plan);
+
+                    Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+                        name: self.object_name_to_table_reference(name)?,
+                        primary_key,
+                        input: Arc::new(plan),
+                        if_not_exists,
+                        or_replace,
+                    }))
+                }
+            },
 
             Statement::CreateView {
                 or_replace,
@@ -281,8 +277,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .collect::<Result<_>>()?;
 
                 // Create planner context with parameters
-                let mut planner_context =
-                    PlannerContext::new_with_prepare_param_data_types(data_types.clone());
+                let mut planner_context = PlannerContext::new()
+                    .with_prepare_param_data_types(data_types.clone());
 
                 // Build logical plan for inner statement of the prepare statement
                 let plan = self.sql_statement_to_plan_with_context(
@@ -437,25 +433,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         TransactionAccessMode::ReadWrite
                     }
                 };
-                Ok(LogicalPlan::TransactionStart(TransactionStart {
+                let statement = PlanStatement::TransactionStart(TransactionStart {
                     access_mode,
                     isolation_level,
                     schema: DFSchemaRef::new(DFSchema::empty()),
-                }))
+                });
+                Ok(LogicalPlan::Statement(statement))
             }
             Statement::Commit { chain } => {
-                Ok(LogicalPlan::TransactionEnd(TransactionEnd {
+                let statement = PlanStatement::TransactionEnd(TransactionEnd {
                     conclusion: TransactionConclusion::Commit,
                     chain,
                     schema: DFSchemaRef::new(DFSchema::empty()),
-                }))
+                });
+                Ok(LogicalPlan::Statement(statement))
             }
             Statement::Rollback { chain } => {
-                Ok(LogicalPlan::TransactionEnd(TransactionEnd {
+                let statement = PlanStatement::TransactionEnd(TransactionEnd {
                     conclusion: TransactionConclusion::Rollback,
                     chain,
                     schema: DFSchemaRef::new(DFSchema::empty()),
-                }))
+                });
+                Ok(LogicalPlan::Statement(statement))
             }
 
             _ => Err(DataFusionError::NotImplemented(format!(
@@ -738,11 +737,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        Ok(LogicalPlan::SetVariable(SetVariable {
+        let statement = PlanStatement::SetVariable(SetVariable {
             variable: variable_lower,
             value: value_string,
             schema: DFSchemaRef::new(DFSchema::empty()),
-        }))
+        });
+
+        Ok(LogicalPlan::Statement(statement))
     }
 
     fn delete_to_plan(
@@ -826,11 +827,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut assign_map = assignments
             .iter()
             .map(|assign| {
-                let col_name: &Ident = assign
-                    .id
-                    .iter()
-                    .last()
-                    .ok_or(DataFusionError::Plan("Empty column id".to_string()))?;
+                let col_name: &Ident = assign.id.iter().last().ok_or_else(|| {
+                    DataFusionError::Plan("Empty column id".to_string())
+                })?;
                 // Validate that the assignment target column exists
                 table_schema.field_with_unqualified_name(&col_name.value)?;
                 Ok((col_name.value.clone(), assign.value.clone()))
@@ -963,7 +962,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Projection
         let mut planner_context =
-            PlannerContext::new_with_prepare_param_data_types(prepare_param_data_types);
+            PlannerContext::new().with_prepare_param_data_types(prepare_param_data_types);
         let source = self.query_to_plan(*source, &mut planner_context)?;
         if fields.len() != source.schema().fields().len() {
             Err(DataFusionError::Plan(
@@ -1075,5 +1074,55 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         self.schema_provider
             .get_table_provider(tables_reference)
             .is_ok()
+    }
+
+    fn primary_key_from_constraints(
+        constraints: &[TableConstraint],
+    ) -> Result<Vec<Column>> {
+        let pk: Result<Vec<&Vec<Ident>>> = constraints
+            .iter()
+            .map(|c: &TableConstraint| match c {
+                TableConstraint::Unique {
+                    columns,
+                    is_primary,
+                    ..
+                } => match is_primary {
+                    true => Ok(columns),
+                    false => Err(DataFusionError::Plan(
+                        "Non-primary unique constraints are not supported".to_string(),
+                    )),
+                },
+                TableConstraint::ForeignKey { .. } => Err(DataFusionError::Plan(
+                    "Foreign key constraints are not currently supported".to_string(),
+                )),
+                TableConstraint::Check { .. } => Err(DataFusionError::Plan(
+                    "Check constraints are not currently supported".to_string(),
+                )),
+                TableConstraint::Index { .. } => Err(DataFusionError::Plan(
+                    "Indexes are not currently supported".to_string(),
+                )),
+                TableConstraint::FulltextOrSpatial { .. } => Err(DataFusionError::Plan(
+                    "Indexes are not currently supported".to_string(),
+                )),
+            })
+            .collect();
+        let pk = pk?;
+        let pk = match pk.as_slice() {
+            [] => return Ok(vec![]),
+            [pk] => pk,
+            _ => {
+                return Err(DataFusionError::Plan(
+                    "Only one primary key is supported!".to_string(),
+                ))?
+            }
+        };
+        let primary_key: Vec<Column> = pk
+            .iter()
+            .map(|c| Column {
+                relation: None,
+                name: c.value.clone(),
+            })
+            .collect();
+        Ok(primary_key)
     }
 }
