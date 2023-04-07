@@ -180,13 +180,15 @@ impl PhysicalSortRequirement {
     ///
     /// This method takes `&'a PhysicalSortExpr` to make it easy to
     /// use implementing [`ExecutionPlan::required_input_ordering`].
-    pub fn from_sort_exprs<'a>(
-        ordering: impl IntoIterator<Item = &'a PhysicalSortExpr>,
-    ) -> Vec<PhysicalSortRequirement> {
+    pub fn from_sort_exprs<T>(
+        ordering: impl IntoIterator<Item = T>,
+    ) -> Vec<PhysicalSortRequirement>
+    where
+        PhysicalSortRequirement: From<T>,
+    {
         ordering
             .into_iter()
-            .cloned()
-            .map(PhysicalSortRequirement::from)
+            .map(|e| PhysicalSortRequirement::from(e))
             .collect()
     }
 
@@ -196,12 +198,15 @@ impl PhysicalSortRequirement {
     /// This function converts `PhysicalSortRequirement` to `PhysicalSortExpr`
     /// for each entry in the input. If required ordering is None for an entry
     /// default ordering `ASC, NULLS LAST` if given (see [`into_sort_expr`])
-    pub fn to_sort_exprs(
-        requirements: impl IntoIterator<Item = PhysicalSortRequirement>,
-    ) -> Vec<PhysicalSortExpr> {
+    pub fn to_sort_exprs<T>(
+        requirements: impl IntoIterator<Item = T>,
+    ) -> Vec<PhysicalSortExpr>
+    where
+        PhysicalSortExpr: From<T>,
+    {
         requirements
             .into_iter()
-            .map(PhysicalSortExpr::from)
+            .map(|e| PhysicalSortExpr::from(e))
             .collect()
     }
 
