@@ -87,13 +87,11 @@ impl AggregateExpr for Sum {
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
-        Ok(vec![
-            Field::new(
-                format_state_name(&self.name, "sum"),
-                self.data_type.clone(),
-                self.nullable,
-            ),
-        ])
+        Ok(vec![Field::new(
+            format_state_name(&self.name, "sum"),
+            self.data_type.clone(),
+            self.nullable,
+        )])
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
