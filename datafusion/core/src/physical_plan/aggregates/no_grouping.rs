@@ -61,6 +61,7 @@ struct AggregateStreamInner {
 }
 
 impl AggregateStream {
+    #[allow(clippy::too_many_arguments)]
     /// Create a new AggregateStream
     pub fn new(
         mode: AggregateMode,

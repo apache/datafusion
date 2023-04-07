@@ -1610,6 +1610,9 @@ pub fn create_window_expr(
     )
 }
 
+type AggregateExprWithOptionalFilter =
+    (Arc<dyn AggregateExpr>, Option<Arc<dyn PhysicalExpr>>);
+
 /// Create an aggregate expression with a name from a logical expression
 pub fn create_aggregate_expr_with_name_and_maybe_filter(
     e: &Expr,
@@ -1617,7 +1620,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
-) -> Result<(Arc<dyn AggregateExpr>, Option<Arc<dyn PhysicalExpr>>)> {
+) -> Result<AggregateExprWithOptionalFilter> {
     match e {
         Expr::AggregateFunction(AggregateFunction {
             fun,
@@ -1693,7 +1696,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
-) -> Result<(Arc<dyn AggregateExpr>, Option<Arc<dyn PhysicalExpr>>)> {
+) -> Result<AggregateExprWithOptionalFilter> {
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
     let (name, e) = match e {
         Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
