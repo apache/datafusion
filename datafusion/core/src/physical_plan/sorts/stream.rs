@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::common::Result;
-use crate::physical_plan::sorts::cursor::SortKeyCursor;
+use crate::physical_plan::sorts::cursor::RowCursor;
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::Schema;
@@ -73,9 +73,9 @@ impl FusedStreams {
 }
 
 /// A [`PartitionedStream`] that wraps a set of [`SendableRecordBatchStream`]
-/// and computes [`SortKeyCursor`] based on the provided [`PhysicalSortExpr`]
+/// and computes [`RowCursor`] based on the provided [`PhysicalSortExpr`]
 #[derive(Debug)]
-pub(crate) struct SortKeyCursorStream {
+pub(crate) struct RowCursorStream {
     /// Converter to convert output of physical expressions
     converter: RowConverter,
     /// The physical expressions to sort by
@@ -84,7 +84,7 @@ pub(crate) struct SortKeyCursorStream {
     streams: FusedStreams,
 }
 
-impl SortKeyCursorStream {
+impl RowCursorStream {
     pub(crate) fn try_new(
         schema: &Schema,
         expressions: &[PhysicalSortExpr],
@@ -107,11 +107,7 @@ impl SortKeyCursorStream {
         })
     }
 
-    fn convert_batch(
-        &mut self,
-        batch: &RecordBatch,
-        stream_idx: usize,
-    ) -> Result<SortKeyCursor> {
+    fn convert_batch(&mut self, batch: &RecordBatch) -> Result<RowCursor> {
         let cols = self
             .column_expressions
             .iter()
@@ -119,12 +115,12 @@ impl SortKeyCursorStream {
             .collect::<Result<Vec<_>>>()?;
 
         let rows = self.converter.convert_columns(&cols)?;
-        Ok(SortKeyCursor::new(stream_idx, rows))
+        Ok(RowCursor::new(rows))
     }
 }
 
-impl PartitionedStream for SortKeyCursorStream {
-    type Output = Result<(SortKeyCursor, RecordBatch)>;
+impl PartitionedStream for RowCursorStream {
+    type Output = Result<(RowCursor, RecordBatch)>;
 
     fn partitions(&self) -> usize {
         self.streams.0.len()
@@ -137,7 +133,7 @@ impl PartitionedStream for SortKeyCursorStream {
     ) -> Poll<Option<Self::Output>> {
         Poll::Ready(ready!(self.streams.poll_next(cx, stream_idx)).map(|r| {
             r.and_then(|batch| {
-                let cursor = self.convert_batch(&batch, stream_idx)?;
+                let cursor = self.convert_batch(&batch)?;
                 Ok((cursor, batch))
             })
         }))

@@ -25,6 +25,5 @@ pub mod sort;
 pub mod sort_preserving_merge;
 mod stream;
 
-pub use cursor::SortKeyCursor;
 pub use index::RowIndex;
 pub(crate) use merge::streaming_merge;
