@@ -1290,6 +1290,18 @@ impl SessionState {
         // We need to take care of the rule ordering. They may influence each other.
         let physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
             Arc::new(AggregateStatistics::new()),
+            // Statistics-based join selection will change the Auto mode to a real join implementation,
+            // like collect left, or hash join, or future sort merge join, which will influence the
+            // EnforceDistribution and EnforceSorting rules as they decide whether to add additional
+            // repartitioning and local sorting steps to meet distribution and ordering requirements.
+            // Therefore, it should run before EnforceDistribution and EnforceSorting.
+            Arc::new(JoinSelection::new()),
+            // If the query is processing infinite inputs, the PipelineFixer rule applies the
+            // necessary transformations to make the query runnable (if it is not already runnable).
+            // If the query can not be made runnable, the rule emits an error with a diagnostic message.
+            // Since the transformations it applies may alter output partitioning properties of operators
+            // (e.g. by swapping hash join sides), this rule runs before EnforceDistribution.
+            Arc::new(PipelineFixer::new()),
             // In order to increase the parallelism, the Repartition rule will change the
             // output partitioning of some operators in the plan tree, which will influence
             // other rules. Therefore, it should run as soon as possible. It is optional because:
@@ -1304,18 +1316,6 @@ impl SessionState {
             // - Since it will change the output ordering of some operators, it should run
             // before JoinSelection and EnforceSorting, which may depend on that.
             Arc::new(GlobalSortSelection::new()),
-            // Statistics-based join selection will change the Auto mode to a real join implementation,
-            // like collect left, or hash join, or future sort merge join, which will influence the
-            // EnforceDistribution and EnforceSorting rules as they decide whether to add additional
-            // repartitioning and local sorting steps to meet distribution and ordering requirements.
-            // Therefore, it should run before EnforceDistribution and EnforceSorting.
-            Arc::new(JoinSelection::new()),
-            // If the query is processing infinite inputs, the PipelineFixer rule applies the
-            // necessary transformations to make the query runnable (if it is not already runnable).
-            // If the query can not be made runnable, the rule emits an error with a diagnostic message.
-            // Since the transformations it applies may alter output partitioning properties of operators
-            // (e.g. by swapping hash join sides), this rule runs before EnforceDistribution.
-            Arc::new(PipelineFixer::new()),
             // The EnforceDistribution rule is for adding essential repartition to satisfy the required
             // distribution. Please make sure that the whole plan tree is determined before this rule.
             Arc::new(EnforceDistribution::new()),
