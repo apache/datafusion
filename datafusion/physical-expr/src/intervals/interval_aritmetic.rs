@@ -72,73 +72,37 @@ impl Interval {
         data_type: &DataType,
         cast_options: &CastOptions,
     ) -> Result<Interval> {
-        let (lower, upper) = match (&self.lower, &self.upper) {
-            (IntervalBound::Open(scalar_lower), IntervalBound::Open(scalar_upper)) => (
-                IntervalBound::Open(cast_scalar_value(
-                    scalar_lower,
-                    data_type,
-                    cast_options,
-                )?),
-                IntervalBound::Open(cast_scalar_value(
-                    scalar_upper,
-                    data_type,
-                    cast_options,
-                )?),
-            ),
-            (IntervalBound::Closed(scalar_lower), IntervalBound::Open(scalar_upper)) => (
-                IntervalBound::Closed(cast_scalar_value(
-                    scalar_lower,
-                    data_type,
-                    cast_options,
-                )?),
-                IntervalBound::Open(cast_scalar_value(
-                    scalar_upper,
-                    data_type,
-                    cast_options,
-                )?),
-            ),
-            (IntervalBound::Open(scalar_lower), IntervalBound::Closed(scalar_upper)) => (
-                IntervalBound::Open(cast_scalar_value(
-                    scalar_lower,
-                    data_type,
-                    cast_options,
-                )?),
-                IntervalBound::Closed(cast_scalar_value(
-                    scalar_upper,
-                    data_type,
-                    cast_options,
-                )?),
-            ),
-            (
-                IntervalBound::Closed(scalar_lower),
-                IntervalBound::Closed(scalar_upper),
-            ) => (
-                IntervalBound::Closed(cast_scalar_value(
-                    scalar_lower,
-                    data_type,
-                    cast_options,
-                )?),
-                IntervalBound::Closed(cast_scalar_value(
-                    scalar_upper,
-                    data_type,
-                    cast_options,
-                )?),
-            ),
-        };
+        let lower =
+            match &self.lower {
+                IntervalBound::Open(scalar_lower) => IntervalBound::Open(
+                    cast_scalar_value(scalar_lower, data_type, cast_options)?,
+                ),
+                IntervalBound::Closed(scalar_lower) => IntervalBound::Closed(
+                    cast_scalar_value(scalar_lower, data_type, cast_options)?,
+                ),
+            };
+        let upper =
+            match &self.upper {
+                IntervalBound::Open(scalar_upper) => IntervalBound::Open(
+                    cast_scalar_value(scalar_upper, data_type, cast_options)?,
+                ),
+                IntervalBound::Closed(scalar_upper) => IntervalBound::Closed(
+                    cast_scalar_value(scalar_upper, data_type, cast_options)?,
+                ),
+            };
         Ok(Interval { lower, upper })
     }
 
     // If the scalar type of bounds are not the same, return error.
     pub(crate) fn get_datatype(&self) -> Result<DataType> {
-        if self.lower.get_bound_scalar().get_datatype()
-            == self.upper.get_bound_scalar().get_datatype()
-        {
-            Ok(self.lower.get_bound_scalar().get_datatype())
+        let lower_type = self.lower.get_bound_scalar().get_datatype();
+        let upper_type = self.upper.get_bound_scalar().get_datatype();
+        if lower_type == upper_type {
+            Ok(lower_type)
         } else {
             Err(DataFusionError::Internal(format!(
-                "Interval bounds have differen types: {} != {}",
-                self.lower.get_bound_scalar().get_datatype(),
-                self.upper.get_bound_scalar().get_datatype(),
+                "Interval bounds have different types: {} != {}",
+                lower_type, upper_type,
             )))
         }
     }
