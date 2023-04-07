@@ -67,6 +67,10 @@ impl Display for Interval {
 }
 
 impl Interval {
+    fn new(lower: IntervalBound, upper: IntervalBound) -> Interval {
+        Interval { lower, upper }
+    }
+
     pub(crate) fn cast_to(
         &self,
         data_type: &DataType,
@@ -90,7 +94,7 @@ impl Interval {
                     cast_scalar_value(scalar_upper, data_type, cast_options)?,
                 ),
             };
-        Ok(Interval { lower, upper })
+        Ok(Interval::new(lower, upper))
     }
 
     // If the scalar type of bounds are not the same, return error.
@@ -784,62 +788,29 @@ mod tests {
 
     #[test]
     fn sub_test_various_bounds() -> Result<()> {
+        use IntervalBound::{Closed, Open};
+        use ScalarValue::Int64;
+
         let cases = vec![
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(200))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(None)),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(None)),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(0))),
-                },
+                Interval::new(Closed(Int64(Some(100))), Closed(Int64(Some(200)))),
+                Interval::new(Closed(Int64(Some(200))), Open(Int64(None))),
+                Interval::new(Open(Int64(None)), Closed(Int64(Some(0)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(Some(300))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(150))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(-50))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(-100))),
-                },
+                Interval::new(Closed(Int64(Some(100))), Open(Int64(Some(200)))),
+                Interval::new(Open(Int64(Some(300))), Closed(Int64(Some(150)))),
+                Interval::new(Closed(Int64(Some(-50))), Open(Int64(Some(-100)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(Some(200))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(None)),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(None)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(0))),
-                },
+                Interval::new(Closed(Int64(Some(100))), Open(Int64(Some(200)))),
+                Interval::new(Open(Int64(Some(200))), Open(Int64(None))),
+                Interval::new(Open(Int64(None)), Open(Int64(Some(0)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(11))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(11))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(-10))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(-10))),
-                },
+                Interval::new(Closed(Int64(Some(1))), Closed(Int64(Some(1)))),
+                Interval::new(Closed(Int64(Some(11))), Closed(Int64(Some(11)))),
+                Interval::new(Closed(Int64(Some(-10))), Closed(Int64(Some(-10)))),
             ),
         ];
 
