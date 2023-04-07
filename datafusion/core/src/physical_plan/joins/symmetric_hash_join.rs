@@ -1502,7 +1502,10 @@ mod tests {
 
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, col, Column};
-    use datafusion_physical_expr::intervals::test_utils::gen_conjunctive_numeric_expr_open_bounds;
+    use datafusion_physical_expr::intervals::test_utils::{
+        gen_conjunctive_numeric_expr_closed_bounds,
+        gen_conjunctive_numeric_expr_open_bounds,
+    };
     use datafusion_physical_expr::PhysicalExpr;
 
     use crate::physical_plan::joins::{
@@ -1736,7 +1739,7 @@ mod tests {
                 7,
                 3,
             ),
-            5 => gen_conjunctive_numeric_expr_closed_bounds(
+            6 => gen_conjunctive_numeric_expr_closed_bounds(
                 left_col,
                 right_col,
                 Operator::Minus,

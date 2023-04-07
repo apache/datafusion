@@ -440,8 +440,8 @@ impl ExprIntervalGraph {
     ///  let intervals = vec![(
     ///     left_index,
     ///     Interval {
-    ///         lower: ScalarValue::Int32(Some(10)),
-    ///         upper: ScalarValue::Int32(Some(20)),
+    ///         lower: IntervalBound::Open(ScalarValue::Int32(Some(10))),
+    ///         upper: IntervalBound::Open(ScalarValue::Int32(Some(20))),
     ///         },
     ///     )];
     ///  // Evaluate bounds for the composite expression:
@@ -449,8 +449,8 @@ impl ExprIntervalGraph {
     ///  assert_eq!(
     ///     graph.evaluate_bounds().unwrap(),
     ///     &Interval {
-    ///         lower: ScalarValue::Int32(Some(20)),
-    ///         upper: ScalarValue::Int32(Some(30))
+    ///         lower: IntervalBound::Open(ScalarValue::Int32(Some(20))),
+    ///         upper: IntervalBound::Open(ScalarValue::Int32(Some(30)))
     ///     }
     ///  )
     ///
