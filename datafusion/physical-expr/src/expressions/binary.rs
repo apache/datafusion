@@ -55,7 +55,6 @@ use arrow::datatypes::*;
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
-use chrono::NaiveDateTime;
 use datafusion_common::scalar::{
     calculate_naives, microseconds_add, microseconds_sub, milliseconds_add,
     milliseconds_sub, nanoseconds_add, nanoseconds_sub, op_dt, op_dt_mdn, op_mdn, op_ym,
@@ -1497,7 +1496,8 @@ pub fn interval_scalar_interval_op(
         )))?,
     };
     Ok(ColumnarValue::Array(ret))
-    
+}
+
 // Macros related with timestamp & interval operations
 macro_rules! ts_sub_op {
     ($lhs:ident, $rhs:ident, $lhs_tz:ident, $rhs_tz:ident, $coef:expr, $caster:expr, $op:expr, $ts_unit:expr, $mode:expr, $type_out:ty) => {{

@@ -20,11 +20,8 @@ use crate::intervals::{apply_operator, Interval};
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::array::{Array, ArrayRef};
-use arrow::compute::unary;
-use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Schema, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
-};
+use arrow::compute::try_unary;
+use arrow::datatypes::{DataType, Date32Type, Date64Type, Schema};
 use arrow::record_batch::RecordBatch;
 
 use datafusion_common::cast::*;
@@ -37,7 +34,10 @@ use std::any::Any;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use super::binary::{interval_array_op, ts_array_op, ts_interval_array_op};
+use super::binary::{
+    interval_array_op, interval_scalar_interval_op, ts_array_op, ts_interval_array_op,
+    ts_scalar_interval_op, ts_scalar_ts_op,
+};
 
 /// Perform DATE/TIME/TIMESTAMP +/ INTERVAL math
 #[derive(Debug)]
