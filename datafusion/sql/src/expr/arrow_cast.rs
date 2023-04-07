@@ -167,6 +167,34 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses the next timezone
+    fn parse_timezone(&mut self, context: &str) -> Result<Option<String>> {
+        match self.next_token()? {
+            Token::None => Ok(None),
+            Token::Some => {
+                self.expect_token(Token::LParen)?;
+                let timezone = self.parse_double_quoted_string("Timezone")?;
+                self.expect_token(Token::RParen)?;
+                Ok(Some(timezone))
+            }
+            tok => Err(make_error(
+                self.val,
+                &format!("finding Timezone for {context}, got {tok}"),
+            )),
+        }
+    }
+
+    /// Parses the next double quoted string
+    fn parse_double_quoted_string(&mut self, context: &str) -> Result<String> {
+        match self.next_token()? {
+            Token::DoubleQuotedString(s) => Ok(s),
+            tok => Err(make_error(
+                self.val,
+                &format!("finding double quoted string for {context}, got '{tok}'"),
+            )),
+        }
+    }
+
     /// Parses the next integer value
     fn parse_i64(&mut self, context: &str) -> Result<i64> {
         match self.next_token()? {
@@ -216,10 +244,7 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::LParen)?;
         let time_unit = self.parse_time_unit("Timestamp")?;
         self.expect_token(Token::Comma)?;
-        // TODO Support timezones other than None
-        self.expect_token(Token::None)?;
-        let timezone = None;
-
+        let timezone = self.parse_timezone("Timestamp")?;
         self.expect_token(Token::RParen)?;
         Ok(DataType::Timestamp(time_unit, timezone))
     }
@@ -382,8 +407,8 @@ impl<'a> Tokenizer<'a> {
             }
         }
 
-        // if it started with a number, try parsing it as an integer
         if let Some(c) = self.word.chars().next() {
+            // if it started with a number, try parsing it as an integer
             if c == '-' || c.is_numeric() {
                 let val: i64 = self.word.parse().map_err(|e| {
                     make_error(
@@ -392,6 +417,28 @@ impl<'a> Tokenizer<'a> {
                     )
                 })?;
                 return Ok(Token::Integer(val));
+            }
+            // if it started with a double quote `"`, try parsing it as a double quoted string
+            else if c == '"' {
+                let len = self.word.chars().count();
+
+                // to verify it's double quoted
+                if let Some(last_c) = self.word.chars().last() {
+                    if last_c != '"' || len < 2 {
+                        return Err(make_error(
+                            self.val,
+                            &format!("parsing {} as double quoted string", self.word),
+                        ));
+                    }
+                }
+
+                let val: String = self.word.parse().map_err(|e| {
+                    make_error(
+                        self.val,
+                        &format!("parsing {} as double quoted string: {e}", self.word),
+                    )
+                })?;
+                return Ok(Token::DoubleQuotedString(val[1..len - 1].to_owned()));
             }
         }
 
@@ -442,6 +489,7 @@ impl<'a> Tokenizer<'a> {
             "DayTime" => Token::IntervalUnit(IntervalUnit::DayTime),
             "MonthDayNano" => Token::IntervalUnit(IntervalUnit::MonthDayNano),
 
+            "Some" => Token::Some,
             "None" => Token::None,
 
             _ => {
@@ -504,8 +552,10 @@ enum Token {
     LParen,
     RParen,
     Comma,
+    Some,
     None,
     Integer(i64),
+    DoubleQuotedString(String),
 }
 
 impl Display for Token {
@@ -522,12 +572,14 @@ impl Display for Token {
             Token::LParen => write!(f, "("),
             Token::RParen => write!(f, ")"),
             Token::Comma => write!(f, ","),
+            Token::Some => write!(f, "Some"),
             Token::None => write!(f, "None"),
             Token::FixedSizeBinary => write!(f, "FixedSizeBinary"),
             Token::Decimal128 => write!(f, "Decimal128"),
             Token::Decimal256 => write!(f, "Decimal256"),
             Token::Dictionary => write!(f, "Dictionary"),
             Token::Integer(v) => write!(f, "Integer({v})"),
+            Token::DoubleQuotedString(s) => write!(f, "DoubleQuotedString({s})"),
         }
     }
 }
@@ -580,8 +632,15 @@ mod test {
             DataType::Timestamp(TimeUnit::Millisecond, None),
             DataType::Timestamp(TimeUnit::Microsecond, None),
             DataType::Timestamp(TimeUnit::Nanosecond, None),
-            // TODO support timezones
-            //DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            // we can't cover all possible timezones, here we only test utc and +08:00
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+            DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".into())),
+            DataType::Timestamp(TimeUnit::Second, Some("+00:00".into())),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("+08:00".into())),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("+08:00".into())),
+            DataType::Timestamp(TimeUnit::Millisecond, Some("+08:00".into())),
+            DataType::Timestamp(TimeUnit::Second, Some("+08:00".into())),
             DataType::Date32,
             DataType::Date64,
             DataType::Time32(TimeUnit::Second),
@@ -673,10 +732,13 @@ mod test {
             ("", "Error finding next token"),
             ("null", "Unsupported type 'null'"),
             ("Nu", "Unsupported type 'Nu'"),
-            // TODO support timezones
             (
-                r#"Timestamp(Nanosecond, Some("UTC"))"#,
-                "Error unrecognized word: Some",
+                r#"Timestamp(Nanosecond, Some(+00:00))"#,
+                "Error unrecognized word: +00:00",
+            ),
+            (
+                r#"Timestamp(Nanosecond, Some("+00:00))"#,
+                r#"Error parsing "+00:00 as double quoted string"#,
             ),
             ("Timestamp(Nanosecond, ", "Error finding next token"),
             (

@@ -102,7 +102,7 @@ query error Error unrecognized word: unknown
 SELECT arrow_cast('1', 'unknown')
 
 # Round Trip tests:
-query TTTTTTTTTTTTTTTTTTT
+query TTTTTTTTTTTTTTTTTTTTTTT
 SELECT
   arrow_typeof(arrow_cast(1, 'Int8')) as col_i8,
   arrow_typeof(arrow_cast(1, 'Int16')) as col_i16,
@@ -124,9 +124,13 @@ SELECT
   arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Millisecond, None)')) as col_ts_ms,
   arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Microsecond, None)')) as col_ts_us,
   arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Nanosecond, None)')) as col_ts_ns,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, Some("+08:00"))')) as col_tstz_s,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Millisecond, Some("+08:00"))')) as col_tstz_ms,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Microsecond, Some("+08:00"))')) as col_tstz_us,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Nanosecond, Some("+08:00"))')) as col_tstz_ns,
   arrow_typeof(arrow_cast('foo', 'Dictionary(Int32, Utf8)')) as col_dict
 ----
-Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float32 Float64 Utf8 LargeUtf8 Binary LargeBinary Timestamp(Second, None) Timestamp(Millisecond, None) Timestamp(Microsecond, None) Timestamp(Nanosecond, None) Dictionary(Int32, Utf8)
+Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float32 Float64 Utf8 LargeUtf8 Binary LargeBinary Timestamp(Second, None) Timestamp(Millisecond, None) Timestamp(Microsecond, None) Timestamp(Nanosecond, None) Timestamp(Second, Some("+08:00")) Timestamp(Millisecond, Some("+08:00")) Timestamp(Microsecond, Some("+08:00")) Timestamp(Nanosecond, Some("+08:00")) Dictionary(Int32, Utf8)
 
 
 
