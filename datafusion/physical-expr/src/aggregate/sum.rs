@@ -220,6 +220,9 @@ pub(crate) fn add_to_row(
         ScalarValue::Int64(rhs) => {
             sum_row!(index, accessor, rhs, i64)
         }
+        ScalarValue::Decimal128(rhs, _, _) => {
+            sum_row!(index, accessor, rhs, i128)
+        }
         _ => {
             let msg =
                 format!("Row sum updater is not expected to receive a scalar {s:?}");

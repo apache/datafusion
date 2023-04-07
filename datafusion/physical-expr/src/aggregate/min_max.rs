@@ -485,6 +485,9 @@ macro_rules! min_max_v2 {
             ScalarValue::Int8(rhs) => {
                 typed_min_max_v2!($INDEX, $ACC, rhs, i8, $OP)
             }
+            ScalarValue::Decimal128(rhs, ..) => {
+                typed_min_max_v2!($INDEX, $ACC, rhs, i128, $OP)
+            }
             e => {
                 return Err(DataFusionError::Internal(format!(
                     "MIN/MAX is not expected to receive scalars of incompatible types {:?}",

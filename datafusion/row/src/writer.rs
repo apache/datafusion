@@ -22,9 +22,7 @@ use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util::{round_upto_power_of_2, set_bit_raw, unset_bit_raw};
-use datafusion_common::cast::{
-    as_binary_array, as_date32_array, as_date64_array, as_string_array,
-};
+use datafusion_common::cast::{as_binary_array, as_date32_array, as_date64_array, as_decimal128_array, as_string_array};
 use datafusion_common::Result;
 use std::cmp::max;
 use std::sync::Arc;
@@ -225,6 +223,10 @@ impl RowWriter {
         set_idx!(8, self, idx, value)
     }
 
+    fn set_decimal128(&mut self, idx: usize, value: i128) {
+        set_idx!(16, self, idx, value)
+    }
+
     fn set_offset_size(&mut self, idx: usize, size: u32) {
         let offset_and_size: u64 = (self.varlena_offset as u64) << 32 | (size as u64);
         self.set_u64(idx, offset_and_size);
@@ -375,6 +377,16 @@ pub(crate) fn write_field_binary(
     to.set_binary(col_idx, s);
 }
 
+pub(crate) fn write_field_decimal128(
+    to: &mut RowWriter,
+    from: &Arc<dyn Array>,
+    col_idx: usize,
+    row_idx: usize,
+) {
+    let from = as_decimal128_array(from).unwrap();
+    to.set_decimal128(col_idx, from.value(row_idx));
+}
+
 fn write_field(
     col_idx: usize,
     row_idx: usize,
@@ -399,6 +411,7 @@ fn write_field(
         Date64 => write_field_date64(row, col, col_idx, row_idx),
         Utf8 => write_field_utf8(row, col, col_idx, row_idx),
         Binary => write_field_binary(row, col, col_idx, row_idx),
+        Decimal128(_, _) => write_field_decimal128(row, col, col_idx, row_idx),
         _ => unimplemented!(),
     }
 }

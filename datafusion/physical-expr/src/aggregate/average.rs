@@ -266,16 +266,35 @@ impl RowAccumulator for AvgRowAccumulator {
     }
 
     fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
-        assert_eq!(self.sum_datatype, DataType::Float64);
-        Ok(match accessor.get_u64_opt(self.state_index()) {
-            None => ScalarValue::Float64(None),
-            Some(0) => ScalarValue::Float64(None),
-            Some(n) => ScalarValue::Float64(
-                accessor
-                    .get_f64_opt(self.state_index() + 1)
-                    .map(|f| f / n as f64),
-            ),
-        })
+        match self.sum_datatype {
+            DataType::Decimal128(p, s) => {
+                Ok(match accessor.get_u64_opt(self.state_index()) {
+                    None => ScalarValue::Decimal128(None, p, s),
+                    Some(0) => ScalarValue::Decimal128(None, p, s),
+                    Some(n) => ScalarValue::Decimal128(
+                        accessor
+                            .get_i128_opt(self.state_index() + 1)
+                            .map(|f| f / n as i128),
+                        p, s),
+                })
+            }
+            DataType::Float64 => {
+                Ok(match accessor.get_u64_opt(self.state_index()) {
+                    None => ScalarValue::Float64(None),
+                    Some(0) => ScalarValue::Float64(None),
+                    Some(n) => ScalarValue::Float64(
+                        accessor
+                            .get_f64_opt(self.state_index() + 1)
+                            .map(|f| f / n as f64),
+                    ),
+                })
+            }
+            _ => {
+                Err(DataFusionError::Internal(
+                    "Sum should be f64 on average".to_string(),
+                ))
+            }
+        }
     }
 
     #[inline(always)]
