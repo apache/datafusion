@@ -24,7 +24,6 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
 use datafusion_expr::Operator;
 
-use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRewriter, VisitRecursion,
 };
@@ -198,14 +197,11 @@ pub fn normalize_sort_requirement_with_equivalence_properties(
     eq_properties: &[EquivalentClass],
 ) -> PhysicalSortRequirement {
     let normalized_expr = normalize_expr_with_equivalence_properties(
-        sort_requirement.expr.clone(),
+        sort_requirement.expr().clone(),
         eq_properties,
     );
-    if sort_requirement.expr.ne(&normalized_expr) {
-        PhysicalSortRequirement {
-            expr: normalized_expr,
-            options: sort_requirement.options,
-        }
+    if sort_requirement.expr().ne(&normalized_expr) {
+        sort_requirement.with_expr(normalized_expr)
     } else {
         sort_requirement
     }
@@ -387,35 +383,6 @@ pub fn map_columns_before_projection(
             }
         })
         .map(|e| Arc::new(e.clone()) as _)
-        .collect()
-}
-
-/// This function converts `PhysicalSortRequirement` to `PhysicalSortExpr`
-/// for each entry in the input. If required ordering is None for an entry
-/// default ordering `ASC, NULLS LAST` if given.
-pub fn make_sort_exprs_from_requirements(
-    required: &[PhysicalSortRequirement],
-) -> Vec<PhysicalSortExpr> {
-    required
-        .iter()
-        .map(|requirement| {
-            if let Some(options) = requirement.options {
-                PhysicalSortExpr {
-                    expr: requirement.expr.clone(),
-                    options,
-                }
-            } else {
-                PhysicalSortExpr {
-                    expr: requirement.expr.clone(),
-                    options: SortOptions {
-                        // By default, create sort key with ASC is true and NULLS LAST to be consistent with
-                        // PostgreSQL's rule: https://www.postgresql.org/docs/current/queries-order.html
-                        descending: false,
-                        nulls_first: false,
-                    },
-                }
-            }
-        })
         .collect()
 }
 

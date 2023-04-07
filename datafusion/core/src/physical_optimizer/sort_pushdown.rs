@@ -27,12 +27,9 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::{
-    make_sort_exprs_from_requirements, ordering_satisfy_requirement,
-    requirements_compatible,
+    ordering_satisfy_requirement, requirements_compatible,
 };
-use datafusion_physical_expr::{
-    make_sort_requirements_from_exprs, PhysicalSortExpr, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 use itertools::izip;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -132,15 +129,16 @@ pub(crate) fn pushdown_sorts(
             || plan.equivalence_properties(),
         ) {
             // If the current plan is a SortExec, modify it to satisfy parent requirements:
-            let parent_required_expr =
-                make_sort_exprs_from_requirements(parent_required.ok_or_else(err)?);
+            let parent_required_expr = PhysicalSortRequirement::to_sort_exprs(
+                parent_required.ok_or_else(err)?.iter().cloned(),
+            );
             new_plan = sort_exec.input.clone();
             add_sort_above(&mut new_plan, parent_required_expr)?;
         };
         let required_ordering = new_plan
             .output_ordering()
             .as_deref()
-            .map(make_sort_requirements_from_exprs);
+            .map(PhysicalSortRequirement::from_sort_exprs);
         // Since new_plan is a SortExec, we can safely get the 0th index.
         let child = &new_plan.children()[0];
         if let Some(adjusted) =
@@ -178,8 +176,9 @@ pub(crate) fn pushdown_sorts(
             }))
         } else {
             // Can not push down requirements, add new SortExec:
-            let parent_required_expr =
-                make_sort_exprs_from_requirements(parent_required.ok_or_else(err)?);
+            let parent_required_expr = PhysicalSortRequirement::to_sort_exprs(
+                parent_required.ok_or_else(err)?.iter().cloned(),
+            );
             let mut new_plan = plan.clone();
             add_sort_above(&mut new_plan, parent_required_expr)?;
             Ok(Transformed::Yes(SortPushDown::init(new_plan)))
@@ -215,8 +214,9 @@ fn pushdown_requirement_to_children(
     } else if let Some(smj) = plan.as_any().downcast_ref::<SortMergeJoinExec>() {
         // If the current plan is SortMergeJoinExec
         let left_columns_len = smj.left.schema().fields().len();
-        let parent_required_expr =
-            make_sort_exprs_from_requirements(parent_required.ok_or_else(err)?);
+        let parent_required_expr = PhysicalSortRequirement::to_sort_exprs(
+            parent_required.ok_or_else(err)?.iter().cloned(),
+        );
         let expr_source_side =
             expr_source_sides(&parent_required_expr, smj.join_type, left_columns_len);
         match expr_source_side {
@@ -388,15 +388,17 @@ fn shift_right_required(
     let new_right_required: Vec<PhysicalSortRequirement> = parent_required
         .iter()
         .filter_map(|r| {
-            r.expr.as_any().downcast_ref::<Column>().and_then(|col| {
-                (col.index() >= left_columns_len).then_some(PhysicalSortRequirement {
-                    expr: Arc::new(Column::new(
-                        col.name(),
-                        col.index() - left_columns_len,
-                    )) as _,
-                    options: r.options,
-                })
-            })
+            let Some(col) = r.expr().as_any().downcast_ref::<Column>() else {
+                return None;
+            };
+
+            if col.index() < left_columns_len {
+                return None;
+            }
+
+            let new_col =
+                Arc::new(Column::new(col.name(), col.index() - left_columns_len));
+            Some(r.clone().with_expr(new_col))
         })
         .collect::<Vec<_>>();
     if new_right_required.len() == parent_required.len() {

@@ -380,6 +380,10 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         Ok(children.iter().any(|u| *u))
     }
 
+    fn benefits_from_input_partitioning(&self) -> bool {
+        false
+    }
+
     fn required_input_distribution(&self) -> Vec<Distribution> {
         let (left_expr, right_expr) = self
             .on
@@ -388,16 +392,8 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             .unzip();
         // TODO:  This will change when we extend collected executions.
         vec![
-            if self.left.output_partitioning().partition_count() == 1 {
-                Distribution::SinglePartition
-            } else {
-                Distribution::HashPartitioned(left_expr)
-            },
-            if self.right.output_partitioning().partition_count() == 1 {
-                Distribution::SinglePartition
-            } else {
-                Distribution::HashPartitioned(right_expr)
-            },
+            Distribution::HashPartitioned(left_expr),
+            Distribution::HashPartitioned(right_expr),
         ]
     }
 
@@ -476,6 +472,14 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let left_partitions = self.left.output_partitioning().partition_count();
+        let right_partitions = self.right.output_partitioning().partition_count();
+        if left_partitions != right_partitions {
+            return Err(DataFusionError::Internal(format!(
+                "Invalid SymmetricHashJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
+                 consider using RepartitionExec",
+            )));
+        }
         // If `filter_state` and `filter` are both present, then calculate sorted filter expressions
         // for both sides, and build an expression graph if one is not already built.
         let (left_sorted_filter_expr, right_sorted_filter_expr, graph) =
@@ -1508,7 +1512,7 @@ mod tests {
         hash_join_utils::tests::complicated_filter, HashJoinExec, PartitionMode,
     };
     use crate::physical_plan::{
-        collect, common, memory::MemoryExec, repartition::RepartitionExec,
+        common, displayable, memory::MemoryExec, repartition::RepartitionExec,
     };
     use crate::prelude::{CsvReadOptions, SessionConfig, SessionContext};
     use crate::test_util::register_unbounded_file_with_ordering;
@@ -2181,9 +2185,9 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test]
     async fn join_change_in_planner() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
+        let config = SessionConfig::new().with_target_partitions(8);
         let ctx = SessionContext::with_config(config);
         let tmp_dir = TempDir::new().unwrap();
         let left_file_path = tmp_dir.path().join("left.csv");
@@ -2224,21 +2228,37 @@ mod tests {
             true,
         )
         .await?;
-        let df = ctx.sql("EXPLAIN SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10").await?;
-        let physical_plan = df.create_physical_plan().await?;
-        let task_ctx = ctx.task_ctx();
-        let results = collect(physical_plan.clone(), task_ctx).await.unwrap();
-        let formatted = pretty_format_batches(&results).unwrap().to_string();
-        let found = formatted
-            .lines()
-            .any(|line| line.contains("SymmetricHashJoinExec"));
-        assert!(found);
+        let sql = "SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10";
+        let dataframe = ctx.sql(sql).await?;
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let expected = {
+            [
+                "SymmetricHashJoinExec: join_type=Full, on=[(Column { name: \"a2\", index: 1 }, Column { name: \"a2\", index: 1 })], filter=BinaryExpr { left: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 0 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Gt, right: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 1 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Plus, right: Literal { value: Int64(3) } } }, op: And, right: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 0 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Lt, right: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 1 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Plus, right: Literal { value: Int64(10) } } } }",
+                "  CoalesceBatchesExec: target_batch_size=8192",
+                "    RepartitionExec: partitioning=Hash([Column { name: \"a2\", index: 1 }], 8), input_partitions=1",
+                // "   CsvExec: files={1 group: [[tempdir/left.csv]]}, has_header=false, limit=None, projection=[a1, a2]",
+                "  CoalesceBatchesExec: target_batch_size=8192",
+                "    RepartitionExec: partitioning=Hash([Column { name: \"a2\", index: 1 }], 8), input_partitions=1",
+                // "   CsvExec: files={1 group: [[tempdir/right.csv]]}, has_header=false, limit=None, projection=[a1, a2]"
+            ]
+        };
+        let mut actual: Vec<&str> = formatted.trim().lines().collect();
+        // Remove CSV lines
+        actual.remove(3);
+        actual.remove(5);
+
+        assert_eq!(
+            expected,
+            actual[..],
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test]
     async fn join_change_in_planner_without_sort() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
+        let config = SessionConfig::new().with_target_partitions(8);
         let ctx = SessionContext::with_config(config);
         let tmp_dir = TempDir::new()?;
         let left_file_path = tmp_dir.path().join("left.csv");
@@ -2261,22 +2281,39 @@ mod tests {
             CsvReadOptions::new().schema(&schema).mark_infinite(true),
         )
         .await?;
-        let df = ctx.sql("EXPLAIN SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10").await?;
-        let physical_plan = df.create_physical_plan().await?;
-        let task_ctx = ctx.task_ctx();
-        let results = collect(physical_plan.clone(), task_ctx).await?;
-        let formatted = pretty_format_batches(&results)?.to_string();
-        let found = formatted
-            .lines()
-            .any(|line| line.contains("SymmetricHashJoinExec"));
-        assert!(found);
+        let sql = "SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10";
+        let dataframe = ctx.sql(sql).await?;
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let expected = {
+            [
+                "SymmetricHashJoinExec: join_type=Full, on=[(Column { name: \"a2\", index: 1 }, Column { name: \"a2\", index: 1 })], filter=BinaryExpr { left: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 0 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Gt, right: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 1 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Plus, right: Literal { value: Int64(3) } } }, op: And, right: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 0 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Lt, right: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 1 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Plus, right: Literal { value: Int64(10) } } } }",
+                "  CoalesceBatchesExec: target_batch_size=8192",
+                "    RepartitionExec: partitioning=Hash([Column { name: \"a2\", index: 1 }], 8), input_partitions=1",
+                // "   CsvExec: files={1 group: [[tempdir/left.csv]]}, has_header=false, limit=None, projection=[a1, a2]",
+                "  CoalesceBatchesExec: target_batch_size=8192",
+                "    RepartitionExec: partitioning=Hash([Column { name: \"a2\", index: 1 }], 8), input_partitions=1",
+                // "   CsvExec: files={1 group: [[tempdir/right.csv]]}, has_header=false, limit=None, projection=[a1, a2]"
+            ]
+        };
+        let mut actual: Vec<&str> = formatted.trim().lines().collect();
+        // Remove CSV lines
+        actual.remove(3);
+        actual.remove(5);
+
+        assert_eq!(
+            expected,
+            actual[..],
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test]
     async fn join_change_in_planner_without_sort_not_allowed() -> Result<()> {
-        let config =
-            SessionConfig::new().with_allow_symmetric_joins_without_pruning(false);
+        let config = SessionConfig::new()
+            .with_target_partitions(8)
+            .with_allow_symmetric_joins_without_pruning(false);
         let ctx = SessionContext::with_config(config);
         let tmp_dir = TempDir::new()?;
         let left_file_path = tmp_dir.path().join("left.csv");
