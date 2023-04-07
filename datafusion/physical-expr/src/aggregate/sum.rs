@@ -234,10 +234,6 @@ impl Accumulator for SumAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-<<<<<<< Updated upstream
-        self.count += (values.len() - values.data().null_count()) as u64;
-=======
->>>>>>> Stashed changes
         let delta = sum_batch(values, &self.sum.get_datatype())?;
         self.sum = self.sum.add(&delta)?;
         Ok(())
@@ -245,10 +241,6 @@ impl Accumulator for SumAccumulator {
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-<<<<<<< Updated upstream
-        self.count -= (values.len() - values.data().null_count()) as u64;
-=======
->>>>>>> Stashed changes
         let delta = sum_batch(values, &self.sum.get_datatype())?;
         self.sum = self.sum.sub(&delta)?;
         Ok(())
