@@ -2771,14 +2771,32 @@ mod tests {
         assert_eq!(left_side_joiner.visited_rows.is_empty(), should_be_empty);
         Ok(())
     }
-
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn with_temporal_columns() -> Result<()> {
-        let join_type = JoinType::Full;
+    async fn testing_with_temporal_columns(
+        #[values(
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::RightSemi,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::RightAnti,
+            JoinType::Full
+        )]
+        join_type: JoinType,
+        #[values(
+               (4, 5),
+               (99, 12),
+               )]
+        cardinality: (i32, i32),
+        #[values(0, 1)] case_expr: usize,
+    ) -> Result<()> {
         let config = SessionConfig::new().with_repartition_joins(false);
         let session_ctx = SessionContext::with_config(config);
         let task_ctx = session_ctx.task_ctx();
-        let (left_batch, right_batch) = build_sides_record_batches(TABLE_SIZE, (10, 10))?;
+        let (left_batch, right_batch) =
+            build_sides_record_batches(TABLE_SIZE, cardinality)?;
         let left_schema = &left_batch.schema();
         let right_schema = &right_batch.schema();
         let on = vec![(
@@ -2819,7 +2837,7 @@ mod tests {
             ),
         ]);
         let filter_expr = join_expr_tests_fixture_temporal(
-            0,
+            case_expr,
             col("left", &intermediate_schema)?,
             col("right", &intermediate_schema)?,
             &intermediate_schema,
@@ -2835,98 +2853,34 @@ mod tests {
             },
         ];
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
-        experiment(
-            left,
-            right,
-            Some(filter),
-            join_type,
-            on.clone(),
-            task_ctx.clone(),
-        )
-        .await?;
+        experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
     }
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn with_temporal_columns_2() -> Result<()> {
-        let join_type = JoinType::Full;
+    async fn test_with_interval_columns(
+        #[values(
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::RightSemi,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::RightAnti,
+            JoinType::Full
+        )]
+        join_type: JoinType,
+        #[values(
+        (4, 5),
+        (99, 12),
+        )]
+        cardinality: (i32, i32),
+    ) -> Result<()> {
         let config = SessionConfig::new().with_repartition_joins(false);
         let session_ctx = SessionContext::with_config(config);
         let task_ctx = session_ctx.task_ctx();
-        let (left_batch, right_batch) = build_sides_record_batches(TABLE_SIZE, (10, 10))?;
-        let left_schema = &left_batch.schema();
-        let right_schema = &right_batch.schema();
-        let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
-        )];
-        let left_sorted = vec![PhysicalSortExpr {
-            expr: col("lt1", left_schema)?,
-            options: SortOptions {
-                descending: false,
-                nulls_first: true,
-            },
-        }];
-        let right_sorted = vec![PhysicalSortExpr {
-            expr: col("rt1", right_schema)?,
-            options: SortOptions {
-                descending: false,
-                nulls_first: true,
-            },
-        }];
-        let (left, right) = create_memory_table(
-            left_batch,
-            right_batch,
-            Some(left_sorted),
-            Some(right_sorted),
-            13,
-        )?;
-        let intermediate_schema = Schema::new(vec![
-            Field::new(
-                "left",
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-                false,
-            ),
-            Field::new(
-                "right",
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-                false,
-            ),
-        ]);
-        let filter_expr = join_expr_tests_fixture_temporal(
-            1,
-            col("left", &intermediate_schema)?,
-            col("right", &intermediate_schema)?,
-            &intermediate_schema,
-        );
-        let column_indices = vec![
-            ColumnIndex {
-                index: 3,
-                side: JoinSide::Left,
-            },
-            ColumnIndex {
-                index: 3,
-                side: JoinSide::Right,
-            },
-        ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
-        experiment(
-            left,
-            right,
-            Some(filter),
-            join_type,
-            on.clone(),
-            task_ctx.clone(),
-        )
-        .await?;
-        Ok(())
-    }
-    #[tokio::test(flavor = "multi_thread")]
-    async fn with_temporal_columns_3() -> Result<()> {
-        let join_type = JoinType::Full;
-        let config = SessionConfig::new().with_repartition_joins(false);
-        let session_ctx = SessionContext::with_config(config);
-        let task_ctx = session_ctx.task_ctx();
-        let (left_batch, right_batch) = build_sides_record_batches(TABLE_SIZE, (10, 10))?;
+        let (left_batch, right_batch) =
+            build_sides_record_batches(TABLE_SIZE, cardinality)?;
         let left_schema = &left_batch.schema();
         let right_schema = &right_batch.schema();
         let on = vec![(
