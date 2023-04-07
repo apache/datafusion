@@ -17,6 +17,7 @@
 
 //! Aggregate without grouping columns
 
+use std::borrow::Cow;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::aggregates::{
     aggregate_expressions, create_accumulators, finalize_aggregation, AccumulatorItem,
@@ -107,7 +108,7 @@ impl AggregateStream {
                         let timer = elapsed_compute.timer();
                         let result = aggregate_batch(
                             &this.mode,
-                            &batch,
+                            batch,
                             &mut this.accumulators,
                             &this.aggregate_expressions,
                             &this.filter_expressions,
@@ -180,7 +181,7 @@ impl RecordBatchStream for AggregateStream {
 /// TODO: Make this a member function
 fn aggregate_batch(
     mode: &AggregateMode,
-    batch: &RecordBatch,
+    batch: RecordBatch,
     accumulators: &mut [AccumulatorItem],
     expressions: &[Vec<Arc<dyn PhysicalExpr>>],
     filters: &[Option<Arc<dyn PhysicalExpr>>],
@@ -200,8 +201,8 @@ fn aggregate_batch(
         .try_for_each(|((accum, expr), filter)| {
             // 1.2
             let batch = match filter {
-                Some(filter) => batch_filter(batch, filter)?,
-                None => batch.clone(),
+                Some(filter) => Cow::Owned(batch_filter(&batch, filter)?),
+                None => Cow::Borrowed(&batch),
             };
             // 1.3
             let values = &expr
