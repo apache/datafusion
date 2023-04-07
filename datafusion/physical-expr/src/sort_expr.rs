@@ -112,21 +112,9 @@ impl From<PhysicalSortRequirement> for PhysicalSortExpr {
     }
 }
 
-impl From<&PhysicalSortRequirement> for PhysicalSortExpr {
-    fn from(value: &PhysicalSortRequirement) -> Self {
-        value.clone().into_sort_expr()
-    }
-}
-
 impl From<PhysicalSortExpr> for PhysicalSortRequirement {
     fn from(value: PhysicalSortExpr) -> Self {
         PhysicalSortRequirement::new(value.expr, Some(value.options))
-    }
-}
-
-impl From<&PhysicalSortExpr> for PhysicalSortRequirement {
-    fn from(value: &PhysicalSortExpr) -> Self {
-        PhysicalSortRequirement::from(value.clone())
     }
 }
 
@@ -190,13 +178,14 @@ impl PhysicalSortRequirement {
     /// Returns [`PhysicalSortRequirement`] that requires the exact
     /// sort of the [`PhysicalSortExpr`]s in `ordering`
     ///
-    /// This method is designed for
+    /// This method takes `&'a PhysicalSortExpr` to make it easy to
     /// use implementing [`ExecutionPlan::required_input_ordering`].
     pub fn from_sort_exprs<'a>(
         ordering: impl IntoIterator<Item = &'a PhysicalSortExpr>,
     ) -> Vec<PhysicalSortRequirement> {
         ordering
             .into_iter()
+            .cloned()
             .map(PhysicalSortRequirement::from)
             .collect()
     }

@@ -199,7 +199,7 @@ pub(crate) fn calc_requirements(
     for sort_expr in orderby_sort_exprs {
         let contains = sort_reqs.iter().any(|e| sort_expr.expr.eq(e.expr()));
         if !contains {
-            sort_reqs.push(PhysicalSortRequirement::from(sort_expr));
+            sort_reqs.push(PhysicalSortRequirement::from(sort_expr.clone()));
         }
     }
     // Convert empty result to None. Otherwise wrap result inside Some()
