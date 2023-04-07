@@ -436,7 +436,7 @@ impl<'a> Tokenizer<'a> {
                     return Err(make_error(
                         self.val,
                         &format!("parsing {} as double quoted string: empty string isn't supported", self.word),
-                    ))
+                    ));
                 }
 
                 let val: String = self.word.parse().map_err(|e| {
@@ -451,7 +451,7 @@ impl<'a> Tokenizer<'a> {
                     return Err(make_error(
                         self.val,
                         &format!("parsing {} as double quoted string: escaped double quote isn't supported", self.word),
-                    ))
+                    ));
                 }
 
                 return Ok(Token::DoubleQuotedString(s));
