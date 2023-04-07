@@ -310,10 +310,7 @@ mod tests {
     use crate::execution_props::ExecutionProps;
     use arrow::array::{ArrayRef, Date32Builder};
     use arrow::datatypes::*;
-    use arrow_array::{
-        IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
-        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
-    };
+    use arrow_array::IntervalMonthDayNanoArray;
     use chrono::{Duration, NaiveDate};
     use datafusion_common::delta::shift_months;
     use datafusion_common::{Column, Result, ToDFSchema};
@@ -713,11 +710,12 @@ mod tests {
     // aiming that evaluate_temporal_array function is working properly and shows the same
     // behavior with ScalarValue arithmetic.
     fn experiment(
-        timestamp_array: ArrayRef,
         timestamp_scalar: ScalarValue,
-        interval_array: ArrayRef,
         interval_scalar: ScalarValue,
     ) -> Result<()> {
+        let timestamp_array = timestamp_scalar.to_array();
+        let interval_array = interval_scalar.to_array();
+
         // timestamp + interval
         if let ColumnarValue::Array(res1) =
             evaluate_temporal_array(timestamp_array.clone(), 1, &interval_scalar)?
@@ -783,9 +781,6 @@ mod tests {
     #[test]
     fn test_evalute_with_scalar() -> Result<()> {
         // Timestamp (sec) & Interval (DayTime)
-        let timestamp_array = Arc::new(TimestampSecondArray::from(vec![
-            1_672_531_200, // 2023-01-01:00.00.00,
-        ]));
         let timestamp_scalar = ScalarValue::TimestampSecond(
             Some(
                 NaiveDate::from_ymd_opt(2023, 1, 1)
@@ -796,20 +791,11 @@ mod tests {
             ),
             None,
         );
-        let interval_array: ArrayRef = Arc::new(IntervalDayTimeArray::from(vec![1_000])); // 1 sec
         let interval_scalar = ScalarValue::new_interval_dt(0, 1_000);
 
-        experiment(
-            timestamp_array,
-            timestamp_scalar,
-            interval_array,
-            interval_scalar,
-        )?;
+        experiment(timestamp_scalar, interval_scalar)?;
 
         // Timestamp (millisec) & Interval (DayTime)
-        let timestamp_array = Arc::new(TimestampMillisecondArray::from(vec![
-            1_672_531_200_000, // 2023-01-01:00.00.00,
-        ]));
         let timestamp_scalar = ScalarValue::TimestampMillisecond(
             Some(
                 NaiveDate::from_ymd_opt(2023, 1, 1)
@@ -820,20 +806,11 @@ mod tests {
             ),
             None,
         );
-        let interval_array: ArrayRef = Arc::new(IntervalDayTimeArray::from(vec![1_000])); // 1 sec
         let interval_scalar = ScalarValue::new_interval_dt(0, 1_000);
 
-        experiment(
-            timestamp_array,
-            timestamp_scalar,
-            interval_array,
-            interval_scalar,
-        )?;
+        experiment(timestamp_scalar, interval_scalar)?;
 
         // Timestamp (nanosec) & Interval (MonthDayNano)
-        let timestamp_array = Arc::new(TimestampNanosecondArray::from(vec![
-            1_672_531_200_000_000_000, // 2023-01-01:00.00.00,
-        ]));
         let timestamp_scalar = ScalarValue::TimestampNanosecond(
             Some(
                 NaiveDate::from_ymd_opt(2023, 1, 1)
@@ -844,21 +821,12 @@ mod tests {
             ),
             None,
         );
-        let interval_array: ArrayRef =
-            Arc::new(IntervalMonthDayNanoArray::from(vec![1_000])); // 1 us
         let interval_scalar = ScalarValue::new_interval_mdn(0, 0, 1_000);
 
-        experiment(
-            timestamp_array,
-            timestamp_scalar,
-            interval_array,
-            interval_scalar,
-        )?;
+        experiment(timestamp_scalar, interval_scalar)?;
 
         // Timestamp (nanosec) & Interval (MonthDayNano), negatively resulting cases
-        let timestamp_array = Arc::new(TimestampNanosecondArray::from(vec![
-            0, // 2023-01-01:00.00.00,
-        ]));
+
         let timestamp_scalar = ScalarValue::TimestampNanosecond(
             Some(
                 NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -869,21 +837,13 @@ mod tests {
             ),
             None,
         );
-        let interval_array: ArrayRef =
-            Arc::new(IntervalMonthDayNanoArray::from(vec![1_000])); // 1 us
+
+        Arc::new(IntervalMonthDayNanoArray::from(vec![1_000])); // 1 us
         let interval_scalar = ScalarValue::new_interval_mdn(0, 0, 1_000);
 
-        experiment(
-            timestamp_array,
-            timestamp_scalar,
-            interval_array,
-            interval_scalar,
-        )?;
+        experiment(timestamp_scalar, interval_scalar)?;
 
         // Timestamp (sec) & Interval (YearMonth)
-        let timestamp_array = Arc::new(TimestampSecondArray::from(vec![
-            1_672_531_200, // 2023-01-01:00.00.00,
-        ]));
         let timestamp_scalar = ScalarValue::TimestampSecond(
             Some(
                 NaiveDate::from_ymd_opt(2023, 1, 1)
@@ -894,15 +854,9 @@ mod tests {
             ),
             None,
         );
-        let interval_array: ArrayRef = Arc::new(IntervalYearMonthArray::from(vec![1])); // 1 us
         let interval_scalar = ScalarValue::new_interval_ym(0, 1);
 
-        experiment(
-            timestamp_array,
-            timestamp_scalar,
-            interval_array,
-            interval_scalar,
-        )?;
+        experiment(timestamp_scalar, interval_scalar)?;
 
         Ok(())
     }

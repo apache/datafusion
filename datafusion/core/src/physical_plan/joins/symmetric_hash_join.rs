@@ -1740,6 +1740,7 @@ mod tests {
         schema: &Schema,
     ) -> Arc<dyn PhysicalExpr> {
         match expr_id {
+            // constructs ((left_col - INTERVAL '100ms')  > (right_col - INTERVAL '200ms')) AND ((left_col - INTERVAL '450ms') < (right_col - INTERVAL '300ms'))
             0 => gen_conjunctive_temporal_expr(
                 left_col,
                 right_col,
@@ -1753,6 +1754,7 @@ mod tests {
                 ScalarValue::new_interval_dt(0, 300), // 300 ms
                 schema,
             ),
+            // constructs ((left_col - TIMESTAMP '2023-01-01:12.00.03')  > (right_col - TIMESTAMP '2023-01-01:12.00.01')) AND ((left_col - TIMESTAMP '2023-01-01:12.00.00') < (right_col - TIMESTAMP '2023-01-01:12.00.02'))
             1 => gen_conjunctive_temporal_expr(
                 left_col,
                 right_col,
@@ -2798,8 +2800,8 @@ mod tests {
             },
         }];
         let (left, right) = create_memory_table(
-            left_batch.clone(),
-            right_batch.clone(),
+            left_batch,
+            right_batch,
             Some(left_sorted),
             Some(right_sorted),
             13,
@@ -2872,8 +2874,8 @@ mod tests {
             },
         }];
         let (left, right) = create_memory_table(
-            left_batch.clone(),
-            right_batch.clone(),
+            left_batch,
+            right_batch,
             Some(left_sorted),
             Some(right_sorted),
             13,
