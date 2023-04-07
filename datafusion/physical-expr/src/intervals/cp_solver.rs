@@ -36,6 +36,8 @@ use crate::intervals::interval_aritmetic::{
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 
+use super::IntervalBound;
+
 // Interval arithmetic provides a way to perform mathematical operations on
 // intervals, which represent a range of possible values rather than a single
 // point value. This allows for the propagation of ranges through mathematical
@@ -171,8 +173,8 @@ impl ExprIntervalGraphNode {
         if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
             let value = literal.value();
             let interval = Interval {
-                lower: value.clone(),
-                upper: value.clone(),
+                lower: IntervalBound::Closed(value.clone()),
+                upper: IntervalBound::Closed(value.clone()),
             };
             ExprIntervalGraphNode::new_with_interval(expr, interval)
         } else {
@@ -243,13 +245,21 @@ fn comparison_operator_target(datatype: &DataType, op: &Operator) -> Result<Inte
     let unbounded = ScalarValue::try_from(datatype)?;
     let zero = ScalarValue::new_zero(datatype)?;
     Ok(match *op {
+        Operator::GtEq => Interval {
+            lower: IntervalBound::Closed(zero),
+            upper: IntervalBound::Open(unbounded),
+        },
         Operator::Gt => Interval {
-            lower: zero,
-            upper: unbounded,
+            lower: IntervalBound::Open(zero),
+            upper: IntervalBound::Open(unbounded),
+        },
+        Operator::LtEq => Interval {
+            lower: IntervalBound::Open(unbounded),
+            upper: IntervalBound::Closed(zero),
         },
         Operator::Lt => Interval {
-            lower: unbounded,
-            upper: zero,
+            lower: IntervalBound::Open(unbounded),
+            upper: IntervalBound::Open(zero),
         },
         _ => unreachable!(),
     })
@@ -267,7 +277,7 @@ pub fn propagate_comparison(
     left_child: &Interval,
     right_child: &Interval,
 ) -> Result<(Option<Interval>, Option<Interval>)> {
-    let parent = comparison_operator_target(&left_child.get_datatype(), op)?;
+    let parent = comparison_operator_target(&left_child.get_datatype()?, op)?;
     propagate_arithmetic(&Operator::Minus, &parent, left_child, right_child)
 }
 
@@ -507,12 +517,12 @@ impl ExprIntervalGraph {
         self.assign_intervals(leaf_bounds);
         match self.evaluate_bounds()? {
             Interval {
-                lower: ScalarValue::Boolean(Some(false)),
-                upper: ScalarValue::Boolean(Some(false)),
+                lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
+                upper: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
             } => Ok(PropagationResult::Infeasible),
             Interval {
-                lower: ScalarValue::Boolean(Some(false)),
-                upper: ScalarValue::Boolean(Some(true)),
+                lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
+                upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
             } => {
                 let result = self.propagate_constraints();
                 self.update_intervals(leaf_bounds);
@@ -542,7 +552,7 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intervals::test_utils::gen_conjunctive_numeric_expr;
+    use crate::intervals::test_utils::gen_conjunctive_numeric_expr_open_bounds;
     use itertools::Itertools;
 
     use crate::expressions::{BinaryExpr, Column};
@@ -564,15 +574,15 @@ mod tests {
             (
                 exprs_with_interval.0.clone(),
                 Interval {
-                    lower: ScalarValue::Int32(left_interval.0),
-                    upper: ScalarValue::Int32(left_interval.1),
+                    lower: IntervalBound::Open(ScalarValue::Int32(left_interval.0)),
+                    upper: IntervalBound::Open(ScalarValue::Int32(left_interval.1)),
                 },
             ),
             (
                 exprs_with_interval.1.clone(),
                 Interval {
-                    lower: ScalarValue::Int32(right_interval.0),
-                    upper: ScalarValue::Int32(right_interval.1),
+                    lower: IntervalBound::Open(ScalarValue::Int32(right_interval.0)),
+                    upper: IntervalBound::Open(ScalarValue::Int32(right_interval.1)),
                 },
             ),
         ];
@@ -580,15 +590,15 @@ mod tests {
             (
                 exprs_with_interval.0.clone(),
                 Interval {
-                    lower: ScalarValue::Int32(left_waited.0),
-                    upper: ScalarValue::Int32(left_waited.1),
+                    lower: IntervalBound::Open(ScalarValue::Int32(left_waited.0)),
+                    upper: IntervalBound::Open(ScalarValue::Int32(left_waited.1)),
                 },
             ),
             (
                 exprs_with_interval.1.clone(),
                 Interval {
-                    lower: ScalarValue::Int32(right_waited.0),
-                    upper: ScalarValue::Int32(right_waited.1),
+                    lower: IntervalBound::Open(ScalarValue::Int32(right_waited.0)),
+                    upper: IntervalBound::Open(ScalarValue::Int32(right_waited.1)),
                 },
             ),
         ];
@@ -707,7 +717,7 @@ mod tests {
         let left_col = Arc::new(Column::new("left_watermark", 0));
         let right_col = Arc::new(Column::new("right_watermark", 0));
         // left_watermark + 1 > right_watermark + 11 AND left_watermark + 3 < right_watermark + 33
-        let expr = gen_conjunctive_numeric_expr(
+        let expr = gen_conjunctive_numeric_expr_open_bounds(
             left_col.clone(),
             right_col.clone(),
             Operator::Plus,
@@ -746,7 +756,7 @@ mod tests {
         let left_col = Arc::new(Column::new("left_watermark", 0));
         let right_col = Arc::new(Column::new("right_watermark", 0));
         // left_watermark - 1 > right_watermark + 5 AND left_watermark + 3 < right_watermark + 10
-        let expr = gen_conjunctive_numeric_expr(
+        let expr = gen_conjunctive_numeric_expr_open_bounds(
             left_col.clone(),
             right_col.clone(),
             Operator::Minus,
@@ -786,7 +796,7 @@ mod tests {
         let left_col = Arc::new(Column::new("left_watermark", 0));
         let right_col = Arc::new(Column::new("right_watermark", 0));
         // left_watermark - 1 > right_watermark + 5 AND left_watermark - 3 < right_watermark + 10
-        let expr = gen_conjunctive_numeric_expr(
+        let expr = gen_conjunctive_numeric_expr_open_bounds(
             left_col.clone(),
             right_col.clone(),
             Operator::Minus,
@@ -825,7 +835,7 @@ mod tests {
         let left_col = Arc::new(Column::new("left_watermark", 0));
         let right_col = Arc::new(Column::new("right_watermark", 0));
         // left_watermark - 10 > right_watermark - 5 AND left_watermark - 3 < right_watermark + 10
-        let expr = gen_conjunctive_numeric_expr(
+        let expr = gen_conjunctive_numeric_expr_open_bounds(
             left_col.clone(),
             right_col.clone(),
             Operator::Minus,
@@ -865,7 +875,7 @@ mod tests {
         let right_col = Arc::new(Column::new("right_watermark", 0));
         // left_watermark - 10 > right_watermark - 5 AND left_watermark - 30 < right_watermark - 3
 
-        let expr = gen_conjunctive_numeric_expr(
+        let expr = gen_conjunctive_numeric_expr_open_bounds(
             left_col.clone(),
             right_col.clone(),
             Operator::Minus,

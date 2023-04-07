@@ -74,7 +74,7 @@ use arrow::record_batch::RecordBatch;
 
 use super::column::Column;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
-use crate::intervals::{apply_operator, Interval};
+use crate::intervals::{apply_operator, Interval, IntervalBound};
 use crate::physical_expr::down_cast_any_ref;
 use crate::{analysis_expect, AnalysisContext, ExprBoundaries, PhysicalExpr};
 use datafusion_common::cast::as_boolean_array;
@@ -782,8 +782,8 @@ impl PhysicalExpr for BinaryExpr {
             return Ok(vec![]);
         } else if self.op.is_comparison_operator() {
             if let Interval {
-                lower: ScalarValue::Boolean(Some(false)),
-                upper: ScalarValue::Boolean(Some(false)),
+                lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
+                upper: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
             } = interval
             {
                 // TODO: We will handle strictly false clauses by negating
