@@ -502,7 +502,7 @@ async fn fetch_statistics(
                         summarize_min_max(
                             &mut max_values,
                             &mut min_values,
-                            &fields,
+                            fields,
                             table_idx,
                             stats,
                         )

@@ -1866,22 +1866,19 @@ mod tests {
 
     fn nested_table_scan(table_name: &str) -> Result<LogicalPlanBuilder> {
         // Create a schema with a scalar field, a list of strings, and a list of structs.
-        let struct_field = Box::new(Field::new(
+        let struct_field = Field::new_struct(
             "item",
-            DataType::Struct(
                 vec![
                     Field::new("a", DataType::UInt32, false),
                     Field::new("b", DataType::UInt32, false),
-                ]
-                .into(),
-            ),
+                ],
             false,
-        ));
-        let string_field = Box::new(Field::new("item", DataType::Utf8, false));
+        );
+        let string_field =Field::new("item", DataType::Utf8, false);
         let schema = Schema::new(vec![
             Field::new("scalar", DataType::UInt32, false),
-            Field::new("strings", DataType::List(string_field), false),
-            Field::new("structs", DataType::List(struct_field), false),
+            Field::new_list("strings", string_field, false),
+            Field::new_list("structs", struct_field, false),
         ]);
 
         table_scan(Some(table_name), &schema, None)

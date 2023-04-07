@@ -36,9 +36,9 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
     // Since ARRAY_AGG(DISTINCT) ordering is nondeterministic, check the schema and contents.
     assert_eq!(
         *actual[0].schema(),
-        Schema::new(vec![Field::new(
+        Schema::new(vec![Field::new_list(
             "ARRAYAGG(DISTINCT aggregate_test_100.c2)",
-            DataType::List(Box::new(Field::new("item", DataType::UInt32, true))),
+            Field::new("item", DataType::UInt32, true),
             false
         ),])
     );

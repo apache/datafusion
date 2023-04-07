@@ -278,9 +278,9 @@ async fn use_between_expression_in_select_query() -> Result<()> {
 #[tokio::test]
 async fn query_get_indexed_field() -> Result<()> {
     let ctx = SessionContext::new();
-    let schema = Arc::new(Schema::new(vec![Field::new(
+    let schema = Arc::new(Schema::new(vec![Field::new_list(
         "some_list",
-        DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
+        Field::new("item", DataType::Int64, true),
         false,
     )]));
     let builder = PrimitiveBuilder::<Int64Type>::with_capacity(3);
@@ -317,11 +317,11 @@ async fn query_get_indexed_field() -> Result<()> {
 #[tokio::test]
 async fn query_nested_get_indexed_field() -> Result<()> {
     let ctx = SessionContext::new();
-    let nested_dt = DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
+    let nested_dt = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
     // Nested schema of { "some_list": [[i64]] }
     let schema = Arc::new(Schema::new(vec![Field::new(
         "some_list",
-        DataType::List(Box::new(Field::new("item", nested_dt.clone(), true))),
+        DataType::List(Arc::new(Field::new("item", nested_dt.clone(), true))),
         false,
     )]));
 
@@ -380,7 +380,7 @@ async fn query_nested_get_indexed_field() -> Result<()> {
 #[tokio::test]
 async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
     let ctx = SessionContext::new();
-    let nested_dt = DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
+    let nested_dt = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
     // Nested schema of { "some_struct": { "bar": [i64] } }
     let struct_fields = vec![Field::new("bar", nested_dt.clone(), true)];
     let schema = Arc::new(Schema::new(vec![Field::new(

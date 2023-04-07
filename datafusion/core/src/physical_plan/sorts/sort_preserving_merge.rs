@@ -470,13 +470,14 @@ impl SortPreservingMergeStream {
             .iter()
             .enumerate()
             .map(|(column_idx, field)| {
-                let arrays = self
+                let arrays: Vec<_> = self
                     .batches
                     .iter()
                     .flat_map(|batch| {
-                        batch.iter().map(|batch| batch.column(column_idx).data())
+                        batch.iter().map(|batch| batch.column(column_idx).to_data())
                     })
                     .collect();
+                let arrays = arrays.iter().collect();
 
                 let mut array_data = MutableArrayData::new(
                     arrays,

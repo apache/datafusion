@@ -25,7 +25,8 @@ use crate::protobuf::{
     PlaceholderNode, RollupNode,
 };
 use arrow::datatypes::{
-    DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit, UnionMode,
+    DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
+    UnionFields, UnionMode,
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
@@ -279,7 +280,7 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 parse_i32_to_time_unit(time_unit)?,
                 match timezone.len() {
                     0 => None,
-                    _ => Some(timezone.to_owned()),
+                    _ => Some(timezone.as_str().into()),
                 },
             ),
             arrow_type::ArrowTypeEnum::Time32(time_unit) => {
@@ -298,18 +299,18 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
             arrow_type::ArrowTypeEnum::List(list) => {
                 let list_type =
                     list.as_ref().field_type.as_deref().required("field_type")?;
-                DataType::List(Box::new(list_type))
+                DataType::List(Arc::new(list_type))
             }
             arrow_type::ArrowTypeEnum::LargeList(list) => {
                 let list_type =
                     list.as_ref().field_type.as_deref().required("field_type")?;
-                DataType::LargeList(Box::new(list_type))
+                DataType::LargeList(Arc::new(list_type))
             }
             arrow_type::ArrowTypeEnum::FixedSizeList(list) => {
                 let list_type =
                     list.as_ref().field_type.as_deref().required("field_type")?;
                 let list_size = list.list_size;
-                DataType::FixedSizeList(Box::new(list_type), list_size)
+                DataType::FixedSizeList(Arc::new(list_type), list_size)
             }
             arrow_type::ArrowTypeEnum::Struct(strct) => DataType::Struct(
                 strct
@@ -325,19 +326,19 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                     protobuf::UnionMode::Dense => UnionMode::Dense,
                     protobuf::UnionMode::Sparse => UnionMode::Sparse,
                 };
-                let union_types = union
+                let union_fields = union
                     .union_types
                     .iter()
                     .map(TryInto::try_into)
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<Vec<Field>, _>>()?;
 
                 // Default to index based type ids if not provided
-                let type_ids = match union.type_ids.is_empty() {
-                    true => (0..union_types.len() as i8).collect(),
+                let type_ids: Vec<_> = match union.type_ids.is_empty() {
+                    true => (0..union_fields.len() as i8).collect(),
                     false => union.type_ids.iter().map(|i| *i as i8).collect(),
                 };
 
-                DataType::Union(union_types, type_ids, union_mode)
+                DataType::Union(UnionFields::new(type_ids, union_fields), union_mode)
             }
             arrow_type::ArrowTypeEnum::Dictionary(dict) => {
                 let key_datatype = dict.as_ref().key.as_deref().required("key")?;
@@ -348,7 +349,7 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 let field: Field =
                     map.as_ref().field_type.as_deref().required("field_type")?;
                 let keys_sorted = map.keys_sorted;
-                DataType::Map(Box::new(field), keys_sorted)
+                DataType::Map(Arc::new(field), keys_sorted)
             }
         })
     }
@@ -581,7 +582,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 } = &scalar_list;
 
                 let field: Field = field.as_ref().required("field")?;
-                let field = Box::new(field);
+                let field = Arc::new(field);
 
                 let values: Result<Vec<ScalarValue>, Error> =
                     values.iter().map(|val| val.try_into()).collect();
@@ -636,7 +637,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 let timezone = if v.timezone.is_empty() {
                     None
                 } else {
-                    Some(v.timezone.clone())
+                    Some(v.timezone.as_str().into())
                 };
 
                 let ts_value =

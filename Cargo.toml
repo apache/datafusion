@@ -72,9 +72,9 @@ panic = 'unwind'
 rpath = false
 
 [patch.crates-io]
-arrow = { git = "https://github.com/tustvold/arrow-rs.git", rev = "bc70e09575272f8dde20b06c19756180434ef158" }
-arrow-array = { git = "https://github.com/tustvold/arrow-rs.git", rev = "bc70e09575272f8dde20b06c19756180434ef158" }
-arrow-buffer = { git = "https://github.com/tustvold/arrow-rs.git", rev = "bc70e09575272f8dde20b06c19756180434ef158" }
-arrow-flight = { git = "https://github.com/tustvold/arrow-rs.git", rev = "bc70e09575272f8dde20b06c19756180434ef158" }
-arrow-schema = { git = "https://github.com/tustvold/arrow-rs.git", rev = "bc70e09575272f8dde20b06c19756180434ef158" }
-parquet = { git = "https://github.com/tustvold/arrow-rs.git", rev = "bc70e09575272f8dde20b06c19756180434ef158" }
+arrow = { git = "https://github.com/tustvold/arrow-rs.git", rev = "e45f8b5132c10505a6f2b9d8a8e8e9207049605f" }
+arrow-array = { git = "https://github.com/tustvold/arrow-rs.git", rev = "e45f8b5132c10505a6f2b9d8a8e8e9207049605f" }
+arrow-buffer = { git = "https://github.com/tustvold/arrow-rs.git", rev = "e45f8b5132c10505a6f2b9d8a8e8e9207049605f" }
+arrow-flight = { git = "https://github.com/tustvold/arrow-rs.git", rev = "e45f8b5132c10505a6f2b9d8a8e8e9207049605f" }
+arrow-schema = { git = "https://github.com/tustvold/arrow-rs.git", rev = "e45f8b5132c10505a6f2b9d8a8e8e9207049605f" }
+parquet = { git = "https://github.com/tustvold/arrow-rs.git", rev = "e45f8b5132c10505a6f2b9d8a8e8e9207049605f" }

@@ -31,7 +31,7 @@ use crate::cast::{
 };
 use crate::delta::shift_months;
 use crate::error::{DataFusionError, Result};
-use arrow::datatypes::{Fields, SchemaBuilder};
+use arrow::datatypes::{FieldRef, Fields, SchemaBuilder};
 use arrow::{
     array::*,
     compute::kernels::cast::{cast, cast_with_options, CastOptions},
@@ -98,7 +98,7 @@ pub enum ScalarValue {
     /// large binary
     LargeBinary(Option<Vec<u8>>),
     /// list of nested ScalarValue
-    List(Option<Vec<ScalarValue>>, Box<Field>),
+    List(Option<Vec<ScalarValue>>, FieldRef),
     /// Date stored as a signed 32bit int days since UNIX epoch 1970-01-01
     Date32(Option<i32>),
     /// Date stored as a signed 64bit int milliseconds since UNIX epoch 1970-01-01
@@ -112,13 +112,13 @@ pub enum ScalarValue {
     /// Time stored as a signed 64bit int as nanoseconds since midnight
     Time64Nanosecond(Option<i64>),
     /// Timestamp Second
-    TimestampSecond(Option<i64>, Option<String>),
+    TimestampSecond(Option<i64>, Option<Arc<str>>),
     /// Timestamp Milliseconds
-    TimestampMillisecond(Option<i64>, Option<String>),
+    TimestampMillisecond(Option<i64>, Option<Arc<str>>),
     /// Timestamp Microseconds
-    TimestampMicrosecond(Option<i64>, Option<String>),
+    TimestampMicrosecond(Option<i64>, Option<Arc<str>>),
     /// Timestamp Nanoseconds
-    TimestampNanosecond(Option<i64>, Option<String>),
+    TimestampNanosecond(Option<i64>, Option<Arc<str>>),
     /// Number of elapsed whole months
     IntervalYearMonth(Option<i32>),
     /// Number of elapsed days and milliseconds (no leap seconds)
@@ -571,8 +571,8 @@ macro_rules! impl_op {
                 ts_sub_to_interval(
                     ts_lhs.checked_mul(1_000).ok_or_else(err)?,
                     ts_rhs.checked_mul(1_000).ok_or_else(err)?,
-                    &tz_lhs,
-                    &tz_rhs,
+                    tz_lhs.as_deref(),
+                    tz_rhs.as_deref(),
                     IntervalMode::Milli,
                 )
             },
@@ -582,8 +582,8 @@ macro_rules! impl_op {
             ) => ts_sub_to_interval(
                 *ts_lhs,
                 *ts_rhs,
-                tz_lhs,
-                tz_rhs,
+                tz_lhs.as_deref(),
+                tz_rhs.as_deref(),
                 IntervalMode::Milli,
             ),
             (
@@ -598,8 +598,8 @@ macro_rules! impl_op {
                 ts_sub_to_interval(
                     ts_lhs.checked_mul(1_000).ok_or_else(err)?,
                     ts_rhs.checked_mul(1_000).ok_or_else(err)?,
-                    tz_lhs,
-                    tz_rhs,
+                    tz_lhs.as_deref(),
+                    tz_rhs.as_deref(),
                     IntervalMode::Nano,
                 )
             },
@@ -609,8 +609,8 @@ macro_rules! impl_op {
             ) => ts_sub_to_interval(
                 *ts_lhs,
                 *ts_rhs,
-                tz_lhs,
-                tz_rhs,
+                tz_lhs.as_deref(),
+                tz_rhs.as_deref(),
                 IntervalMode::Nano,
             ),
             _ => impl_op_arithmetic!($LHS, $RHS, -)
@@ -855,8 +855,8 @@ enum IntervalMode {
 fn ts_sub_to_interval(
     lhs_ts: i64,
     rhs_ts: i64,
-    lhs_tz: &Option<String>,
-    rhs_tz: &Option<String>,
+    lhs_tz: Option<&str>,
+    rhs_tz: Option<&str>,
     mode: IntervalMode,
 ) -> Result<ScalarValue> {
     let lhs_dt = with_timezone_to_naive_datetime(lhs_ts, lhs_tz, mode)?;
@@ -891,7 +891,7 @@ fn ts_sub_to_interval(
 #[inline]
 fn with_timezone_to_naive_datetime(
     ts: i64,
-    tz: &Option<String>,
+    tz: Option<&str>,
     mode: IntervalMode,
 ) -> Result<NaiveDateTime> {
     let datetime = if let IntervalMode::Milli = mode {
@@ -901,7 +901,7 @@ fn with_timezone_to_naive_datetime(
     }?;
 
     if let Some(tz) = tz {
-        let parsed_tz: Tz = FromStr::from_str(tz).map_err(|_| {
+        let parsed_tz: Tz = tz.parse().map_err(|_| {
             DataFusionError::Execution("cannot parse given timezone".to_string())
         })?;
         let offset = parsed_tz
@@ -1201,7 +1201,7 @@ macro_rules! build_list {
             // the return on the macro is necessary, to short-circuit and return ArrayRef
             None => {
                 return new_null_array(
-                    &DataType::List(Box::new(Field::new(
+                    &DataType::List(Arc::new(Field::new(
                         "item",
                         DataType::$SCALAR_TY,
                         true,
@@ -1222,7 +1222,7 @@ macro_rules! build_timestamp_list {
             // the return on the macro is necessary, to short-circuit and return ArrayRef
             None => {
                 return new_null_array(
-                    &DataType::List(Box::new(Field::new(
+                    &DataType::List(Arc::new(Field::new(
                         "item",
                         DataType::Timestamp($TIME_UNIT, $TIME_ZONE),
                         true,
@@ -1399,7 +1399,7 @@ impl ScalarValue {
 
     /// Create a new nullable ScalarValue::List with the specified child_type
     pub fn new_list(scalars: Option<Vec<Self>>, child_type: DataType) -> Self {
-        Self::List(scalars, Box::new(Field::new("item", child_type, true)))
+        Self::List(scalars, Arc::new(Field::new("item", child_type, true)))
     }
 
     /// Create a zero value in the given type.
@@ -1477,7 +1477,7 @@ impl ScalarValue {
             ScalarValue::Binary(_) => DataType::Binary,
             ScalarValue::FixedSizeBinary(sz, _) => DataType::FixedSizeBinary(*sz),
             ScalarValue::LargeBinary(_) => DataType::LargeBinary,
-            ScalarValue::List(_, field) => DataType::List(Box::new(Field::new(
+            ScalarValue::List(_, field) => DataType::List(Arc::new(Field::new(
                 "item",
                 field.data_type().clone(),
                 true,
@@ -2026,7 +2026,7 @@ impl ScalarValue {
             | DataType::FixedSizeList(_, _)
             | DataType::Interval(_)
             | DataType::LargeList(_)
-            | DataType::Union(_, _, _)
+            | DataType::Union(_, _)
             | DataType::Map(_, _)
             | DataType::RunEndEncoded(_, _) => {
                 return Err(DataFusionError::Internal(format!(
@@ -2124,8 +2124,8 @@ impl ScalarValue {
         let array_data = ArrayDataBuilder::new(data_type.clone())
             .len(offsets_array.len() - 1)
             .null_bit_buffer(Some(valid.finish()))
-            .add_buffer(offsets_array.data().buffers()[0].clone())
-            .add_child_data(flat_array.data().clone());
+            .add_buffer(offsets_array.values().inner().clone())
+            .add_child_data(flat_array.to_data());
 
         let list_array = ListArray::from(array_data.build()?);
         Ok(list_array)
@@ -2277,7 +2277,7 @@ impl ScalarValue {
                 }
                 _ => ScalarValue::iter_to_array_list(
                     repeat(self.clone()).take(size),
-                    &DataType::List(Box::new(Field::new(
+                    &DataType::List(Arc::new(Field::new(
                         "item",
                         field.data_type().clone(),
                         true,
@@ -2756,13 +2756,14 @@ impl ScalarValue {
                 | ScalarValue::IntervalYearMonth(_)
                 | ScalarValue::IntervalDayTime(_)
                 | ScalarValue::IntervalMonthDayNano(_) => 0,
-                ScalarValue::Utf8(s)
-                | ScalarValue::LargeUtf8(s)
-                | ScalarValue::TimestampSecond(_, s)
+                ScalarValue::Utf8(s) | ScalarValue::LargeUtf8(s) => {
+                    s.as_ref().map(|s| s.capacity()).unwrap_or_default()
+                }
+                ScalarValue::TimestampSecond(_, s)
                 | ScalarValue::TimestampMillisecond(_, s)
                 | ScalarValue::TimestampMicrosecond(_, s)
                 | ScalarValue::TimestampNanosecond(_, s) => {
-                    s.as_ref().map(|s| s.capacity()).unwrap_or_default()
+                    s.as_ref().map(|s| s.len()).unwrap_or_default()
                 }
                 ScalarValue::Binary(b)
                 | ScalarValue::FixedSizeBinary(_, b)
@@ -3478,7 +3479,7 @@ mod tests {
     fn scalar_list_null_to_array() {
         let list_array_ref = ScalarValue::List(
             None,
-            Box::new(Field::new("item", DataType::UInt64, false)),
+            Arc::new(Field::new("item", DataType::UInt64, false)),
         )
         .to_array();
         let list_array = as_list_array(&list_array_ref).unwrap();
@@ -3496,7 +3497,7 @@ mod tests {
                 ScalarValue::UInt64(None),
                 ScalarValue::UInt64(Some(101)),
             ]),
-            Box::new(Field::new("item", DataType::UInt64, false)),
+            Arc::new(Field::new("item", DataType::UInt64, false)),
         )
         .to_array();
 
@@ -3900,7 +3901,7 @@ mod tests {
                 i64_vals,
                 TimestampSecondArray,
                 TimestampSecond,
-                Some("UTC".to_owned())
+                Some("UTC".into())
             ),
             make_test_case!(
                 i64_vals,
@@ -3912,7 +3913,7 @@ mod tests {
                 i64_vals,
                 TimestampMillisecondArray,
                 TimestampMillisecond,
-                Some("UTC".to_owned())
+                Some("UTC".into())
             ),
             make_test_case!(
                 i64_vals,
@@ -3924,7 +3925,7 @@ mod tests {
                 i64_vals,
                 TimestampMicrosecondArray,
                 TimestampMicrosecond,
-                Some("UTC".to_owned())
+                Some("UTC".into())
             ),
             make_test_case!(
                 i64_vals,
@@ -3936,7 +3937,7 @@ mod tests {
                 i64_vals,
                 TimestampNanosecondArray,
                 TimestampNanosecond,
-                Some("UTC".to_owned())
+                Some("UTC".into())
             ),
             make_test_case!(i32_vals, IntervalYearMonthArray, IntervalYearMonth),
             make_test_case!(i64_vals, IntervalDayTimeArray, IntervalDayTime),
@@ -3999,11 +4000,11 @@ mod tests {
         assert_eq!(
             List(
                 Some(vec![Int32(Some(1)), Int32(Some(5))]),
-                Box::new(Field::new("item", DataType::Int32, false)),
+                Arc::new(Field::new("item", DataType::Int32, false)),
             )
             .partial_cmp(&List(
                 Some(vec![Int32(Some(1)), Int32(Some(5))]),
-                Box::new(Field::new("item", DataType::Int32, false)),
+                Arc::new(Field::new("item", DataType::Int32, false)),
             )),
             Some(Ordering::Equal)
         );
@@ -4011,11 +4012,11 @@ mod tests {
         assert_eq!(
             List(
                 Some(vec![Int32(Some(10)), Int32(Some(5))]),
-                Box::new(Field::new("item", DataType::Int32, false)),
+                Arc::new(Field::new("item", DataType::Int32, false)),
             )
             .partial_cmp(&List(
                 Some(vec![Int32(Some(1)), Int32(Some(5))]),
-                Box::new(Field::new("item", DataType::Int32, false)),
+                Arc::new(Field::new("item", DataType::Int32, false)),
             )),
             Some(Ordering::Greater)
         );
@@ -4023,11 +4024,11 @@ mod tests {
         assert_eq!(
             List(
                 Some(vec![Int32(Some(1)), Int32(Some(5))]),
-                Box::new(Field::new("item", DataType::Int32, false)),
+                Arc::new(Field::new("item", DataType::Int32, false)),
             )
             .partial_cmp(&List(
                 Some(vec![Int32(Some(10)), Int32(Some(5))]),
-                Box::new(Field::new("item", DataType::Int32, false)),
+                Arc::new(Field::new("item", DataType::Int32, false)),
             )),
             Some(Ordering::Less)
         );
@@ -4036,11 +4037,11 @@ mod tests {
         assert_eq!(
             List(
                 Some(vec![Int64(Some(1)), Int64(Some(5))]),
-                Box::new(Field::new("item", DataType::Int64, false)),
+                Arc::new(Field::new("item", DataType::Int64, false)),
             )
             .partial_cmp(&List(
                 Some(vec![Int32(Some(1)), Int32(Some(5))]),
-                Box::new(Field::new("item", DataType::Int32, false)),
+                Arc::new(Field::new("item", DataType::Int32, false)),
             )),
             None
         );
@@ -4300,7 +4301,7 @@ mod tests {
         let field_a = Field::new("A", DataType::Utf8, false);
         let field_primitive_list = Field::new(
             "primitive_list",
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
             false,
         );
 
@@ -4311,17 +4312,17 @@ mod tests {
                 ScalarValue::from(2i32),
                 ScalarValue::from(3i32),
             ]),
-            Box::new(Field::new("item", DataType::Int32, false)),
+            Arc::new(Field::new("item", DataType::Int32, false)),
         );
 
         let l1 = ScalarValue::List(
             Some(vec![ScalarValue::from(4i32), ScalarValue::from(5i32)]),
-            Box::new(Field::new("item", DataType::Int32, false)),
+            Arc::new(Field::new("item", DataType::Int32, false)),
         );
 
         let l2 = ScalarValue::List(
             Some(vec![ScalarValue::from(6i32)]),
-            Box::new(Field::new("item", DataType::Int32, false)),
+            Arc::new(Field::new("item", DataType::Int32, false)),
         );
 
         // Define struct scalars
@@ -4509,7 +4510,7 @@ mod tests {
                     DataType::Int32,
                 ),
             ]),
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
         );
 
         let l2 = ScalarValue::new_list(
@@ -4523,7 +4524,7 @@ mod tests {
                     DataType::Int32,
                 ),
             ]),
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
         );
 
         let l3 = ScalarValue::new_list(
@@ -4531,7 +4532,7 @@ mod tests {
                 Some(vec![ScalarValue::from(9i32)]),
                 DataType::Int32,
             )]),
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
         );
 
         let array = ScalarValue::iter_to_array(vec![l1, l2, l3]).unwrap();
@@ -4573,25 +4574,25 @@ mod tests {
     fn scalar_timestamp_ns_utc_timezone() {
         let scalar = ScalarValue::TimestampNanosecond(
             Some(1599566400000000000),
-            Some("UTC".to_owned()),
+            Some("UTC".into()),
         );
 
         assert_eq!(
             scalar.get_datatype(),
-            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".to_owned()))
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
         );
 
         let array = scalar.to_array();
         assert_eq!(array.len(), 1);
         assert_eq!(
             array.data_type(),
-            &DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".to_owned()))
+            &DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
         );
 
         let newscalar = ScalarValue::try_from_array(&array, 0).unwrap();
         assert_eq!(
             newscalar.get_datatype(),
-            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".to_owned()))
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
         );
     }
 
@@ -5068,7 +5069,7 @@ mod tests {
                             .unwrap()
                             .timestamp_nanos(),
                     ),
-                    Some("+12:00".to_string()),
+                    Some("+12:00".into()),
                 ),
                 ScalarValue::TimestampNanosecond(
                     Some(
@@ -5078,7 +5079,7 @@ mod tests {
                             .unwrap()
                             .timestamp_nanos(),
                     ),
-                    Some("+00:00".to_string()),
+                    Some("+00:00".into()),
                 ),
                 ScalarValue::new_interval_mdn(0, 0, 0),
             ),
@@ -5092,7 +5093,7 @@ mod tests {
                             .unwrap()
                             .timestamp_micros(),
                     ),
-                    Some("+01:00".to_string()),
+                    Some("+01:00".into()),
                 ),
                 ScalarValue::TimestampMicrosecond(
                     Some(
@@ -5102,7 +5103,7 @@ mod tests {
                             .unwrap()
                             .timestamp_micros(),
                     ),
-                    Some("-01:00".to_string()),
+                    Some("-01:00".into()),
                 ),
                 ScalarValue::new_interval_mdn(0, sign * 59, 0),
             ),
@@ -5116,7 +5117,7 @@ mod tests {
                             .unwrap()
                             .timestamp_millis(),
                     ),
-                    Some("+10:10".to_string()),
+                    Some("+10:10".into()),
                 ),
                 ScalarValue::TimestampMillisecond(
                     Some(
@@ -5126,7 +5127,7 @@ mod tests {
                             .unwrap()
                             .timestamp_millis(),
                     ),
-                    Some("+01:00".to_string()),
+                    Some("+01:00".into()),
                 ),
                 ScalarValue::new_interval_dt(sign * 60, 0),
             ),
@@ -5141,7 +5142,7 @@ mod tests {
                             .unwrap()
                             .timestamp(),
                     ),
-                    Some("-11:59".to_string()),
+                    Some("-11:59".into()),
                 ),
                 ScalarValue::TimestampSecond(
                     Some(
@@ -5151,7 +5152,7 @@ mod tests {
                             .unwrap()
                             .timestamp(),
                     ),
-                    Some("+11:59".to_string()),
+                    Some("+11:59".into()),
                 ),
                 ScalarValue::new_interval_dt(sign * 59, 0),
             ),
@@ -5166,7 +5167,7 @@ mod tests {
                             .unwrap()
                             .timestamp_millis(),
                     ),
-                    Some("+06:00".to_string()),
+                    Some("+06:00".into()),
                 ),
                 ScalarValue::TimestampMillisecond(
                     Some(
@@ -5176,7 +5177,7 @@ mod tests {
                             .unwrap()
                             .timestamp_millis(),
                     ),
-                    Some("-12:00".to_string()),
+                    Some("-12:00".into()),
                 ),
                 ScalarValue::new_interval_dt(0, sign * -43_200_000),
             ),
@@ -5266,7 +5267,7 @@ mod tests {
                             .unwrap()
                             .timestamp(),
                     ),
-                    Some("+23:59".to_string()),
+                    Some("+23:59".into()),
                 ),
                 ScalarValue::TimestampSecond(
                     Some(
@@ -5276,7 +5277,7 @@ mod tests {
                             .unwrap()
                             .timestamp(),
                     ),
-                    Some("-23:59".to_string()),
+                    Some("-23:59".into()),
                 ),
                 ScalarValue::new_interval_dt(0, 0),
             ),
@@ -5290,7 +5291,7 @@ mod tests {
                             .unwrap()
                             .timestamp(),
                     ),
-                    Some("Europe/Istanbul".to_string()),
+                    Some("Europe/Istanbul".into()),
                 ),
                 ScalarValue::TimestampSecond(
                     Some(
@@ -5300,7 +5301,7 @@ mod tests {
                             .unwrap()
                             .timestamp(),
                     ),
-                    Some("America/Los_Angeles".to_string()),
+                    Some("America/Los_Angeles".into()),
                 ),
                 ScalarValue::new_interval_dt(0, 0),
             ),

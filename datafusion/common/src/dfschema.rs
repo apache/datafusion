@@ -437,14 +437,14 @@ impl DFSchema {
                     .zip(iter2)
                         .all(|(f1, f2)| Self::field_is_semantically_equal(f1, f2))
             }
-            (DataType::Union(fields1, _, _), DataType::Union(fields2, _, _)) => {
+            (DataType::Union(fields1, _), DataType::Union(fields2, _)) => {
                 let iter1 = fields1.iter();
                 let iter2 = fields2.iter();
                 fields1.len() == fields2.len() &&
                     // all fields have to be the same
                     iter1
                         .zip(iter2)
-                        .all(|(f1, f2)| Self::field_is_semantically_equal(f1, f2))
+                        .all(|((t1, f1), (t2, f2))| t1 == t2 && Self::field_is_semantically_equal(f1, f2))
             }
             _ => dt1 == dt2,
         }
@@ -958,43 +958,43 @@ mod tests {
         let field_dict_t = DFField::from(Field::new("f_dict", dict.clone(), true));
         let field_dict_f = DFField::from(Field::new("f_dict", dict, false));
 
-        let list_t = DFField::from(Field::new(
+        let list_t = DFField::from(Field::new_list(
             "f_list",
-            DataType::List(Box::new(field1_i16_t.field().as_ref().clone())),
+            field1_i16_t.field().clone(),
             true,
         ));
-        let list_f = DFField::from(Field::new(
+        let list_f = DFField::from(Field::new_list(
             "f_list",
-            DataType::List(Box::new(field1_i16_f.field().as_ref().clone())),
+            field1_i16_f.field().clone(),
             false,
         ));
 
-        let list_f_name = DFField::from(Field::new(
+        let list_f_name = DFField::from(Field::new_list(
             "f_list",
-            DataType::List(Box::new(field2_i16_t.field().as_ref().clone())),
+            field2_i16_t.field().clone(),
             false,
         ));
 
-        let struct_t = DFField::from(Field::new(
+        let struct_t = DFField::from(Field::new_struct(
             "f_struct",
-            DataType::Struct(vec![field1_i16_t.field().clone()].into()),
+            vec![field1_i16_t.field().clone()],
             true,
         ));
-        let struct_f = DFField::from(Field::new(
+        let struct_f = DFField::from(Field::new_struct(
             "f_struct",
-            DataType::Struct(vec![field1_i16_f.field().clone()].into()),
+            vec![field1_i16_f.field().clone()],
             false,
         ));
 
-        let struct_f_meta = DFField::from(Field::new(
+        let struct_f_meta = DFField::from(Field::new_struct(
             "f_struct",
-            DataType::Struct(vec![field1_i16_t_meta.field().clone()].into()),
+            vec![field1_i16_t_meta.field().clone()],
             false,
         ));
 
-        let struct_f_type = DFField::from(Field::new(
+        let struct_f_type = DFField::from(Field::new_struct(
             "f_struct",
-            DataType::Struct(vec![field1_i32_t.field().clone()].into()),
+            vec![field1_i32_t.field().clone()],
             false,
         ));
 

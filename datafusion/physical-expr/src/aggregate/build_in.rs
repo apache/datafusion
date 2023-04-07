@@ -316,13 +316,9 @@ mod tests {
                         assert!(result_agg_phy_exprs.as_any().is::<ArrayAgg>());
                         assert_eq!("c1", result_agg_phy_exprs.name());
                         assert_eq!(
-                            Field::new(
+                            Field::new_list(
                                 "c1",
-                                DataType::List(Box::new(Field::new(
-                                    "item",
-                                    data_type.clone(),
-                                    true,
-                                ))),
+                                Field::new("item", data_type.clone(), true,),
                                 false,
                             ),
                             result_agg_phy_exprs.field().unwrap()
@@ -359,13 +355,9 @@ mod tests {
                         assert!(result_distinct.as_any().is::<DistinctArrayAgg>());
                         assert_eq!("c1", result_distinct.name());
                         assert_eq!(
-                            Field::new(
+                            Field::new_list(
                                 "c1",
-                                DataType::List(Box::new(Field::new(
-                                    "item",
-                                    data_type.clone(),
-                                    true,
-                                ))),
+                                Field::new("item", data_type.clone(), true,),
                                 false,
                             ),
                             result_agg_phy_exprs.field().unwrap()

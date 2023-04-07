@@ -1296,7 +1296,7 @@ where
     make_timestamp_tz_table::<A>(None)
 }
 
-fn make_timestamp_tz_table<A>(tz: Option<String>) -> Result<Arc<MemTable>>
+fn make_timestamp_tz_table<A>(tz: Option<Arc<str>>) -> Result<Arc<MemTable>>
 where
     A: ArrowTimestampType<Native = i64>,
 {

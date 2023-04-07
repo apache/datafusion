@@ -504,12 +504,12 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             DataType::List(field) => {
                 let child =
                     self.build_nested_list_array::<i32>(&flatten_values(rows), field)?;
-                child.data().clone()
+                child.to_data()
             }
             DataType::LargeList(field) => {
                 let child =
                     self.build_nested_list_array::<i64>(&flatten_values(rows), field)?;
-                child.data().clone()
+                child.to_data()
             }
             DataType::Struct(fields) => {
                 // extract list values, with non-lists converted to Value::Null
@@ -550,7 +550,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 ArrayDataBuilder::new(data_type)
                     .len(rows.len())
                     .null_bit_buffer(Some(null_buffer.into()))
-                    .child_data(arrays.into_iter().map(|a| a.data().clone()).collect())
+                    .child_data(arrays.into_iter().map(|a| a.to_data()).collect())
                     .build()
                     .unwrap()
             }
@@ -561,7 +561,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             }
         };
         // build list
-        let list_data = ArrayData::builder(DataType::List(Box::new(list_field.clone())))
+        let list_data = ArrayData::builder(DataType::List(Arc::new(list_field.clone())))
             .len(list_len)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_child_data(array_data)
@@ -756,7 +756,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                             .len(len)
                             .null_bit_buffer(Some(null_buffer.into()))
                             .child_data(
-                                arrays.into_iter().map(|a| a.data().clone()).collect(),
+                                arrays.into_iter().map(|a| a.to_data()).collect(),
                             )
                             .build()?;
                         make_array(data)
@@ -797,7 +797,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             })
             .collect::<Vec<Option<T::Native>>>();
         let array = values.iter().collect::<PrimitiveArray<T>>();
-        array.data().clone()
+        array.to_data()
     }
 
     fn field_lookup<'b>(
@@ -969,6 +969,7 @@ mod test {
         as_int32_array, as_int64_array, as_list_array, as_timestamp_microsecond_array,
     };
     use std::fs::File;
+    use std::sync::Arc;
 
     fn build_reader(name: &str, batch_size: usize) -> Reader<File> {
         let testdata = crate::test_util::arrow_test_data();
@@ -1024,7 +1025,7 @@ mod test {
         let a_array = as_list_array(batch.column(col_id_index)).unwrap();
         assert_eq!(
             *a_array.data_type(),
-            DataType::List(Box::new(Field::new("bigint", DataType::Int64, true)))
+            DataType::List(Arc::new(Field::new("bigint", DataType::Int64, true)))
         );
         let array = a_array.value(0);
         assert_eq!(*array.data_type(), DataType::Int64);
