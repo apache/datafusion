@@ -1354,21 +1354,4 @@ mod tests {
             ScalarValue::Time64Nanosecond(Some(5))
         )
     }
-
-    #[test]
-    fn sa() -> Result<()> {
-        let sa = ScalarValue::Float64(Some(3.1));
-        let ass = ScalarValue::Float64(Some(3.1));
-
-        let mete = &sa;
-        let metee = &ass;
-
-        let saaa = match mete.partial_cmp(metee) {
-            Some(std::cmp::Ordering::Greater) => mete.clone(),
-            Some(_) => metee.clone(),
-            _ => unreachable!(),
-        };
-        println!("{:?}", saaa);
-        Ok(())
-    }
 }
