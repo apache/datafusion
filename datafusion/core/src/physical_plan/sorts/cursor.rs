@@ -18,24 +18,15 @@
 use arrow::row::{Row, Rows};
 use std::cmp::Ordering;
 
-/// A `SortKeyCursor` is created from a `RecordBatch`, and a set of
-/// `PhysicalExpr` that when evaluated on the `RecordBatch` yield the sort keys.
-///
-/// Additionally it maintains a row cursor that can be advanced through the rows
-/// of the provided `RecordBatch`
-///
-/// `SortKeyCursor::compare` can then be used to compare the sort key pointed to
-/// by this row cursor, with that of another `SortKeyCursor`. A cursor stores
-/// a row comparator for each other cursor that it is compared to.
-pub struct SortKeyCursor {
-    stream_idx: usize,
+/// A [`Cursor`] for [`Rows`]
+pub struct RowCursor {
     cur_row: usize,
     num_rows: usize,
 
     rows: Rows,
 }
 
-impl std::fmt::Debug for SortKeyCursor {
+impl std::fmt::Debug for RowCursor {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("SortKeyCursor")
             .field("cur_row", &self.cur_row)
@@ -44,36 +35,14 @@ impl std::fmt::Debug for SortKeyCursor {
     }
 }
 
-impl SortKeyCursor {
+impl RowCursor {
     /// Create a new SortKeyCursor
-    pub fn new(stream_idx: usize, rows: Rows) -> Self {
+    pub fn new(rows: Rows) -> Self {
         Self {
-            stream_idx,
             cur_row: 0,
             num_rows: rows.num_rows(),
             rows,
         }
-    }
-
-    #[inline(always)]
-    /// Return the stream index of this cursor
-    pub fn stream_idx(&self) -> usize {
-        self.stream_idx
-    }
-
-    #[inline(always)]
-    /// Return true if the stream is finished
-    pub fn is_finished(&self) -> bool {
-        self.num_rows == self.cur_row
-    }
-
-    #[inline(always)]
-    /// Returns the cursor's current row, and advances the cursor to the next row
-    pub fn advance(&mut self) -> usize {
-        assert!(!self.is_finished());
-        let t = self.cur_row;
-        self.cur_row += 1;
-        t
     }
 
     /// Returns the current row
@@ -82,32 +51,23 @@ impl SortKeyCursor {
     }
 }
 
-impl PartialEq for SortKeyCursor {
+impl PartialEq for RowCursor {
     fn eq(&self, other: &Self) -> bool {
         self.current() == other.current()
     }
 }
 
-impl Eq for SortKeyCursor {}
+impl Eq for RowCursor {}
 
-impl PartialOrd for SortKeyCursor {
+impl PartialOrd for RowCursor {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for SortKeyCursor {
+impl Ord for RowCursor {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Order finished cursors greater (last)
-        match (self.is_finished(), other.is_finished()) {
-            (true, true) => Ordering::Equal,
-            (_, true) => Ordering::Less,
-            (true, _) => Ordering::Greater,
-            _ => self
-                .current()
-                .cmp(&other.current())
-                .then_with(|| self.stream_idx.cmp(&other.stream_idx)),
-        }
+        self.current().cmp(&other.current())
     }
 }
 
@@ -117,17 +77,19 @@ pub trait Cursor: Ord {
     fn is_finished(&self) -> bool;
 
     /// Advance the cursor, returning the previous row index
-    ///
-    /// Returns `None` if [`Self::is_finished`]
-    fn advance(&mut self) -> Option<usize>;
+    fn advance(&mut self) -> usize;
 }
 
-impl Cursor for SortKeyCursor {
+impl Cursor for RowCursor {
+    #[inline]
     fn is_finished(&self) -> bool {
-        self.is_finished()
+        self.num_rows == self.cur_row
     }
 
-    fn advance(&mut self) -> Option<usize> {
-        (!self.is_finished()).then(|| self.advance())
+    #[inline]
+    fn advance(&mut self) -> usize {
+        let t = self.cur_row;
+        self.cur_row += 1;
+        t
     }
 }

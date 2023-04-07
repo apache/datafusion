@@ -19,7 +19,7 @@ use crate::common::Result;
 use crate::physical_plan::metrics::MemTrackingMetrics;
 use crate::physical_plan::sorts::builder::BatchBuilder;
 use crate::physical_plan::sorts::cursor::Cursor;
-use crate::physical_plan::sorts::stream::{PartitionedStream, SortKeyCursorStream};
+use crate::physical_plan::sorts::stream::{PartitionedStream, RowCursorStream};
 use crate::physical_plan::{
     PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream,
 };
@@ -37,7 +37,7 @@ pub(crate) fn streaming_merge(
     tracking_metrics: MemTrackingMetrics,
     batch_size: usize,
 ) -> Result<SendableRecordBatchStream> {
-    let streams = SortKeyCursorStream::try_new(schema.as_ref(), expressions, streams)?;
+    let streams = RowCursorStream::try_new(schema.as_ref(), expressions, streams)?;
 
     Ok(Box::pin(SortPreservingMergeStream::new(
         Box::new(streams),
@@ -119,11 +119,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         cx: &mut Context<'_>,
         idx: usize,
     ) -> Poll<Result<()>> {
-        if self.cursors[idx]
-            .as_ref()
-            .map(|cursor| !cursor.is_finished())
-            .unwrap_or(false)
-        {
+        if self.cursors[idx].is_some() {
             // Cursor is not finished - don't need a new RecordBatch yet
             return Poll::Ready(Ok(()));
         }
@@ -176,8 +172,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
             }
 
             let stream_idx = self.loser_tree[0];
-            let cursor = self.cursors[stream_idx].as_mut();
-            if cursor.and_then(Cursor::advance).is_some() {
+            if self.advance(stream_idx) {
                 self.loser_tree_adjusted = false;
                 self.in_progress.push_row(stream_idx);
                 if self.in_progress.len() < self.batch_size {
@@ -189,13 +184,27 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         }
     }
 
+    fn advance(&mut self, stream_idx: usize) -> bool {
+        let slot = &mut self.cursors[stream_idx];
+        match slot.as_mut() {
+            Some(c) => {
+                c.advance();
+                if c.is_finished() {
+                    *slot = None;
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Returns `true` if the cursor at index `a` is greater than at index `b`
     #[inline]
     fn is_gt(&self, a: usize, b: usize) -> bool {
         match (&self.cursors[a], &self.cursors[b]) {
             (None, _) => true,
             (_, None) => false,
-            (Some(a), Some(b)) => b < a,
+            (Some(ac), Some(bc)) => ac.cmp(bc).then_with(|| a.cmp(&b)).is_gt(),
         }
     }
 
