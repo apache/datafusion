@@ -172,9 +172,9 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
             }
 
             let stream_idx = self.loser_tree[0];
-            if let Some(row_idx) = self.advance(stream_idx) {
+            if self.advance(stream_idx)  {
                 self.loser_tree_adjusted = false;
-                self.in_progress.push_row(stream_idx, row_idx);
+                self.in_progress.push_row(stream_idx);
                 if self.in_progress.len() < self.batch_size {
                     continue;
                 }
@@ -184,17 +184,17 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         }
     }
 
-    fn advance(&mut self, stream_idx: usize) -> Option<usize> {
+    fn advance(&mut self, stream_idx: usize) -> bool {
         let slot = &mut self.cursors[stream_idx];
         match slot.as_mut() {
             Some(c) => {
-                let ret = c.advance();
+                c.advance();
                 if c.is_finished() {
                     *slot = None;
                 }
-                Some(ret)
+                true
             }
-            None => None,
+            None => false,
         }
     }
 
