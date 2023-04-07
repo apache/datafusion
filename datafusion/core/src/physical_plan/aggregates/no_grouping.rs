@@ -19,8 +19,8 @@
 
 use crate::execution::context::TaskContext;
 use crate::physical_plan::aggregates::{
-    aggregate_expressions, create_accumulators, filter_expressions, finalize_aggregation,
-    AccumulatorItem, AggregateMode,
+    aggregate_expressions, create_accumulators, finalize_aggregation, AccumulatorItem,
+    AggregateMode,
 };
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
@@ -65,13 +65,19 @@ impl AggregateStream {
         mode: AggregateMode,
         schema: SchemaRef,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
         context: Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
         let aggregate_expressions = aggregate_expressions(&aggr_expr, &mode, 0)?;
-        let filter_expressions = filter_expressions(&aggr_expr, &mode)?;
+        let filter_expressions = match mode {
+            AggregateMode::Partial => filter_expr,
+            AggregateMode::Final | AggregateMode::FinalPartitioned => {
+                vec![None; aggr_expr.len()]
+            }
+        };
         let accumulators = create_accumulators(&aggr_expr)?;
 
         let reservation = MemoryConsumer::new(format!("AggregateStream[{partition}]"))

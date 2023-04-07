@@ -39,7 +39,6 @@ pub struct Correlation {
     name: String,
     expr1: Arc<dyn PhysicalExpr>,
     expr2: Arc<dyn PhysicalExpr>,
-    filter: Option<Arc<dyn PhysicalExpr>>,
 }
 
 impl Correlation {
@@ -47,7 +46,6 @@ impl Correlation {
     pub fn new(
         expr1: Arc<dyn PhysicalExpr>,
         expr2: Arc<dyn PhysicalExpr>,
-        filter: Option<Arc<dyn PhysicalExpr>>,
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
@@ -57,7 +55,6 @@ impl Correlation {
             name: name.into(),
             expr1,
             expr2,
-            filter,
         }
     }
 }
@@ -113,10 +110,6 @@ impl AggregateExpr for Correlation {
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         vec![self.expr1.clone(), self.expr2.clone()]
-    }
-
-    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
-        self.filter.clone()
     }
 
     fn name(&self) -> &str {
@@ -435,7 +428,6 @@ mod tests {
         let agg1 = Arc::new(Correlation::new(
             col("a", &schema)?,
             col("b", &schema)?,
-            None,
             "bla".to_string(),
             DataType::Float64,
         ));
@@ -443,7 +435,6 @@ mod tests {
         let agg2 = Arc::new(Correlation::new(
             col("a", &schema)?,
             col("b", &schema)?,
-            None,
             "bla".to_string(),
             DataType::Float64,
         ));
@@ -472,7 +463,6 @@ mod tests {
         let agg1 = Arc::new(Correlation::new(
             col("a", &schema)?,
             col("b", &schema)?,
-            None,
             "bla".to_string(),
             DataType::Float64,
         ));
@@ -480,7 +470,6 @@ mod tests {
         let agg2 = Arc::new(Correlation::new(
             col("a", &schema)?,
             col("b", &schema)?,
-            None,
             "bla".to_string(),
             DataType::Float64,
         ));

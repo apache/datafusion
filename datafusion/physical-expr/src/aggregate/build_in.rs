@@ -39,7 +39,6 @@ pub fn create_aggregate_expr(
     fun: &AggregateFunction,
     distinct: bool,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
-    filter: Option<&Arc<dyn PhysicalExpr>>,
     input_schema: &Schema,
     name: impl Into<String>,
 ) -> Result<Arc<dyn AggregateExpr>> {
@@ -55,71 +54,60 @@ pub fn create_aggregate_expr(
     Ok(match (fun, distinct) {
         (AggregateFunction::Count, false) => Arc::new(expressions::Count::new(
             input_phy_exprs[0].clone(),
-            filter.cloned(),
             name,
             return_type,
         )),
         (AggregateFunction::Count, true) => Arc::new(expressions::DistinctCount::new(
             input_phy_types[0].clone(),
             input_phy_exprs[0].clone(),
-            filter.cloned(),
             name,
         )),
         (AggregateFunction::Grouping, _) => Arc::new(expressions::Grouping::new(
             input_phy_exprs[0].clone(),
-            filter.cloned(),
             name,
             return_type,
         )),
         (AggregateFunction::Sum, false) => Arc::new(expressions::Sum::new(
             input_phy_exprs[0].clone(),
-            filter.cloned(),
             name,
             return_type,
         )),
         (AggregateFunction::Sum, true) => Arc::new(expressions::DistinctSum::new(
             vec![input_phy_exprs[0].clone()],
-            filter.cloned(),
             name,
             return_type,
         )),
         (AggregateFunction::ApproxDistinct, _) => {
             Arc::new(expressions::ApproxDistinct::new(
                 input_phy_exprs[0].clone(),
-                filter.cloned(),
                 name,
                 input_phy_types[0].clone(),
             ))
         }
         (AggregateFunction::ArrayAgg, false) => Arc::new(expressions::ArrayAgg::new(
             input_phy_exprs[0].clone(),
-            filter.cloned(),
             name,
             input_phy_types[0].clone(),
         )),
         (AggregateFunction::ArrayAgg, true) => {
             Arc::new(expressions::DistinctArrayAgg::new(
                 input_phy_exprs[0].clone(),
-                filter.cloned(),
                 name,
                 input_phy_types[0].clone(),
             ))
         }
         (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
             input_phy_exprs[0].clone(),
-            filter.cloned(),
             name,
             return_type,
         )),
         (AggregateFunction::Max, _) => Arc::new(expressions::Max::new(
             input_phy_exprs[0].clone(),
-            filter.cloned(),
             name,
             return_type,
         )),
         (AggregateFunction::Avg, false) => Arc::new(expressions::Avg::new(
             input_phy_exprs[0].clone(),
-            filter.cloned(),
             name,
             return_type,
         )),
@@ -130,7 +118,6 @@ pub fn create_aggregate_expr(
         }
         (AggregateFunction::Variance, false) => Arc::new(expressions::Variance::new(
             input_phy_exprs[0].clone(),
-            filter.cloned(),
             name,
             return_type,
         )),
@@ -139,14 +126,9 @@ pub fn create_aggregate_expr(
                 "VAR(DISTINCT) aggregations are not available".to_string(),
             ));
         }
-        (AggregateFunction::VariancePop, false) => {
-            Arc::new(expressions::VariancePop::new(
-                input_phy_exprs[0].clone(),
-                filter.cloned(),
-                name,
-                return_type,
-            ))
-        }
+        (AggregateFunction::VariancePop, false) => Arc::new(
+            expressions::VariancePop::new(input_phy_exprs[0].clone(), name, return_type),
+        ),
         (AggregateFunction::VariancePop, true) => {
             return Err(DataFusionError::NotImplemented(
                 "VAR_POP(DISTINCT) aggregations are not available".to_string(),
@@ -155,7 +137,6 @@ pub fn create_aggregate_expr(
         (AggregateFunction::Covariance, false) => Arc::new(expressions::Covariance::new(
             input_phy_exprs[0].clone(),
             input_phy_exprs[1].clone(),
-            filter.cloned(),
             name,
             return_type,
         )),
@@ -168,7 +149,6 @@ pub fn create_aggregate_expr(
             Arc::new(expressions::CovariancePop::new(
                 input_phy_exprs[0].clone(),
                 input_phy_exprs[1].clone(),
-                filter.cloned(),
                 name,
                 return_type,
             ))
@@ -180,7 +160,6 @@ pub fn create_aggregate_expr(
         }
         (AggregateFunction::Stddev, false) => Arc::new(expressions::Stddev::new(
             input_phy_exprs[0].clone(),
-            filter.cloned(),
             name,
             return_type,
         )),
@@ -191,7 +170,6 @@ pub fn create_aggregate_expr(
         }
         (AggregateFunction::StddevPop, false) => Arc::new(expressions::StddevPop::new(
             input_phy_exprs[0].clone(),
-            filter.cloned(),
             name,
             return_type,
         )),
@@ -204,7 +182,6 @@ pub fn create_aggregate_expr(
             Arc::new(expressions::Correlation::new(
                 input_phy_exprs[0].clone(),
                 input_phy_exprs[1].clone(),
-                filter.cloned(),
                 name,
                 return_type,
             ))
@@ -219,7 +196,6 @@ pub fn create_aggregate_expr(
                 Arc::new(expressions::ApproxPercentileCont::new(
                     // Pass in the desired percentile expr
                     input_phy_exprs,
-                    filter.cloned(),
                     name,
                     return_type,
                 )?)
@@ -227,7 +203,6 @@ pub fn create_aggregate_expr(
                 Arc::new(expressions::ApproxPercentileCont::new_with_max_size(
                     // Pass in the desired percentile expr
                     input_phy_exprs,
-                    filter.cloned(),
                     name,
                     return_type,
                 )?)
@@ -243,7 +218,6 @@ pub fn create_aggregate_expr(
             Arc::new(expressions::ApproxPercentileContWithWeight::new(
                 // Pass in the desired percentile expr
                 input_phy_exprs,
-                filter.cloned(),
                 name,
                 return_type,
             )?)
@@ -257,7 +231,6 @@ pub fn create_aggregate_expr(
         (AggregateFunction::ApproxMedian, false) => {
             Arc::new(expressions::ApproxMedian::try_new(
                 input_phy_exprs[0].clone(),
-                filter.cloned(),
                 name,
                 return_type,
             )?)
@@ -269,7 +242,6 @@ pub fn create_aggregate_expr(
         }
         (AggregateFunction::Median, false) => Arc::new(expressions::Median::new(
             input_phy_exprs[0].clone(),
-            filter.cloned(),
             name,
             return_type,
         )),
@@ -1092,7 +1064,7 @@ mod tests {
                 "Invalid or wrong number of arguments passed to aggregate: '{name}'",
             )));
         }
-        create_aggregate_expr(fun, distinct, &coerced_phy_exprs, None, input_schema, name)
+        create_aggregate_expr(fun, distinct, &coerced_phy_exprs, input_schema, name)
     }
 
     // Returns the coerced exprs for each `input_exprs`.

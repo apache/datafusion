@@ -49,7 +49,6 @@ pub struct Sum {
     name: String,
     data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
-    filter: Option<Arc<dyn PhysicalExpr>>,
     nullable: bool,
 }
 
@@ -57,14 +56,12 @@ impl Sum {
     /// Create a new SUM aggregate function
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
-        filter: Option<Arc<dyn PhysicalExpr>>,
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
         Self {
             name: name.into(),
             expr,
-            filter,
             data_type,
             nullable: true,
         }
@@ -106,10 +103,6 @@ impl AggregateExpr for Sum {
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         vec![self.expr.clone()]
-    }
-
-    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
-        self.filter.clone()
     }
 
     fn name(&self) -> &str {

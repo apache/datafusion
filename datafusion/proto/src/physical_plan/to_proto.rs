@@ -140,18 +140,13 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
             .iter()
             .map(|e| e.clone().try_into())
             .collect::<Result<Vec<_>>>()?;
-        let filter: Option<Box<protobuf::PhysicalExprNode>> = a
-            .filter()
-            .map(|e| e.clone().try_into().map(Box::new))
-            .transpose()?;
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
-                Box::new(protobuf::PhysicalAggregateExprNode {
+                protobuf::PhysicalAggregateExprNode {
                     aggr_function,
                     expr: expressions,
                     distinct,
-                    filter,
-                }),
+                },
             )),
         })
     }
@@ -500,6 +495,19 @@ impl From<JoinSide> for protobuf::JoinSide {
         match t {
             JoinSide::Left => protobuf::JoinSide::LeftSide,
             JoinSide::Right => protobuf::JoinSide::RightSide,
+        }
+    }
+}
+
+impl TryFrom<Option<Arc<dyn PhysicalExpr>>> for protobuf::MaybeFilter {
+    type Error = DataFusionError;
+
+    fn try_from(expr: Option<Arc<dyn PhysicalExpr>>) -> Result<Self, Self::Error> {
+        match expr {
+            None => Ok(protobuf::MaybeFilter { expr: None }),
+            Some(expr) => Ok(protobuf::MaybeFilter {
+                expr: Some(expr.try_into()?),
+            }),
         }
     }
 }

@@ -38,7 +38,6 @@ pub struct ApproxPercentileCont {
     name: String,
     input_data_type: DataType,
     expr: Vec<Arc<dyn PhysicalExpr>>,
-    filter: Option<Arc<dyn PhysicalExpr>>,
     percentile: f64,
     tdigest_max_size: Option<usize>,
 }
@@ -47,7 +46,6 @@ impl ApproxPercentileCont {
     /// Create a new [`ApproxPercentileCont`] aggregate function.
     pub fn new(
         expr: Vec<Arc<dyn PhysicalExpr>>,
-        filter: Option<Arc<dyn PhysicalExpr>>,
         name: impl Into<String>,
         input_data_type: DataType,
     ) -> Result<Self> {
@@ -61,7 +59,6 @@ impl ApproxPercentileCont {
             input_data_type,
             // The physical expr to evaluate during accumulation
             expr,
-            filter,
             percentile,
             tdigest_max_size: None,
         })
@@ -70,7 +67,6 @@ impl ApproxPercentileCont {
     /// Create a new [`ApproxPercentileCont`] aggregate function.
     pub fn new_with_max_size(
         expr: Vec<Arc<dyn PhysicalExpr>>,
-        filter: Option<Arc<dyn PhysicalExpr>>,
         name: impl Into<String>,
         input_data_type: DataType,
     ) -> Result<Self> {
@@ -83,7 +79,6 @@ impl ApproxPercentileCont {
             input_data_type,
             // The physical expr to evaluate during accumulation
             expr,
-            filter,
             percentile,
             tdigest_max_size: Some(max_size),
         })
@@ -234,10 +229,6 @@ impl AggregateExpr for ApproxPercentileCont {
 
     fn name(&self) -> &str {
         &self.name
-    }
-
-    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
-        self.filter.clone()
     }
 }
 

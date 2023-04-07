@@ -1500,28 +1500,9 @@ impl SessionState {
     pub fn sql_to_statement(
         &self,
         sql: &str,
-    ) -> Result<datafusion_sql::parser::Statement> {
-        let mut statements = DFParser::parse_sql(sql)?;
-        if statements.len() > 1 {
-            return Err(DataFusionError::NotImplemented(
-                "The context currently only supports a single SQL statement".to_string(),
-            ));
-        }
-        let statement = statements.pop_front().ok_or_else(|| {
-            DataFusionError::NotImplemented(
-                "The context requires a statement!".to_string(),
-            )
-        })?;
-        Ok(statement)
-    }
-
-    /// Convert a SQL string into an AST Statement
-    pub fn sql_to_statement_with_dialect(
-        &self,
-        sql: &str,
         dialect: &str,
     ) -> Result<datafusion_sql::parser::Statement> {
-        let dialect = create_dialect_from_str(dialect);
+        let dialect = create_dialect_from_str(dialect)?;
         let mut statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
         if statements.len() > 1 {
             return Err(DataFusionError::NotImplemented(
@@ -1651,7 +1632,7 @@ impl SessionState {
     /// See [`SessionContext::sql`] for a higher-level interface that also handles DDL
     pub async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
         let dialect = self.config.options().sql_parser.dialect.as_str();
-        let statement = self.sql_to_statement_with_dialect(sql, dialect)?;
+        let statement = self.sql_to_statement(sql, dialect)?;
         let plan = self.statement_to_plan(statement).await?;
         Ok(plan)
     }
@@ -1860,25 +1841,24 @@ impl From<&SessionState> for TaskContext {
     }
 }
 
-fn create_dialect_from_str(dialect_name: &str) -> Box<dyn Dialect> {
+fn create_dialect_from_str(dialect_name: &str) -> Result<Box<dyn Dialect>> {
     match dialect_name.to_lowercase().as_str() {
-        "generic" => Box::new(GenericDialect),
-        "mysql" => Box::new(MySqlDialect {}),
-        "postgresql" | "postgres" => Box::new(PostgreSqlDialect {}),
-        "hive" => Box::new(HiveDialect {}),
-        "sqlite" => Box::new(SQLiteDialect {}),
-        "snowflake" => Box::new(SnowflakeDialect),
-        "redshift" => Box::new(RedshiftSqlDialect {}),
-        "mssql" => Box::new(MsSqlDialect {}),
-        "clickhouse" => Box::new(ClickHouseDialect {}),
-        "bigquery" => Box::new(BigQueryDialect),
-        "ansi" => Box::new(AnsiDialect {}),
+        "generic" => Ok(Box::new(GenericDialect)),
+        "mysql" => Ok(Box::new(MySqlDialect {})),
+        "postgresql" | "postgres" => Ok(Box::new(PostgreSqlDialect {})),
+        "hive" => Ok(Box::new(HiveDialect {})),
+        "sqlite" => Ok(Box::new(SQLiteDialect {})),
+        "snowflake" => Ok(Box::new(SnowflakeDialect)),
+        "redshift" => Ok(Box::new(RedshiftSqlDialect {})),
+        "mssql" => Ok(Box::new(MsSqlDialect {})),
+        "clickhouse" => Ok(Box::new(ClickHouseDialect {})),
+        "bigquery" => Ok(Box::new(BigQueryDialect)),
+        "ansi" => Ok(Box::new(AnsiDialect {})),
         _ => {
-            println!(
-                "Unsupported SQL dialect: {}. Using GenericDialect. Available dialects: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi.",
+            return Err(DataFusionError::Internal(format!(
+                "Unsupported SQL dialect: {}. Available dialects: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi.",
                 dialect_name
-            );
-            Box::new(GenericDialect)
+            )))
         }
     }
 }

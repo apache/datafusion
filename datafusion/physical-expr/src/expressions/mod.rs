@@ -118,7 +118,6 @@ pub(crate) mod tests {
 
             let agg = Arc::new(<$OP>::new(
                 col("a", &schema)?,
-                None,
                 "bla".to_string(),
                 $EXPECTED_DATATYPE,
             ));
@@ -156,7 +155,6 @@ pub(crate) mod tests {
             let agg = Arc::new(<$OP>::new(
                 col("a", &schema)?,
                 col("b", &schema)?,
-                None,
                 "bla".to_string(),
                 $EXPECTED_DATATYPE,
             ));

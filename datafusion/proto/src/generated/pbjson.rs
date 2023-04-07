@@ -33,6 +33,9 @@ impl serde::Serialize for AggregateExecNode {
         if !self.groups.is_empty() {
             len += 1;
         }
+        if !self.filter_expr.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.AggregateExecNode", len)?;
         if !self.group_expr.is_empty() {
             struct_ser.serialize_field("groupExpr", &self.group_expr)?;
@@ -63,6 +66,9 @@ impl serde::Serialize for AggregateExecNode {
         if !self.groups.is_empty() {
             struct_ser.serialize_field("groups", &self.groups)?;
         }
+        if !self.filter_expr.is_empty() {
+            struct_ser.serialize_field("filterExpr", &self.filter_expr)?;
+        }
         struct_ser.end()
     }
 }
@@ -88,6 +94,8 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
             "null_expr",
             "nullExpr",
             "groups",
+            "filter_expr",
+            "filterExpr",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -101,6 +109,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
             InputSchema,
             NullExpr,
             Groups,
+            FilterExpr,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -131,6 +140,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                             "inputSchema" | "input_schema" => Ok(GeneratedField::InputSchema),
                             "nullExpr" | "null_expr" => Ok(GeneratedField::NullExpr),
                             "groups" => Ok(GeneratedField::Groups),
+                            "filterExpr" | "filter_expr" => Ok(GeneratedField::FilterExpr),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -159,6 +169,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                 let mut input_schema__ = None;
                 let mut null_expr__ = None;
                 let mut groups__ = None;
+                let mut filter_expr__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::GroupExpr => {
@@ -215,6 +226,12 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                             }
                             groups__ = Some(map.next_value()?);
                         }
+                        GeneratedField::FilterExpr => {
+                            if filter_expr__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("filterExpr"));
+                            }
+                            filter_expr__ = Some(map.next_value()?);
+                        }
                     }
                 }
                 Ok(AggregateExecNode {
@@ -227,6 +244,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                     input_schema: input_schema__,
                     null_expr: null_expr__.unwrap_or_default(),
                     groups: groups__.unwrap_or_default(),
+                    filter_expr: filter_expr__.unwrap_or_default(),
                 })
             }
         }
@@ -11280,6 +11298,97 @@ impl<'de> serde::Deserialize<'de> for Map {
         deserializer.deserialize_struct("datafusion.Map", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for MaybeFilter {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.expr.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.MaybeFilter", len)?;
+        if let Some(v) = self.expr.as_ref() {
+            struct_ser.serialize_field("expr", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for MaybeFilter {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "expr",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Expr,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "expr" => Ok(GeneratedField::Expr),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = MaybeFilter;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.MaybeFilter")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<MaybeFilter, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut expr__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::Expr => {
+                            if expr__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("expr"));
+                            }
+                            expr__ = map.next_value()?;
+                        }
+                    }
+                }
+                Ok(MaybeFilter {
+                    expr: expr__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.MaybeFilter", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for NegativeNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -12466,9 +12575,6 @@ impl serde::Serialize for PhysicalAggregateExprNode {
         if self.distinct {
             len += 1;
         }
-        if self.filter.is_some() {
-            len += 1;
-        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalAggregateExprNode", len)?;
         if self.aggr_function != 0 {
             let v = AggregateFunction::from_i32(self.aggr_function)
@@ -12480,9 +12586,6 @@ impl serde::Serialize for PhysicalAggregateExprNode {
         }
         if self.distinct {
             struct_ser.serialize_field("distinct", &self.distinct)?;
-        }
-        if let Some(v) = self.filter.as_ref() {
-            struct_ser.serialize_field("filter", v)?;
         }
         struct_ser.end()
     }
@@ -12498,7 +12601,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
             "aggrFunction",
             "expr",
             "distinct",
-            "filter",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -12506,7 +12608,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
             AggrFunction,
             Expr,
             Distinct,
-            Filter,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -12531,7 +12632,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                             "aggrFunction" | "aggr_function" => Ok(GeneratedField::AggrFunction),
                             "expr" => Ok(GeneratedField::Expr),
                             "distinct" => Ok(GeneratedField::Distinct),
-                            "filter" => Ok(GeneratedField::Filter),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -12554,7 +12654,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                 let mut aggr_function__ = None;
                 let mut expr__ = None;
                 let mut distinct__ = None;
-                let mut filter__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::AggrFunction => {
@@ -12575,19 +12674,12 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                             }
                             distinct__ = Some(map.next_value()?);
                         }
-                        GeneratedField::Filter => {
-                            if filter__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("filter"));
-                            }
-                            filter__ = map.next_value()?;
-                        }
                     }
                 }
                 Ok(PhysicalAggregateExprNode {
                     aggr_function: aggr_function__.unwrap_or_default(),
                     expr: expr__.unwrap_or_default(),
                     distinct: distinct__.unwrap_or_default(),
-                    filter: filter__,
                 })
             }
         }

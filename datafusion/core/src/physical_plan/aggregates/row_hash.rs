@@ -132,6 +132,7 @@ impl GroupedHashAggregateStream {
         schema: SchemaRef,
         group_by: PhysicalGroupBy,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
         batch_size: usize,
@@ -154,7 +155,12 @@ impl GroupedHashAggregateStream {
         // col_idx_base to the group expression count.
         let all_aggregate_expressions =
             aggregates::aggregate_expressions(&aggr_expr, &mode, start_idx)?;
-        let filter_expressions = aggregates::filter_expressions(&aggr_expr, &mode)?;
+        let filter_expressions = match mode {
+            AggregateMode::Partial => filter_expr,
+            AggregateMode::Final | AggregateMode::FinalPartitioned => {
+                vec![None; aggr_expr.len()]
+            }
+        };
         for ((expr, others), filter) in aggr_expr
             .iter()
             .zip(all_aggregate_expressions.into_iter())

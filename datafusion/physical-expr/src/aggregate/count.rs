@@ -42,21 +42,18 @@ pub struct Count {
     data_type: DataType,
     nullable: bool,
     expr: Arc<dyn PhysicalExpr>,
-    filter: Option<Arc<dyn PhysicalExpr>>,
 }
 
 impl Count {
     /// Create a new COUNT aggregate function.
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
-        filter: Option<Arc<dyn PhysicalExpr>>,
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
         Self {
             name: name.into(),
             expr,
-            filter,
             data_type,
             nullable: true,
         }
@@ -118,10 +115,6 @@ impl AggregateExpr for Count {
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(CountAccumulator::new()))
-    }
-
-    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
-        self.filter.clone()
     }
 }
 

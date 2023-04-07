@@ -482,10 +482,12 @@ mod tests {
                 AggregateMode::Final,
                 PhysicalGroupBy::default(),
                 vec![],
+                vec![],
                 Arc::new(
                     AggregateExec::try_new(
                         AggregateMode::Partial,
                         PhysicalGroupBy::default(),
+                        vec![],
                         vec![],
                         input,
                         schema.clone(),

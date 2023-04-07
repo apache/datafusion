@@ -403,6 +403,18 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 let physical_schema: SchemaRef =
                     SchemaRef::new((&input_schema).try_into()?);
 
+                let physical_filter_expr = hash_agg
+                    .filter_expr
+                    .iter()
+                    .map(|expr| {
+                        let x = expr
+                            .expr
+                            .as_ref()
+                            .map(|e| parse_physical_expr(e, registry, &physical_schema));
+                        x.transpose()
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
                 let physical_aggr_expr: Vec<Arc<dyn AggregateExpr>> = hash_agg
                     .aggr_expr
                     .iter()
@@ -430,15 +442,10 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 let input_phy_expr: Vec<Arc<dyn PhysicalExpr>> = agg_node.expr.iter()
                                     .map(|e| parse_physical_expr(e, registry, &physical_schema).unwrap()).collect();
 
-                                let filter = agg_node.filter.as_ref().map(|f| {
-                                    parse_physical_expr(f, registry, &physical_schema).unwrap()
-                                });
-
                                 Ok(create_aggregate_expr(
                                     &aggr_function.into(),
                                     agg_node.distinct,
                                     input_phy_expr.as_slice(),
-                                    filter.as_ref(),
                                     &physical_schema,
                                     name.to_string(),
                                 )?)
@@ -455,6 +462,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     agg_mode,
                     PhysicalGroupBy::new(group_expr, null_expr, groups),
                     physical_aggr_expr,
+                    physical_filter_expr,
                     input,
                     Arc::new((&input_schema).try_into()?),
                 )?))
@@ -870,6 +878,12 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 .map(|expr| expr.1.to_owned())
                 .collect();
 
+            let filter = exec
+                .filter_expr()
+                .iter()
+                .map(|expr| expr.to_owned().try_into())
+                .collect::<Result<Vec<_>>>()?;
+
             let agg = exec
                 .aggr_expr()
                 .iter()
@@ -917,6 +931,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         group_expr,
                         group_expr_name: group_names,
                         aggr_expr: agg,
+                        filter_expr: filter,
                         aggr_expr_name: agg_names,
                         mode: agg_mode as i32,
                         input: Some(Box::new(input)),
@@ -1386,7 +1401,6 @@ mod roundtrip_tests {
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
             col("b", &schema)?,
-            None,
             "AVG(b)".to_string(),
             DataType::Float64,
         ))];
@@ -1395,6 +1409,7 @@ mod roundtrip_tests {
             AggregateMode::Final,
             PhysicalGroupBy::new_single(groups.clone()),
             aggregates.clone(),
+            vec![None],
             Arc::new(EmptyExec::new(false, schema.clone())),
             schema,
         )?))
@@ -1600,7 +1615,6 @@ mod roundtrip_tests {
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(DistinctCount::new(
             DataType::Int64,
             col("b", &schema)?,
-            None,
             "COUNT(DISTINCT b)".to_string(),
         ))];
 
@@ -1611,6 +1625,7 @@ mod roundtrip_tests {
             AggregateMode::Final,
             PhysicalGroupBy::new_single(groups),
             aggregates.clone(),
+            vec![None],
             Arc::new(EmptyExec::new(false, schema.clone())),
             schema,
         )?))

@@ -170,6 +170,8 @@ pub struct AggregateExec {
     pub(crate) group_by: PhysicalGroupBy,
     /// Aggregate expressions
     pub(crate) aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+    /// FILTER (WHERE clause) expression for each aggregate expression
+    pub(crate) filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied
@@ -191,6 +193,7 @@ impl AggregateExec {
         mode: AggregateMode,
         group_by: PhysicalGroupBy,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
@@ -220,6 +223,7 @@ impl AggregateExec {
             mode,
             group_by,
             aggr_expr,
+            filter_expr,
             input,
             schema,
             input_schema,
@@ -257,6 +261,11 @@ impl AggregateExec {
         &self.aggr_expr
     }
 
+    /// FILTER (WHERE clause) expression for each aggregate expression
+    pub fn filter_expr(&self) -> &[Option<Arc<dyn PhysicalExpr>>] {
+        &self.filter_expr
+    }
+
     /// Input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
@@ -280,6 +289,7 @@ impl AggregateExec {
                 self.mode,
                 self.schema.clone(),
                 self.aggr_expr.clone(),
+                self.filter_expr.clone(),
                 input,
                 baseline_metrics,
                 context,
@@ -292,6 +302,7 @@ impl AggregateExec {
                     self.schema.clone(),
                     self.group_by.clone(),
                     self.aggr_expr.clone(),
+                    self.filter_expr.clone(),
                     input,
                     baseline_metrics,
                     batch_size,
@@ -390,6 +401,7 @@ impl ExecutionPlan for AggregateExec {
             self.mode,
             self.group_by.clone(),
             self.aggr_expr.clone(),
+            self.filter_expr.clone(),
             children[0].clone(),
             self.input_schema.clone(),
         )?))
@@ -568,28 +580,6 @@ fn aggregate_expressions(
                     Ok(exprs)
                 })
                 .collect::<Result<Vec<_>>>()?)
-        }
-    }
-}
-
-/// returns filter expressions to evaluate against a batch
-/// The expressions are different depending on `mode`:
-/// * Partial: AggregateExpr::filter
-/// * Final | FinalPartitioned: empty
-fn filter_expressions(
-    aggr_expr: &[Arc<dyn AggregateExpr>],
-    mode: &AggregateMode,
-) -> Result<Vec<Option<Arc<dyn PhysicalExpr>>>> {
-    match mode {
-        AggregateMode::Partial => {
-            let filters = aggr_expr
-                .iter()
-                .map(|agg| agg.filter())
-                .collect::<Vec<Option<Arc<dyn PhysicalExpr>>>>();
-            Ok(filters)
-        }
-        AggregateMode::Final | AggregateMode::FinalPartitioned => {
-            Ok(vec![None; aggr_expr.len()])
         }
     }
 }
@@ -828,7 +818,6 @@ mod tests {
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Count::new(
             lit(1i8),
-            None,
             "COUNT(1)".to_string(),
             DataType::Int64,
         ))];
@@ -840,6 +829,7 @@ mod tests {
             AggregateMode::Partial,
             grouping_set.clone(),
             aggregates.clone(),
+            vec![None],
             input,
             input_schema.clone(),
         )?);
@@ -882,6 +872,7 @@ mod tests {
             AggregateMode::Final,
             final_grouping_set,
             aggregates,
+            vec![None],
             merge,
             input_schema,
         )?);
@@ -934,7 +925,6 @@ mod tests {
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
             col("b", &input_schema)?,
-            None,
             "AVG(b)".to_string(),
             DataType::Float64,
         ))];
@@ -946,6 +936,7 @@ mod tests {
             AggregateMode::Partial,
             grouping_set.clone(),
             aggregates.clone(),
+            vec![None],
             input,
             input_schema.clone(),
         )?);
@@ -978,6 +969,7 @@ mod tests {
             AggregateMode::Final,
             final_grouping_set,
             aggregates,
+            vec![None],
             merge,
             input_schema,
         )?);
@@ -1165,7 +1157,6 @@ mod tests {
         // something that allocates within the aggregator
         let aggregates_v0: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Median::new(
             col("a", &input_schema)?,
-            None,
             "MEDIAN(a)".to_string(),
             DataType::UInt32,
         ))];
@@ -1174,7 +1165,6 @@ mod tests {
         let aggregates_v1: Vec<Arc<dyn AggregateExpr>> =
             vec![Arc::new(ApproxDistinct::new(
                 col("a", &input_schema)?,
-                None,
                 "APPROX_DISTINCT(a)".to_string(),
                 DataType::UInt32,
             ))];
@@ -1182,7 +1172,6 @@ mod tests {
         // use fast-path in `row_hash.rs`.
         let aggregates_v2: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
             col("b", &input_schema)?,
-            None,
             "AVG(b)".to_string(),
             DataType::Float64,
         ))];
@@ -1196,6 +1185,7 @@ mod tests {
                 AggregateMode::Partial,
                 groups,
                 aggregates,
+                vec![None; 3],
                 input.clone(),
                 input_schema.clone(),
             )?);
@@ -1241,7 +1231,6 @@ mod tests {
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
             col("a", &schema)?,
-            None,
             "AVG(a)".to_string(),
             DataType::Float64,
         ))];
@@ -1252,6 +1241,7 @@ mod tests {
             AggregateMode::Partial,
             groups.clone(),
             aggregates.clone(),
+            vec![None],
             blocking_exec,
             schema,
         )?);
@@ -1280,7 +1270,6 @@ mod tests {
 
         let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
             col("b", &schema)?,
-            None,
             "AVG(b)".to_string(),
             DataType::Float64,
         ))];
@@ -1291,6 +1280,7 @@ mod tests {
             AggregateMode::Partial,
             groups,
             aggregates.clone(),
+            vec![None],
             blocking_exec,
             schema,
         )?);

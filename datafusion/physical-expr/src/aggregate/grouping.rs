@@ -36,21 +36,18 @@ pub struct Grouping {
     data_type: DataType,
     nullable: bool,
     expr: Arc<dyn PhysicalExpr>,
-    filter: Option<Arc<dyn PhysicalExpr>>,
 }
 
 impl Grouping {
     /// Create a new GROUPING aggregate function.
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
-        filter: Option<Arc<dyn PhysicalExpr>>,
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
         Self {
             name: name.into(),
             expr,
-            filter,
             data_type,
             nullable: true,
         }
@@ -92,9 +89,5 @@ impl AggregateExpr for Grouping {
 
     fn name(&self) -> &str {
         &self.name
-    }
-
-    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
-        self.filter.clone()
     }
 }
