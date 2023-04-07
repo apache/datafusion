@@ -1244,8 +1244,10 @@ macro_rules! ts_sub_op {
         let prim_array_rhs = $caster(&$rhs)?;
         let ret: PrimitiveArray<$type_out> =
             arrow::compute::try_binary(prim_array_lhs, prim_array_rhs, |ts1, ts2| {
-                let (parsed_lhs_tz, parsed_rhs_tz) =
-                    (parse_timezones($lhs_tz.as_deref())?, parse_timezones($rhs_tz.as_deref())?);
+                let (parsed_lhs_tz, parsed_rhs_tz) = (
+                    parse_timezones($lhs_tz.as_deref())?,
+                    parse_timezones($rhs_tz.as_deref())?,
+                );
                 let (naive_lhs, naive_rhs) = calculate_naives::<$mode>(
                     ts1.mul_wrapping($coef),
                     parsed_lhs_tz,

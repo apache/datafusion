@@ -755,9 +755,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                         let data = ArrayDataBuilder::new(data_type)
                             .len(len)
                             .null_bit_buffer(Some(null_buffer.into()))
-                            .child_data(
-                                arrays.into_iter().map(|a| a.to_data()).collect(),
-                            )
+                            .child_data(arrays.into_iter().map(|a| a.to_data()).collect())
                             .build()?;
                         make_array(data)
                     }

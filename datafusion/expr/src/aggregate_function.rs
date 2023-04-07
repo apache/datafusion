@@ -20,8 +20,8 @@
 use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{DataFusionError, Result};
-use std::{fmt, str::FromStr};
 use std::sync::Arc;
+use std::{fmt, str::FromStr};
 
 /// Enum of all built-in aggregate functions
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]

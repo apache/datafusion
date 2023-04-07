@@ -1868,13 +1868,13 @@ mod tests {
         // Create a schema with a scalar field, a list of strings, and a list of structs.
         let struct_field = Field::new_struct(
             "item",
-                vec![
-                    Field::new("a", DataType::UInt32, false),
-                    Field::new("b", DataType::UInt32, false),
-                ],
+            vec![
+                Field::new("a", DataType::UInt32, false),
+                Field::new("b", DataType::UInt32, false),
+            ],
             false,
         );
-        let string_field =Field::new("item", DataType::Utf8, false);
+        let string_field = Field::new("item", DataType::Utf8, false);
         let schema = Schema::new(vec![
             Field::new("scalar", DataType::UInt32, false),
             Field::new_list("strings", string_field, false),
