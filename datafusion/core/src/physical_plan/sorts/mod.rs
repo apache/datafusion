@@ -17,30 +17,13 @@
 
 //! Sort functionalities
 
-use crate::physical_plan::SendableRecordBatchStream;
-use std::fmt::{Debug, Formatter};
-
+mod builder;
 mod cursor;
 mod index;
+mod merge;
 pub mod sort;
 pub mod sort_preserving_merge;
+mod stream;
 
-pub use cursor::SortKeyCursor;
 pub use index::RowIndex;
-
-pub(crate) struct SortedStream {
-    stream: SendableRecordBatchStream,
-    mem_used: usize,
-}
-
-impl Debug for SortedStream {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "InMemSorterStream")
-    }
-}
-
-impl SortedStream {
-    pub(crate) fn new(stream: SendableRecordBatchStream, mem_used: usize) -> Self {
-        Self { stream, mem_used }
-    }
-}
+pub(crate) use merge::streaming_merge;
