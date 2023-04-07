@@ -262,6 +262,25 @@ pub fn return_type(
 
         BuiltinScalarFunction::ArrowTypeof => Ok(DataType::Utf8),
 
+        BuiltinScalarFunction::WithTimezone => match input_expr_types[0] {
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
+            }
+            DataType::Timestamp(TimeUnit::Second, _) => {
+                Ok(DataType::Timestamp(TimeUnit::Second, None))
+            }
+            _ => return Err(DataFusionError::Internal(
+                "The with_timezone function can only accept timestamp as the first arg."
+                    .to_string(),
+            )),
+        },
+
         BuiltinScalarFunction::Abs
         | BuiltinScalarFunction::Acos
         | BuiltinScalarFunction::Asin
@@ -636,6 +655,28 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
             fun.volatility(),
         ),
         BuiltinScalarFunction::ArrowTypeof => Signature::any(1, fun.volatility()),
+
+        BuiltinScalarFunction::WithTimezone => Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    DataType::Utf8,
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                    DataType::Utf8,
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Timestamp(TimeUnit::Millisecond, None),
+                    DataType::Utf8,
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Timestamp(TimeUnit::Second, None),
+                    DataType::Utf8,
+                ]),
+            ],
+            fun.volatility(),
+        ),
         // math expressions expect 1 argument of type f64 or f32
         // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
         // return the best approximation for it (in f64).

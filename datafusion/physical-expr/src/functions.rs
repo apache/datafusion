@@ -62,7 +62,7 @@ pub fn create_physical_expr(
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let data_type = function::return_type(fun, &input_expr_types)?;
+    let mut data_type = function::return_type(fun, &input_expr_types)?;
 
     let fun_expr: ScalarFunctionImplementation = match fun {
         // These functions need args and input schema to pick an implementation
@@ -168,6 +168,22 @@ pub fn create_physical_expr(
                     "{input_data_type}"
                 )))))
             })
+        }
+        BuiltinScalarFunction::WithTimezone => {
+            // function::return_type doesn't consider the arg value which contains the timezone info
+            // i.e. it could only output Timestamp<TimeUnit, None> or Timestamo<TimeUnit, Some(SomeFixedTimestamp))
+            // here we parse the second arg as timestamp and modify the return data_type
+            let timezone = format!("{}", input_phy_exprs[1]);
+            data_type = match data_type {
+                DataType::Timestamp(TimeUnit::Nanosecond, _) => DataType::Timestamp(TimeUnit::Nanosecond, Some(timezone)),
+                DataType::Timestamp(TimeUnit::Microsecond, _) => DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
+                DataType::Timestamp(TimeUnit::Millisecond, _) => DataType::Timestamp(TimeUnit::Millisecond, Some(timezone)),
+                DataType::Timestamp(TimeUnit::Second, _) => DataType::Timestamp(TimeUnit::Second, Some(timezone)),
+                other => return Err(DataFusionError::Internal(format!(
+                    "Unsupported data type {other:?} as the first arg for function with_timezone",
+                )))
+            };
+            Arc::new(datetime_expressions::with_timezone)
         }
         // These don't need args and input schema
         _ => create_physical_fun(fun, execution_props)?,
@@ -436,6 +452,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::DatePart => Arc::new(datetime_expressions::date_part),
         BuiltinScalarFunction::DateTrunc => Arc::new(datetime_expressions::date_trunc),
         BuiltinScalarFunction::DateBin => Arc::new(datetime_expressions::date_bin),
+        BuiltinScalarFunction::WithTimezone => {
+            Arc::new(datetime_expressions::with_timezone)
+        }
         BuiltinScalarFunction::Now => {
             // bind value for now at plan time
             Arc::new(datetime_expressions::make_now(

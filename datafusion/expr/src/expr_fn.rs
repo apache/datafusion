@@ -621,6 +621,7 @@ scalar_expr!(Now, now, ,"returns current timestamp in nanoseconds, using the sam
 scalar_expr!(CurrentTime, current_time, , "returns current UTC time as a [`DataType::Time64`] value");
 
 scalar_expr!(ArrowTypeof, arrow_typeof, val, "data type");
+scalar_expr!(WithTimezone, with_timezone, date timezone, "replace the timezone by the given timezone");
 
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
 pub fn case(expr: Expr) -> CaseBuilder {
@@ -836,6 +837,7 @@ mod test {
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
+        test_scalar_expr!(WithTimezone, with_timezone, date, timezone);
     }
 
     #[test]

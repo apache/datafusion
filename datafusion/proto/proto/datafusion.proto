@@ -523,6 +523,7 @@ enum ScalarFunction {
   CurrentDate = 70;
   CurrentTime = 71;
   Uuid = 72;
+  WithTimezone = 73;
 }
 
 message ScalarFunctionNode {

@@ -472,6 +472,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::FromUnixtime => Self::FromUnixtime,
             ScalarFunction::Atan2 => Self::Atan2,
             ScalarFunction::ArrowTypeof => Self::ArrowTypeof,
+            ScalarFunction::WithTimezone => Self::WithTimezone,
         }
     }
 }

@@ -174,6 +174,8 @@ pub enum BuiltinScalarFunction {
     Struct,
     /// arrow_typeof
     ArrowTypeof,
+    /// with_timezone
+    WithTimezone,
 }
 
 impl BuiltinScalarFunction {
@@ -261,6 +263,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Struct => Volatility::Immutable,
             BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
             BuiltinScalarFunction::ArrowTypeof => Volatility::Immutable,
+            BuiltinScalarFunction::WithTimezone => Volatility::Immutable,
 
             // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
@@ -367,6 +370,7 @@ impl FromStr for BuiltinScalarFunction {
             "struct" => BuiltinScalarFunction::Struct,
             "from_unixtime" => BuiltinScalarFunction::FromUnixtime,
             "arrow_typeof" => BuiltinScalarFunction::ArrowTypeof,
+            "with_timezone" => BuiltinScalarFunction::WithTimezone,
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in function named {name}"

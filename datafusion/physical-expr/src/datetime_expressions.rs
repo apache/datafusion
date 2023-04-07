@@ -604,6 +604,53 @@ where
     Ok(b.finish())
 }
 
+pub fn with_timezone(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.len() != 2 {
+        return Err(DataFusionError::Execution(
+            "Expected two arguments in WITH_TIMEZONE".to_string(),
+        ));
+    }
+
+    let (array, timezone) = (&args[0], &args[1]);
+
+    let timezone = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = timezone {
+        v
+    } else {
+        return Err(DataFusionError::Execution(
+            "Second argument of `WITH_TIMEZONE` must be non-null scalar Utf8".to_string(),
+        ));
+    };
+
+    let array = match array {
+        ColumnarValue::Array(array) => array.clone(),
+        ColumnarValue::Scalar(scalar) => scalar.to_array(),
+    };
+
+    let array: ArrayRef = match array.data_type() {
+        DataType::Timestamp(unit, _) => match unit {
+            TimeUnit::Nanosecond => {
+                Arc::new(as_timestamp_nanosecond_array(&array)?.with_timezone(timezone))
+            }
+            TimeUnit::Microsecond => {
+                Arc::new(as_timestamp_microsecond_array(&array)?.with_timezone(timezone))
+            }
+            TimeUnit::Millisecond => {
+                Arc::new(as_timestamp_millisecond_array(&array)?.with_timezone(timezone))
+            }
+            TimeUnit::Second => {
+                Arc::new(as_timestamp_second_array(&array)?.with_timezone(timezone))
+            }
+        },
+        _other => {
+            return Err(DataFusionError::Execution(
+                "First argument of `WITH_TIMEZONE` must be Timestamp".to_string(),
+            ))
+        }
+    };
+
+    Ok(ColumnarValue::Array(array))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
