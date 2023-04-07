@@ -104,7 +104,7 @@ mod unix_test {
         // Create a new temporary FIFO file
         let tmp_dir = TempDir::new()?;
         let fifo_path =
-            create_fifo_file(&tmp_dir, &format!("fifo_{:?}.csv", unbounded_file))?;
+            create_fifo_file(&tmp_dir, &format!("fifo_{unbounded_file:?}.csv"))?;
         // Execution can calculated at least one RecordBatch after the number of
         // "joinable_lines_length" lines are read.
         let joinable_lines_length =

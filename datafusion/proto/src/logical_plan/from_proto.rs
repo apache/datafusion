@@ -33,7 +33,7 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::{
-    abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
+    abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, cbrt, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
     date_part, date_trunc, digest, exp,
     expr::{self, Sort, WindowFunction},
@@ -400,6 +400,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
         use protobuf::ScalarFunction;
         match f {
             ScalarFunction::Sqrt => Self::Sqrt,
+            ScalarFunction::Cbrt => Self::Cbrt,
             ScalarFunction::Sin => Self::Sin,
             ScalarFunction::Cos => Self::Cos,
             ScalarFunction::Tan => Self::Tan,
@@ -1129,6 +1130,7 @@ pub fn parse_expr(
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
                 ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Sin => Ok(sin(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Cos => Ok(cos(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Tan => Ok(tan(parse_expr(&args[0], registry)?)),

@@ -85,6 +85,7 @@ expressions such as `col("a") + col("b")` to be used.
 | signum(x)             | sign of the argument (-1, 0, +1)                  |
 | sin(x)                | sine                                              |
 | sqrt(x)               | square root                                       |
+| cbrt(x)               | cube root                                         |
 | tan(x)                | tangent                                           |
 | trunc(x)              | truncate toward zero                              |
 

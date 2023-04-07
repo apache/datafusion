@@ -110,3 +110,24 @@ impl Ord for SortKeyCursor {
         }
     }
 }
+
+/// A cursor into a sorted batch of rows
+pub trait Cursor: Ord {
+    /// Returns true if there are no more rows in this cursor
+    fn is_finished(&self) -> bool;
+
+    /// Advance the cursor, returning the previous row index
+    ///
+    /// Returns `None` if [`Self::is_finished`]
+    fn advance(&mut self) -> Option<usize>;
+}
+
+impl Cursor for SortKeyCursor {
+    fn is_finished(&self) -> bool {
+        self.is_finished()
+    }
+
+    fn advance(&mut self) -> Option<usize> {
+        (!self.is_finished()).then(|| self.advance())
+    }
+}
