@@ -69,19 +69,21 @@ impl Default for ParserOptions {
     }
 }
 
-#[derive(Debug, Clone)]
 /// Struct to store the states used by the Planner. The Planner will leverage the states to resolve
 /// CTEs, Views, subqueries and PREPARE statements. The states include
 /// Common Table Expression (CTE) provided with WITH clause and
 /// Parameter Data Types provided with PREPARE statement and the query schema of the
 /// outer query plan
+#[derive(Debug, Clone)]
 pub struct PlannerContext {
-    /// Data type provided with prepare statement
-    pub prepare_param_data_types: Vec<DataType>,
-    /// Map of CTE name to logical plan of the WITH clause
-    pub ctes: HashMap<String, LogicalPlan>,
+    /// Data types for numbered parameters ($1, $2, etc), if supplied
+    /// in `PREPARE` statement
+    prepare_param_data_types: Vec<DataType>,
+    /// Map of CTE name to logical plan of the WITH clause.
+    /// Use Arc<LogicalPlan> to allow cheap cloning
+    ctes: HashMap<String, Arc<LogicalPlan>>,
     /// The query schema of the outer query plan, used to resolve the columns in subquery
-    pub outer_query_schema: Option<DFSchema>,
+    outer_query_schema: Option<DFSchema>,
 }
 
 impl Default for PlannerContext {
@@ -100,15 +102,52 @@ impl PlannerContext {
         }
     }
 
-    /// Create a new PlannerContext with provided prepare_param_data_types
-    pub fn new_with_prepare_param_data_types(
+    /// Update the PlannerContext with provided prepare_param_data_types
+    pub fn with_prepare_param_data_types(
+        mut self,
         prepare_param_data_types: Vec<DataType>,
     ) -> Self {
-        Self {
-            prepare_param_data_types,
-            ctes: HashMap::new(),
-            outer_query_schema: None,
-        }
+        self.prepare_param_data_types = prepare_param_data_types;
+        self
+    }
+
+    // return a reference to the outer queries schema
+    pub fn outer_query_schema(&self) -> Option<&DFSchema> {
+        self.outer_query_schema.as_ref()
+    }
+
+    /// sets the outer query schema, returning the existing one, if
+    /// any
+    pub fn set_outer_query_schema(
+        &mut self,
+        mut schema: Option<DFSchema>,
+    ) -> Option<DFSchema> {
+        std::mem::swap(&mut self.outer_query_schema, &mut schema);
+        schema
+    }
+
+    /// Return the types of parameters (`$1`, `$2`, etc) if known
+    pub fn prepare_param_data_types(&self) -> &[DataType] {
+        &self.prepare_param_data_types
+    }
+
+    /// returns true if there is a Common Table Expression (CTE) /
+    /// Subquery for the specified name
+    pub fn contains_cte(&self, cte_name: &str) -> bool {
+        self.ctes.contains_key(cte_name)
+    }
+
+    /// Inserts a LogicalPlan for the Common Table Expression (CTE) /
+    /// Subquery for the specified name
+    pub fn insert_cte(&mut self, cte_name: impl Into<String>, plan: LogicalPlan) {
+        let cte_name = cte_name.into();
+        self.ctes.insert(cte_name, Arc::new(plan));
+    }
+
+    /// Return a plan for the Common Table Expression (CTE) / Subquery for the
+    /// specified name
+    pub fn get_cte(&self, cte_name: &str) -> Option<&LogicalPlan> {
+        self.ctes.get(cte_name).map(|cte| cte.as_ref())
     }
 }
 
@@ -295,6 +334,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 make_decimal_type(precision, scale)
             }
             SQLDataType::Bytea => Ok(DataType::Binary),
+            SQLDataType::Interval => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
             // Explicitly list all other types so that if sqlparser
             // adds/changes the `SQLDataType` the compiler will tell us on upgrade
             // and avoid bugs like https://github.com/apache/arrow-datafusion/issues/3059
@@ -305,7 +345,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Varbinary(_)
             | SQLDataType::Blob(_)
             | SQLDataType::Datetime(_)
-            | SQLDataType::Interval
             | SQLDataType::Regclass
             | SQLDataType::Custom(_, _)
             | SQLDataType::Array(_)

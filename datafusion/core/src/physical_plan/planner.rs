@@ -576,34 +576,6 @@ impl DefaultPhysicalPlanner {
                     }
 
                     let logical_input_schema = input.schema();
-
-                    let physical_sort_keys = if sort_keys.is_empty() {
-                        None
-                    } else {
-                        let physical_input_schema = input_exec.schema();
-                        let sort_keys = sort_keys
-                            .iter()
-                            .map(|(e, _)| match e {
-                                Expr::Sort(expr::Sort {
-                                    expr,
-                                    asc,
-                                    nulls_first,
-                                }) => create_physical_sort_expr(
-                                    expr,
-                                    logical_input_schema,
-                                    &physical_input_schema,
-                                    SortOptions {
-                                        descending: !*asc,
-                                        nulls_first: *nulls_first,
-                                    },
-                                    session_state.execution_props(),
-                                ),
-                                _ => unreachable!(),
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-                        Some(sort_keys)
-                    };
-
                     let physical_input_schema = input_exec.schema();
                     let window_expr = window_expr
                         .iter()
@@ -628,7 +600,6 @@ impl DefaultPhysicalPlanner {
                             input_exec,
                             physical_input_schema,
                             physical_partition_keys,
-                            physical_sort_keys,
                         )?)
                     } else {
                         Arc::new(WindowAggExec::try_new(
@@ -636,7 +607,6 @@ impl DefaultPhysicalPlanner {
                             input_exec,
                             physical_input_schema,
                             physical_partition_keys,
-                            physical_sort_keys,
                         )?)
                     })
                 }
@@ -952,21 +922,21 @@ impl DefaultPhysicalPlanner {
 
                     let join_filter = match filter {
                         Some(expr) => {
-                            // Extract columns from filter expression
+                            // Extract columns from filter expression and saved in a HashSet
                             let cols = expr.to_columns()?;
 
-                            // Collect left & right field indices
+                            // Collect left & right field indices, the field indices are sorted in ascending order
                             let left_field_indices = cols.iter()
                                 .filter_map(|c| match left_df_schema.index_of_column(c) {
                                     Ok(idx) => Some(idx),
                                     _ => None,
-                                })
+                                }).sorted()
                                 .collect::<Vec<_>>();
                             let right_field_indices = cols.iter()
                                 .filter_map(|c| match right_df_schema.index_of_column(c) {
                                     Ok(idx) => Some(idx),
                                     _ => None,
-                                })
+                                }).sorted()
                                 .collect::<Vec<_>>();
 
                             // Collect DFFields and Fields required for intermediate schemas
@@ -985,7 +955,6 @@ impl DefaultPhysicalPlanner {
                                         ))
                                 )
                                 .unzip();
-
 
                             // Construct intermediate schemas used for filtering data and
                             // convert logical expression to physical according to filter schema
@@ -1187,9 +1156,11 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: Dml".to_string(),
                     ))
                 }
-                LogicalPlan::SetVariable(_) => {
-                    Err(DataFusionError::Internal(
-                        "Unsupported logical plan: SetVariable must be root of the plan".to_string(),
+                LogicalPlan::Statement(statement) => {
+                    // DataFusion is a read-only query engine, but also a library, so consumers may implement this
+                    let name = statement.name();
+                    Err(DataFusionError::NotImplemented(
+                        format!("Unsupported logical plan: Statement({name})")
                     ))
                 }
                 LogicalPlan::DescribeTable(_) => {
@@ -2193,9 +2164,7 @@ mod tests {
 
         assert_contains!(
             &e,
-            r#"type_coercion
-caused by
-Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: Error during planning: Can not find compatible types to compare Boolean with [Struct([Field { name: "foo", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), Utf8]. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"#
+            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct([Field { name: "foo", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), Utf8]"#
         );
 
         Ok(())

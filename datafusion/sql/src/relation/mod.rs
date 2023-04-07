@@ -33,7 +33,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // normalize name and alias
                 let table_ref = self.object_name_to_table_reference(name)?;
                 let table_name = table_ref.to_string();
-                let cte = planner_context.ctes.get(&table_name);
+                let cte = planner_context.get_cte(&table_name);
                 (
                     match (
                         cte,

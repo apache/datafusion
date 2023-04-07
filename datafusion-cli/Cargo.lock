@@ -69,7 +69,7 @@ checksum = "8da52d66c7071e2e3fa2a1e5c6d088fec47b593032b254f5e980de8ea54454d6"
 [[package]]
 name = "arrow"
 version = "36.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=bc70e09575272f8dde20b06c19756180434ef158#bc70e09575272f8dde20b06c19756180434ef158"
+source = "git+https://github.com/tustvold/arrow-rs.git?rev=e45f8b5132c10505a6f2b9d8a8e8e9207049605f#e45f8b5132c10505a6f2b9d8a8e8e9207049605f"
 dependencies = [
  "ahash",
  "arrow-arith",
@@ -90,7 +90,7 @@ dependencies = [
 [[package]]
 name = "arrow-arith"
 version = "36.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=bc70e09575272f8dde20b06c19756180434ef158#bc70e09575272f8dde20b06c19756180434ef158"
+source = "git+https://github.com/tustvold/arrow-rs.git?rev=e45f8b5132c10505a6f2b9d8a8e8e9207049605f#e45f8b5132c10505a6f2b9d8a8e8e9207049605f"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -104,7 +104,7 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "36.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=bc70e09575272f8dde20b06c19756180434ef158#bc70e09575272f8dde20b06c19756180434ef158"
+source = "git+https://github.com/tustvold/arrow-rs.git?rev=e45f8b5132c10505a6f2b9d8a8e8e9207049605f#e45f8b5132c10505a6f2b9d8a8e8e9207049605f"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -120,7 +120,7 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "36.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=bc70e09575272f8dde20b06c19756180434ef158#bc70e09575272f8dde20b06c19756180434ef158"
+source = "git+https://github.com/tustvold/arrow-rs.git?rev=e45f8b5132c10505a6f2b9d8a8e8e9207049605f#e45f8b5132c10505a6f2b9d8a8e8e9207049605f"
 dependencies = [
  "half",
  "num",
@@ -129,7 +129,7 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "36.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=bc70e09575272f8dde20b06c19756180434ef158#bc70e09575272f8dde20b06c19756180434ef158"
+source = "git+https://github.com/tustvold/arrow-rs.git?rev=e45f8b5132c10505a6f2b9d8a8e8e9207049605f#e45f8b5132c10505a6f2b9d8a8e8e9207049605f"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -145,7 +145,7 @@ dependencies = [
 [[package]]
 name = "arrow-csv"
 version = "36.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=bc70e09575272f8dde20b06c19756180434ef158#bc70e09575272f8dde20b06c19756180434ef158"
+source = "git+https://github.com/tustvold/arrow-rs.git?rev=e45f8b5132c10505a6f2b9d8a8e8e9207049605f#e45f8b5132c10505a6f2b9d8a8e8e9207049605f"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -163,7 +163,7 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "36.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=bc70e09575272f8dde20b06c19756180434ef158#bc70e09575272f8dde20b06c19756180434ef158"
+source = "git+https://github.com/tustvold/arrow-rs.git?rev=e45f8b5132c10505a6f2b9d8a8e8e9207049605f#e45f8b5132c10505a6f2b9d8a8e8e9207049605f"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -174,7 +174,7 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "36.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=bc70e09575272f8dde20b06c19756180434ef158#bc70e09575272f8dde20b06c19756180434ef158"
+source = "git+https://github.com/tustvold/arrow-rs.git?rev=e45f8b5132c10505a6f2b9d8a8e8e9207049605f#e45f8b5132c10505a6f2b9d8a8e8e9207049605f"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -187,7 +187,7 @@ dependencies = [
 [[package]]
 name = "arrow-json"
 version = "36.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=bc70e09575272f8dde20b06c19756180434ef158#bc70e09575272f8dde20b06c19756180434ef158"
+source = "git+https://github.com/tustvold/arrow-rs.git?rev=e45f8b5132c10505a6f2b9d8a8e8e9207049605f#e45f8b5132c10505a6f2b9d8a8e8e9207049605f"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -199,13 +199,14 @@ dependencies = [
  "indexmap",
  "lexical-core",
  "num",
+ "serde",
  "serde_json",
 ]
 
 [[package]]
 name = "arrow-ord"
 version = "36.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=bc70e09575272f8dde20b06c19756180434ef158#bc70e09575272f8dde20b06c19756180434ef158"
+source = "git+https://github.com/tustvold/arrow-rs.git?rev=e45f8b5132c10505a6f2b9d8a8e8e9207049605f#e45f8b5132c10505a6f2b9d8a8e8e9207049605f"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -219,7 +220,7 @@ dependencies = [
 [[package]]
 name = "arrow-row"
 version = "36.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=bc70e09575272f8dde20b06c19756180434ef158#bc70e09575272f8dde20b06c19756180434ef158"
+source = "git+https://github.com/tustvold/arrow-rs.git?rev=e45f8b5132c10505a6f2b9d8a8e8e9207049605f#e45f8b5132c10505a6f2b9d8a8e8e9207049605f"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -233,12 +234,12 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "36.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=bc70e09575272f8dde20b06c19756180434ef158#bc70e09575272f8dde20b06c19756180434ef158"
+source = "git+https://github.com/tustvold/arrow-rs.git?rev=e45f8b5132c10505a6f2b9d8a8e8e9207049605f#e45f8b5132c10505a6f2b9d8a8e8e9207049605f"
 
 [[package]]
 name = "arrow-select"
 version = "36.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=bc70e09575272f8dde20b06c19756180434ef158#bc70e09575272f8dde20b06c19756180434ef158"
+source = "git+https://github.com/tustvold/arrow-rs.git?rev=e45f8b5132c10505a6f2b9d8a8e8e9207049605f#e45f8b5132c10505a6f2b9d8a8e8e9207049605f"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -250,7 +251,7 @@ dependencies = [
 [[package]]
 name = "arrow-string"
 version = "36.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=bc70e09575272f8dde20b06c19756180434ef158#bc70e09575272f8dde20b06c19756180434ef158"
+source = "git+https://github.com/tustvold/arrow-rs.git?rev=e45f8b5132c10505a6f2b9d8a8e8e9207049605f#e45f8b5132c10505a6f2b9d8a8e8e9207049605f"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -287,7 +288,7 @@ checksum = "b9ccdd8f2a161be9bd5c023df56f1b2a0bd1d83872ae53b71a84a12c9bf6e842"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.11",
+ "syn 2.0.12",
 ]
 
 [[package]]
@@ -645,7 +646,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "scratch",
- "syn 2.0.11",
+ "syn 2.0.12",
 ]
 
 [[package]]
@@ -662,7 +663,7 @@ checksum = "2345488264226bf682893e25de0769f3360aac9957980ec49361b083ddaa5bc5"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.11",
+ "syn 2.0.12",
 ]
 
 [[package]]
@@ -680,7 +681,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "21.0.0"
+version = "21.1.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -726,7 +727,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "21.0.0"
+version = "21.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -744,7 +745,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "21.0.0"
+version = "21.1.0"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -757,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-execution"
-version = "21.0.0"
+version = "21.1.0"
 dependencies = [
  "dashmap",
  "datafusion-common",
@@ -773,7 +774,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "21.0.0"
+version = "21.1.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -783,7 +784,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-optimizer"
-version = "21.0.0"
+version = "21.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -799,10 +800,11 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "21.0.0"
+version = "21.1.0"
 dependencies = [
  "ahash",
  "arrow",
+ "arrow-array",
  "arrow-buffer",
  "arrow-schema",
  "blake2",
@@ -828,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-row"
-version = "21.0.0"
+version = "21.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -838,8 +840,9 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "21.0.0"
+version = "21.1.0"
 dependencies = [
+ "arrow",
  "arrow-schema",
  "datafusion-common",
  "datafusion-expr",
@@ -1033,9 +1036,9 @@ dependencies = [
 
 [[package]]
 name = "futures"
-version = "0.3.27"
+version = "0.3.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "531ac96c6ff5fd7c62263c5e3c67a603af4fcaee2e1a0ae5565ba3a11e69e549"
+checksum = "23342abe12aba583913b2e62f22225ff9c950774065e4bfb61a19cd9770fec40"
 dependencies = [
  "futures-channel",
  "futures-core",
@@ -1048,9 +1051,9 @@ dependencies = [
 
 [[package]]
 name = "futures-channel"
-version = "0.3.27"
+version = "0.3.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "164713a5a0dcc3e7b4b1ed7d3b433cabc18025386f9339346e8daf15963cf7ac"
+checksum = "955518d47e09b25bbebc7a18df10b81f0c766eaf4c4f1cccef2fca5f2a4fb5f2"
 dependencies = [
  "futures-core",
  "futures-sink",
@@ -1058,15 +1061,15 @@ dependencies = [
 
 [[package]]
 name = "futures-core"
-version = "0.3.27"
+version = "0.3.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86d7a0c1aa76363dac491de0ee99faf6941128376f1cf96f07db7603b7de69dd"
+checksum = "4bca583b7e26f571124fe5b7561d49cb2868d79116cfa0eefce955557c6fee8c"
 
 [[package]]
 name = "futures-executor"
-version = "0.3.27"
+version = "0.3.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1997dd9df74cdac935c76252744c1ed5794fac083242ea4fe77ef3ed60ba0f83"
+checksum = "ccecee823288125bd88b4d7f565c9e58e41858e47ab72e8ea2d64e93624386e0"
 dependencies = [
  "futures-core",
  "futures-task",
@@ -1075,38 +1078,38 @@ dependencies = [
 
 [[package]]
 name = "futures-io"
-version = "0.3.27"
+version = "0.3.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89d422fa3cbe3b40dca574ab087abb5bc98258ea57eea3fd6f1fa7162c778b91"
+checksum = "4fff74096e71ed47f8e023204cfd0aa1289cd54ae5430a9523be060cdb849964"
 
 [[package]]
 name = "futures-macro"
-version = "0.3.27"
+version = "0.3.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3eb14ed937631bd8b8b8977f2c198443447a8355b6e3ca599f38c975e5a963b6"
+checksum = "89ca545a94061b6365f2c7355b4b32bd20df3ff95f02da9329b34ccc3bd6ee72"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.109",
+ "syn 2.0.12",
 ]
 
 [[package]]
 name = "futures-sink"
-version = "0.3.27"
+version = "0.3.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec93083a4aecafb2a80a885c9de1f0ccae9dbd32c2bb54b0c3a65690e0b8d2f2"
+checksum = "f43be4fe21a13b9781a69afa4985b0f6ee0e1afab2c6f454a8cf30e2b2237b6e"
 
 [[package]]
 name = "futures-task"
-version = "0.3.27"
+version = "0.3.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd65540d33b37b16542a0438c12e6aeead10d4ac5d05bd3f805b8f35ab592879"
+checksum = "76d3d132be6c0e6aa1534069c705a74a5997a356c0dc2f86a47765e5617c5b65"
 
 [[package]]
 name = "futures-util"
-version = "0.3.27"
+version = "0.3.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ef6b17e481503ec85211fed8f39d1970f128935ca1f814cd32ac4a6842e84ab"
+checksum = "26b01e40b772d54cf6c6d721c1d1abd0647a0106a12ecaa1c186273392a69533"
 dependencies = [
  "futures-channel",
  "futures-core",
@@ -1510,9 +1513,9 @@ dependencies = [
 
 [[package]]
 name = "linux-raw-sys"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd550e73688e6d578f0ac2119e32b797a327631a42f9433e59d02e139c8df60d"
+checksum = "d59d8c75012853d2e872fb56bc8a2e53718e2cafe1a4c823143141c6d90c322f"
 
 [[package]]
 name = "lock_api"
@@ -1798,7 +1801,7 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "36.0.0"
-source = "git+https://github.com/tustvold/arrow-rs.git?rev=bc70e09575272f8dde20b06c19756180434ef158#bc70e09575272f8dde20b06c19756180434ef158"
+source = "git+https://github.com/tustvold/arrow-rs.git?rev=e45f8b5132c10505a6f2b9d8a8e8e9207049605f#e45f8b5132c10505a6f2b9d8a8e8e9207049605f"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -2259,7 +2262,7 @@ checksum = "4c614d17805b093df4b147b51339e7e44bf05ef59fba1e45d83500bcfb4d8585"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.11",
+ "syn 2.0.12",
 ]
 
 [[package]]
@@ -2438,9 +2441,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.11"
+version = "2.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21e3787bb71465627110e7d87ed4faaa36c1f61042ee67badb9e2ef173accc40"
+checksum = "79d9531f94112cfc3e4c8f5f02cb2b58f72c97b7efd85f70203cc6d8efda5927"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2492,7 +2495,7 @@ checksum = "f9456a42c5b0d803c8cd86e73dd7cc9edd429499f37a3550d286d5e86720569f"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.11",
+ "syn 2.0.12",
 ]
 
 [[package]]
@@ -2556,7 +2559,7 @@ checksum = "61a573bdc87985e9d6ddeed1b3d864e8a302c847e40d647746df2f1de209d1ce"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.11",
+ "syn 2.0.12",
 ]
 
 [[package]]

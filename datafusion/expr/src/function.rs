@@ -277,6 +277,7 @@ pub fn return_type(
         | BuiltinScalarFunction::Signum
         | BuiltinScalarFunction::Sin
         | BuiltinScalarFunction::Sqrt
+        | BuiltinScalarFunction::Cbrt
         | BuiltinScalarFunction::Tan
         | BuiltinScalarFunction::Trunc => match input_expr_types[0] {
             DataType::Float32 => Ok(DataType::Float32),

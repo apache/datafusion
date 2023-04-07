@@ -32,12 +32,10 @@ fn test_single_column() {
 
     let mut cursor1 = CursorBuilder::new(batch1)
         .with_stream_idx(11)
-        .with_batch_id(0)
         .build(&mut converter);
 
     let mut cursor2 = CursorBuilder::new(batch2)
         .with_stream_idx(22)
-        .with_batch_id(0)
         .build(&mut converter);
 
     let expected = vec![
@@ -63,13 +61,11 @@ fn test_stable_compare() {
 
     let cursor1 = CursorBuilder::new(batch1)
         // higher stream index
-        .with_stream_idx(33)
-        .with_batch_id(0);
+        .with_stream_idx(33);
 
     let cursor2 = CursorBuilder::new(batch2)
         // Lower stream index -- should always be first
-        .with_stream_idx(22)
-        .with_batch_id(0);
+        .with_stream_idx(22);
 
     let expected = vec!["22: (0, 0)", "33: (0, 0)", "33: (0, 1)"];
 
@@ -127,7 +123,7 @@ fn advance(cursor: &mut SortKeyCursor) -> RowIndex {
     let row_idx = cursor.advance();
     RowIndex {
         stream_idx: cursor.stream_idx(),
-        batch_idx: cursor.batch_id(),
+        batch_idx: 0,
         row_idx,
     }
 }
@@ -152,7 +148,6 @@ fn int64_batch(values: impl IntoIterator<Item = Option<i64>>) -> RecordBatch {
 struct CursorBuilder {
     batch: RecordBatch,
     stream_idx: Option<usize>,
-    batch_id: Option<usize>,
 }
 
 impl CursorBuilder {
@@ -160,7 +155,6 @@ impl CursorBuilder {
         Self {
             batch,
             stream_idx: None,
-            batch_id: None,
         }
     }
 
@@ -170,24 +164,10 @@ impl CursorBuilder {
         self
     }
 
-    /// Set the stream index
-    fn with_batch_id(mut self, batch_id: usize) -> Self {
-        self.batch_id = Some(batch_id);
-        self
-    }
-
     fn build(self, converter: &mut RowConverter) -> SortKeyCursor {
-        let Self {
-            batch,
-            stream_idx,
-            batch_id,
-        } = self;
+        let Self { batch, stream_idx } = self;
         let rows = converter.convert_columns(batch.columns()).unwrap();
-        SortKeyCursor::new(
-            stream_idx.expect("stream idx not set"),
-            batch_id.expect("batch id not set"),
-            rows,
-        )
+        SortKeyCursor::new(stream_idx.expect("stream idx not set"), rows)
     }
 }
 

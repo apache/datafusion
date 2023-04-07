@@ -1251,6 +1251,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
     fn try_from(scalar: &BuiltinScalarFunction) -> Result<Self, Self::Error> {
         let scalar_function = match scalar {
             BuiltinScalarFunction::Sqrt => Self::Sqrt,
+            BuiltinScalarFunction::Cbrt => Self::Cbrt,
             BuiltinScalarFunction::Sin => Self::Sin,
             BuiltinScalarFunction::Cos => Self::Cos,
             BuiltinScalarFunction::Tan => Self::Tan,

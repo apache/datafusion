@@ -24,21 +24,18 @@ use arrow::datatypes::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use arrow::record_batch::RecordBatch;
-use datafusion_common::cast::{
-    as_date32_array, as_date64_array, as_timestamp_microsecond_array,
-    as_timestamp_millisecond_array, as_timestamp_nanosecond_array,
-    as_timestamp_second_array,
-};
-use datafusion_common::scalar::{
-    date32_add, date64_add, microseconds_add, milliseconds_add, nanoseconds_add,
-    seconds_add,
-};
+
+use datafusion_common::cast::*;
+use datafusion_common::scalar::*;
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_expr::type_coercion::binary::coerce_types;
 use datafusion_expr::{ColumnarValue, Operator};
 use std::any::Any;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
+
+use super::binary::{interval_array_op, ts_array_op, ts_interval_array_op};
 
 /// Perform DATE/TIME/TIMESTAMP +/ INTERVAL math
 #[derive(Debug)]
@@ -59,27 +56,29 @@ impl DateTimeIntervalExpr {
         rhs: Arc<dyn PhysicalExpr>,
         input_schema: &Schema,
     ) -> Result<Self> {
-        match lhs.data_type(input_schema)? {
-            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
-                match rhs.data_type(input_schema)? {
-                    DataType::Interval(_) => match &op {
-                        Operator::Plus | Operator::Minus => Ok(Self {
-                            lhs,
-                            op,
-                            rhs,
-                            input_schema: input_schema.clone(),
-                        }),
-                        _ => Err(DataFusionError::Execution(format!(
-                            "Invalid operator '{op}' for DateIntervalExpr"
-                        ))),
-                    },
-                    other => Err(DataFusionError::Execution(format!(
-                        "Operation '{op}' not support for type {other}"
-                    ))),
-                }
-            }
-            other => Err(DataFusionError::Execution(format!(
-                "Invalid lhs type '{other}' for DateIntervalExpr"
+        match (
+            lhs.data_type(input_schema)?,
+            op,
+            rhs.data_type(input_schema)?,
+        ) {
+            (
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
+                Operator::Plus | Operator::Minus,
+                DataType::Interval(_),
+            )
+            | (DataType::Timestamp(_, _), Operator::Minus, DataType::Timestamp(_, _))
+            | (
+                DataType::Interval(_),
+                Operator::Plus | Operator::Minus,
+                DataType::Interval(_),
+            ) => Ok(Self {
+                lhs,
+                op,
+                rhs,
+                input_schema: input_schema.clone(),
+            }),
+            (lhs, _, rhs) => Err(DataFusionError::Execution(format!(
+                "Invalid operation between '{lhs}' and '{rhs}' for DateIntervalExpr"
             ))),
         }
     }
@@ -112,7 +111,11 @@ impl PhysicalExpr for DateTimeIntervalExpr {
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        self.lhs.data_type(input_schema)
+        coerce_types(
+            &self.lhs.data_type(input_schema)?,
+            &Operator::Minus,
+            &self.rhs.data_type(input_schema)?,
+        )
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
@@ -120,18 +123,8 @@ impl PhysicalExpr for DateTimeIntervalExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let dates = self.lhs.evaluate(batch)?;
-        let intervals = self.rhs.evaluate(batch)?;
-
-        // Unwrap interval to add
-        let intervals = match &intervals {
-            ColumnarValue::Scalar(interval) => interval,
-            _ => {
-                let msg = "Columnar execution is not yet supported for DateIntervalExpr";
-                return Err(DataFusionError::Execution(msg.to_string()));
-            }
-        };
-
+        let lhs_value = self.lhs.evaluate(batch)?;
+        let rhs_value = self.rhs.evaluate(batch)?;
         // Invert sign for subtraction
         let sign = match self.op {
             Operator::Plus => 1,
@@ -142,14 +135,30 @@ impl PhysicalExpr for DateTimeIntervalExpr {
                 return Err(DataFusionError::Internal(msg.to_string()));
             }
         };
+        // RHS is first checked. If it is a Scalar, there are 2 options:
+        // Either LHS is also a Scalar and matching operation is applied,
+        // or LHS is an Array and unary operations for related types are
+        // applied in evaluate_array function. If RHS is an Array, then
+        // LHS must also be, moreover; they must be the same Timestamp type.
+        match (lhs_value, rhs_value) {
+            (ColumnarValue::Scalar(operand_lhs), ColumnarValue::Scalar(operand_rhs)) => {
+                Ok(ColumnarValue::Scalar(if sign > 0 {
+                    operand_lhs.add(&operand_rhs)?
+                } else {
+                    operand_lhs.sub(&operand_rhs)?
+                }))
+            }
+            (ColumnarValue::Array(array_lhs), ColumnarValue::Scalar(operand_rhs)) => {
+                evaluate_array(array_lhs, sign, &operand_rhs)
+            }
 
-        match dates {
-            ColumnarValue::Scalar(operand) => Ok(ColumnarValue::Scalar(if sign > 0 {
-                operand.add(intervals)?
-            } else {
-                operand.sub(intervals)?
-            })),
-            ColumnarValue::Array(array) => evaluate_array(array, sign, intervals),
+            (ColumnarValue::Array(array_lhs), ColumnarValue::Array(array_rhs)) => {
+                evaluate_temporal_arrays(&array_lhs, sign, &array_rhs)
+            }
+            (_, _) => {
+                let msg = "If RHS of the operation is an array, then LHS also must be";
+                Err(DataFusionError::Internal(msg.to_string()))
+            }
         }
     }
 
@@ -234,6 +243,42 @@ pub fn evaluate_array(
         _ => Err(DataFusionError::Execution(format!(
             "Invalid lhs type for DateIntervalExpr: {}",
             array.data_type()
+        )))?,
+    };
+    Ok(ColumnarValue::Array(ret))
+}
+
+// This function evaluates temporal array operations, such as timestamp - timestamp, interval + interval,
+// timestamp + interval, and interval + timestamp. It takes two arrays as input and an integer sign representing
+// the operation (+1 for addition and -1 for subtraction). It returns a ColumnarValue as output, which can hold
+// either a scalar or an array.
+pub fn evaluate_temporal_arrays(
+    array_lhs: &ArrayRef,
+    sign: i32,
+    array_rhs: &ArrayRef,
+) -> Result<ColumnarValue> {
+    let ret = match (array_lhs.data_type(), array_rhs.data_type()) {
+        // Timestamp - Timestamp operations, operands of only the same types are supported.
+        (DataType::Timestamp(_, _), DataType::Timestamp(_, _)) => {
+            ts_array_op(array_lhs, array_rhs)?
+        }
+        // Interval (+ , -) Interval operations
+        (DataType::Interval(_), DataType::Interval(_)) => {
+            interval_array_op(array_lhs, array_rhs, sign)?
+        }
+        // Timestamp (+ , -) Interval and Interval + Timestamp operations
+        // Interval - Timestamp operation is not rational hence not supported
+        (DataType::Timestamp(_, _), DataType::Interval(_)) => {
+            ts_interval_array_op(array_lhs, sign, array_rhs)?
+        }
+        (DataType::Interval(_), DataType::Timestamp(_, _)) if sign == 1 => {
+            ts_interval_array_op(array_rhs, sign, array_lhs)?
+        }
+        (_, _) => Err(DataFusionError::Execution(format!(
+            "Invalid array types for DateIntervalExpr: {} {} {}",
+            array_lhs.data_type(),
+            sign,
+            array_rhs.data_type()
         )))?,
     };
     Ok(ColumnarValue::Array(ret))

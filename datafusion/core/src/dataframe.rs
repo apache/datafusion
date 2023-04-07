@@ -1371,7 +1371,7 @@ mod tests {
         let join = left
             .join_on(right, JoinType::Inner, [col("c1").eq(col("c1"))])
             .expect_err("join didn't fail check");
-        let expected = "Schema error: Ambiguous reference to unqualified field \"c1\"";
+        let expected = "Schema error: Ambiguous reference to unqualified field c1";
         assert_eq!(join.to_string(), expected);
 
         Ok(())
