@@ -289,22 +289,6 @@ pub fn calc_ordering_range(in1: &[usize]) -> usize {
     count
 }
 
-/// evaluate the partition points given the sort columns; if the sort columns are
-/// empty then the result will be a single element vec of the whole column rows.
-pub fn evaluate_partition_points(
-    num_rows: usize,
-    partition_columns: &[SortColumn],
-) -> Result<Vec<Range<usize>>> {
-    Ok(if partition_columns.is_empty() {
-        vec![Range {
-            start: 0,
-            end: num_rows,
-        }]
-    } else {
-        lexicographical_partition_ranges(partition_columns)?.collect()
-    })
-}
-
 /// Construct a new Vec<ArrayRef> from the rows of the `arrays` at the `indices`.
 pub fn get_arrayref_at_indices(
     arrays: &[ArrayRef],
@@ -334,15 +318,6 @@ mod tests {
     use crate::ScalarValue::Null;
 
     use super::*;
-
-    #[test]
-    fn test_calc_ordering_range() -> Result<()> {
-        assert_eq!(calc_ordering_range(&[0, 3, 4]), 1);
-        assert_eq!(calc_ordering_range(&[0, 1, 3, 4]), 2);
-        assert_eq!(calc_ordering_range(&[0, 1, 2, 3, 4]), 5);
-        assert_eq!(calc_ordering_range(&[1, 2, 3, 4]), 0);
-        Ok(())
-    }
 
     #[test]
     fn test_bisect_linear_left_and_right() -> Result<()> {
@@ -637,6 +612,15 @@ mod tests {
                 expected_parsed
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_calc_ordering_range() -> Result<()> {
+        assert_eq!(calc_ordering_range(&[0, 3, 4]), 1);
+        assert_eq!(calc_ordering_range(&[0, 1, 3, 4]), 2);
+        assert_eq!(calc_ordering_range(&[0, 1, 2, 3, 4]), 5);
+        assert_eq!(calc_ordering_range(&[1, 2, 3, 4]), 0);
         Ok(())
     }
 

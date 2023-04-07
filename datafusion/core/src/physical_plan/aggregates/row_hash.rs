@@ -45,7 +45,7 @@ use arrow::compute::{cast, SortColumn};
 use arrow::datatypes::{DataType, Schema, UInt32Type};
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::utils::{
-    evaluate_partition_points, get_arrayref_at_indices, get_row_at_idx,
+    evaluate_partition_ranges, get_arrayref_at_indices, get_row_at_idx,
 };
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
@@ -331,7 +331,7 @@ impl GroupedHashAggregateStream {
                 })
                 .collect::<Vec<_>>();
             let n_rows = group_rows.num_rows();
-            let ranges = evaluate_partition_points(n_rows, &sort_column)?;
+            let ranges = evaluate_partition_ranges(n_rows, &sort_column)?;
             for range in ranges {
                 let row = group_rows.row(range.start).owned();
                 let indices = (range.start as u32..range.end as u32).collect::<Vec<_>>();
