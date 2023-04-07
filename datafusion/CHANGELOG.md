@@ -32,9 +32,20 @@
 - Top down `EnforceSorting`, Extended testbench for `EnforceSorting` rule to prepare for refactors, additional functionality such as pushdowns over unions [#5661](https://github.com/apache/arrow-datafusion/pull/5661) (mustafasrepo)
 - Move `TransactionStart`/`TransactionEnd`/`SetVariable` into `LogicalPlan::Statement` [#5842](https://github.com/apache/arrow-datafusion/pull/5842) (alamb)
 
+**Implemented enhancements:**
+
+- feat: Simplify LOG and POWER functions [#5816](https://github.com/apache/arrow-datafusion/pull/5816) (izveigor)
+- feat: Add expression rewrite rules for LIKE and ILIKE [#5819](https://github.com/apache/arrow-datafusion/pull/5819) (Weijun-H)
+- feat: BuiltinScalarFunction::Cbrt [#5839](https://github.com/apache/arrow-datafusion/pull/5839) (izveigor)
+- feat: Quote column names if required in error messages [#5778](https://github.com/apache/arrow-datafusion/pull/5778) (alamb)
+
 **Fixed bugs:**
 
 - Fix parquet pruning when column names have periods [#5710](https://github.com/apache/arrow-datafusion/pull/5710) (alamb)
+- fix: parse table name into TableReference on converting substrait read [#5716](https://github.com/apache/arrow-datafusion/pull/5716) (waynexia)
+- fix: Enhance case expression type coercion [#5820](https://github.com/apache/arrow-datafusion/pull/5820) (Jefffrey)
+- fix: type_coercion support BinaryExpr ( interval , timestamp ). [#5845](https://github.com/apache/arrow-datafusion/pull/5845) (jackwener)
+- fix: coerce type for InSubquery and fix timestamp minus timestamp. [#5853](https://github.com/apache/arrow-datafusion/pull/5853) (jackwener)
 
 **Documentation updates:**
 
