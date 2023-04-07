@@ -127,9 +127,8 @@ pub(crate) fn pushdown_sorts(
             plan.equivalence_properties()
         }) {
             // If the current plan is a SortExec, modify it to satisfy parent requirements:
-            let parent_required_expr = PhysicalSortRequirement::to_sort_exprs(
-                parent_required.ok_or_else(err)?.iter().cloned(),
-            );
+            let parent_required_expr =
+                PhysicalSortRequirement::to_sort_exprs(parent_required.ok_or_else(err)?);
             new_plan = sort_exec.input.clone();
             add_sort_above(&mut new_plan, parent_required_expr)?;
         };
@@ -171,9 +170,8 @@ pub(crate) fn pushdown_sorts(
             }))
         } else {
             // Can not push down requirements, add new SortExec:
-            let parent_required_expr = PhysicalSortRequirement::to_sort_exprs(
-                parent_required.ok_or_else(err)?.iter().cloned(),
-            );
+            let parent_required_expr =
+                PhysicalSortRequirement::to_sort_exprs(parent_required.ok_or_else(err)?);
             let mut new_plan = plan.clone();
             add_sort_above(&mut new_plan, parent_required_expr)?;
             Ok(Transformed::Yes(SortPushDown::init(new_plan)))
@@ -209,9 +207,8 @@ fn pushdown_requirement_to_children(
     } else if let Some(smj) = plan.as_any().downcast_ref::<SortMergeJoinExec>() {
         // If the current plan is SortMergeJoinExec
         let left_columns_len = smj.left.schema().fields().len();
-        let parent_required_expr = PhysicalSortRequirement::to_sort_exprs(
-            parent_required.ok_or_else(err)?.iter().cloned(),
-        );
+        let parent_required_expr =
+            PhysicalSortRequirement::to_sort_exprs(parent_required.ok_or_else(err)?);
         let expr_source_side =
             expr_source_sides(&parent_required_expr, smj.join_type, left_columns_len);
         match expr_source_side {
