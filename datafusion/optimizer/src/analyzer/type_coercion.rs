@@ -151,21 +151,18 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let new_plan = analyze_internal(&self.schema, &subquery.subquery)?;
                 let expr_type = expr.get_type(&self.schema)?;
                 let subquery_type = new_plan.schema().field(0).data_type();
-                let result_type = comparison_coercion(&expr_type, subquery_type).ok_or(DataFusionError::Plan(
+                let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(DataFusionError::Plan(
                     format!(
                         "expr type {expr_type:?} can't cast to {subquery_type:?} in InSubquery"
                     ),
                 ))?;
                 let new_subquery = Subquery {
-                    subquery: Arc::new(analyze_internal(
-                        &self.schema,
-                        &subquery.subquery,
-                    )?),
+                    subquery: Arc::new(new_plan),
                     outer_ref_columns: subquery.outer_ref_columns,
                 };
                 Ok(Expr::InSubquery {
-                    expr: Box::new(expr.cast_to(&result_type, &self.schema)?),
-                    subquery: cast_subquery(new_subquery, &result_type)?,
+                    expr: Box::new(expr.cast_to(&common_type, &self.schema)?),
+                    subquery: cast_subquery(new_subquery, &common_type)?,
                     negated,
                 })
             }
@@ -1447,6 +1444,30 @@ mod test {
         Filter: CAST(a AS Int64) IN (<subquery>)\
         \n  Subquery:\
         \n    EmptyRelation\
+        \n  EmptyRelation";
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
+        Ok(())
+    }
+
+    #[test]
+    fn in_subquery_cast_all() -> Result<()> {
+        let empty_inside = empty_with_type(DataType::Decimal128(10, 5));
+        let empty_outside = empty_with_type(DataType::Decimal128(8, 8));
+
+        let in_subquery_expr = Expr::InSubquery {
+            expr: Box::new(col("a")),
+            subquery: Subquery {
+                subquery: empty_inside,
+                outer_ref_columns: vec![],
+            },
+            negated: false,
+        };
+        let plan = LogicalPlan::Filter(Filter::try_new(in_subquery_expr, empty_outside)?);
+        // add cast for subquery
+        let expected = "Filter: CAST(a AS Decimal128(13, 8)) IN (<subquery>)\
+        \n  Subquery:\
+        \n    Projection: CAST(a AS Decimal128(13, 8))\
+        \n      EmptyRelation\
         \n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
         Ok(())
