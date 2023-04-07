@@ -447,7 +447,7 @@ impl<'a> Tokenizer<'a> {
                 })?;
 
                 let s = val[1..len - 1].to_string();
-                if s.contains("\"") {
+                if s.contains('"') {
                     return Err(make_error(
                         self.val,
                         &format!("parsing {} as double quoted string: escaped double quote isn't supported", self.word),
