@@ -172,7 +172,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
             }
 
             let stream_idx = self.loser_tree[0];
-            if self.advance(stream_idx)  {
+            if self.advance(stream_idx) {
                 self.loser_tree_adjusted = false;
                 self.in_progress.push_row(stream_idx);
                 if self.in_progress.len() < self.batch_size {
