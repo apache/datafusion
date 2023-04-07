@@ -424,7 +424,7 @@ impl ExprIntervalGraph {
     ///  use datafusion_common::ScalarValue;
     ///  use datafusion_expr::Operator;
     ///  use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
-    ///  use datafusion_physical_expr::intervals::{Interval, ExprIntervalGraph};
+    ///  use datafusion_physical_expr::intervals::{Interval, IntervalBound, ExprIntervalGraph};
     ///  use datafusion_physical_expr::PhysicalExpr;
     ///  let expr = Arc::new(BinaryExpr::new(
     ///             Arc::new(Column::new("gnz", 0)),
