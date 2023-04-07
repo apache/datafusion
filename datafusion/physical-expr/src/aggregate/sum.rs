@@ -93,11 +93,6 @@ impl AggregateExpr for Sum {
                 self.data_type.clone(),
                 self.nullable,
             ),
-            Field::new(
-                format_state_name(&self.name, "count"),
-                DataType::UInt64,
-                self.nullable,
-            ),
         ])
     }
 
