@@ -78,6 +78,9 @@ fn get_valid_types(
                 .map(|_| current_types[0].clone())
                 .collect()]
         }
+        TypeSignature::VariadicAny => vec![(0..current_types.len())
+            .map(|i| current_types[i].clone())
+            .collect()],
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
         TypeSignature::Any(number) => {
             if current_types.len() != *number {
