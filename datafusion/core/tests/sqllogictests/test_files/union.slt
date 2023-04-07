@@ -40,7 +40,7 @@ CREATE TABLE t2(
 ;
 
 # union with EXCEPT(JOIN)
-query T
+query T rowsort
 (   
     SELECT name FROM t1
     EXCEPT
@@ -52,13 +52,12 @@ UNION ALL
     EXCEPT
     SELECT name FROM t1
 )
-ORDER BY name
 ----
 Alice
 John
 
 # union with type coercion
-query T
+query IT rowsort
 (   
     SELECT * FROM t1
     EXCEPT
@@ -70,17 +69,15 @@ UNION ALL
     EXCEPT
     SELECT * FROM t1
 )
-ORDER BY name
 ----
 3 Alice
 3 John
 
 # union all
-query I
+query I rowsort
 SELECT 1 as x
 UNION ALL
 SELECT 2 as x
-ORDER BY x
 ----
 1
 2
@@ -116,11 +113,10 @@ select COUNT(*) from (
 200
 
 # union_distinct
-query I
+query I rowsort
 SELECT 1 as x
 UNION
 SELECT 1 as x
-ORDER BY x
 ----
 1
 
@@ -148,21 +144,21 @@ SELECT COUNT(*) FROM (
 2
 
 # union_schemas
-query I
-SELECT 1 A UNION ALL SELECT 2 ORDER BY 1
+query I rowsort
+SELECT 1 A UNION ALL SELECT 2
 ----
 1
 2
 
 # union_schemas
-query I
-SELECT 1 UNION SELECT 2 ORDER BY 1
+query I rowsort
+SELECT 1 UNION SELECT 2
 ----
 1
 2
 
 # union_with_except_input
-query T
+query T rowsort
 (
     SELECT name FROM t1
     EXCEPT
@@ -174,13 +170,12 @@ UNION ALL
     EXCEPT
     SELECT name FROM t1
 )
-ORDER BY name
 ----
 Alice
 John
 
 # union_with_type_coercion
-query IT
+query IT rowsort
 (
     SELECT id, name FROM t1
     EXCEPT
@@ -192,7 +187,19 @@ UNION ALL
     EXCEPT
     SELECT id, name FROM t1
 )
-ORDER BY name
 ----
 3 Alice
 3 John
+
+########
+# Clean up after the test
+########
+
+statement ok
+drop table t1;
+
+statement ok
+drop table t2;
+
+statement ok
+drop table aggregate_test_100;

@@ -40,7 +40,7 @@ use datafusion_expr::expr::{
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
     BuiltInWindowFunction, BuiltinScalarFunction, Expr, JoinConstraint, JoinType,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction,
+    TryCast, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction,
 };
 
 #[derive(Debug)]
@@ -218,9 +218,12 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::Decimal256(_, _) => {
                 return Err(Error::General("Proto serialization error: The Decimal256 data type is not yet supported".to_owned()))
             }
-            DataType::Map(_, _) => {
-                return Err(Error::General(
-                    "Proto serialization error: The Map data type is not yet supported".to_owned()
+            DataType::Map(field, sorted) => {
+                Self::Map(Box::new(
+                    protobuf::Map {
+                        field_type: Some(Box::new(field.as_ref().try_into()?)),
+                        keys_sorted: *sorted,
+                    }
                 ))
             }
             DataType::RunEndEncoded(_, _) => {
@@ -237,9 +240,9 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
 impl From<Column> for protobuf::Column {
     fn from(c: Column) -> Self {
         Self {
-            relation: c
-                .relation
-                .map(|relation| protobuf::ColumnRelation { relation }),
+            relation: c.relation.map(|relation| protobuf::ColumnRelation {
+                relation: relation.to_string(),
+            }),
             name: c.name,
         }
     }
@@ -486,50 +489,59 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     // linearized from left innermost to right outermost (but while
                     // traversing the chain we do the exact opposite).
                     operands: exprs
-                    .into_iter()
-                    .rev()
-                    .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<_>, Error>>()?,
+                        .into_iter()
+                        .rev()
+                        .map(|expr| expr.try_into())
+                        .collect::<Result<Vec<_>, Error>>()?,
                     op: format!("{op:?}"),
                 };
                 Self {
                     expr_type: Some(ExprType::BinaryExpr(binary_expr)),
                 }
             }
-            Expr::Like(Like { negated, expr, pattern, escape_char }) => {
+            Expr::Like(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => {
                 let pb = Box::new(protobuf::LikeNode {
                     negated: *negated,
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     pattern: Some(Box::new(pattern.as_ref().try_into()?)),
-                    escape_char: escape_char
-                        .map(|ch| ch.to_string())
-                        .unwrap_or_default()
+                    escape_char: escape_char.map(|ch| ch.to_string()).unwrap_or_default(),
                 });
                 Self {
                     expr_type: Some(ExprType::Like(pb)),
                 }
             }
-            Expr::ILike(Like { negated, expr, pattern, escape_char }) => {
+            Expr::ILike(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => {
                 let pb = Box::new(protobuf::ILikeNode {
                     negated: *negated,
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     pattern: Some(Box::new(pattern.as_ref().try_into()?)),
-                    escape_char: escape_char
-                        .map(|ch| ch.to_string())
-                        .unwrap_or_default(),
+                    escape_char: escape_char.map(|ch| ch.to_string()).unwrap_or_default(),
                 });
                 Self {
                     expr_type: Some(ExprType::Ilike(pb)),
                 }
             }
-            Expr::SimilarTo(Like { negated, expr, pattern, escape_char }) => {
+            Expr::SimilarTo(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => {
                 let pb = Box::new(protobuf::SimilarToNode {
                     negated: *negated,
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     pattern: Some(Box::new(pattern.as_ref().try_into()?)),
-                    escape_char: escape_char
-                        .map(|ch| ch.to_string())
-                        .unwrap_or_default(),
+                    escape_char: escape_char.map(|ch| ch.to_string()).unwrap_or_default(),
                 });
                 Self {
                     expr_type: Some(ExprType::SimilarTo(pb)),
@@ -554,7 +566,11 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         )
                     }
                     // TODO: Tracked in https://github.com/apache/arrow-datafusion/issues/4584
-                    WindowFunction::AggregateUDF(_) => return Err(Error::NotImplemented("UDAF as window function in proto".to_string()))
+                    WindowFunction::AggregateUDF(_) => {
+                        return Err(Error::NotImplemented(
+                            "UDAF as window function in proto".to_string(),
+                        ))
+                    }
                 };
                 let arg_expr: Option<Box<Self>> = if !args.is_empty() {
                     let arg = &args[0];
@@ -571,7 +587,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     .map(|e| e.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let window_frame: Option<protobuf::WindowFrame> = Some(window_frame.try_into()?);
+                let window_frame: Option<protobuf::WindowFrame> =
+                    Some(window_frame.try_into()?);
                 let window_expr = Box::new(protobuf::WindowExprNode {
                     expr: arg_expr,
                     window_function: Some(window_function),
@@ -587,7 +604,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 ref fun,
                 ref args,
                 ref distinct,
-                ref filter
+                ref filter,
             }) => {
                 let aggr_function = match fun {
                     AggregateFunction::ApproxDistinct => {
@@ -645,7 +662,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::AggregateExpr(Box::new(aggregate_expr))),
                 }
             }
-            Expr::ScalarVariable(_, _) => return Err(Error::General("Proto serialization error: Scalar Variable not supported".to_string())),
+            Expr::ScalarVariable(_, _) => {
+                return Err(Error::General(
+                    "Proto serialization error: Scalar Variable not supported"
+                        .to_string(),
+                ))
+            }
             Expr::ScalarFunction { ref fun, ref args } => {
                 let fun: protobuf::ScalarFunction = fun.try_into()?;
                 let args: Vec<Self> = args
@@ -670,23 +692,22 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .collect::<Result<Vec<_>, Error>>()?,
                 })),
             },
-            Expr::AggregateUDF { fun, args, filter } => {
-                Self {
-                    expr_type: Some(ExprType::AggregateUdfExpr(
-                        Box::new(protobuf::AggregateUdfExprNode {
-                            fun_name: fun.name.clone(),
-                            args: args.iter().map(|expr| expr.try_into()).collect::<Result<
-                                Vec<_>,
-                                Error,
-                            >>()?,
-                            filter: match filter {
-                                Some(e) => Some(Box::new(e.as_ref().try_into()?)),
-                                None => None,
-                            },
+            Expr::AggregateUDF { fun, args, filter } => Self {
+                expr_type: Some(ExprType::AggregateUdfExpr(Box::new(
+                    protobuf::AggregateUdfExprNode {
+                        fun_name: fun.name.clone(),
+                        args: args.iter().map(|expr| expr.try_into()).collect::<Result<
+                            Vec<_>,
+                            Error,
+                        >>(
+                        )?,
+                        filter: match filter {
+                            Some(e) => Some(Box::new(e.as_ref().try_into()?)),
+                            None => None,
                         },
-                        ))),
-                }
-            }
+                    },
+                ))),
+            },
             Expr::Not(expr) => {
                 let expr = Box::new(protobuf::Not {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
@@ -776,7 +797,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 }
             }
             Expr::Case(case) => {
-                let when_then_expr = case.when_then_expr
+                let when_then_expr = case
+                    .when_then_expr
                     .iter()
                     .map(|(w, t)| {
                         Ok(protobuf::WhenThen {
@@ -809,7 +831,16 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Cast(expr)),
                 }
             }
-            Expr::Sort(Sort{
+            Expr::TryCast(TryCast { expr, data_type }) => {
+                let expr = Box::new(protobuf::TryCastNode {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                    arrow_type: Some(data_type.try_into()?),
+                });
+                Self {
+                    expr_type: Some(ExprType::TryCast(expr)),
+                }
+            }
+            Expr::Sort(Sort {
                 expr,
                 asc,
                 nulls_first,
@@ -851,27 +882,30 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             Expr::Wildcard => Self {
                 expr_type: Some(ExprType::Wildcard(true)),
             },
-            Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } => {
+            Expr::ScalarSubquery(_)
+            | Expr::InSubquery { .. }
+            | Expr::Exists { .. }
+            | Expr::OuterReferenceColumn { .. } => {
                 // we would need to add logical plan operators to datafusion.proto to support this
                 // see discussion in https://github.com/apache/arrow-datafusion/issues/2565
-                return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } not supported".to_string()));
+                return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } | Exp:OuterReferenceColumn not supported".to_string()));
             }
-            Expr::GetIndexedField(GetIndexedField { key, expr }) =>
-                Self {
-                    expr_type: Some(ExprType::GetIndexedField(Box::new(
-                        protobuf::GetIndexedField {
-                            key: Some(key.try_into()?),
-                            expr: Some(Box::new(expr.as_ref().try_into()?)),
-                        },
-                    ))),
-                },
+            Expr::GetIndexedField(GetIndexedField { key, expr }) => Self {
+                expr_type: Some(ExprType::GetIndexedField(Box::new(
+                    protobuf::GetIndexedField {
+                        key: Some(key.try_into()?),
+                        expr: Some(Box::new(expr.as_ref().try_into()?)),
+                    },
+                ))),
+            },
 
             Expr::GroupingSet(GroupingSet::Cube(exprs)) => Self {
                 expr_type: Some(ExprType::Cube(CubeNode {
                     expr: exprs.iter().map(|expr| expr.try_into()).collect::<Result<
                         Vec<_>,
                         Self::Error,
-                    >>()?,
+                    >>(
+                    )?,
                 })),
             },
             Expr::GroupingSet(GroupingSet::Rollup(exprs)) => Self {
@@ -879,7 +913,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr: exprs.iter().map(|expr| expr.try_into()).collect::<Result<
                         Vec<_>,
                         Self::Error,
-                    >>()?,
+                    >>(
+                    )?,
                 })),
             },
             Expr::GroupingSet(GroupingSet::GroupingSets(exprs)) => Self {
@@ -897,7 +932,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .collect::<Result<Vec<_>, Self::Error>>()?,
                 })),
             },
-            Expr::Placeholder{ id, data_type } => {
+            Expr::Placeholder { id, data_type } => {
                 let data_type = match data_type {
                     Some(data_type) => Some(data_type.try_into()?),
                     None => None,
@@ -908,10 +943,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         data_type,
                     })),
                 }
-            },
+            }
 
-            Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } =>
-                return Err(Error::General("Proto serialization error: Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } not supported".to_string())),
+            Expr::QualifiedWildcard { .. } => return Err(Error::General(
+                "Proto serialization error: Expr::QualifiedWildcard { .. } not supported"
+                    .to_string(),
+            )),
         };
 
         Ok(expr_node)
@@ -1214,6 +1251,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
     fn try_from(scalar: &BuiltinScalarFunction) -> Result<Self, Self::Error> {
         let scalar_function = match scalar {
             BuiltinScalarFunction::Sqrt => Self::Sqrt,
+            BuiltinScalarFunction::Cbrt => Self::Cbrt,
             BuiltinScalarFunction::Sin => Self::Sin,
             BuiltinScalarFunction::Cos => Self::Cos,
             BuiltinScalarFunction::Tan => Self::Tan,
@@ -1318,12 +1356,14 @@ impl From<OwnedTableReference> for protobuf::OwnedTableReference {
         use protobuf::owned_table_reference::TableReferenceEnum;
         let table_reference_enum = match t {
             OwnedTableReference::Bare { table } => {
-                TableReferenceEnum::Bare(protobuf::BareTableReference { table })
+                TableReferenceEnum::Bare(protobuf::BareTableReference {
+                    table: table.to_string(),
+                })
             }
             OwnedTableReference::Partial { schema, table } => {
                 TableReferenceEnum::Partial(protobuf::PartialTableReference {
-                    schema,
-                    table,
+                    schema: schema.to_string(),
+                    table: table.to_string(),
                 })
             }
             OwnedTableReference::Full {
@@ -1331,9 +1371,9 @@ impl From<OwnedTableReference> for protobuf::OwnedTableReference {
                 schema,
                 table,
             } => TableReferenceEnum::Full(protobuf::FullTableReference {
-                catalog,
-                schema,
-                table,
+                catalog: catalog.to_string(),
+                schema: schema.to_string(),
+                table: table.to_string(),
             }),
         };
 

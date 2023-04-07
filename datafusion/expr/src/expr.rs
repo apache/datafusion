@@ -21,7 +21,7 @@ use crate::aggregate_function;
 use crate::built_in_function;
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
-use crate::utils::expr_to_columns;
+use crate::utils::{expr_to_columns, find_out_reference_exprs};
 use crate::window_frame;
 use crate::window_function;
 use crate::AggregateUDF;
@@ -220,6 +220,9 @@ pub enum Expr {
         /// The type the parameter will be filled in with
         data_type: Option<DataType>,
     },
+    /// A place holder which hold a reference to a qualified field
+    /// in the outer query, used for correlated sub queries.
+    OuterReferenceColumn(DataType, Column),
 }
 
 /// Binary expression
@@ -238,35 +241,6 @@ impl BinaryExpr {
     pub fn new(left: Box<Expr>, op: Operator, right: Box<Expr>) -> Self {
         Self { left, op, right }
     }
-
-    /// Get the operator precedence
-    /// use <https://www.postgresql.org/docs/7.0/operators.htm#AEN2026> as a reference
-    pub fn precedence(&self) -> u8 {
-        match self.op {
-            Operator::Or => 5,
-            Operator::And => 10,
-            Operator::NotEq
-            | Operator::Eq
-            | Operator::Lt
-            | Operator::LtEq
-            | Operator::Gt
-            | Operator::GtEq => 20,
-            Operator::Plus | Operator::Minus => 30,
-            Operator::Multiply | Operator::Divide | Operator::Modulo => 40,
-            Operator::IsDistinctFrom
-            | Operator::IsNotDistinctFrom
-            | Operator::RegexMatch
-            | Operator::RegexNotMatch
-            | Operator::RegexIMatch
-            | Operator::RegexNotIMatch
-            | Operator::BitwiseAnd
-            | Operator::BitwiseOr
-            | Operator::BitwiseShiftLeft
-            | Operator::BitwiseShiftRight
-            | Operator::BitwiseXor
-            | Operator::StringConcat => 0,
-        }
-    }
 }
 
 impl Display for BinaryExpr {
@@ -283,7 +257,7 @@ impl Display for BinaryExpr {
         ) -> fmt::Result {
             match expr {
                 Expr::BinaryExpr(child) => {
-                    let p = child.precedence();
+                    let p = child.op.precedence();
                     if p == 0 || p < precedence {
                         write!(f, "({child})")?;
                     } else {
@@ -295,7 +269,7 @@ impl Display for BinaryExpr {
             Ok(())
         }
 
-        let precedence = self.precedence();
+        let precedence = self.op.precedence();
         write_child(f, self.left.as_ref(), precedence)?;
         write!(f, " {} ", self.op)?;
         write_child(f, self.right.as_ref(), precedence)
@@ -303,7 +277,7 @@ impl Display for BinaryExpr {
 }
 
 /// CASE expression
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Case {
     /// Optional base expression that can be compared to literal values in the "when" expressions
     pub expr: Option<Box<Expr>>,
@@ -596,6 +570,7 @@ impl Expr {
             Expr::Case { .. } => "Case",
             Expr::Cast { .. } => "Cast",
             Expr::Column(..) => "Column",
+            Expr::OuterReferenceColumn(_, _) => "Outer",
             Expr::Exists { .. } => "Exists",
             Expr::GetIndexedField { .. } => "GetIndexedField",
             Expr::GroupingSet(..) => "GroupingSet",
@@ -666,6 +641,31 @@ impl Expr {
     /// Return `self || other`
     pub fn or(self, other: Expr) -> Expr {
         binary_expr(self, Operator::Or, other)
+    }
+
+    /// Return `self & other`
+    pub fn bitwise_and(self, other: Expr) -> Expr {
+        binary_expr(self, Operator::BitwiseAnd, other)
+    }
+
+    /// Return `self | other`
+    pub fn bitwise_or(self, other: Expr) -> Expr {
+        binary_expr(self, Operator::BitwiseOr, other)
+    }
+
+    /// Return `self ^ other`
+    pub fn bitwise_xor(self, other: Expr) -> Expr {
+        binary_expr(self, Operator::BitwiseXor, other)
+    }
+
+    /// Return `self >> other`
+    pub fn bitwise_shift_right(self, other: Expr) -> Expr {
+        binary_expr(self, Operator::BitwiseShiftRight, other)
+    }
+
+    /// Return `self << other`
+    pub fn bitwise_shift_left(self, other: Expr) -> Expr {
+        binary_expr(self, Operator::BitwiseShiftLeft, other)
     }
 
     /// Return `!self`
@@ -789,6 +789,11 @@ impl Expr {
 
         Ok(using_columns)
     }
+
+    /// Return true when the expression contains out reference(correlated) expressions.
+    pub fn contains_outer(&self) -> bool {
+        !find_out_reference_exprs(self).is_empty()
+    }
 }
 
 impl Not for Expr {
@@ -834,6 +839,7 @@ impl fmt::Debug for Expr {
         match self {
             Expr::Alias(expr, alias) => write!(f, "{expr:?} AS {alias}"),
             Expr::Column(c) => write!(f, "{c}"),
+            Expr::OuterReferenceColumn(_, c) => write!(f, "outer_ref({c})"),
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v) => write!(f, "{v:?}"),
             Expr::Case(case) => {
@@ -1114,6 +1120,7 @@ fn create_name(e: &Expr) -> Result<String> {
     match e {
         Expr::Alias(_, name) => Ok(name.clone()),
         Expr::Column(c) => Ok(c.flat_name()),
+        Expr::OuterReferenceColumn(_, c) => Ok(format!("outer_ref({})", c.flat_name())),
         Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
         Expr::Literal(value) => Ok(format!("{value:?}")),
         Expr::BinaryExpr(binary_expr) => {

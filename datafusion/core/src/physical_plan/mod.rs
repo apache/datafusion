@@ -37,6 +37,7 @@ use futures::stream::Stream;
 use std::fmt;
 use std::fmt::Debug;
 
+use datafusion_common::tree_node::Transformed;
 use datafusion_common::DataFusionError;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -141,7 +142,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// NOTE that checking `!is_empty()` does **not** check for a
     /// required input ordering. Instead, the correct check is that at
     /// least one entry must be `Some`
-    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
         vec![None; self.children().len()]
     }
 
@@ -269,7 +270,7 @@ pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
 pub fn with_new_children_if_necessary(
     plan: Arc<dyn ExecutionPlan>,
     children: Vec<Arc<dyn ExecutionPlan>>,
-) -> Result<Arc<dyn ExecutionPlan>> {
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let old_children = plan.children();
     if children.len() != old_children.len() {
         Err(DataFusionError::Internal(
@@ -281,9 +282,9 @@ pub fn with_new_children_if_necessary(
             .zip(old_children.iter())
             .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
     {
-        plan.with_new_children(children)
+        Ok(Transformed::Yes(plan.with_new_children(children)?))
     } else {
-        Ok(plan)
+        Ok(Transformed::No(plan))
     }
 }
 
@@ -318,15 +319,14 @@ pub fn with_new_children_if_necessary(
 ///   let normalized = Path::from_filesystem_path(working_directory).unwrap();
 ///   let plan_string = plan_string.replace(normalized.as_ref(), "WORKING_DIR");
 ///
-///   assert_eq!("ProjectionExec: expr=[a@0 as a]\
-///              \n  CoalesceBatchesExec: target_batch_size=8192\
-///              \n    FilterExec: a@0 < 5\
-///              \n      RepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1\
-///              \n        CsvExec: files={1 group: [[WORKING_DIR/tests/data/example.csv]]}, has_header=true, limit=None, projection=[a]",
+///   assert_eq!("CoalesceBatchesExec: target_batch_size=8192\
+///              \n  FilterExec: a@0 < 5\
+///              \n    RepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1\
+///              \n      CsvExec: files={1 group: [[WORKING_DIR/tests/data/example.csv]]}, has_header=true, limit=None, projection=[a]",
 ///               plan_string.trim());
 ///
 ///   let one_line = format!("{}", displayable_plan.one_line());
-///   assert_eq!("ProjectionExec: expr=[a@0 as a]", one_line.trim());
+///   assert_eq!("CoalesceBatchesExec: target_batch_size=8192", one_line.trim());
 /// }
 /// ```
 ///
@@ -591,11 +591,11 @@ impl Distribution {
 
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::WindowExpr;
-use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_expr::{
     expr_list_eq_strict_order, normalize_expr_with_equivalence_properties,
 };
 pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
 /// projected schema
@@ -654,12 +654,13 @@ pub mod metrics;
 pub mod planner;
 pub mod projection;
 pub mod repartition;
-pub mod rewrite;
 pub mod sorts;
 pub mod stream;
 pub mod streaming;
+pub mod tree_node;
 pub mod udaf;
 pub mod union;
+pub mod unnest;
 pub mod values;
 pub mod windows;
 

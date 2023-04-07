@@ -128,9 +128,7 @@ impl ListingSchemaProvider {
             if !self.table_exist(table_name) {
                 let table_url = format!("{}/{}", self.authority, table_path);
 
-                let name = OwnedTableReference::Bare {
-                    table: table_name.to_string(),
-                };
+                let name = OwnedTableReference::bare(table_name.to_string());
                 let provider = self
                     .factory
                     .create(
@@ -146,6 +144,7 @@ impl ListingSchemaProvider {
                             if_not_exists: false,
                             definition: None,
                             file_compression_type: CompressionTypeVariant::UNCOMPRESSED,
+                            order_exprs: vec![],
                             options: Default::default(),
                         },
                     )

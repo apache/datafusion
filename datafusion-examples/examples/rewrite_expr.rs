@@ -17,8 +17,8 @@
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::expr_rewriter::rewrite_expr;
 use datafusion_expr::{
     AggregateUDF, Between, Expr, Filter, LogicalPlan, ScalarUDF, TableSource,
 };
@@ -105,9 +105,9 @@ impl OptimizerRule for MyRule {
 
 /// use rewrite_expr to modify the expression tree.
 fn my_rewrite(expr: Expr) -> Result<Expr> {
-    rewrite_expr(expr, |e| {
+    expr.transform(&|expr| {
         // closure is invoked for all sub expressions
-        match e {
+        Ok(match expr {
             Expr::Between(Between {
                 expr,
                 negated,
@@ -119,13 +119,13 @@ fn my_rewrite(expr: Expr) -> Result<Expr> {
                 let low: Expr = *low;
                 let high: Expr = *high;
                 if negated {
-                    Ok(expr.clone().lt(low).or(expr.gt(high)))
+                    Transformed::Yes(expr.clone().lt(low).or(expr.gt(high)))
                 } else {
-                    Ok(expr.clone().gt_eq(low).and(expr.lt_eq(high)))
+                    Transformed::Yes(expr.clone().gt_eq(low).and(expr.lt_eq(high)))
                 }
             }
-            _ => Ok(e),
-        }
+            _ => Transformed::No(expr),
+        })
     })
 }
 

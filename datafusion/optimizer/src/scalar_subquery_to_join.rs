@@ -72,12 +72,12 @@ impl ScalarSubqueryToJoin {
                                 Ok(subquery) => subquery,
                                 _ => return Ok(()),
                             };
-                            let subquery = self
+                            let subquery_plan = self
                                 .try_optimize(&subquery.subquery, config)?
                                 .map(Arc::new)
                                 .unwrap_or_else(|| subquery.subquery.clone());
-                            let subquery = Subquery { subquery };
-                            let res = SubqueryInfo::new(subquery, expr, *op, lhs);
+                            let new_subquery = subquery.with_plan(subquery_plan);
+                            let res = SubqueryInfo::new(new_subquery, expr, *op, lhs);
                             subqueries.push(res);
                             Ok(())
                         };
@@ -272,16 +272,10 @@ fn optimize_scalar(
     // qualify the join columns for outside the subquery
     let mut subqry_cols: Vec<_> = subqry_cols
         .iter()
-        .map(|it| Column {
-            relation: Some(subqry_alias.clone()),
-            name: it.name.clone(),
-        })
+        .map(|it| Column::new(Some(subqry_alias.clone()), it.name.clone()))
         .collect();
 
-    let qry_expr = Expr::Column(Column {
-        relation: Some(subqry_alias),
-        name: "__value".to_string(),
-    });
+    let qry_expr = Expr::Column(Column::new(Some(subqry_alias), "__value".to_string()));
 
     // if correlated subquery's operation is column equality, put the clause into join on clause.
     let mut restore_where_clause = true;
@@ -330,7 +324,6 @@ fn optimize_scalar(
         new_plan = new_plan.filter(expr)?
     }
     let new_plan = new_plan.build()?;
-
     Ok(Some(new_plan))
 }
 
@@ -668,25 +661,27 @@ mod tests {
 
     /// Test for correlated scalar expressions
     #[test]
-    #[ignore]
     fn scalar_subquery_project_expr() -> Result<()> {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
                 .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
-                .project(vec![max(col("orders.o_custkey")).add(lit(1))])?
+                .project(vec![col("MAX(orders.o_custkey)").add(lit(1))])?
                 .build()?,
         );
-        /*
-        Error: SchemaError(FieldNotFound { qualifier: Some("orders"), name: "o_custkey", valid_fields: ["MAX(orders.o_custkey)"] })
-         */
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#""#;
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+        \n  Inner Join: customer.c_custkey = __scalar_sq_1.o_custkey, customer.c_custkey = __scalar_sq_1.__value [c_custkey:Int64, c_name:Utf8, o_custkey:Int64, __value:Int64;N]\
+        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+        \n    SubqueryAlias: __scalar_sq_1 [o_custkey:Int64, __value:Int64;N]\
+        \n      Projection: orders.o_custkey, MAX(orders.o_custkey) + Int32(1) AS __value [o_custkey:Int64, __value:Int64;N]\
+        \n        Aggregate: groupBy=[[orders.o_custkey]], aggr=[[MAX(orders.o_custkey)]] [o_custkey:Int64, MAX(orders.o_custkey):Int64;N]\
+        \n          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(ScalarSubqueryToJoin::new()),

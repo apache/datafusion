@@ -21,8 +21,16 @@ use super::optimizer::PhysicalOptimizerRule;
 
 use crate::config::ConfigOptions;
 use crate::error::Result;
+use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
+use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use crate::physical_plan::union::UnionExec;
+use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion_common::tree_node::Transformed;
+use datafusion_physical_expr::utils::ordering_satisfy;
 use datafusion_physical_expr::PhysicalSortExpr;
 use std::sync::Arc;
 
@@ -44,26 +52,62 @@ pub fn optimize_children(
     if children.is_empty() {
         Ok(Arc::clone(&plan))
     } else {
-        with_new_children_if_necessary(plan, children)
+        with_new_children_if_necessary(plan, children).map(Transformed::into)
     }
 }
 
-/// Util function to add SortExec above child
-/// preserving the original partitioning
-pub fn add_sort_above_child(
-    child: &Arc<dyn ExecutionPlan>,
+/// This utility function adds a `SortExec` above an operator according to the
+/// given ordering requirements while preserving the original partitioning.
+pub fn add_sort_above(
+    node: &mut Arc<dyn ExecutionPlan>,
     sort_expr: Vec<PhysicalSortExpr>,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let new_child = if child.output_partitioning().partition_count() > 1 {
-        Arc::new(SortExec::new_with_partitioning(
-            sort_expr,
-            child.clone(),
-            true,
-            None,
-        )) as Arc<dyn ExecutionPlan>
-    } else {
-        Arc::new(SortExec::try_new(sort_expr, child.clone(), None)?)
-            as Arc<dyn ExecutionPlan>
-    };
-    Ok(new_child)
+) -> Result<()> {
+    // If the ordering requirement is already satisfied, do not add a sort.
+    if !ordering_satisfy(node.output_ordering(), Some(&sort_expr), || {
+        node.equivalence_properties()
+    }) {
+        *node = Arc::new(if node.output_partitioning().partition_count() > 1 {
+            SortExec::new_with_partitioning(sort_expr, node.clone(), true, None)
+        } else {
+            SortExec::try_new(sort_expr, node.clone(), None)?
+        }) as _
+    }
+    Ok(())
+}
+
+/// Checks whether the given operator is a limit;
+/// i.e. either a [`LocalLimitExec`] or a [`GlobalLimitExec`].
+pub fn is_limit(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<GlobalLimitExec>() || plan.as_any().is::<LocalLimitExec>()
+}
+
+/// Checks whether the given operator is a window;
+/// i.e. either a [`WindowAggExec`] or a [`BoundedWindowAggExec`].
+pub fn is_window(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<WindowAggExec>() || plan.as_any().is::<BoundedWindowAggExec>()
+}
+
+/// Checks whether the given operator is a [`SortExec`].
+pub fn is_sort(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<SortExec>()
+}
+
+/// Checks whether the given operator is a [`SortPreservingMergeExec`].
+pub fn is_sort_preserving_merge(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<SortPreservingMergeExec>()
+}
+
+/// Checks whether the given operator is a [`CoalescePartitionsExec`].
+pub fn is_coalesce_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<CoalescePartitionsExec>()
+}
+
+/// Checks whether the given operator is a [`UnionExec`].
+pub fn is_union(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<UnionExec>()
+}
+
+/// Checks whether the given operator is a [`RepartitionExec`].
+pub fn is_repartition(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<RepartitionExec>()
 }

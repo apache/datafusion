@@ -29,23 +29,24 @@ use arrow::datatypes::{
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
     ScalarValue,
 };
 use datafusion_expr::{
-    abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
+    abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, cbrt, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
     date_part, date_trunc, digest, exp,
     expr::{self, Sort, WindowFunction},
-    floor, from_unixtime, left, ln, log10, log2,
+    floor, from_unixtime, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, now, nullif, octet_length, power, random, regexp_match,
     regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
     sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr,
     substring, tan, to_hex, to_timestamp_micros, to_timestamp_millis,
-    to_timestamp_seconds, translate, trim, trunc, upper, uuid, AggregateFunction,
-    Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr,
-    GetIndexedField, GroupingSet,
+    to_timestamp_seconds, translate, trim, trunc, upper, uuid,
+    window_frame::regularize,
+    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
+    Case, Cast, Expr, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -113,13 +114,13 @@ impl Error {
 pub trait FromOptionalField<T> {
     /// Converts an optional protobuf field to an option of a different type
     ///
-    /// Returns None if the option is None, otherwise calls [`FromField::field`]
+    /// Returns None if the option is None, otherwise calls [`TryInto::try_into`]
     /// on the contained data, returning any error encountered
     fn optional(self) -> Result<Option<T>, Error>;
 
     /// Converts an optional protobuf field to a different type, returning an error if None
     ///
-    /// Returns `Error::MissingRequiredField` if None, otherwise calls [`FromField::field`]
+    /// Returns `Error::MissingRequiredField` if None, otherwise calls [`TryInto::try_into`]
     /// on the contained data, returning any error encountered
     fn required(self, field: impl Into<String>) -> Result<T, Error>;
 }
@@ -144,10 +145,7 @@ impl From<protobuf::Column> for Column {
     fn from(c: protobuf::Column) -> Self {
         let protobuf::Column { relation, name } = c;
 
-        Self {
-            relation: relation.map(|r| r.relation),
-            name,
-        }
+        Self::new(relation.map(|r| r.relation), name)
     }
 }
 
@@ -189,7 +187,7 @@ impl TryFrom<&protobuf::DfField> for DFField {
         let field = df_field.field.as_ref().required("field")?;
 
         Ok(match &df_field.qualifier {
-            Some(q) => DFField::from_qualified(&q.relation, field),
+            Some(q) => DFField::from_qualified(q.relation.clone(), field),
             None => DFField::from(field),
         })
     }
@@ -216,21 +214,17 @@ impl TryFrom<protobuf::OwnedTableReference> for OwnedTableReference {
 
         match table_reference_enum {
             TableReferenceEnum::Bare(protobuf::BareTableReference { table }) => {
-                Ok(OwnedTableReference::Bare { table })
+                Ok(OwnedTableReference::bare(table))
             }
             TableReferenceEnum::Partial(protobuf::PartialTableReference {
                 schema,
                 table,
-            }) => Ok(OwnedTableReference::Partial { schema, table }),
+            }) => Ok(OwnedTableReference::partial(schema, table)),
             TableReferenceEnum::Full(protobuf::FullTableReference {
                 catalog,
                 schema,
                 table,
-            }) => Ok(OwnedTableReference::Full {
-                catalog,
-                schema,
-                table,
-            }),
+            }) => Ok(OwnedTableReference::full(catalog, schema, table)),
         }
     }
 }
@@ -350,6 +344,12 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 let value_datatype = dict.as_ref().value.as_deref().required("value")?;
                 DataType::Dictionary(Box::new(key_datatype), Box::new(value_datatype))
             }
+            arrow_type::ArrowTypeEnum::Map(map) => {
+                let field: Field =
+                    map.as_ref().field_type.as_deref().required("field_type")?;
+                let keys_sorted = map.keys_sorted;
+                DataType::Map(Box::new(field), keys_sorted)
+            }
         })
     }
 }
@@ -400,6 +400,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
         use protobuf::ScalarFunction;
         match f {
             ScalarFunction::Sqrt => Self::Sqrt,
+            ScalarFunction::Cbrt => Self::Cbrt,
             ScalarFunction::Sin => Self::Sin,
             ScalarFunction::Cos => Self::Cos,
             ScalarFunction::Tan => Self::Tan,
@@ -907,16 +908,15 @@ pub fn parse_expr(
                 .window_frame
                 .as_ref()
                 .map::<Result<WindowFrame, _>, _>(|window_frame| {
-                    let window_frame: WindowFrame = window_frame.clone().try_into()?;
-                    if WindowFrameUnits::Range == window_frame.units
-                        && order_by.len() != 1
-                    {
-                        Err(proto_error("With window frame of type RANGE, the order by expression must be of length 1"))
-                    } else {
-                        Ok(window_frame)
-                    }
+                    let window_frame = window_frame.clone().try_into()?;
+                    regularize(window_frame, order_by.len())
                 })
-                .transpose()?.ok_or_else(||{DataFusionError::Execution("expects somothing".to_string())})?;
+                .transpose()?
+                .ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "missing window frame during deserialization".to_string(),
+                    )
+                })?;
 
             match window_function {
                 window_expr_node::WindowFunction::AggrFunction(i) => {
@@ -1130,6 +1130,7 @@ pub fn parse_expr(
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
                 ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Sin => Ok(sin(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Cos => Ok(cos(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Tan => Ok(tan(parse_expr(&args[0], registry)?)),
@@ -1140,7 +1141,12 @@ pub fn parse_expr(
                 ScalarFunction::Log10 => Ok(log10(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Floor => Ok(floor(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Ceil => Ok(ceil(parse_expr(&args[0], registry)?)),
-                ScalarFunction::Round => Ok(round(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Round => Ok(round(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
                 ScalarFunction::Trunc => Ok(trunc(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Abs => Ok(abs(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Signum => Ok(signum(parse_expr(&args[0], registry)?)),
@@ -1303,6 +1309,10 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
+                ScalarFunction::Log => Ok(log(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::FromUnixtime => {
                     Ok(from_unixtime(parse_expr(&args[0], registry)?))
                 }
@@ -1379,7 +1389,7 @@ pub fn parse_expr(
 }
 
 /// Parse an optional escape_char for Like, ILike, SimilarTo
-fn parse_escape_char(s: &str) -> Result<Option<char>, DataFusionError> {
+fn parse_escape_char(s: &str) -> Result<Option<char>> {
     match s.len() {
         0 => Ok(None),
         1 => Ok(s.chars().next()),

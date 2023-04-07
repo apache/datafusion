@@ -16,13 +16,11 @@
 // under the License.
 
 use clap::Parser;
-use datafusion::datasource::object_store::ObjectStoreRegistry;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicFileCatalog;
-use datafusion_cli::object_storage::DatafusionCliObjectStoreProvider;
 use datafusion_cli::{
     exec, print_format::PrintFormat, print_options::PrintOptions, DATAFUSION_CLI_VERSION,
 };
@@ -149,11 +147,7 @@ pub async fn main() -> Result<()> {
 }
 
 fn create_runtime_env() -> Result<RuntimeEnv> {
-    let object_store_provider = DatafusionCliObjectStoreProvider {};
-    let object_store_registry =
-        ObjectStoreRegistry::new_with_provider(Some(Arc::new(object_store_provider)));
-    let rn_config =
-        RuntimeConfig::new().with_object_store_registry(Arc::new(object_store_registry));
+    let rn_config = RuntimeConfig::new();
     RuntimeEnv::new(rn_config)
 }
 

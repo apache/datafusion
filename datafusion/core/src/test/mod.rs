@@ -26,16 +26,19 @@ use crate::error::Result;
 use crate::from_slice::FromSlice;
 use crate::logical_expr::LogicalPlan;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
+use crate::physical_plan::memory::MemoryExec;
+use crate::physical_plan::ExecutionPlan;
 use crate::test::object_store::local_unpartitioned_file;
 use crate::test_util::{aggr_test_schema, arrow_test_data};
 use array::ArrayRef;
 use arrow::array::{self, Array, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 #[cfg(feature = "compression")]
 use bzip2::write::BzEncoder;
 #[cfg(feature = "compression")]
 use bzip2::Compression as BzCompression;
+use datafusion_common::DataFusionError;
 #[cfg(feature = "compression")]
 use flate2::write::GzEncoder;
 #[cfg(feature = "compression")]
@@ -49,6 +52,8 @@ use std::sync::Arc;
 use tempfile::TempDir;
 #[cfg(feature = "compression")]
 use xz2::write::XzEncoder;
+#[cfg(feature = "compression")]
+use zstd::Encoder as ZstdEncoder;
 
 pub fn create_table_dual() -> Arc<dyn TableProvider> {
     let dual_schema = Arc::new(Schema::new(vec![
@@ -124,14 +129,22 @@ pub fn partitioned_file_groups(
             #[cfg(feature = "compression")]
             FileCompressionType::XZ => Box::new(XzEncoder::new(file, 9)),
             #[cfg(feature = "compression")]
+            FileCompressionType::ZSTD => {
+                let encoder = ZstdEncoder::new(file, 0)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .auto_finish();
+                Box::new(encoder)
+            }
+            #[cfg(feature = "compression")]
             FileCompressionType::BZIP2 => {
                 Box::new(BzEncoder::new(file, BzCompression::default()))
             }
             #[cfg(not(feature = "compression"))]
             FileCompressionType::GZIP
             | FileCompressionType::BZIP2
-            | FileCompressionType::XZ => {
-                panic!("GZIP compression is not supported in this build")
+            | FileCompressionType::XZ
+            | FileCompressionType::ZSTD => {
+                panic!("Compression is not supported in this build")
             }
         };
 
@@ -196,7 +209,7 @@ pub fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {
     assert_eq!(actual, expected);
 }
 
-/// returns a table with 3 columns of i32 in memory
+/// returns record batch with 3 columns of i32 in memory
 pub fn build_table_i32(
     a: (&str, &Vec<i32>),
     b: (&str, &Vec<i32>),
@@ -217,6 +230,17 @@ pub fn build_table_i32(
         ],
     )
     .unwrap()
+}
+
+/// returns memory table scan wrapped around record batch with 3 columns of i32
+pub fn build_table_scan_i32(
+    a: (&str, &Vec<i32>),
+    b: (&str, &Vec<i32>),
+    c: (&str, &Vec<i32>),
+) -> Arc<dyn ExecutionPlan> {
+    let batch = build_table_i32(a, b, c);
+    let schema = batch.schema();
+    Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap())
 }
 
 /// Returns the column names on the schema
@@ -249,6 +273,14 @@ pub fn make_partition(sz: i32) -> RecordBatch {
     let arr = arr as ArrayRef;
 
     RecordBatch::try_new(schema, vec![arr]).unwrap()
+}
+
+/// Return a RecordBatch with a single array with row_count sz
+pub fn make_batch_no_column(sz: usize) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![]));
+
+    let options = RecordBatchOptions::new().with_row_count(Option::from(sz));
+    RecordBatch::try_new_with_options(schema, vec![], &options).unwrap()
 }
 
 /// Return a new table which provide this decimal column

@@ -29,6 +29,7 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::window_function::WindowFunction;
 use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::physical_plan::expressions::GetIndexedFieldExpr;
 use datafusion::physical_plan::expressions::LikeExpr;
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{
@@ -39,7 +40,7 @@ use datafusion::physical_plan::{
     functions, Partitioning,
 };
 use datafusion::physical_plan::{ColumnStatistics, PhysicalExpr, Statistics};
-use datafusion_common::DataFusionError;
+use datafusion_common::{DataFusionError, Result};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::convert::{TryFrom, TryInto};
@@ -71,7 +72,7 @@ pub fn parse_physical_expr(
     proto: &protobuf::PhysicalExprNode,
     registry: &dyn FunctionRegistry,
     input_schema: &Schema,
-) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
+) -> Result<Arc<dyn PhysicalExpr>> {
     let expr_type = proto
         .expr_type
         .as_ref()
@@ -196,7 +197,7 @@ pub fn parse_physical_expr(
                         )?,
                     ))
                 })
-                .collect::<Result<Vec<_>, DataFusionError>>()?,
+                .collect::<Result<Vec<_>>>()?,
             e.else_expr
                 .as_ref()
                 .map(|e| parse_physical_expr(e.as_ref(), registry, input_schema))
@@ -282,6 +283,17 @@ pub fn parse_physical_expr(
                 input_schema,
             )?,
         )),
+        ExprType::GetIndexedFieldExpr(get_indexed_field_expr) => {
+            Arc::new(GetIndexedFieldExpr::new(
+                parse_required_physical_expr(
+                    get_indexed_field_expr.arg.as_deref(),
+                    registry,
+                    "arg",
+                    input_schema,
+                )?,
+                convert_required!(get_indexed_field_expr.key)?,
+            ))
+        }
     };
 
     Ok(pexpr)
@@ -292,7 +304,7 @@ fn parse_required_physical_expr(
     registry: &dyn FunctionRegistry,
     field: &str,
     input_schema: &Schema,
-) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
+) -> Result<Arc<dyn PhysicalExpr>> {
     expr.map(|e| parse_physical_expr(e, registry, input_schema))
         .transpose()?
         .ok_or_else(|| {
@@ -334,7 +346,7 @@ pub fn parse_protobuf_hash_partitioning(
     partitioning: Option<&protobuf::PhysicalHashRepartition>,
     registry: &dyn FunctionRegistry,
     input_schema: &Schema,
-) -> Result<Option<Partitioning>, DataFusionError> {
+) -> Result<Option<Partitioning>> {
     match partitioning {
         Some(hash_part) => {
             let expr = hash_part
@@ -355,7 +367,7 @@ pub fn parse_protobuf_hash_partitioning(
 pub fn parse_protobuf_file_scan_config(
     proto: &protobuf::FileScanExecConf,
     registry: &dyn FunctionRegistry,
-) -> Result<FileScanConfig, DataFusionError> {
+) -> Result<FileScanConfig> {
     let schema: Arc<Schema> = Arc::new(convert_required!(proto.schema)?);
     let projection = proto
         .projection
@@ -390,7 +402,7 @@ pub fn parse_protobuf_file_scan_config(
                 schema.field_with_name(col)?.data_type().clone(),
             ))
         })
-        .collect::<Result<Vec<(String, DataType)>, DataFusionError>>()?;
+        .collect::<Result<Vec<(String, DataType)>>>()?;
 
     let output_ordering = proto
         .output_ordering
@@ -409,7 +421,7 @@ pub fn parse_protobuf_file_scan_config(
                 },
             })
         })
-        .collect::<Result<Vec<PhysicalSortExpr>, DataFusionError>>()?;
+        .collect::<Result<Vec<PhysicalSortExpr>>>()?;
     let output_ordering = if output_ordering.is_empty() {
         None
     } else {

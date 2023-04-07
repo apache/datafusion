@@ -29,7 +29,6 @@ use datafusion_physical_expr::hash_utils::create_hashes;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
-use crate::error::Result;
 use crate::execution::context::TaskContext;
 use crate::execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use crate::physical_plan::aggregates::{
@@ -47,7 +46,7 @@ use arrow::compute::cast;
 use arrow::datatypes::{DataType, Schema, UInt32Type};
 use arrow::{array::ArrayRef, compute};
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use datafusion_row::accessor::RowAccessor;
 use datafusion_row::layout::RowLayout;
@@ -297,7 +296,7 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 impl GroupedHashAggregateStream {
     /// Perform group-by aggregation for the given [`RecordBatch`].
     ///
-    /// If successfull, this returns the additional number of bytes that were allocated during this process.
+    /// If successful, this returns the additional number of bytes that were allocated during this process.
     ///
     fn group_aggregate_batch(&mut self, batch: RecordBatch) -> Result<usize> {
         // Evaluate the grouping expressions:
@@ -504,9 +503,7 @@ impl GroupedHashAggregateStream {
                         .and({
                             group_state.indices.clear();
                             Ok(())
-                        })?;
-
-                    Ok::<(), DataFusionError>(())
+                        })
                 })?;
         }
         allocated += self

@@ -202,7 +202,7 @@ macro_rules! invoke_if_crypto_expressions_feature_flag {
 }
 
 #[cfg(feature = "regex_expressions")]
-macro_rules! invoke_if_regex_expressions_feature_flag {
+macro_rules! invoke_on_array_if_regex_expressions_feature_flag {
     ($FUNC:ident, $T:tt, $NAME:expr) => {{
         use crate::regex_expressions;
         regex_expressions::$FUNC::<$T>
@@ -210,9 +210,29 @@ macro_rules! invoke_if_regex_expressions_feature_flag {
 }
 
 #[cfg(not(feature = "regex_expressions"))]
-macro_rules! invoke_if_regex_expressions_feature_flag {
+macro_rules! invoke_on_array_if_regex_expressions_feature_flag {
     ($FUNC:ident, $T:tt, $NAME:expr) => {
         |_: &[ArrayRef]| -> Result<ArrayRef> {
+            Err(DataFusionError::Internal(format!(
+                "function {} requires compilation with feature flag: regex_expressions.",
+                $NAME
+            )))
+        }
+    };
+}
+
+#[cfg(feature = "regex_expressions")]
+macro_rules! invoke_on_columnar_value_if_regex_expressions_feature_flag {
+    ($FUNC:ident, $T:tt, $NAME:expr) => {{
+        use crate::regex_expressions;
+        regex_expressions::$FUNC::<$T>
+    }};
+}
+
+#[cfg(not(feature = "regex_expressions"))]
+macro_rules! invoke_on_columnar_value_if_regex_expressions_feature_flag {
+    ($FUNC:ident, $T:tt, $NAME:expr) => {
+        |_: &[ColumnarValue]| -> Result<ScalarFunctionImplementation> {
             Err(DataFusionError::Internal(format!(
                 "function {} requires compilation with feature flag: regex_expressions.",
                 $NAME
@@ -323,15 +343,17 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Cos => Arc::new(math_expressions::cos),
         BuiltinScalarFunction::Exp => Arc::new(math_expressions::exp),
         BuiltinScalarFunction::Floor => Arc::new(math_expressions::floor),
-        BuiltinScalarFunction::Log => Arc::new(math_expressions::log10),
         BuiltinScalarFunction::Ln => Arc::new(math_expressions::ln),
         BuiltinScalarFunction::Log10 => Arc::new(math_expressions::log10),
         BuiltinScalarFunction::Log2 => Arc::new(math_expressions::log2),
         BuiltinScalarFunction::Random => Arc::new(math_expressions::random),
-        BuiltinScalarFunction::Round => Arc::new(math_expressions::round),
+        BuiltinScalarFunction::Round => {
+            Arc::new(|args| make_scalar_function(math_expressions::round)(args))
+        }
         BuiltinScalarFunction::Signum => Arc::new(math_expressions::signum),
         BuiltinScalarFunction::Sin => Arc::new(math_expressions::sin),
         BuiltinScalarFunction::Sqrt => Arc::new(math_expressions::sqrt),
+        BuiltinScalarFunction::Cbrt => Arc::new(math_expressions::cbrt),
         BuiltinScalarFunction::Tan => Arc::new(math_expressions::tan),
         BuiltinScalarFunction::Trunc => Arc::new(math_expressions::trunc),
         BuiltinScalarFunction::Power => {
@@ -339,6 +361,9 @@ pub fn create_physical_fun(
         }
         BuiltinScalarFunction::Atan2 => {
             Arc::new(|args| make_scalar_function(math_expressions::atan2)(args))
+        }
+        BuiltinScalarFunction::Log => {
+            Arc::new(|args| make_scalar_function(math_expressions::log)(args))
         }
 
         // string functions
@@ -501,7 +526,7 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::RegexpMatch => {
             Arc::new(|args| match args[0].data_type() {
                 DataType::Utf8 => {
-                    let func = invoke_if_regex_expressions_feature_flag!(
+                    let func = invoke_on_array_if_regex_expressions_feature_flag!(
                         regexp_match,
                         i32,
                         "regexp_match"
@@ -509,7 +534,7 @@ pub fn create_physical_fun(
                     make_scalar_function(func)(args)
                 }
                 DataType::LargeUtf8 => {
-                    let func = invoke_if_regex_expressions_feature_flag!(
+                    let func = invoke_on_array_if_regex_expressions_feature_flag!(
                         regexp_match,
                         i64,
                         "regexp_match"
@@ -524,7 +549,7 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::RegexpReplace => {
             Arc::new(|args| match args[0].data_type() {
                 DataType::Utf8 => {
-                    let specializer_func = invoke_if_regex_expressions_feature_flag!(
+                    let specializer_func = invoke_on_columnar_value_if_regex_expressions_feature_flag!(
                         specialize_regexp_replace,
                         i32,
                         "regexp_replace"
@@ -533,7 +558,7 @@ pub fn create_physical_fun(
                     func(args)
                 }
                 DataType::LargeUtf8 => {
-                    let specializer_func = invoke_if_regex_expressions_feature_flag!(
+                    let specializer_func = invoke_on_columnar_value_if_regex_expressions_feature_flag!(
                         specialize_regexp_replace,
                         i64,
                         "regexp_replace"

@@ -30,8 +30,7 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, CompositeMetricsSet, MemTrackingMetrics, MetricsSet,
 };
-use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeStream;
-use crate::physical_plan::sorts::SortedStream;
+use crate::physical_plan::sorts::merge::streaming_merge;
 use crate::physical_plan::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::physical_plan::{
     DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan, Partitioning,
@@ -169,37 +168,40 @@ impl ExternalSorter {
         let batch_size = self.session_config.batch_size();
 
         if self.spilled_before() {
-            let tracking_metrics = self
+            let intermediate_metrics = self
                 .metrics_set
                 .new_intermediate_tracking(self.partition_id, &self.runtime.memory_pool);
-            let mut streams: Vec<SortedStream> = vec![];
+            let mut merge_metrics = self
+                .metrics_set
+                .new_final_tracking(self.partition_id, &self.runtime.memory_pool);
+
+            let mut streams = vec![];
             if !self.in_mem_batches.is_empty() {
                 let in_mem_stream = in_mem_partial_sort(
                     &mut self.in_mem_batches,
                     self.schema.clone(),
                     &self.expr,
                     batch_size,
-                    tracking_metrics,
+                    intermediate_metrics,
                     self.fetch,
                 )?;
-                let prev_used = self.reservation.free();
-                streams.push(SortedStream::new(in_mem_stream, prev_used));
+                // TODO: More accurate, dynamic memory accounting (#5885)
+                merge_metrics.init_mem_used(self.reservation.free());
+                streams.push(in_mem_stream);
             }
 
             for spill in self.spills.drain(..) {
                 let stream = read_spill_as_stream(spill, self.schema.clone())?;
-                streams.push(SortedStream::new(stream, 0));
+                streams.push(stream);
             }
-            let tracking_metrics = self
-                .metrics_set
-                .new_final_tracking(self.partition_id, &self.runtime.memory_pool);
-            Ok(Box::pin(SortPreservingMergeStream::new_from_streams(
+
+            streaming_merge(
                 streams,
                 self.schema.clone(),
                 &self.expr,
-                tracking_metrics,
+                merge_metrics,
                 self.session_config.batch_size(),
-            )?))
+            )
         } else if !self.in_mem_batches.is_empty() {
             let tracking_metrics = self
                 .metrics_set
@@ -295,7 +297,6 @@ fn in_mem_partial_sort(
         let (sorted_arrays, batches): (Vec<Vec<ArrayRef>>, Vec<RecordBatch>) =
             buffered_batches
                 .drain(..)
-                .into_iter()
                 .map(|b| {
                     let BatchWithSortArray {
                         sort_arrays,
@@ -794,7 +795,12 @@ impl ExecutionPlan for SortExec {
         match t {
             DisplayFormatType::Default => {
                 let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
-                write!(f, "SortExec: [{}]", expr.join(","))
+                match self.fetch {
+                    Some(fetch) => {
+                        write!(f, "SortExec: fetch={fetch}, expr=[{}]", expr.join(","))
+                    }
+                    None => write!(f, "SortExec: expr=[{}]", expr.join(",")),
+                }
             }
         }
     }
@@ -1050,7 +1056,7 @@ mod tests {
     #[tokio::test]
     async fn test_sort_fetch_memory_calculation() -> Result<()> {
         // This test mirrors down the size from the example above.
-        let avg_batch_size = 5336;
+        let avg_batch_size = 6000;
         let partitions = 4;
 
         // A tuple of (fetch, expect_spillage)

@@ -29,18 +29,16 @@ use bytes::{Buf, Bytes};
 
 use datafusion_common::DataFusionError;
 
+use datafusion_physical_expr::PhysicalExpr;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 
 use super::FileFormat;
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::logical_expr::Expr;
-use crate::physical_plan::file_format::{
-    newline_delimited_stream, CsvExec, FileScanConfig,
-};
+use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
@@ -156,7 +154,7 @@ impl FileFormat for CsvFormat {
         &self,
         _state: &SessionState,
         conf: FileScanConfig,
-        _filters: &[Expr],
+        _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = CsvExec::new(
             conf,
@@ -183,12 +181,10 @@ async fn read_to_delimited_chunks(
         .map_err(DataFusionError::ObjectStore);
 
     match stream {
-        Ok(s) => newline_delimited_stream(
-            s.into_stream()
-                .map_err(|e| DataFusionError::External(Box::new(e))),
-        )
-        .left_stream(),
-        Err(e) => futures::stream::iter(vec![Err(e)]).right_stream(),
+        Ok(s) => newline_delimited_stream(s.into_stream())
+            .map_err(|e| DataFusionError::External(Box::new(e)))
+            .left_stream(),
+        Err(e) => futures::stream::once(futures::future::ready(Err(e))).right_stream(),
     }
 }
 

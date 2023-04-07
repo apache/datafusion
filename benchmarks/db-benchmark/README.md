@@ -19,6 +19,8 @@
 
 # Run db-benchmark
 
+This directory contains scripts for running DataFusion with the https://github.com/h2oai/db-benchmark
+
 ## Directions
 
 Run the following from root `arrow-datafusion` directory

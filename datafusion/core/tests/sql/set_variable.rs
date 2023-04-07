@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+use arrow::util::pretty::pretty_format_batches;
 
 #[tokio::test]
 async fn set_variable_to_value() {
@@ -412,14 +413,8 @@ async fn set_time_zone_bad_time_zone_format() {
         plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
             .await
             .unwrap();
-    let expected = vec![
-        "+-----------------------------------------------------+",
-        "| Utf8(\"2000-01-01T00:00:00\")                         |",
-        "+-----------------------------------------------------+",
-        "| 2000-01-01T00:00:00 (Unknown Time Zone '+08:00:00') |",
-        "+-----------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &result);
+    let err = pretty_format_batches(&result).err().unwrap().to_string();
+    assert_eq!(err, "Parser error: Invalid timezone \"+08:00:00\": '+08:00:00' is not a valid timezone");
 
     plan_and_collect(&ctx, "SET TIME ZONE = '08:00'")
         .await
@@ -430,14 +425,12 @@ async fn set_time_zone_bad_time_zone_format() {
         plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
             .await
             .unwrap();
-    let expected = vec![
-        "+-------------------------------------------------+",
-        "| Utf8(\"2000-01-01T00:00:00\")                     |",
-        "+-------------------------------------------------+",
-        "| 2000-01-01T00:00:00 (Unknown Time Zone '08:00') |",
-        "+-------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &result);
+
+    let err = pretty_format_batches(&result).err().unwrap().to_string();
+    assert_eq!(
+        err,
+        "Parser error: Invalid timezone \"08:00\": '08:00' is not a valid timezone"
+    );
 
     plan_and_collect(&ctx, "SET TIME ZONE = '08'")
         .await
@@ -448,16 +441,14 @@ async fn set_time_zone_bad_time_zone_format() {
         plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
             .await
             .unwrap();
-    let expected = vec![
-        "+----------------------------------------------+",
-        "| Utf8(\"2000-01-01T00:00:00\")                  |",
-        "+----------------------------------------------+",
-        "| 2000-01-01T00:00:00 (Unknown Time Zone '08') |",
-        "+----------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &result);
 
-    // we dont support named time zone yet
+    let err = pretty_format_batches(&result).err().unwrap().to_string();
+    assert_eq!(
+        err,
+        "Parser error: Invalid timezone \"08\": '08' is not a valid timezone"
+    );
+
+    // we support named timezones
     plan_and_collect(&ctx, "SET TIME ZONE = 'Asia/Taipei'")
         .await
         .unwrap();
@@ -467,14 +458,8 @@ async fn set_time_zone_bad_time_zone_format() {
         plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
             .await
             .unwrap();
-    let expected = vec![
-        "+-------------------------------------------------------+",
-        "| Utf8(\"2000-01-01T00:00:00\")                           |",
-        "+-------------------------------------------------------+",
-        "| 2000-01-01T00:00:00 (Unknown Time Zone 'Asia/Taipei') |",
-        "+-------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &result);
+    let batch_pretty = pretty_format_batches(&result).unwrap().to_string();
+    assert_eq!(batch_pretty, "+-----------------------------+\n| Utf8(\"2000-01-01T00:00:00\") |\n+-----------------------------+\n| 2000-01-01T08:00:00+08:00   |\n+-----------------------------+");
 
     // this is invalid even after we support named time zone
     plan_and_collect(&ctx, "SET TIME ZONE = 'Asia/Taipei2'")
@@ -486,12 +471,6 @@ async fn set_time_zone_bad_time_zone_format() {
         plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
             .await
             .unwrap();
-    let expected = vec![
-        "+--------------------------------------------------------+",
-        "| Utf8(\"2000-01-01T00:00:00\")                            |",
-        "+--------------------------------------------------------+",
-        "| 2000-01-01T00:00:00 (Unknown Time Zone 'Asia/Taipei2') |",
-        "+--------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &result);
+    let err = pretty_format_batches(&result).err().unwrap().to_string();
+    assert_eq!(err, "Parser error: Invalid timezone \"Asia/Taipei2\": 'Asia/Taipei2' is not a valid timezone");
 }

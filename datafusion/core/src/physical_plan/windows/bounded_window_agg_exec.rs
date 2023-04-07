@@ -30,10 +30,9 @@ use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
-use arrow::array::Array;
-use arrow::compute::{concat, lexicographical_partition_ranges, SortColumn};
 use arrow::{
-    array::ArrayRef,
+    array::{Array, ArrayRef},
+    compute::{concat, concat_batches, SortColumn},
     datatypes::{Schema, SchemaRef},
     record_batch::RecordBatch,
 };
@@ -43,17 +42,19 @@ use futures::{ready, StreamExt};
 use std::any::Any;
 use std::cmp::min;
 use std::collections::HashMap;
-use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::physical_plan::common::merge_batches;
+use crate::physical_plan::windows::calc_requirements;
+use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_physical_expr::window::{
     PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
     WindowAggState, WindowState,
 };
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_expr::{
+    EquivalenceProperties, PhysicalExpr, PhysicalSortRequirement,
+};
 use indexmap::IndexMap;
 use log::debug;
 
@@ -70,8 +71,6 @@ pub struct BoundedWindowAggExec {
     input_schema: SchemaRef,
     /// Partition Keys
     pub partition_keys: Vec<Arc<dyn PhysicalExpr>>,
-    /// Sort Keys
-    pub sort_keys: Option<Vec<PhysicalSortExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -83,7 +82,6 @@ impl BoundedWindowAggExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
         partition_keys: Vec<Arc<dyn PhysicalExpr>>,
-        sort_keys: Option<Vec<PhysicalSortExpr>>,
     ) -> Result<Self> {
         let schema = create_schema(&input_schema, &window_expr)?;
         let schema = Arc::new(schema);
@@ -93,7 +91,6 @@ impl BoundedWindowAggExec {
             schema,
             input_schema,
             partition_keys,
-            sort_keys,
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -122,7 +119,7 @@ impl BoundedWindowAggExec {
         let mut result = vec![];
         // All window exprs have the same partition by, so we just use the first one:
         let partition_by = self.window_expr()[0].partition_by();
-        let sort_keys = self.sort_keys.as_deref().unwrap_or(&[]);
+        let sort_keys = self.input.output_ordering().unwrap_or(&[]);
         for item in partition_by {
             if let Some(a) = sort_keys.iter().find(|&e| e.expr.eq(item)) {
                 result.push(a.clone());
@@ -166,9 +163,11 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self.input().output_ordering()
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
-        let sort_keys = self.sort_keys.as_deref();
-        vec![sort_keys]
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+        let partition_bys = self.window_expr()[0].partition_by();
+        let order_keys = self.window_expr()[0].order_by();
+        let requirements = calc_requirements(partition_bys, order_keys);
+        vec![requirements]
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -176,7 +175,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
             debug!("No partition defined for BoundedWindowAggExec!!!");
             vec![Distribution::SinglePartition]
         } else {
-            //TODO support PartitionCollections if there is no common partition columns in the window_expr
             vec![Distribution::HashPartitioned(self.partition_keys.clone())]
         }
     }
@@ -198,7 +196,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
             children[0].clone(),
             self.input_schema.clone(),
             self.partition_keys.clone(),
-            self.sort_keys.clone(),
         )?))
     }
 
@@ -352,12 +349,12 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
     // For instance, if `n_out` number of rows are calculated, we can remove
     // first `n_out` rows from `self.input_buffer_record_batch`.
     fn prune_state(&mut self, n_out: usize) -> Result<()> {
+        // Prune `self.window_agg_states`:
+        self.prune_out_columns(n_out)?;
         // Prune `self.partition_batches`:
         self.prune_partition_batches()?;
         // Prune `self.input_buffer_record_batch`:
         self.prune_input_batch(n_out)?;
-        // Prune `self.window_agg_states`:
-        self.prune_out_columns(n_out)?;
         Ok(())
     }
 
@@ -366,7 +363,7 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
         let num_rows = record_batch.num_rows();
         if num_rows > 0 {
             let partition_points =
-                self.evaluate_partition_points(num_rows, &partition_columns)?;
+                evaluate_partition_ranges(num_rows, &partition_columns)?;
             for partition_range in partition_points {
                 let partition_row = partition_columns
                     .iter()
@@ -381,10 +378,9 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
                 if let Some(partition_batch_state) =
                     self.partition_buffers.get_mut(&partition_row)
                 {
-                    partition_batch_state.record_batch = merge_batches(
-                        &partition_batch_state.record_batch,
-                        &partition_batch,
-                        self.input.schema(),
+                    partition_batch_state.record_batch = concat_batches(
+                        &self.input.schema(),
+                        [&partition_batch_state.record_batch, &partition_batch],
                     )?;
                 } else {
                     let partition_batch_state = PartitionBatchState {
@@ -405,7 +401,7 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
         self.input_buffer = if self.input_buffer.num_rows() == 0 {
             record_batch
         } else {
-            merge_batches(&self.input_buffer, &record_batch, self.input.schema())?
+            concat_batches(&self.input.schema(), [&self.input_buffer, &record_batch])?
         };
 
         Ok(())
@@ -518,7 +514,6 @@ impl SortedPartitionByBoundedWindowStream {
                 }
                 cur_window_expr_out_result_len
             })
-            .into_iter()
             .min()
             .unwrap_or(0)
     }
@@ -549,9 +544,9 @@ impl SortedPartitionByBoundedWindowStream {
             for (partition_row, WindowState { state: value, .. }) in window_agg_state {
                 let n_prune =
                     min(value.window_frame_range.start, value.last_calculated_index);
-                if let Some(state) = n_prune_each_partition.get_mut(partition_row) {
-                    if n_prune < *state {
-                        *state = n_prune;
+                if let Some(current) = n_prune_each_partition.get_mut(partition_row) {
+                    if n_prune < *current {
+                        *current = n_prune;
                     }
                 } else {
                     n_prune_each_partition.insert(partition_row.clone(), n_prune);
@@ -572,15 +567,7 @@ impl SortedPartitionByBoundedWindowStream {
 
             // Update state indices since we have pruned some rows from the beginning:
             for window_agg_state in self.window_agg_states.iter_mut() {
-                let window_state =
-                    window_agg_state.get_mut(partition_row).ok_or_else(err)?;
-                let mut state = &mut window_state.state;
-                state.window_frame_range = Range {
-                    start: state.window_frame_range.start - n_prune,
-                    end: state.window_frame_range.end - n_prune,
-                };
-                state.last_calculated_index -= n_prune;
-                state.offset_pruned_rows += n_prune;
+                window_agg_state[partition_row].state.prune_state(*n_prune);
             }
         }
         Ok(())
@@ -637,23 +624,6 @@ impl SortedPartitionByBoundedWindowStream {
             .iter()
             .map(|e| e.evaluate_to_sort_column(batch))
             .collect::<Result<Vec<_>>>()
-    }
-
-    /// evaluate the partition points given the sort columns; if the sort columns are
-    /// empty then the result will be a single element vec of the whole column rows.
-    fn evaluate_partition_points(
-        &self,
-        num_rows: usize,
-        partition_columns: &[SortColumn],
-    ) -> Result<Vec<Range<usize>>> {
-        Ok(if partition_columns.is_empty() {
-            vec![Range {
-                start: 0,
-                end: num_rows,
-            }]
-        } else {
-            lexicographical_partition_ranges(partition_columns)?.collect()
-        })
     }
 }
 

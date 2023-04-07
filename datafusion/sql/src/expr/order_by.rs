@@ -27,6 +27,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         e: OrderByExpr,
         schema: &DFSchema,
+        planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let OrderByExpr {
             asc,
@@ -55,7 +56,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let field = schema.field(field_index - 1);
                 Expr::Column(field.qualified_column())
             }
-            e => self.sql_expr_to_logical_expr(e, schema, &mut PlannerContext::new())?,
+            e => self.sql_expr_to_logical_expr(e, schema, planner_context)?,
         };
         Ok({
             let asc = asc.unwrap_or(true);

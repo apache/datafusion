@@ -16,17 +16,22 @@
 // under the License.
 
 use crate::equivalence::EquivalentClass;
-use crate::expressions::BinaryExpr;
-use crate::expressions::Column;
-use crate::expressions::UnKnownColumn;
-use crate::rewrite::TreeNodeRewritable;
-use crate::PhysicalSortExpr;
-use crate::{EquivalenceProperties, PhysicalExpr};
+use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
+use crate::{
+    EquivalenceProperties, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+};
+use arrow::datatypes::SchemaRef;
+use datafusion_common::Result;
 use datafusion_expr::Operator;
 
-use arrow::datatypes::SchemaRef;
-
+use arrow_schema::SortOptions;
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeRewriter, VisitRecursion,
+};
+use petgraph::graph::NodeIndex;
+use petgraph::stable_graph::StableGraph;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Compare the two expr lists are equal no matter the order.
@@ -115,33 +120,29 @@ pub fn normalize_out_expr_with_alias_schema(
     alias_map: &HashMap<Column, Vec<Column>>,
     schema: &SchemaRef,
 ) -> Arc<dyn PhysicalExpr> {
-    let expr_clone = expr.clone();
-    expr_clone
+    expr.clone()
         .transform(&|expr| {
-            let normalized_form: Option<Arc<dyn PhysicalExpr>> =
-                match expr.as_any().downcast_ref::<Column>() {
-                    Some(column) => {
-                        let out = alias_map
-                            .get(column)
-                            .map(|c| {
-                                let out_col: Arc<dyn PhysicalExpr> =
-                                    Arc::new(c[0].clone());
-                                out_col
-                            })
-                            .or_else(|| match schema.index_of(column.name()) {
-                                // Exactly matching, return None, no need to do the transform
-                                Ok(idx) if column.index() == idx => None,
-                                _ => {
-                                    let out_col: Arc<dyn PhysicalExpr> =
-                                        Arc::new(UnKnownColumn::new(column.name()));
-                                    Some(out_col)
-                                }
-                            });
-                        out
-                    }
-                    None => None,
-                };
-            Ok(normalized_form)
+            let normalized_form: Option<Arc<dyn PhysicalExpr>> = match expr
+                .as_any()
+                .downcast_ref::<Column>()
+            {
+                Some(column) => {
+                    alias_map
+                        .get(column)
+                        .map(|c| Arc::new(c[0].clone()) as _)
+                        .or_else(|| match schema.index_of(column.name()) {
+                            // Exactly matching, return None, no need to do the transform
+                            Ok(idx) if column.index() == idx => None,
+                            _ => Some(Arc::new(UnKnownColumn::new(column.name())) as _),
+                        })
+                }
+                None => None,
+            };
+            Ok(if let Some(normalized_form) = normalized_form {
+                Transformed::Yes(normalized_form)
+            } else {
+                Transformed::No(expr)
+            })
         })
         .unwrap_or(expr)
 }
@@ -150,20 +151,27 @@ pub fn normalize_expr_with_equivalence_properties(
     expr: Arc<dyn PhysicalExpr>,
     eq_properties: &[EquivalentClass],
 ) -> Arc<dyn PhysicalExpr> {
-    let expr_clone = expr.clone();
-    expr_clone
-        .transform(&|expr| match expr.as_any().downcast_ref::<Column>() {
-            Some(column) => {
-                let mut normalized: Option<Arc<dyn PhysicalExpr>> = None;
-                for class in eq_properties {
-                    if class.contains(column) {
-                        normalized = Some(Arc::new(class.head().clone()));
-                        break;
+    expr.clone()
+        .transform(&|expr| {
+            let normalized_form: Option<Arc<dyn PhysicalExpr>> =
+                match expr.as_any().downcast_ref::<Column>() {
+                    Some(column) => {
+                        let mut normalized: Option<Arc<dyn PhysicalExpr>> = None;
+                        for class in eq_properties {
+                            if class.contains(column) {
+                                normalized = Some(Arc::new(class.head().clone()));
+                                break;
+                            }
+                        }
+                        normalized
                     }
-                }
-                Ok(normalized)
-            }
-            None => Ok(None),
+                    None => None,
+                };
+            Ok(if let Some(normalized_form) = normalized_form {
+                Transformed::Yes(normalized_form)
+            } else {
+                Transformed::No(expr)
+            })
         })
         .unwrap_or(expr)
 }
@@ -185,6 +193,24 @@ pub fn normalize_sort_expr_with_equivalence_properties(
     }
 }
 
+pub fn normalize_sort_requirement_with_equivalence_properties(
+    sort_requirement: PhysicalSortRequirement,
+    eq_properties: &[EquivalentClass],
+) -> PhysicalSortRequirement {
+    let normalized_expr = normalize_expr_with_equivalence_properties(
+        sort_requirement.expr.clone(),
+        eq_properties,
+    );
+    if sort_requirement.expr.ne(&normalized_expr) {
+        PhysicalSortRequirement {
+            expr: normalized_expr,
+            options: sort_requirement.options,
+        }
+    } else {
+        sort_requirement
+    }
+}
+
 /// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
 pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
     provided: Option<&[PhysicalSortExpr]>,
@@ -200,7 +226,9 @@ pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
     }
 }
 
-pub fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(
+/// Checks whether the required [`PhysicalSortExpr`]s are satisfied by the
+/// provided [`PhysicalSortExpr`]s.
+fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(
     provided: &[PhysicalSortExpr],
     required: &[PhysicalSortExpr],
     equal_properties: F,
@@ -210,42 +238,474 @@ pub fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(
     } else if required
         .iter()
         .zip(provided.iter())
-        .all(|(order1, order2)| order1.eq(order2))
+        .all(|(req, given)| req.eq(given))
     {
         true
     } else if let eq_classes @ [_, ..] = equal_properties().classes() {
-        let normalized_required_exprs = required
+        required
             .iter()
             .map(|e| {
                 normalize_sort_expr_with_equivalence_properties(e.clone(), eq_classes)
             })
-            .collect::<Vec<_>>();
-        let normalized_provided_exprs = provided
-            .iter()
-            .map(|e| {
+            .zip(provided.iter().map(|e| {
                 normalize_sort_expr_with_equivalence_properties(e.clone(), eq_classes)
-            })
-            .collect::<Vec<_>>();
-        normalized_required_exprs
-            .iter()
-            .zip(normalized_provided_exprs.iter())
-            .all(|(order1, order2)| order1.eq(order2))
+            }))
+            .all(|(req, given)| req.eq(&given))
     } else {
         false
     }
 }
 
+/// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
+/// provided [`PhysicalSortExpr`]s.
+pub fn ordering_satisfy_requirement<F: FnOnce() -> EquivalenceProperties>(
+    provided: Option<&[PhysicalSortExpr]>,
+    required: Option<&[PhysicalSortRequirement]>,
+    equal_properties: F,
+) -> bool {
+    match (provided, required) {
+        (_, None) => true,
+        (None, Some(_)) => false,
+        (Some(provided), Some(required)) => {
+            ordering_satisfy_requirement_concrete(provided, required, equal_properties)
+        }
+    }
+}
+
+/// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
+/// provided [`PhysicalSortExpr`]s.
+pub fn ordering_satisfy_requirement_concrete<F: FnOnce() -> EquivalenceProperties>(
+    provided: &[PhysicalSortExpr],
+    required: &[PhysicalSortRequirement],
+    equal_properties: F,
+) -> bool {
+    if required.len() > provided.len() {
+        false
+    } else if required
+        .iter()
+        .zip(provided.iter())
+        .all(|(req, given)| given.satisfy(req))
+    {
+        true
+    } else if let eq_classes @ [_, ..] = equal_properties().classes() {
+        required
+            .iter()
+            .map(|e| {
+                normalize_sort_requirement_with_equivalence_properties(
+                    e.clone(),
+                    eq_classes,
+                )
+            })
+            .zip(provided.iter().map(|e| {
+                normalize_sort_expr_with_equivalence_properties(e.clone(), eq_classes)
+            }))
+            .all(|(req, given)| given.satisfy(&req))
+    } else {
+        false
+    }
+}
+
+/// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
+/// specific than the provided [`PhysicalSortRequirement`]s.
+pub fn requirements_compatible<F: FnOnce() -> EquivalenceProperties>(
+    provided: Option<&[PhysicalSortRequirement]>,
+    required: Option<&[PhysicalSortRequirement]>,
+    equal_properties: F,
+) -> bool {
+    match (provided, required) {
+        (_, None) => true,
+        (None, Some(_)) => false,
+        (Some(provided), Some(required)) => {
+            requirements_compatible_concrete(provided, required, equal_properties)
+        }
+    }
+}
+
+/// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
+/// specific than the provided [`PhysicalSortRequirement`]s.
+fn requirements_compatible_concrete<F: FnOnce() -> EquivalenceProperties>(
+    provided: &[PhysicalSortRequirement],
+    required: &[PhysicalSortRequirement],
+    equal_properties: F,
+) -> bool {
+    if required.len() > provided.len() {
+        false
+    } else if required
+        .iter()
+        .zip(provided.iter())
+        .all(|(req, given)| given.compatible(req))
+    {
+        true
+    } else if let eq_classes @ [_, ..] = equal_properties().classes() {
+        required
+            .iter()
+            .map(|e| {
+                normalize_sort_requirement_with_equivalence_properties(
+                    e.clone(),
+                    eq_classes,
+                )
+            })
+            .zip(provided.iter().map(|e| {
+                normalize_sort_requirement_with_equivalence_properties(
+                    e.clone(),
+                    eq_classes,
+                )
+            }))
+            .all(|(req, given)| given.compatible(&req))
+    } else {
+        false
+    }
+}
+
+/// This function maps back requirement after ProjectionExec
+/// to the Executor for its input.
+// Specifically, `ProjectionExec` changes index of `Column`s in the schema of its input executor.
+// This function changes requirement given according to ProjectionExec schema to the requirement
+// according to schema of input executor to the ProjectionExec.
+// For instance, Column{"a", 0} would turn to Column{"a", 1}. Please note that this function assumes that
+// name of the Column is unique. If we have a requirement such that Column{"a", 0}, Column{"a", 1}.
+// This function will produce incorrect result (It will only emit single Column as a result).
+pub fn map_columns_before_projection(
+    parent_required: &[Arc<dyn PhysicalExpr>],
+    proj_exprs: &[(Arc<dyn PhysicalExpr>, String)],
+) -> Vec<Arc<dyn PhysicalExpr>> {
+    let column_mapping = proj_exprs
+        .iter()
+        .filter_map(|(expr, name)| {
+            expr.as_any()
+                .downcast_ref::<Column>()
+                .map(|column| (name.clone(), column.clone()))
+        })
+        .collect::<HashMap<_, _>>();
+    parent_required
+        .iter()
+        .filter_map(|r| {
+            if let Some(column) = r.as_any().downcast_ref::<Column>() {
+                column_mapping.get(column.name())
+            } else {
+                None
+            }
+        })
+        .map(|e| Arc::new(e.clone()) as _)
+        .collect()
+}
+
+/// This function converts `PhysicalSortRequirement` to `PhysicalSortExpr`
+/// for each entry in the input. If required ordering is None for an entry
+/// default ordering `ASC, NULLS LAST` if given.
+pub fn make_sort_exprs_from_requirements(
+    required: &[PhysicalSortRequirement],
+) -> Vec<PhysicalSortExpr> {
+    required
+        .iter()
+        .map(|requirement| {
+            if let Some(options) = requirement.options {
+                PhysicalSortExpr {
+                    expr: requirement.expr.clone(),
+                    options,
+                }
+            } else {
+                PhysicalSortExpr {
+                    expr: requirement.expr.clone(),
+                    options: SortOptions {
+                        // By default, create sort key with ASC is true and NULLS LAST to be consistent with
+                        // PostgreSQL's rule: https://www.postgresql.org/docs/current/queries-order.html
+                        descending: false,
+                        nulls_first: false,
+                    },
+                }
+            }
+        })
+        .collect()
+}
+
+#[derive(Clone, Debug)]
+pub struct ExprTreeNode<T> {
+    expr: Arc<dyn PhysicalExpr>,
+    data: Option<T>,
+    child_nodes: Vec<ExprTreeNode<T>>,
+}
+
+impl<T> ExprTreeNode<T> {
+    pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
+        ExprTreeNode {
+            expr,
+            data: None,
+            child_nodes: vec![],
+        }
+    }
+
+    pub fn expression(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.expr
+    }
+
+    pub fn children(&self) -> Vec<ExprTreeNode<T>> {
+        self.expr
+            .children()
+            .into_iter()
+            .map(ExprTreeNode::new)
+            .collect()
+    }
+}
+
+impl<T: Clone> TreeNode for ExprTreeNode<T> {
+    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    where
+        F: FnMut(&Self) -> Result<VisitRecursion>,
+    {
+        for child in self.children() {
+            match op(&child)? {
+                VisitRecursion::Continue => {}
+                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+            }
+        }
+
+        Ok(VisitRecursion::Continue)
+    }
+
+    fn map_children<F>(mut self, transform: F) -> Result<Self>
+    where
+        F: FnMut(Self) -> Result<Self>,
+    {
+        self.child_nodes = self
+            .children()
+            .into_iter()
+            .map(transform)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(self)
+    }
+}
+
+/// This struct facilitates the [TreeNodeRewriter] mechanism to convert a
+/// [PhysicalExpr] tree into a DAEG (i.e. an expression DAG) by collecting
+/// identical expressions in one node. Caller specifies the node type in the
+/// DAEG via the `constructor` argument, which constructs nodes in the DAEG
+/// from the [ExprTreeNode] ancillary object.
+struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> T> {
+    // The resulting DAEG (expression DAG).
+    graph: StableGraph<T, usize>,
+    // A vector of visited expression nodes and their corresponding node indices.
+    visited_plans: Vec<(Arc<dyn PhysicalExpr>, NodeIndex)>,
+    // A function to convert an input expression node to T.
+    constructor: &'a F,
+}
+
+impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> T> TreeNodeRewriter
+    for PhysicalExprDAEGBuilder<'a, T, F>
+{
+    type N = ExprTreeNode<NodeIndex>;
+    // This method mutates an expression node by transforming it to a physical expression
+    // and adding it to the graph. The method returns the mutated expression node.
+    fn mutate(
+        &mut self,
+        mut node: ExprTreeNode<NodeIndex>,
+    ) -> Result<ExprTreeNode<NodeIndex>> {
+        // Get the expression associated with the input expression node.
+        let expr = &node.expr;
+
+        // Check if the expression has already been visited.
+        let node_idx = match self.visited_plans.iter().find(|(e, _)| expr.eq(e)) {
+            // If the expression has been visited, return the corresponding node index.
+            Some((_, idx)) => *idx,
+            // If the expression has not been visited, add a new node to the graph and
+            // add edges to its child nodes. Add the visited expression to the vector
+            // of visited expressions and return the newly created node index.
+            None => {
+                let node_idx = self.graph.add_node((self.constructor)(&node));
+                for expr_node in node.child_nodes.iter() {
+                    self.graph.add_edge(node_idx, expr_node.data.unwrap(), 0);
+                }
+                self.visited_plans.push((expr.clone(), node_idx));
+                node_idx
+            }
+        };
+        // Set the data field of the input expression node to the corresponding node index.
+        node.data = Some(node_idx);
+        // Return the mutated expression node.
+        Ok(node)
+    }
+}
+
+// A function that builds a directed acyclic graph of physical expression trees.
+pub fn build_dag<T, F>(
+    expr: Arc<dyn PhysicalExpr>,
+    constructor: &F,
+) -> Result<(NodeIndex, StableGraph<T, usize>)>
+where
+    F: Fn(&ExprTreeNode<NodeIndex>) -> T,
+{
+    // Create a new expression tree node from the input expression.
+    let init = ExprTreeNode::new(expr);
+    // Create a new `PhysicalExprDAEGBuilder` instance.
+    let mut builder = PhysicalExprDAEGBuilder {
+        graph: StableGraph::<T, usize>::new(),
+        visited_plans: Vec::<(Arc<dyn PhysicalExpr>, NodeIndex)>::new(),
+        constructor,
+    };
+    // Use the builder to transform the expression tree node into a DAG.
+    let root = init.rewrite(&mut builder)?;
+    // Return a tuple containing the root node index and the DAG.
+    Ok((root.data.unwrap(), builder.graph))
+}
+
+/// Recursively extract referenced [`Column`]s within a [`PhysicalExpr`].
+pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
+    let mut columns = HashSet::<Column>::new();
+    expr.apply(&mut |expr| {
+        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            if !columns.iter().any(|c| c.eq(column)) {
+                columns.insert(column.clone());
+            }
+        }
+        Ok(VisitRecursion::Continue)
+    })
+    // pre_visit always returns OK, so this will always too
+    .expect("no way to return error during recursion");
+    columns
+}
+
+/// Re-assign column indices referenced in predicate according to given schema.
+/// This may be helpful when dealing with projections.
+pub fn reassign_predicate_columns(
+    pred: Arc<dyn PhysicalExpr>,
+    schema: &SchemaRef,
+    ignore_not_found: bool,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    pred.transform(&|expr| {
+        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            let index = match schema.index_of(column.name()) {
+                Ok(idx) => idx,
+                Err(_) if ignore_not_found => usize::MAX,
+                Err(e) => return Err(e.into()),
+            };
+            return Ok(Transformed::Yes(Arc::new(Column::new(
+                column.name(),
+                index,
+            ))));
+        }
+
+        Ok(Transformed::No(expr))
+    })
+}
+
 #[cfg(test)]
 mod tests {
-
     use super::*;
-    use crate::expressions::Column;
+    use crate::expressions::{binary, cast, col, lit, Column, Literal};
     use crate::PhysicalSortExpr;
     use arrow::compute::SortOptions;
-    use datafusion_common::Result;
+    use datafusion_common::{Result, ScalarValue};
+    use std::fmt::{Display, Formatter};
 
-    use arrow_schema::Schema;
+    use arrow_schema::{DataType, Field, Schema};
+    use petgraph::visit::Bfs;
     use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct DummyProperty {
+        expr_type: String,
+    }
+
+    /// This is a dummy node in the DAEG; it stores a reference to the actual
+    /// [PhysicalExpr] as well as a dummy property.
+    #[derive(Clone)]
+    struct PhysicalExprDummyNode {
+        pub expr: Arc<dyn PhysicalExpr>,
+        pub property: DummyProperty,
+    }
+
+    impl Display for PhysicalExprDummyNode {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.expr)
+        }
+    }
+
+    fn make_dummy_node(node: &ExprTreeNode<NodeIndex>) -> PhysicalExprDummyNode {
+        let expr = node.expression().clone();
+        let dummy_property = if expr.as_any().is::<BinaryExpr>() {
+            "Binary"
+        } else if expr.as_any().is::<Column>() {
+            "Column"
+        } else if expr.as_any().is::<Literal>() {
+            "Literal"
+        } else {
+            "Other"
+        }
+        .to_owned();
+        PhysicalExprDummyNode {
+            expr,
+            property: DummyProperty {
+                expr_type: dummy_property,
+            },
+        }
+    }
+
+    #[test]
+    fn test_build_dag() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("0", DataType::Int32, true),
+            Field::new("1", DataType::Int32, true),
+            Field::new("2", DataType::Int32, true),
+        ]);
+        let expr = binary(
+            cast(
+                binary(
+                    col("0", &schema)?,
+                    Operator::Plus,
+                    col("1", &schema)?,
+                    &schema,
+                )?,
+                &schema,
+                DataType::Int64,
+            )?,
+            Operator::Gt,
+            binary(
+                cast(col("2", &schema)?, &schema, DataType::Int64)?,
+                Operator::Plus,
+                lit(ScalarValue::Int64(Some(10))),
+                &schema,
+            )?,
+            &schema,
+        )?;
+        let mut vector_dummy_props = vec![];
+        let (root, graph) = build_dag(expr, &make_dummy_node)?;
+        let mut bfs = Bfs::new(&graph, root);
+        while let Some(node_index) = bfs.next(&graph) {
+            let node = &graph[node_index];
+            vector_dummy_props.push(node.property.clone());
+        }
+
+        assert_eq!(
+            vector_dummy_props
+                .iter()
+                .filter(|property| property.expr_type == "Binary")
+                .count(),
+            3
+        );
+        assert_eq!(
+            vector_dummy_props
+                .iter()
+                .filter(|property| property.expr_type == "Column")
+                .count(),
+            3
+        );
+        assert_eq!(
+            vector_dummy_props
+                .iter()
+                .filter(|property| property.expr_type == "Literal")
+                .count(),
+            1
+        );
+        assert_eq!(
+            vector_dummy_props
+                .iter()
+                .filter(|property| property.expr_type == "Other")
+                .count(),
+            2
+        );
+        Ok(())
+    }
 
     #[test]
     fn expr_list_eq_test() -> Result<()> {

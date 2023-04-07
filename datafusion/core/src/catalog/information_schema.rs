@@ -38,11 +38,11 @@ use crate::physical_plan::SendableRecordBatchStream;
 
 use super::{catalog::CatalogList, schema::SchemaProvider};
 
-pub const INFORMATION_SCHEMA: &str = "information_schema";
-pub const TABLES: &str = "tables";
-pub const VIEWS: &str = "views";
-pub const COLUMNS: &str = "columns";
-pub const DF_SETTINGS: &str = "df_settings";
+pub(crate) const INFORMATION_SCHEMA: &str = "information_schema";
+pub(crate) const TABLES: &str = "tables";
+pub(crate) const VIEWS: &str = "views";
+pub(crate) const COLUMNS: &str = "columns";
+pub(crate) const DF_SETTINGS: &str = "df_settings";
 
 /// All information schema tables
 pub const INFORMATION_SCHEMA_TABLES: &[&str] = &[TABLES, VIEWS, COLUMNS, DF_SETTINGS];
@@ -644,10 +644,7 @@ impl PartitionStream for InformationSchemaDfSettings {
             // TODO: Stream this
             futures::stream::once(async move {
                 // create a mem table with the names of tables
-                config.make_df_settings(
-                    ctx.session_config().config_options(),
-                    &mut builder,
-                );
+                config.make_df_settings(ctx.session_config().options(), &mut builder);
                 Ok(builder.finish())
             }),
         ))

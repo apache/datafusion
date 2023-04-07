@@ -24,26 +24,25 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
+use crate::physical_plan::windows::calc_requirements;
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
     ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
-use arrow::compute::{
-    concat, concat_batches, lexicographical_partition_ranges, SortColumn,
-};
+use arrow::compute::{concat, concat_batches};
 use arrow::error::ArrowError;
 use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::DataFusionError;
+use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
-use log::debug;
 use std::any::Any;
-use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -61,8 +60,6 @@ pub struct WindowAggExec {
     input_schema: SchemaRef,
     /// Partition Keys
     pub partition_keys: Vec<Arc<dyn PhysicalExpr>>,
-    /// Sort Keys
-    pub sort_keys: Option<Vec<PhysicalSortExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -74,7 +71,6 @@ impl WindowAggExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
         partition_keys: Vec<Arc<dyn PhysicalExpr>>,
-        sort_keys: Option<Vec<PhysicalSortExpr>>,
     ) -> Result<Self> {
         let schema = create_schema(&input_schema, &window_expr)?;
         let schema = Arc::new(schema);
@@ -85,7 +81,6 @@ impl WindowAggExec {
             schema,
             input_schema,
             partition_keys,
-            sort_keys,
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -114,7 +109,7 @@ impl WindowAggExec {
         let mut result = vec![];
         // All window exprs have the same partition by, so we just use the first one:
         let partition_by = self.window_expr()[0].partition_by();
-        let sort_keys = self.sort_keys.as_deref().unwrap_or(&[]);
+        let sort_keys = self.input.output_ordering().unwrap_or(&[]);
         for item in partition_by {
             if let Some(a) = sort_keys.iter().find(|&e| e.expr.eq(item)) {
                 result.push(a.clone());
@@ -172,17 +167,17 @@ impl ExecutionPlan for WindowAggExec {
         vec![true]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
-        let sort_keys = self.sort_keys.as_deref();
-        vec![sort_keys]
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+        let partition_bys = self.window_expr()[0].partition_by();
+        let order_keys = self.window_expr()[0].order_by();
+        let requirements = calc_requirements(partition_bys, order_keys);
+        vec![requirements]
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         if self.partition_keys.is_empty() {
-            debug!("No partition defined for WindowAggExec!!!");
             vec![Distribution::SinglePartition]
         } else {
-            //TODO support PartitionCollections if there is no common partition columns in the window_expr
             vec![Distribution::HashPartitioned(self.partition_keys.clone())]
         }
     }
@@ -200,7 +195,6 @@ impl ExecutionPlan for WindowAggExec {
             children[0].clone(),
             self.input_schema.clone(),
             self.partition_keys.clone(),
-            self.sort_keys.clone(),
         )?))
     }
 
@@ -340,7 +334,7 @@ impl WindowAggStream {
             .map(|elem| elem.evaluate_to_sort_column(&batch))
             .collect::<Result<Vec<_>>>()?;
         let partition_points =
-            self.evaluate_partition_points(batch.num_rows(), &partition_by_sort_keys)?;
+            evaluate_partition_ranges(batch.num_rows(), &partition_by_sort_keys)?;
 
         let mut partition_results = vec![];
         // Calculate window cols
@@ -365,25 +359,6 @@ impl WindowAggStream {
         // calculate window cols
         batch_columns.extend_from_slice(&columns);
         Ok(RecordBatch::try_new(self.schema.clone(), batch_columns)?)
-    }
-
-    /// Evaluates the partition points given the sort columns. If the sort columns are
-    /// empty, then the result will be a single element vector spanning the entire batch.
-    fn evaluate_partition_points(
-        &self,
-        num_rows: usize,
-        partition_columns: &[SortColumn],
-    ) -> Result<Vec<Range<usize>>> {
-        Ok(if partition_columns.is_empty() {
-            vec![Range {
-                start: 0,
-                end: num_rows,
-            }]
-        } else {
-            lexicographical_partition_ranges(partition_columns)
-                .map_err(DataFusionError::ArrowError)?
-                .collect::<Vec<_>>()
-        })
     }
 }
 

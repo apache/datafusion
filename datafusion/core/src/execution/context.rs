@@ -18,7 +18,11 @@
 //! SessionContext contains methods for registering data sources and executing queries
 use crate::{
     catalog::catalog::{CatalogList, MemoryCatalogList},
-    datasource::listing::{ListingOptions, ListingTable},
+    datasource::{
+        datasource::TableProviderFactory,
+        listing::{ListingOptions, ListingTable},
+        listing_table_factory::ListingTableFactory,
+    },
     datasource::{MemTable, ViewTable},
     logical_expr::{PlanType, ToStringifiedPlan},
     optimizer::optimizer::Optimizer,
@@ -27,16 +31,15 @@ use crate::{
         optimizer::PhysicalOptimizerRule,
     },
 };
-use datafusion_expr::{DescribeTable, StringifiedPlan};
+use datafusion_expr::{
+    logical_plan::Statement, DescribeTable, DmlStatement, StringifiedPlan, WriteOp,
+};
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
+use std::collections::hash_map::Entry;
+use std::string::String;
 use std::sync::Arc;
-use std::{
-    any::{Any, TypeId},
-    hash::{BuildHasherDefault, Hasher},
-    string::String,
-};
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -82,7 +85,7 @@ use crate::physical_plan::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_common::ScalarValue;
+use datafusion_common::OwnedTableReference;
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -93,7 +96,6 @@ use url::Url;
 use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
-use crate::execution::memory_pool::MemoryPool;
 use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
@@ -102,9 +104,50 @@ use datafusion_optimizer::OptimizerConfig;
 use datafusion_sql::planner::object_name_to_table_reference;
 use uuid::Uuid;
 
+// backwards compatibility
+pub use datafusion_execution::config::SessionConfig;
+pub use datafusion_execution::TaskContext;
+
 use super::options::{
     AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions, ReadOptions,
 };
+
+/// DataFilePaths adds a method to convert strings and vector of strings to vector of [`ListingTableUrl`] URLs.
+/// This allows methods such [`SessionContext::read_csv`] and `[`SessionContext::read_avro`]
+/// to take either a single file or multiple files.
+pub trait DataFilePaths {
+    /// Parse to a vector of [`ListingTableUrl`] URLs.
+    fn to_urls(self) -> Result<Vec<ListingTableUrl>>;
+}
+
+impl DataFilePaths for &str {
+    fn to_urls(self) -> Result<Vec<ListingTableUrl>> {
+        Ok(vec![ListingTableUrl::parse(self)?])
+    }
+}
+
+impl DataFilePaths for String {
+    fn to_urls(self) -> Result<Vec<ListingTableUrl>> {
+        Ok(vec![ListingTableUrl::parse(self)?])
+    }
+}
+
+impl DataFilePaths for &String {
+    fn to_urls(self) -> Result<Vec<ListingTableUrl>> {
+        Ok(vec![ListingTableUrl::parse(self)?])
+    }
+}
+
+impl<P> DataFilePaths for Vec<P>
+where
+    P: AsRef<str>,
+{
+    fn to_urls(self) -> Result<Vec<ListingTableUrl>> {
+        self.iter()
+            .map(ListingTableUrl::parse)
+            .collect::<Result<Vec<ListingTableUrl>>>()
+    }
+}
 
 /// SessionContext is the main interface for executing queries with DataFusion. It stands for
 /// the connection between user and DataFusion/Ballista cluster.
@@ -149,7 +192,7 @@ use super::options::{
 /// ```
 #[derive(Clone)]
 pub struct SessionContext {
-    /// Uuid for the session
+    /// UUID for the session
     session_id: String,
     /// Session start time
     session_start_time: DateTime<Utc>,
@@ -169,7 +212,7 @@ impl SessionContext {
         Self::with_config(SessionConfig::new())
     }
 
-    /// Finds any ListSchemaProviders and instructs them to reload tables from "disk"
+    /// Finds any [`ListingSchemaProvider`]s and instructs them to reload tables from "disk"
     pub async fn refresh_catalogs(&self) -> Result<()> {
         let cat_names = self.catalog_names().clone();
         for cat_name in cat_names.iter() {
@@ -195,7 +238,7 @@ impl SessionContext {
         Self::with_config_rt(config, runtime)
     }
 
-    /// Creates a new session context using the provided configuration and RuntimeEnv.
+    /// Creates a new session context using the provided configuration and [`RuntimeEnv`].
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let state = SessionState::with_config_rt(config, runtime);
         Self::with_state(state)
@@ -222,7 +265,12 @@ impl SessionContext {
         batch: RecordBatch,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-        self.register_table(TableReference::Bare { table: table_name }, Arc::new(table))
+        self.register_table(
+            TableReference::Bare {
+                table: table_name.into(),
+            },
+            Arc::new(table),
+        )
     }
 
     /// Return the [RuntimeEnv] used to run queries with this [SessionContext]
@@ -230,17 +278,26 @@ impl SessionContext {
         self.state.read().runtime_env.clone()
     }
 
-    /// Return the session_id of this Session
+    /// Return the `session_id` of this Session
     pub fn session_id(&self) -> String {
         self.session_id.clone()
     }
 
-    /// Return the enable_ident_normalization of this Session
+    /// Return the [`TableProviderFactory`] that is registered for the
+    /// specified file type, if any.
+    pub fn table_factory(
+        &self,
+        file_type: &str,
+    ) -> Option<Arc<dyn TableProviderFactory>> {
+        self.state.read().table_factories().get(file_type).cloned()
+    }
+
+    /// Return the `enable_ident_normalization` of this Session
     pub fn enable_ident_normalization(&self) -> bool {
         self.state
             .read()
             .config
-            .options
+            .options()
             .sql_parser
             .enable_ident_normalization
     }
@@ -252,7 +309,8 @@ impl SessionContext {
 
     /// Creates a [`DataFrame`] that will execute a SQL query.
     ///
-    /// Note: This api implements DDL such as `CREATE TABLE` and `CREATE VIEW` with in memory
+    /// Note: This API implements DDL statements such as `CREATE TABLE` and
+    /// `CREATE VIEW` and DML statements such as `INSERT INTO` with in-memory
     /// default implementations.
     ///
     /// If this is not desirable, consider using [`SessionState::create_logical_plan()`] which
@@ -261,7 +319,29 @@ impl SessionContext {
         // create a query planner
         let plan = self.state().create_logical_plan(sql).await?;
 
+        self.execute_logical_plan(plan).await
+    }
+
+    /// Execute the [`LogicalPlan`], return a [`DataFrame`]
+    pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
+            LogicalPlan::Dml(DmlStatement {
+                table_name,
+                op: WriteOp::Insert,
+                input,
+                ..
+            }) => {
+                if self.table_exist(&table_name)? {
+                    let name = table_name.table();
+                    let provider = self.table_provider(name).await?;
+                    provider.insert_into(&self.state(), &input).await?;
+                } else {
+                    return Err(DataFusionError::Execution(format!(
+                        "Table '{table_name}' does not exist"
+                    )));
+                }
+                self.return_empty_dataframe()
+            }
             LogicalPlan::CreateExternalTable(cmd) => {
                 self.create_external_table(&cmd).await
             }
@@ -271,7 +351,15 @@ impl SessionContext {
                 input,
                 if_not_exists,
                 or_replace,
+                primary_key,
             }) => {
+                if !primary_key.is_empty() {
+                    Err(DataFusionError::Execution(
+                        "Primary keys on MemoryTables are not currently supported!"
+                            .to_string(),
+                    ))?;
+                }
+
                 let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
                 let table = self.table(&name).await;
 
@@ -363,12 +451,13 @@ impl SessionContext {
                 }
             }
 
-            LogicalPlan::SetVariable(SetVariable {
-                variable, value, ..
-            }) => {
+            LogicalPlan::Statement(Statement::SetVariable(SetVariable {
+                variable,
+                value,
+                ..
+            })) => {
                 let mut state = self.state.write();
-                let config_options = &mut state.config.options;
-                config_options.set(&variable, &value)?;
+                state.config.options_mut().set(&variable, &value)?;
                 drop(state);
 
                 self.return_empty_dataframe()
@@ -389,7 +478,7 @@ impl SessionContext {
                 let (catalog, schema_name) = match tokens.len() {
                     1 => {
                         let state = self.state.read();
-                        let name = &state.config.options.catalog.default_catalog;
+                        let name = &state.config.options().catalog.default_catalog;
                         let catalog =
                             state.catalog_list.catalog(name).ok_or_else(|| {
                                 DataFusionError::Execution(format!(
@@ -536,16 +625,16 @@ impl SessionContext {
     ) -> Result<Arc<dyn TableProvider>> {
         let state = self.state.read().clone();
         let file_type = cmd.file_type.to_uppercase();
-        let factory = &state
-            .runtime_env
-            .table_factories
-            .get(file_type.as_str())
-            .ok_or_else(|| {
-                DataFusionError::Execution(format!(
-                    "Unable to find factory for {}",
-                    cmd.file_type
-                ))
-            })?;
+        let factory =
+            &state
+                .table_factories
+                .get(file_type.as_str())
+                .ok_or_else(|| {
+                    DataFusionError::Execution(format!(
+                        "Unable to find factory for {}",
+                        cmd.file_type
+                    ))
+                })?;
         let table = (*factory).create(&state, cmd).await?;
         Ok(table)
     }
@@ -556,19 +645,20 @@ impl SessionContext {
         table_type: TableType,
     ) -> Result<bool> {
         let table_ref = table_ref.into();
+        let table = table_ref.table().to_owned();
         let maybe_schema = {
             let state = self.state.read();
             let resolved = state.resolve_table_ref(table_ref);
             state
                 .catalog_list
-                .catalog(resolved.catalog)
-                .and_then(|c| c.schema(resolved.schema))
+                .catalog(&resolved.catalog)
+                .and_then(|c| c.schema(&resolved.schema))
         };
 
         if let Some(schema) = maybe_schema {
-            if let Some(table_provider) = schema.table(table_ref.table()).await {
+            if let Some(table_provider) = schema.table(&table).await {
                 if table_provider.table_type() == table_type {
-                    schema.deregister_table(table_ref.table())?;
+                    schema.deregister_table(&table)?;
                     return Ok(true);
                 }
             }
@@ -621,22 +711,18 @@ impl SessionContext {
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    async fn _read_type<'a>(
+    async fn _read_type<'a, P: DataFilePaths>(
         &self,
-        table_path: impl AsRef<str>,
+        table_paths: P,
         options: impl ReadOptions<'a>,
     ) -> Result<DataFrame> {
-        let table_path = ListingTableUrl::parse(table_path)?;
+        let table_paths = table_paths.to_urls()?;
         let session_config = self.copied_config();
         let listing_options = options.to_listing_options(&session_config);
-        let resolved_schema = match options
-            .get_resolved_schema(&session_config, self.state(), table_path.clone())
-            .await
-        {
-            Ok(resolved_schema) => resolved_schema,
-            Err(e) => return Err(e),
-        };
-        let config = ListingTableConfig::new(table_path)
+        let resolved_schema = options
+            .get_resolved_schema(&session_config, self.state(), table_paths[0].clone())
+            .await?;
+        let config = ListingTableConfig::new_with_multi_paths(table_paths)
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
         let provider = ListingTable::try_new(config)?;
@@ -647,24 +733,28 @@ impl SessionContext {
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    pub async fn read_avro(
+    ///
+    /// For an example, see [`read_csv`](Self::read_csv)
+    pub async fn read_avro<P: DataFilePaths>(
         &self,
-        table_path: impl AsRef<str>,
+        table_paths: P,
         options: AvroReadOptions<'_>,
     ) -> Result<DataFrame> {
-        self._read_type(table_path, options).await
+        self._read_type(table_paths, options).await
     }
 
-    /// Creates a [`DataFrame`] for reading an Json data source.
+    /// Creates a [`DataFrame`] for reading an JSON data source.
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    pub async fn read_json(
+    ///
+    /// For an example, see [`read_csv`](Self::read_csv)
+    pub async fn read_json<P: DataFilePaths>(
         &self,
-        table_path: impl AsRef<str>,
+        table_paths: P,
         options: NdJsonReadOptions<'_>,
     ) -> Result<DataFrame> {
-        self._read_type(table_path, options).await
+        self._read_type(table_paths, options).await
     }
 
     /// Creates an empty DataFrame.
@@ -679,24 +769,42 @@ impl SessionContext {
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    pub async fn read_csv(
+    ///
+    /// Example usage is given below:
+    ///
+    /// ```
+    /// use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// // You can read a single file using `read_csv`
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// // you can also read multiple files:
+    /// let df = ctx.read_csv(vec!["tests/data/example.csv", "tests/data/example.csv"], CsvReadOptions::new()).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn read_csv<P: DataFilePaths>(
         &self,
-        table_path: impl AsRef<str>,
+        table_paths: P,
         options: CsvReadOptions<'_>,
     ) -> Result<DataFrame> {
-        self._read_type(table_path, options).await
+        self._read_type(table_paths, options).await
     }
 
     /// Creates a [`DataFrame`] for reading a Parquet data source.
     ///
     /// For more control such as reading multiple files, you can use
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    pub async fn read_parquet(
+    ///
+    /// For an example, see [`read_csv`](Self::read_csv)
+    pub async fn read_parquet<P: DataFilePaths>(
         &self,
-        table_path: impl AsRef<str>,
+        table_paths: P,
         options: ParquetReadOptions<'_>,
     ) -> Result<DataFrame> {
-        self._read_type(table_path, options).await
+        self._read_type(table_paths, options).await
     }
 
     /// Creates a [`DataFrame`] for a [`TableProvider`] such as a
@@ -753,7 +861,10 @@ impl SessionContext {
             .with_listing_options(options)
             .with_schema(resolved_schema);
         let table = ListingTable::try_new(config)?.with_definition(sql_definition);
-        self.register_table(TableReference::Bare { table: name }, Arc::new(table))?;
+        self.register_table(
+            TableReference::Bare { table: name.into() },
+            Arc::new(table),
+        )?;
         Ok(())
     }
 
@@ -779,7 +890,7 @@ impl SessionContext {
         Ok(())
     }
 
-    /// Registers a Json file as a table that it can be referenced
+    /// Registers a JSON file as a table that it can be referenced
     /// from SQL statements executed against this context.
     pub async fn register_json(
         &self,
@@ -875,10 +986,11 @@ impl SessionContext {
         provider: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref = table_ref.into();
+        let table = table_ref.table().to_owned();
         self.state
             .read()
             .schema_for_ref(table_ref)?
-            .register_table(table_ref.table().to_owned(), provider)
+            .register_table(table, provider)
     }
 
     /// Deregisters the given table.
@@ -889,23 +1001,25 @@ impl SessionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref = table_ref.into();
+        let table = table_ref.table().to_owned();
         self.state
             .read()
             .schema_for_ref(table_ref)?
-            .deregister_table(table_ref.table())
+            .deregister_table(&table)
     }
 
-    /// Return true if the specified table exists in the schema provider.
+    /// Return `true` if the specified table exists in the schema provider.
     pub fn table_exist<'a>(
         &'a self,
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<bool> {
         let table_ref = table_ref.into();
+        let table = table_ref.table().to_owned();
         Ok(self
             .state
             .read()
             .schema_for_ref(table_ref)?
-            .table_exist(table_ref.table()))
+            .table_exist(&table))
     }
 
     /// Retrieves a [`DataFrame`] representing a table previously
@@ -920,9 +1034,9 @@ impl SessionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<DataFrame> {
         let table_ref = table_ref.into();
-        let provider = self.table_provider(table_ref).await?;
+        let provider = self.table_provider(table_ref.to_owned_reference()).await?;
         let plan = LogicalPlanBuilder::scan(
-            table_ref.table(),
+            table_ref.to_owned_reference(),
             provider_as_source(Arc::clone(&provider)),
             None,
         )?
@@ -936,13 +1050,11 @@ impl SessionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn TableProvider>> {
         let table_ref = table_ref.into();
+        let table = table_ref.table().to_string();
         let schema = self.state.read().schema_for_ref(table_ref)?;
-        match schema.table(table_ref.table()).await {
+        match schema.table(&table).await {
             Some(ref provider) => Ok(Arc::clone(provider)),
-            _ => Err(DataFusionError::Plan(format!(
-                "No table named '{}'",
-                table_ref.table()
-            ))),
+            _ => Err(DataFusionError::Plan(format!("No table named '{table}'"))),
         }
     }
 
@@ -960,7 +1072,7 @@ impl SessionContext {
             .state
             .read()
             // a bare reference will always resolve to the default catalog and schema
-            .schema_for_ref(TableReference::Bare { table: "" })?
+            .schema_for_ref(TableReference::Bare { table: "".into() })?
             .table_names()
             .iter()
             .cloned()
@@ -992,8 +1104,7 @@ impl SessionContext {
         plan: Arc<dyn ExecutionPlan>,
         path: impl AsRef<str>,
     ) -> Result<()> {
-        let state = self.state.read().clone();
-        plan_to_csv(&state, plan, path).await
+        plan_to_csv(self.task_ctx(), plan, path).await
     }
 
     /// Executes a query and writes the results to a partitioned JSON file.
@@ -1002,8 +1113,7 @@ impl SessionContext {
         plan: Arc<dyn ExecutionPlan>,
         path: impl AsRef<str>,
     ) -> Result<()> {
-        let state = self.state.read().clone();
-        plan_to_json(&state, plan, path).await
+        plan_to_json(self.task_ctx(), plan, path).await
     }
 
     /// Executes a query and writes the results to a partitioned Parquet file.
@@ -1013,8 +1123,7 @@ impl SessionContext {
         path: impl AsRef<str>,
         writer_properties: Option<WriterProperties>,
     ) -> Result<()> {
-        let state = self.state.read().clone();
-        plan_to_parquet(&state, plan, path, writer_properties).await
+        plan_to_parquet(self.task_ctx(), plan, path, writer_properties).await
     }
 
     /// Get a new TaskContext to run in this session
@@ -1084,336 +1193,10 @@ impl QueryPlanner for DefaultQueryPlanner {
     }
 }
 
-/// Map that holds opaque objects indexed by their type.
-///
-/// Data is wrapped into an [`Arc`] to enable [`Clone`] while still being [object safe].
-///
-/// [object safe]: https://doc.rust-lang.org/reference/items/traits.html#object-safety
-type AnyMap =
-    HashMap<TypeId, Arc<dyn Any + Send + Sync + 'static>, BuildHasherDefault<IdHasher>>;
-
-/// Hasher for [`AnyMap`].
-///
-/// With [`TypeId`}s as keys, there's no need to hash them. They are already hashes themselves, coming from the compiler.
-/// The [`IdHasher`} just holds the [`u64`} of the [`TypeId`}, and then returns it, instead of doing any bit fiddling.
-#[derive(Default)]
-struct IdHasher(u64);
-
-impl Hasher for IdHasher {
-    fn write(&mut self, _: &[u8]) {
-        unreachable!("TypeId calls write_u64");
-    }
-
-    #[inline]
-    fn write_u64(&mut self, id: u64) {
-        self.0 = id;
-    }
-
-    #[inline]
-    fn finish(&self) -> u64 {
-        self.0
-    }
-}
-
-/// Configuration options for session context
-#[derive(Clone)]
-pub struct SessionConfig {
-    /// Configuration options
-    options: ConfigOptions,
-    /// Opaque extensions.
-    extensions: AnyMap,
-}
-
-impl Default for SessionConfig {
-    fn default() -> Self {
-        Self {
-            options: ConfigOptions::new(),
-            // Assume no extensions by default.
-            extensions: HashMap::with_capacity_and_hasher(
-                0,
-                BuildHasherDefault::default(),
-            ),
-        }
-    }
-}
-
-impl SessionConfig {
-    /// Create an execution config with default setting
-    pub fn new() -> Self {
-        Default::default()
-    }
-
-    /// Create an execution config with config options read from the environment
-    pub fn from_env() -> Result<Self> {
-        Ok(ConfigOptions::from_env()?.into())
-    }
-
-    /// Set a configuration option
-    pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
-        self.options.set(key, &value.to_string()).unwrap();
-        self
-    }
-
-    /// Set a boolean configuration option
-    pub fn set_bool(self, key: &str, value: bool) -> Self {
-        self.set(key, ScalarValue::Boolean(Some(value)))
-    }
-
-    /// Set a generic `u64` configuration option
-    pub fn set_u64(self, key: &str, value: u64) -> Self {
-        self.set(key, ScalarValue::UInt64(Some(value)))
-    }
-
-    /// Set a generic `usize` configuration option
-    pub fn set_usize(self, key: &str, value: usize) -> Self {
-        let value: u64 = value.try_into().expect("convert usize to u64");
-        self.set(key, ScalarValue::UInt64(Some(value)))
-    }
-
-    /// Set a generic `str` configuration option
-    pub fn set_str(self, key: &str, value: &str) -> Self {
-        self.set(key, ScalarValue::Utf8(Some(value.to_string())))
-    }
-
-    /// Customize batch size
-    pub fn with_batch_size(mut self, n: usize) -> Self {
-        // batch size must be greater than zero
-        assert!(n > 0);
-        self.options.execution.batch_size = n;
-        self
-    }
-
-    /// Customize [`OPT_TARGET_PARTITIONS`]
-    pub fn with_target_partitions(mut self, n: usize) -> Self {
-        // partition count must be greater than zero
-        assert!(n > 0);
-        self.options.execution.target_partitions = n;
-        self
-    }
-
-    /// get target_partitions
-    pub fn target_partitions(&self) -> usize {
-        self.options.execution.target_partitions
-    }
-
-    /// Is the information schema enabled?
-    pub fn information_schema(&self) -> bool {
-        self.options.catalog.information_schema
-    }
-
-    /// Should the context create the default catalog and schema?
-    pub fn create_default_catalog_and_schema(&self) -> bool {
-        self.options.catalog.create_default_catalog_and_schema
-    }
-
-    /// Are joins repartitioned during execution?
-    pub fn repartition_joins(&self) -> bool {
-        self.options.optimizer.repartition_joins
-    }
-
-    /// Are aggregates repartitioned during execution?
-    pub fn repartition_aggregations(&self) -> bool {
-        self.options.optimizer.repartition_aggregations
-    }
-
-    /// Are window functions repartitioned during execution?
-    pub fn repartition_window_functions(&self) -> bool {
-        self.options.optimizer.repartition_windows
-    }
-
-    /// Are statistics collected during execution?
-    pub fn collect_statistics(&self) -> bool {
-        self.options.execution.collect_statistics
-    }
-
-    /// Selects a name for the default catalog and schema
-    pub fn with_default_catalog_and_schema(
-        mut self,
-        catalog: impl Into<String>,
-        schema: impl Into<String>,
-    ) -> Self {
-        self.options.catalog.default_catalog = catalog.into();
-        self.options.catalog.default_schema = schema.into();
-        self
-    }
-
-    /// Controls whether the default catalog and schema will be automatically created
-    pub fn with_create_default_catalog_and_schema(mut self, create: bool) -> Self {
-        self.options.catalog.create_default_catalog_and_schema = create;
-        self
-    }
-
-    /// Enables or disables the inclusion of `information_schema` virtual tables
-    pub fn with_information_schema(mut self, enabled: bool) -> Self {
-        self.options.catalog.information_schema = enabled;
-        self
-    }
-
-    /// Enables or disables the use of repartitioning for joins to improve parallelism
-    pub fn with_repartition_joins(mut self, enabled: bool) -> Self {
-        self.options.optimizer.repartition_joins = enabled;
-        self
-    }
-
-    /// Enables or disables the use of repartitioning for aggregations to improve parallelism
-    pub fn with_repartition_aggregations(mut self, enabled: bool) -> Self {
-        self.options.optimizer.repartition_aggregations = enabled;
-        self
-    }
-
-    /// Sets minimum file range size for repartitioning scans
-    pub fn with_repartition_file_min_size(mut self, size: usize) -> Self {
-        self.options.optimizer.repartition_file_min_size = size;
-        self
-    }
-
-    /// Enables or disables the use of repartitioning for file scans
-    pub fn with_repartition_file_scans(mut self, enabled: bool) -> Self {
-        self.options.optimizer.repartition_file_scans = enabled;
-        self
-    }
-
-    /// Enables or disables the use of repartitioning for window functions to improve parallelism
-    pub fn with_repartition_windows(mut self, enabled: bool) -> Self {
-        self.options.optimizer.repartition_windows = enabled;
-        self
-    }
-
-    /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
-    pub fn with_parquet_pruning(mut self, enabled: bool) -> Self {
-        self.options.execution.parquet.pruning = enabled;
-        self
-    }
-
-    /// Returns true if pruning predicate should be used to skip parquet row groups
-    pub fn parquet_pruning(&self) -> bool {
-        self.options.execution.parquet.pruning
-    }
-
-    /// Enables or disables the collection of statistics after listing files
-    pub fn with_collect_statistics(mut self, enabled: bool) -> Self {
-        self.options.execution.collect_statistics = enabled;
-        self
-    }
-
-    /// Get the currently configured batch size
-    pub fn batch_size(&self) -> usize {
-        self.options.execution.batch_size
-    }
-
-    /// Convert configuration options to name-value pairs with values
-    /// converted to strings.
-    ///
-    /// Note that this method will eventually be deprecated and
-    /// replaced by [`config_options`].
-    ///
-    /// [`config_options`]: SessionContext::config_option
-    pub fn to_props(&self) -> HashMap<String, String> {
-        let mut map = HashMap::new();
-        // copy configs from config_options
-        for entry in self.options.entries() {
-            map.insert(entry.key, entry.value.unwrap_or_default());
-        }
-
-        map
-    }
-
-    /// Return a handle to the configuration options.
-    ///
-    /// [`config_options`]: SessionContext::config_option
-    pub fn config_options(&self) -> &ConfigOptions {
-        &self.options
-    }
-
-    /// Return a mutable handle to the configuration options.
-    ///
-    /// [`config_options`]: SessionContext::config_option
-    pub fn config_options_mut(&mut self) -> &mut ConfigOptions {
-        &mut self.options
-    }
-
-    /// Add extensions.
-    ///
-    /// Extensions can be used to attach extra data to the session config -- e.g. tracing information or caches.
-    /// Extensions are opaque and the types are unknown to DataFusion itself, which makes them extremely flexible. [^1]
-    ///
-    /// Extensions are stored within an [`Arc`] so they do NOT require [`Clone`]. The are immutable. If you need to
-    /// modify their state over their lifetime -- e.g. for caches -- you need to establish some for of interior mutability.
-    ///
-    /// Extensions are indexed by their type `T`. If multiple values of the same type are provided, only the last one
-    /// will be kept.
-    ///
-    /// You may use [`get_extension`](Self::get_extension) to retrieve extensions.
-    ///
-    /// # Example
-    /// ```
-    /// use std::sync::Arc;
-    /// use datafusion::execution::context::SessionConfig;
-    ///
-    /// // application-specific extension types
-    /// struct Ext1(u8);
-    /// struct Ext2(u8);
-    /// struct Ext3(u8);
-    ///
-    /// let ext1a = Arc::new(Ext1(10));
-    /// let ext1b = Arc::new(Ext1(11));
-    /// let ext2 = Arc::new(Ext2(2));
-    ///
-    /// let cfg = SessionConfig::default()
-    ///     // will only remember the last Ext1
-    ///     .with_extension(Arc::clone(&ext1a))
-    ///     .with_extension(Arc::clone(&ext1b))
-    ///     .with_extension(Arc::clone(&ext2));
-    ///
-    /// let ext1_received = cfg.get_extension::<Ext1>().unwrap();
-    /// assert!(!Arc::ptr_eq(&ext1_received, &ext1a));
-    /// assert!(Arc::ptr_eq(&ext1_received, &ext1b));
-    ///
-    /// let ext2_received = cfg.get_extension::<Ext2>().unwrap();
-    /// assert!(Arc::ptr_eq(&ext2_received, &ext2));
-    ///
-    /// assert!(cfg.get_extension::<Ext3>().is_none());
-    /// ```
-    ///
-    /// [^1]: Compare that to [`ConfigOptions`] which only supports [`ScalarValue`] payloads.
-    pub fn with_extension<T>(mut self, ext: Arc<T>) -> Self
-    where
-        T: Send + Sync + 'static,
-    {
-        let ext = ext as Arc<dyn Any + Send + Sync + 'static>;
-        let id = TypeId::of::<T>();
-        self.extensions.insert(id, ext);
-        self
-    }
-
-    /// Get extension, if any for the specified type `T` exists.
-    ///
-    /// See [`with_extension`](Self::with_extension) on how to add attach extensions.
-    pub fn get_extension<T>(&self) -> Option<Arc<T>>
-    where
-        T: Send + Sync + 'static,
-    {
-        let id = TypeId::of::<T>();
-        self.extensions
-            .get(&id)
-            .cloned()
-            .map(|ext| Arc::downcast(ext).expect("TypeId unique"))
-    }
-}
-
-impl From<ConfigOptions> for SessionConfig {
-    fn from(options: ConfigOptions) -> Self {
-        Self {
-            options,
-            ..Default::default()
-        }
-    }
-}
-
 /// Execution context for registering data sources and executing queries
 #[derive(Clone)]
 pub struct SessionState {
-    /// Uuid for the session
+    /// UUID for the session
     session_id: String,
     /// Responsible for optimizing a logical plan
     optimizer: Optimizer,
@@ -1431,6 +1214,14 @@ pub struct SessionState {
     config: SessionConfig,
     /// Execution properties
     execution_props: ExecutionProps,
+    /// TableProviderFactories for different file formats.
+    ///
+    /// Maps strings like "JSON" to an instance of  [`TableProviderFactory`]
+    ///
+    /// This is used to create [`TableProvider`] instances for the
+    /// `CREATE EXTERNAL TABLE ... STORED AS <FORMAT>` for custom file
+    /// formats other than those built into DataFusion
+    table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
 }
@@ -1452,23 +1243,46 @@ pub fn default_session_builder(config: SessionConfig) -> SessionState {
 impl SessionState {
     /// Returns new SessionState using the provided configuration and runtime
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
+        let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
+        Self::with_config_rt_and_catalog_list(config, runtime, catalog_list)
+    }
+
+    /// Returns new SessionState using the provided configuration, runtime and catalog list.
+    pub fn with_config_rt_and_catalog_list(
+        config: SessionConfig,
+        runtime: Arc<RuntimeEnv>,
+        catalog_list: Arc<dyn CatalogList>,
+    ) -> Self {
         let session_id = Uuid::new_v4().to_string();
 
-        let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
+        // Create table_factories for all default formats
+        let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
+            HashMap::new();
+        table_factories.insert("PARQUET".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("CSV".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("JSON".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("NDJSON".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("AVRO".into(), Arc::new(ListingTableFactory::new()));
+
         if config.create_default_catalog_and_schema() {
             let default_catalog = MemoryCatalogProvider::new();
 
             default_catalog
                 .register_schema(
-                    &config.config_options().catalog.default_schema,
+                    &config.options().catalog.default_schema,
                     Arc::new(MemorySchemaProvider::new()),
                 )
                 .expect("memory catalog provider can register schema");
 
-            Self::register_default_schema(&config, &runtime, &default_catalog);
+            Self::register_default_schema(
+                &config,
+                &table_factories,
+                &runtime,
+                &default_catalog,
+            );
 
             catalog_list.register_catalog(
-                config.config_options().catalog.default_catalog.clone(),
+                config.options().catalog.default_catalog.clone(),
                 Arc::new(default_catalog),
             );
         }
@@ -1476,6 +1290,18 @@ impl SessionState {
         // We need to take care of the rule ordering. They may influence each other.
         let physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
             Arc::new(AggregateStatistics::new()),
+            // Statistics-based join selection will change the Auto mode to a real join implementation,
+            // like collect left, or hash join, or future sort merge join, which will influence the
+            // EnforceDistribution and EnforceSorting rules as they decide whether to add additional
+            // repartitioning and local sorting steps to meet distribution and ordering requirements.
+            // Therefore, it should run before EnforceDistribution and EnforceSorting.
+            Arc::new(JoinSelection::new()),
+            // If the query is processing infinite inputs, the PipelineFixer rule applies the
+            // necessary transformations to make the query runnable (if it is not already runnable).
+            // If the query can not be made runnable, the rule emits an error with a diagnostic message.
+            // Since the transformations it applies may alter output partitioning properties of operators
+            // (e.g. by swapping hash join sides), this rule runs before EnforceDistribution.
+            Arc::new(PipelineFixer::new()),
             // In order to increase the parallelism, the Repartition rule will change the
             // output partitioning of some operators in the plan tree, which will influence
             // other rules. Therefore, it should run as soon as possible. It is optional because:
@@ -1490,18 +1316,6 @@ impl SessionState {
             // - Since it will change the output ordering of some operators, it should run
             // before JoinSelection and EnforceSorting, which may depend on that.
             Arc::new(GlobalSortSelection::new()),
-            // Statistics-based join selection will change the Auto mode to a real join implementation,
-            // like collect left, or hash join, or future sort merge join, which will influence the
-            // EnforceDistribution and EnforceSorting rules as they decide whether to add additional
-            // repartitioning and local sorting steps to meet distribution and ordering requirements.
-            // Therefore, it should run before EnforceDistribution and EnforceSorting.
-            Arc::new(JoinSelection::new()),
-            // If the query is processing infinite inputs, the PipelineFixer rule applies the
-            // necessary transformations to make the query runnable (if it is not already runnable).
-            // If the query can not be made runnable, the rule emits an error with a diagnostic message.
-            // Since the transformations it applies may alter output partitioning properties of operators
-            // (e.g. by swapping hash join sides), this rule runs before EnforceDistribution.
-            Arc::new(PipelineFixer::new()),
             // The EnforceDistribution rule is for adding essential repartition to satisfy the required
             // distribution. Please make sure that the whole plan tree is determined before this rule.
             Arc::new(EnforceDistribution::new()),
@@ -1531,16 +1345,18 @@ impl SessionState {
             config,
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
+            table_factories,
         }
     }
 
     fn register_default_schema(
         config: &SessionConfig,
+        table_factories: &HashMap<String, Arc<dyn TableProviderFactory>>,
         runtime: &Arc<RuntimeEnv>,
         default_catalog: &MemoryCatalogProvider,
     ) {
-        let url = config.options.catalog.location.as_ref();
-        let format = config.options.catalog.format.as_ref();
+        let url = config.options().catalog.location.as_ref();
+        let format = config.options().catalog.format.as_ref();
         let (url, format) = match (url, format) {
             (Some(url), Some(format)) => (url, format),
             _ => return,
@@ -1548,7 +1364,7 @@ impl SessionState {
         let url = url.to_string();
         let format = format.to_string();
 
-        let has_header = config.options.catalog.has_header;
+        let has_header = config.options().catalog.has_header;
         let url = Url::parse(url.as_str()).expect("Invalid default catalog location!");
         let authority = match url.host_str() {
             Some(host) => format!("{}://{}", url.scheme(), host),
@@ -1562,7 +1378,7 @@ impl SessionState {
             Ok(store) => store,
             _ => return,
         };
-        let factory = match runtime.table_factories.get(format.as_str()) {
+        let factory = match table_factories.get(format.as_str()) {
             Some(factory) => factory,
             _ => return,
         };
@@ -1601,14 +1417,14 @@ impl SessionState {
         }
 
         self.catalog_list
-            .catalog(resolved_ref.catalog)
+            .catalog(&resolved_ref.catalog)
             .ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "failed to resolve catalog: {}",
                     resolved_ref.catalog
                 ))
             })?
-            .schema(resolved_ref.schema)
+            .schema(&resolved_ref.schema)
             .ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "failed to resolve schema: {}",
@@ -1668,7 +1484,19 @@ impl SessionState {
         self
     }
 
-    /// Convert a sql string into an ast Statement
+    /// Get the table factories
+    pub fn table_factories(&self) -> &HashMap<String, Arc<dyn TableProviderFactory>> {
+        &self.table_factories
+    }
+
+    /// Get the table factories
+    pub fn table_factories_mut(
+        &mut self,
+    ) -> &mut HashMap<String, Arc<dyn TableProviderFactory>> {
+        &mut self.table_factories
+    }
+
+    /// Convert a SQL string into an AST Statement
     pub fn sql_to_statement(
         &self,
         sql: &str,
@@ -1687,21 +1515,20 @@ impl SessionState {
         Ok(statement)
     }
 
-    /// Convert an ast Statement into a LogicalPlan
-    pub async fn statement_to_plan(
+    /// Resolve all table references in the SQL statement.
+    pub fn resolve_table_references(
         &self,
-        statement: datafusion_sql::parser::Statement,
-    ) -> Result<LogicalPlan> {
+        statement: &datafusion_sql::parser::Statement,
+    ) -> Result<Vec<OwnedTableReference>> {
         use crate::catalog::information_schema::INFORMATION_SCHEMA_TABLES;
         use datafusion_sql::parser::Statement as DFStatement;
         use sqlparser::ast::*;
-        use std::collections::hash_map::Entry;
 
         // Getting `TableProviders` is async but planing is not -- thus pre-fetch
         // table providers for all relations referenced in this query
         let mut relations = hashbrown::HashSet::with_capacity(10);
 
-        match &statement {
+        match statement {
             DFStatement::Statement(s) => {
                 struct RelationVisitor<'a>(&'a mut hashbrown::HashSet<ObjectName>);
 
@@ -1752,22 +1579,36 @@ impl SessionState {
             }
         }
 
+        let enable_ident_normalization =
+            self.config.options().sql_parser.enable_ident_normalization;
+        relations
+            .into_iter()
+            .map(|x| object_name_to_table_reference(x, enable_ident_normalization))
+            .collect::<Result<_>>()
+    }
+
+    /// Convert an AST Statement into a LogicalPlan
+    pub async fn statement_to_plan(
+        &self,
+        statement: datafusion_sql::parser::Statement,
+    ) -> Result<LogicalPlan> {
+        let references = self.resolve_table_references(&statement)?;
+
         let mut provider = SessionContextProvider {
             state: self,
-            tables: HashMap::with_capacity(relations.len()),
+            tables: HashMap::with_capacity(references.len()),
         };
 
         let enable_ident_normalization =
-            self.config.options.sql_parser.enable_ident_normalization;
+            self.config.options().sql_parser.enable_ident_normalization;
         let parse_float_as_decimal =
-            self.config.options.sql_parser.parse_float_as_decimal;
-        for relation in relations {
-            let reference =
-                object_name_to_table_reference(relation, enable_ident_normalization)?;
-            let resolved = self.resolve_table_ref(reference.as_table_reference());
+            self.config.options().sql_parser.parse_float_as_decimal;
+        for reference in references {
+            let table = reference.table();
+            let resolved = self.resolve_table_ref(&reference);
             if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
                 if let Ok(schema) = self.schema_for_ref(resolved) {
-                    if let Some(table) = schema.table(resolved.table).await {
+                    if let Some(table) = schema.table(table).await {
                         v.insert(provider_as_source(table));
                     }
                 }
@@ -1870,7 +1711,7 @@ impl SessionState {
 
     /// return the configuration options
     pub fn config_options(&self) -> &ConfigOptions {
-        self.config.config_options()
+        self.config.options()
     }
 
     /// Get a new TaskContext to run in this session
@@ -1881,6 +1722,16 @@ impl SessionState {
     /// Return catalog list
     pub fn catalog_list(&self) -> Arc<dyn CatalogList> {
         self.catalog_list.clone()
+    }
+
+    /// Return reference to scalar_functions
+    pub fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+        &self.scalar_functions
+    }
+
+    /// Return reference to aggregate_functions
+    pub fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+        &self.aggregate_functions
     }
 }
 
@@ -1899,11 +1750,11 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
-        self.state.scalar_functions.get(name).cloned()
+        self.state.scalar_functions().get(name).cloned()
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
-        self.state.aggregate_functions.get(name).cloned()
+        self.state.aggregate_functions().get(name).cloned()
     }
 
     fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType> {
@@ -1965,73 +1816,6 @@ impl OptimizerConfig for SessionState {
     }
 }
 
-/// Task Execution Context
-pub struct TaskContext {
-    /// Session Id
-    session_id: String,
-    /// Optional Task Identify
-    task_id: Option<String>,
-    /// Session configuration
-    session_config: SessionConfig,
-    /// Scalar functions associated with this task context
-    scalar_functions: HashMap<String, Arc<ScalarUDF>>,
-    /// Aggregate functions associated with this task context
-    aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
-    /// Runtime environment associated with this task context
-    runtime: Arc<RuntimeEnv>,
-}
-
-impl TaskContext {
-    /// Create a new task context instance
-    pub fn new(
-        task_id: String,
-        session_id: String,
-        task_props: HashMap<String, String>,
-        scalar_functions: HashMap<String, Arc<ScalarUDF>>,
-        aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
-        runtime: Arc<RuntimeEnv>,
-    ) -> Self {
-        let mut config = ConfigOptions::new();
-        for (k, v) in task_props {
-            let _ = config.set(&k, &v);
-        }
-
-        Self {
-            task_id: Some(task_id),
-            session_id,
-            session_config: config.into(),
-            scalar_functions,
-            aggregate_functions,
-            runtime,
-        }
-    }
-
-    /// Return the SessionConfig associated with the Task
-    pub fn session_config(&self) -> &SessionConfig {
-        &self.session_config
-    }
-
-    /// Return the session_id of this [TaskContext]
-    pub fn session_id(&self) -> String {
-        self.session_id.clone()
-    }
-
-    /// Return the task_id of this [TaskContext]
-    pub fn task_id(&self) -> Option<String> {
-        self.task_id.clone()
-    }
-
-    /// Return the [`MemoryPool`] associated with this [TaskContext]
-    pub fn memory_pool(&self) -> &Arc<dyn MemoryPool> {
-        &self.runtime.memory_pool
-    }
-
-    /// Return the [RuntimeEnv] associated with this [TaskContext]
-    pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
-        self.runtime.clone()
-    }
-}
-
 /// Create a new task context instance from SessionContext
 impl From<&SessionContext> for TaskContext {
     fn from(session: &SessionContext) -> Self {
@@ -2042,45 +1826,15 @@ impl From<&SessionContext> for TaskContext {
 /// Create a new task context instance from SessionState
 impl From<&SessionState> for TaskContext {
     fn from(state: &SessionState) -> Self {
-        let session_id = state.session_id.clone();
-        let session_config = state.config.clone();
-        let scalar_functions = state.scalar_functions.clone();
-        let aggregate_functions = state.aggregate_functions.clone();
-        let runtime = state.runtime_env.clone();
-        Self {
-            task_id: None,
-            session_id,
-            session_config,
-            scalar_functions,
-            aggregate_functions,
-            runtime,
-        }
-    }
-}
-
-impl FunctionRegistry for TaskContext {
-    fn udfs(&self) -> HashSet<String> {
-        self.scalar_functions.keys().cloned().collect()
-    }
-
-    fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>> {
-        let result = self.scalar_functions.get(name);
-
-        result.cloned().ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "There is no UDF named \"{name}\" in the TaskContext"
-            ))
-        })
-    }
-
-    fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
-        let result = self.aggregate_functions.get(name);
-
-        result.cloned().ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "There is no UDAF named \"{name}\" in the TaskContext"
-            ))
-        })
+        let task_id = None;
+        TaskContext::new(
+            task_id,
+            state.session_id.clone(),
+            state.config.clone(),
+            state.scalar_functions.clone(),
+            state.aggregate_functions.clone(),
+            state.runtime_env.clone(),
+        )
     }
 }
 
@@ -2276,7 +2030,7 @@ mod tests {
             "+-------------+",
             "| MY_AVG(t.i) |",
             "+-------------+",
-            "| 1           |",
+            "| 1.0         |",
             "+-------------+",
         ];
         assert_batches_eq!(expected, &result);

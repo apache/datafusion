@@ -104,7 +104,7 @@ impl OptimizerRule for PropagateEmptyRelation {
                         schema: plan.schema().clone(),
                     })));
                 } else if new_inputs.len() == 1 {
-                    let child = (**(union.inputs.get(0).unwrap())).clone();
+                    let child = (*new_inputs[0]).clone();
                     if child.schema().eq(plan.schema()) {
                         return Ok(Some(child));
                     } else {
@@ -144,14 +144,8 @@ impl OptimizerRule for PropagateEmptyRelation {
 }
 
 fn binary_plan_children_is_empty(plan: &LogicalPlan) -> Result<(bool, bool)> {
-    let inputs = plan.inputs();
-
-    // all binary-plan need to deal with separately.
-    match inputs.len() {
-        2 => {
-            let left = inputs.get(0).unwrap();
-            let right = inputs.get(1).unwrap();
-
+    match plan.inputs()[..] {
+        [left, right] => {
             let left_empty = match left {
                 LogicalPlan::EmptyRelation(empty) => !empty.produce_one_row,
                 _ => false,
@@ -169,26 +163,20 @@ fn binary_plan_children_is_empty(plan: &LogicalPlan) -> Result<(bool, bool)> {
 }
 
 fn empty_child(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
-    let inputs = plan.inputs();
-
-    // all binary-plan need to deal with separately.
-    match inputs.len() {
-        1 => {
-            let input = inputs.get(0).unwrap();
-            match input {
-                LogicalPlan::EmptyRelation(empty) => {
-                    if !empty.produce_one_row {
-                        Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
-                            produce_one_row: false,
-                            schema: plan.schema().clone(),
-                        })))
-                    } else {
-                        Ok(None)
-                    }
+    match plan.inputs()[..] {
+        [child] => match child {
+            LogicalPlan::EmptyRelation(empty) => {
+                if !empty.produce_one_row {
+                    Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
+                        produce_one_row: false,
+                        schema: plan.schema().clone(),
+                    })))
+                } else {
+                    Ok(None)
                 }
-                _ => Ok(None),
             }
-        }
+            _ => Ok(None),
+        },
         _ => Err(DataFusionError::Plan(
             "plan just can have one child".to_string(),
         )),
@@ -200,11 +188,12 @@ mod tests {
     use crate::eliminate_filter::EliminateFilter;
     use crate::optimizer::Optimizer;
     use crate::test::{
-        assert_optimized_plan_eq, test_table_scan, test_table_scan_with_name,
+        assert_optimized_plan_eq, test_table_scan, test_table_scan_fields,
+        test_table_scan_with_name,
     };
     use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{Column, ScalarValue};
+    use datafusion_common::{Column, DFField, DFSchema, ScalarValue};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Expr, JoinType,
@@ -282,8 +271,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
-        let expected = "Projection: a, b, c\
-            \n  TableScan: test";
+        let expected = "TableScan: test";
         assert_together_optimized_plan_eq(&plan, expected)
     }
 
@@ -373,8 +361,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
-        let expected = "Projection: a, b, c\
-            \n  TableScan: test";
+        let expected = "TableScan: test";
         assert_together_optimized_plan_eq(&plan, expected)
     }
 
@@ -390,6 +377,39 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
+        assert_together_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn test_empty_with_non_empty() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let fields = test_table_scan_fields()
+            .into_iter()
+            .map(DFField::from)
+            .collect();
+
+        let empty = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::new_with_metadata(fields, Default::default())?),
+        });
+
+        let one = LogicalPlanBuilder::from(empty.clone()).build()?;
+        let two = LogicalPlanBuilder::from(table_scan).build()?;
+        let three = LogicalPlanBuilder::from(empty).build()?;
+
+        // Union
+        //  EmptyRelation
+        //  TableScan: test
+        //  EmptyRelation
+        let plan = LogicalPlanBuilder::from(one)
+            .union(two)?
+            .union(three)?
+            .build()?;
+
+        let expected = "Projection: a, b, c\
+        \n  TableScan: test";
+
         assert_together_optimized_plan_eq(&plan, expected)
     }
 }

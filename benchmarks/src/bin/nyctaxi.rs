@@ -29,6 +29,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::{SessionConfig, SessionContext};
 
 use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
+use datafusion_benchmarks::BenchmarkRun;
 use structopt::StructOpt;
 
 #[cfg(feature = "snmalloc")]
@@ -61,6 +62,10 @@ struct Opt {
     /// File format: `csv` or `parquet`
     #[structopt(short = "f", long = "format", default_value = "csv")]
     file_format: String,
+
+    /// Path to machine readable output file
+    #[structopt(parse(from_os_str), short = "o", long = "output")]
+    output_path: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -91,42 +96,51 @@ async fn main() -> Result<()> {
         }
     }
 
-    datafusion_sql_benchmarks(&mut ctx, opt.iterations, opt.debug).await
+    datafusion_sql_benchmarks(&mut ctx, opt).await
 }
 
-async fn datafusion_sql_benchmarks(
-    ctx: &mut SessionContext,
-    iterations: usize,
-    debug: bool,
-) -> Result<()> {
+async fn datafusion_sql_benchmarks(ctx: &mut SessionContext, opt: Opt) -> Result<()> {
+    let iterations = opt.iterations;
+    let debug = opt.debug;
+    let output = opt.output_path;
+    let mut rundata = BenchmarkRun::new();
     let mut queries = HashMap::new();
     queries.insert("fare_amt_by_passenger", "SELECT passenger_count, MIN(fare_amount), MAX(fare_amount), SUM(fare_amount) FROM tripdata GROUP BY passenger_count");
     for (name, sql) in &queries {
         println!("Executing '{name}'");
+        rundata.start_new_case(name);
         for i in 0..iterations {
-            let start = Instant::now();
-            execute_sql(ctx, sql, debug).await?;
+            let (rows, elapsed) = execute_sql(ctx, sql, debug).await?;
             println!(
                 "Query '{}' iteration {} took {} ms",
                 name,
                 i,
-                start.elapsed().as_millis()
+                elapsed.as_secs_f64() * 1000.0
             );
+            rundata.write_iter(elapsed, rows);
         }
     }
+    rundata.maybe_write_json(output.as_ref())?;
     Ok(())
 }
 
-async fn execute_sql(ctx: &SessionContext, sql: &str, debug: bool) -> Result<()> {
+async fn execute_sql(
+    ctx: &SessionContext,
+    sql: &str,
+    debug: bool,
+) -> Result<(usize, std::time::Duration)> {
+    let start = Instant::now();
     let dataframe = ctx.sql(sql).await?;
     if debug {
         println!("Optimized logical plan:\n{:?}", dataframe.logical_plan());
     }
     let result = dataframe.collect().await?;
+    let elapsed = start.elapsed();
     if debug {
         pretty::print_batches(&result)?;
     }
-    Ok(())
+    let rowcount = result.iter().map(|b| b.num_rows()).sum();
+    Ok((rowcount, elapsed))
 }
 
 fn nyctaxi_schema() -> Schema {

@@ -175,22 +175,18 @@ async fn projection_on_table_scan() -> Result<()> {
     let state = ctx.state();
     let optimized_plan = state.optimize(&logical_plan)?;
     match &optimized_plan {
-        LogicalPlan::Projection(Projection { input, .. }) => match &**input {
-            LogicalPlan::TableScan(TableScan {
-                source,
-                projected_schema,
-                ..
-            }) => {
-                assert_eq!(source.schema().fields().len(), 3);
-                assert_eq!(projected_schema.fields().len(), 1);
-            }
-            _ => panic!("input to projection should be TableScan"),
-        },
-        _ => panic!("expect optimized_plan to be projection"),
+        LogicalPlan::TableScan(TableScan {
+            source,
+            projected_schema,
+            ..
+        }) => {
+            assert_eq!(source.schema().fields().len(), 3);
+            assert_eq!(projected_schema.fields().len(), 1);
+        }
+        _ => panic!("input to projection should be TableScan"),
     }
 
-    let expected = "Projection: test.c2\
-                    \n  TableScan: test projection=[c2]";
+    let expected = "TableScan: test projection=[c2]";
     assert_eq!(format!("{optimized_plan:?}"), expected);
 
     let physical_plan = state.create_physical_plan(&optimized_plan).await?;
@@ -291,24 +287,18 @@ async fn projection_on_memory_scan() -> Result<()> {
     let state = ctx.state();
     let optimized_plan = state.optimize(&plan)?;
     match &optimized_plan {
-        LogicalPlan::Projection(Projection { input, .. }) => match &**input {
-            LogicalPlan::TableScan(TableScan {
-                source,
-                projected_schema,
-                ..
-            }) => {
-                assert_eq!(source.schema().fields().len(), 3);
-                assert_eq!(projected_schema.fields().len(), 1);
-            }
-            _ => panic!("input to projection should be InMemoryScan"),
-        },
-        _ => panic!("expect optimized_plan to be projection"),
+        LogicalPlan::TableScan(TableScan {
+            source,
+            projected_schema,
+            ..
+        }) => {
+            assert_eq!(source.schema().fields().len(), 3);
+            assert_eq!(projected_schema.fields().len(), 1);
+        }
+        _ => panic!("input to projection should be InMemoryScan"),
     }
 
-    let expected = format!(
-        "Projection: {UNNAMED_TABLE}.b\
-         \n  TableScan: {UNNAMED_TABLE} projection=[b]"
-    );
+    let expected = format!("TableScan: {UNNAMED_TABLE} projection=[b]");
     assert_eq!(format!("{optimized_plan:?}"), expected);
 
     let physical_plan = state.create_physical_plan(&optimized_plan).await?;

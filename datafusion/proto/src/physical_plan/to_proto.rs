@@ -42,12 +42,12 @@ use datafusion::physical_plan::expressions::{
 use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 
 use crate::protobuf;
-use crate::protobuf::PhysicalSortExprNode;
+use crate::protobuf::{PhysicalSortExprNode, ScalarValue};
 use datafusion::logical_expr::BuiltinScalarFunction;
-use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
+use datafusion::physical_expr::expressions::{DateTimeIntervalExpr, GetIndexedFieldExpr};
 use datafusion::physical_expr::ScalarFunctionExpr;
 use datafusion::physical_plan::joins::utils::JoinSide;
-use datafusion_common::DataFusionError;
+use datafusion_common::{DataFusionError, Result};
 
 impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
     type Error = DataFusionError;
@@ -139,7 +139,7 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
             .expressions()
             .iter()
             .map(|e| e.clone().try_into())
-            .collect::<Result<Vec<_>, DataFusionError>>()?;
+            .collect::<Result<Vec<_>>>()?;
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
                 protobuf::PhysicalAggregateExprNode {
@@ -342,6 +342,17 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                     }),
                 )),
             })
+        } else if let Some(expr) = expr.downcast_ref::<GetIndexedFieldExpr>() {
+            Ok(protobuf::PhysicalExprNode {
+                expr_type: Some(
+                    protobuf::physical_expr_node::ExprType::GetIndexedFieldExpr(
+                        Box::new(protobuf::PhysicalGetIndexedFieldExprNode {
+                            arg: Some(Box::new(expr.arg().to_owned().try_into()?)),
+                            key: Some(ScalarValue::try_from(expr.key())?),
+                        }),
+                    ),
+                ),
+            })
         } else {
             Err(DataFusionError::Internal(format!(
                 "physical_plan::to_proto() unsupported expression {value:?}"
@@ -353,7 +364,7 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
 fn try_parse_when_then_expr(
     when_expr: &Arc<dyn PhysicalExpr>,
     then_expr: &Arc<dyn PhysicalExpr>,
-) -> Result<protobuf::PhysicalWhenThen, DataFusionError> {
+) -> Result<protobuf::PhysicalWhenThen> {
     Ok(protobuf::PhysicalWhenThen {
         when_expr: Some(when_expr.clone().try_into()?),
         then_expr: Some(then_expr.clone().try_into()?),
@@ -451,7 +462,7 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
                         nulls_first: o.options.nulls_first,
                     })
                 })
-                .collect::<Result<Vec<PhysicalSortExprNode>, DataFusionError>>()?
+                .collect::<Result<Vec<PhysicalSortExprNode>>>()?
         } else {
             vec![]
         };

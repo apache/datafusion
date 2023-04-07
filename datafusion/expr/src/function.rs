@@ -255,6 +255,11 @@ pub fn return_type(
             _ => Ok(DataType::Float64),
         },
 
+        BuiltinScalarFunction::Log => match &input_expr_types[0] {
+            DataType::Float32 => Ok(DataType::Float32),
+            _ => Ok(DataType::Float64),
+        },
+
         BuiltinScalarFunction::ArrowTypeof => Ok(DataType::Utf8),
 
         BuiltinScalarFunction::Abs
@@ -265,7 +270,6 @@ pub fn return_type(
         | BuiltinScalarFunction::Cos
         | BuiltinScalarFunction::Exp
         | BuiltinScalarFunction::Floor
-        | BuiltinScalarFunction::Log
         | BuiltinScalarFunction::Ln
         | BuiltinScalarFunction::Log10
         | BuiltinScalarFunction::Log2
@@ -273,6 +277,7 @@ pub fn return_type(
         | BuiltinScalarFunction::Signum
         | BuiltinScalarFunction::Sin
         | BuiltinScalarFunction::Sqrt
+        | BuiltinScalarFunction::Cbrt
         | BuiltinScalarFunction::Tan
         | BuiltinScalarFunction::Trunc => match input_expr_types[0] {
             DataType::Float32 => Ok(DataType::Float32),
@@ -444,11 +449,26 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
             ],
             fun.volatility(),
         ),
-        BuiltinScalarFunction::DateBin => Signature::exact(
+        BuiltinScalarFunction::DateBin => Signature::one_of(
             vec![
-                DataType::Interval(IntervalUnit::DayTime),
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                TypeSignature::Exact(vec![
+                    DataType::Interval(IntervalUnit::DayTime),
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Interval(IntervalUnit::MonthDayNano),
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Interval(IntervalUnit::DayTime),
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Interval(IntervalUnit::MonthDayNano),
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                ]),
             ],
             fun.volatility(),
         ),
@@ -602,6 +622,15 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
         ),
         BuiltinScalarFunction::Atan2 => Signature::one_of(
             vec![
+                TypeSignature::Exact(vec![DataType::Float32, DataType::Float32]),
+                TypeSignature::Exact(vec![DataType::Float64, DataType::Float64]),
+            ],
+            fun.volatility(),
+        ),
+        BuiltinScalarFunction::Log => Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Float32]),
+                TypeSignature::Exact(vec![DataType::Float64]),
                 TypeSignature::Exact(vec![DataType::Float32, DataType::Float32]),
                 TypeSignature::Exact(vec![DataType::Float64, DataType::Float64]),
             ],

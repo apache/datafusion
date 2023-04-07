@@ -97,7 +97,8 @@ message ParquetFormat {
 message AvroFormat {}
 
 message ListingTableScanNode {
-  string table_name = 1;
+  reserved 1; // was string table_name
+  OwnedTableReference table_name = 14;
   repeated string paths = 2;
   string file_extension = 3;
   ProjectionColumns projection = 4;
@@ -115,7 +116,8 @@ message ListingTableScanNode {
 }
 
 message ViewTableScanNode {
-  string table_name = 1;
+  reserved 1; // was string table_name
+  OwnedTableReference table_name = 6;
   LogicalPlanNode input = 2;
   Schema schema = 3;
   ProjectionColumns projection = 4;
@@ -124,7 +126,8 @@ message ViewTableScanNode {
 
 // Logical Plan to Scan a CustomTableProvider registered at runtime
 message CustomTableScanNode {
-  string table_name = 1;
+  reserved 1; // was string table_name
+  OwnedTableReference table_name = 6;
   ProjectionColumns projection = 2;
   Schema schema = 3;
   repeated LogicalExprNode filters = 4;
@@ -180,6 +183,7 @@ message CreateExternalTableNode {
   string delimiter = 8;
   string definition = 9;
   string file_compression_type = 10;
+  repeated LogicalExprNode order_exprs = 13;
   map<string, string> options = 11;
 }
 
@@ -519,6 +523,7 @@ enum ScalarFunction {
   CurrentDate = 70;
   CurrentTime = 71;
   Uuid = 72;
+  Cbrt = 73;
 }
 
 message ScalarFunctionNode {
@@ -743,6 +748,11 @@ message Struct{
   repeated Field sub_field_types = 1;
 }
 
+message Map {
+  Field field_type = 1;
+  bool keys_sorted = 2;
+}
+
 enum UnionMode{
   sparse = 0;
   dense = 1;
@@ -894,6 +904,7 @@ message ArrowType{
     Struct STRUCT = 28;
     Union UNION = 29;
     Dictionary DICTIONARY = 30;
+    Map MAP = 33;
   }
 }
 
@@ -1023,6 +1034,8 @@ message PhysicalExprNode {
     PhysicalDateTimeIntervalExprNode date_time_interval_expr = 17;
 
     PhysicalLikeExprNode like_expr = 18;
+
+    PhysicalGetIndexedFieldExprNode get_indexed_field_expr = 19;
   }
 }
 
@@ -1157,7 +1170,11 @@ message FileScanExecConf {
 
 message ParquetScanExecNode {
   FileScanExecConf base_conf = 1;
-  LogicalExprNode pruning_predicate = 2;
+
+  // Was pruning predicate based on a logical expr.
+  reserved 2;
+
+  PhysicalExprNode predicate = 3;
 }
 
 message CsvScanExecNode {
@@ -1266,6 +1283,7 @@ message SortExecNode {
   repeated PhysicalExprNode expr = 2;
   // Maximum number of highest/lowest rows to fetch; negative means no limit
   int64 fetch = 3;
+  bool preserve_partitioning = 4;
 }
 
 message SortPreservingMergeExecNode {
@@ -1344,4 +1362,9 @@ message ColumnStats {
   ScalarValue max_value = 2;
   uint32 null_count = 3;
   uint32 distinct_count = 4;
+}
+
+message PhysicalGetIndexedFieldExprNode {
+  PhysicalExprNode arg = 1;
+  ScalarValue key = 2;
 }

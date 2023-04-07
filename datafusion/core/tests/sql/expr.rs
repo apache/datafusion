@@ -514,7 +514,7 @@ async fn query_without_from() -> Result<()> {
         "+---------------------+---------------------+---------------+",
         "| Int64(1) + Int64(2) | Int64(3) / Int64(4) | cos(Int64(0)) |",
         "+---------------------+---------------------+---------------+",
-        "| 3                   | 0                   | 1             |",
+        "| 3                   | 0                   | 1.0           |",
         "+---------------------+---------------------+---------------+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -676,6 +676,7 @@ async fn test_boolean_expressions() -> Result<()> {
 #[tokio::test]
 async fn test_mathematical_expressions_with_null() -> Result<()> {
     test_expression!("sqrt(NULL)", "NULL");
+    test_expression!("cbrt(NULL)", "NULL");
     test_expression!("sin(NULL)", "NULL");
     test_expression!("cos(NULL)", "NULL");
     test_expression!("tan(NULL)", "NULL");
@@ -818,18 +819,12 @@ async fn test_array_literals() -> Result<()> {
 
 #[tokio::test]
 async fn test_struct_literals() -> Result<()> {
-    test_expression!(
-        "STRUCT(1,2,3,4,5)",
-        "{\"c0\": 1, \"c1\": 2, \"c2\": 3, \"c3\": 4, \"c4\": 5}"
-    );
-    test_expression!("STRUCT(Null)", "{\"c0\": null}");
-    test_expression!("STRUCT(2)", "{\"c0\": 2}");
-    test_expression!("STRUCT('1',Null)", "{\"c0\": \"1\", \"c1\": null}");
-    test_expression!("STRUCT(true, false)", "{\"c0\": true, \"c1\": false}");
-    test_expression!(
-        "STRUCT('str1', 'str2')",
-        "{\"c0\": \"str1\", \"c1\": \"str2\"}"
-    );
+    test_expression!("STRUCT(1,2,3,4,5)", "{c0: 1, c1: 2, c2: 3, c3: 4, c4: 5}");
+    test_expression!("STRUCT(Null)", "{c0: }");
+    test_expression!("STRUCT(2)", "{c0: 2}");
+    test_expression!("STRUCT('1',Null)", "{c0: 1, c1: }");
+    test_expression!("STRUCT(true, false)", "{c0: true, c1: false}");
+    test_expression!("STRUCT('str1', 'str2')", "{c0: str1, c1: str2}");
 
     Ok(())
 }
@@ -849,83 +844,83 @@ async fn test_interval_expressions() -> Result<()> {
     // day nano intervals
     test_expression!(
         "interval '1'",
-        "0 years 0 mons 0 days 0 hours 0 mins 1.000 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 1.000000000 secs"
     );
     test_expression!(
         "interval '1 second'",
-        "0 years 0 mons 0 days 0 hours 0 mins 1.000 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 1.000000000 secs"
     );
     test_expression!(
         "interval '500 milliseconds'",
-        "0 years 0 mons 0 days 0 hours 0 mins 0.500 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 0.500000000 secs"
     );
     test_expression!(
         "interval '5 second'",
-        "0 years 0 mons 0 days 0 hours 0 mins 5.000 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs"
     );
     test_expression!(
         "interval '0.5 minute'",
-        "0 years 0 mons 0 days 0 hours 0 mins 30.000 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs"
     );
     test_expression!(
         "interval '.5 minute'",
-        "0 years 0 mons 0 days 0 hours 0 mins 30.000 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs"
     );
     test_expression!(
         "interval '5 minute'",
-        "0 years 0 mons 0 days 0 hours 5 mins 0.000 secs"
+        "0 years 0 mons 0 days 0 hours 5 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '5 minute 1 second'",
-        "0 years 0 mons 0 days 0 hours 5 mins 1.000 secs"
+        "0 years 0 mons 0 days 0 hours 5 mins 1.000000000 secs"
     );
     test_expression!(
         "interval '1 hour'",
-        "0 years 0 mons 0 days 1 hours 0 mins 0.000 secs"
+        "0 years 0 mons 0 days 1 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '5 hour'",
-        "0 years 0 mons 0 days 5 hours 0 mins 0.000 secs"
+        "0 years 0 mons 0 days 5 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 day'",
-        "0 years 0 mons 1 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 1 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 week'",
-        "0 years 0 mons 7 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 7 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '2 weeks'",
-        "0 years 0 mons 14 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 14 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 day 1'",
-        "0 years 0 mons 1 days 0 hours 0 mins 1.000 secs"
+        "0 years 0 mons 1 days 0 hours 0 mins 1.000000000 secs"
     );
     test_expression!(
         "interval '0.5'",
-        "0 years 0 mons 0 days 0 hours 0 mins 0.500 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 0.500000000 secs"
     );
     test_expression!(
         "interval '0.5 day 1'",
-        "0 years 0 mons 0 days 12 hours 0 mins 1.000 secs"
+        "0 years 0 mons 0 days 12 hours 0 mins 1.000000000 secs"
     );
     test_expression!(
         "interval '0.49 day'",
-        "0 years 0 mons 0 days 11 hours 45 mins 36.000 secs"
+        "0 years 0 mons 0 days 11 hours 45 mins 36.000000000 secs"
     );
     test_expression!(
         "interval '0.499 day'",
-        "0 years 0 mons 0 days 11 hours 58 mins 33.600 secs"
+        "0 years 0 mons 0 days 11 hours 58 mins 33.600000000 secs"
     );
     test_expression!(
         "interval '0.4999 day'",
-        "0 years 0 mons 0 days 11 hours 59 mins 51.360 secs"
+        "0 years 0 mons 0 days 11 hours 59 mins 51.360000000 secs"
     );
     test_expression!(
         "interval '0.49999 day'",
-        "0 years 0 mons 0 days 11 hours 59 mins 59.136 secs"
+        "0 years 0 mons 0 days 11 hours 59 mins 59.136000000 secs"
     );
     test_expression!(
         "interval '0.49999999999 day'",
@@ -933,69 +928,69 @@ async fn test_interval_expressions() -> Result<()> {
     );
     test_expression!(
         "interval '5 day'",
-        "0 years 0 mons 5 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 5 days 0 hours 0 mins 0.000000000 secs"
     );
     // Hour is ignored, this matches PostgreSQL
     test_expression!(
         "interval '5 day' hour",
-        "0 years 0 mons 5 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 5 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '5 day 4 hours 3 minutes 2 seconds 100 milliseconds'",
-        "0 years 0 mons 5 days 4 hours 3 mins 2.100 secs"
+        "0 years 0 mons 5 days 4 hours 3 mins 2.100000000 secs"
     );
     // month intervals
     test_expression!(
         "interval '0.5 month'",
-        "0 years 0 mons 15 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 15 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '0.5' month",
-        "0 years 0 mons 15 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 15 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 month'",
-        "0 years 1 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 1 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1' MONTH",
-        "0 years 1 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 1 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '5 month'",
-        "0 years 5 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 5 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '13 month'",
-        "1 years 1 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 13 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '0.5 year'",
-        "0 years 6 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 6 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 year'",
-        "1 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 12 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 decade'",
-        "10 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 120 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '2 decades'",
-        "20 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 240 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 century'",
-        "100 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 1200 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '2 year'",
-        "2 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 24 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '2' year",
-        "2 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 24 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     // complex
     test_expression!(
@@ -1236,53 +1231,53 @@ async fn in_list_array() -> Result<()> {
 
 #[tokio::test]
 async fn test_extract_date_part() -> Result<()> {
-    test_expression!("date_part('YEAR', CAST('2000-01-01' AS DATE))", "2000");
+    test_expression!("date_part('YEAR', CAST('2000-01-01' AS DATE))", "2000.0");
     test_expression!(
         "EXTRACT(year FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "2020"
+        "2020.0"
     );
-    test_expression!("date_part('QUARTER', CAST('2000-01-01' AS DATE))", "1");
+    test_expression!("date_part('QUARTER', CAST('2000-01-01' AS DATE))", "1.0");
     test_expression!(
         "EXTRACT(quarter FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "3"
+        "3.0"
     );
-    test_expression!("date_part('MONTH', CAST('2000-01-01' AS DATE))", "1");
+    test_expression!("date_part('MONTH', CAST('2000-01-01' AS DATE))", "1.0");
     test_expression!(
         "EXTRACT(month FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "9"
+        "9.0"
     );
-    test_expression!("date_part('WEEK', CAST('2003-01-01' AS DATE))", "1");
+    test_expression!("date_part('WEEK', CAST('2003-01-01' AS DATE))", "1.0");
     test_expression!(
         "EXTRACT(WEEK FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "37"
+        "37.0"
     );
-    test_expression!("date_part('DAY', CAST('2000-01-01' AS DATE))", "1");
+    test_expression!("date_part('DAY', CAST('2000-01-01' AS DATE))", "1.0");
     test_expression!(
         "EXTRACT(day FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "8"
+        "8.0"
     );
-    test_expression!("date_part('DOY', CAST('2000-01-01' AS DATE))", "1");
+    test_expression!("date_part('DOY', CAST('2000-01-01' AS DATE))", "1.0");
     test_expression!(
         "EXTRACT(doy FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "252"
+        "252.0"
     );
-    test_expression!("date_part('DOW', CAST('2000-01-01' AS DATE))", "6");
+    test_expression!("date_part('DOW', CAST('2000-01-01' AS DATE))", "6.0");
     test_expression!(
         "EXTRACT(dow FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "2"
+        "2.0"
     );
-    test_expression!("date_part('HOUR', CAST('2000-01-01' AS DATE))", "0");
+    test_expression!("date_part('HOUR', CAST('2000-01-01' AS DATE))", "0.0");
     test_expression!(
         "EXTRACT(hour FROM to_timestamp('2020-09-08T12:03:03+00:00'))",
-        "12"
+        "12.0"
     );
     test_expression!(
         "EXTRACT(minute FROM to_timestamp('2020-09-08T12:12:00+00:00'))",
-        "12"
+        "12.0"
     );
     test_expression!(
         "date_part('minute', to_timestamp('2020-09-08T12:12:00+00:00'))",
-        "12"
+        "12.0"
     );
     test_expression!(
         "EXTRACT(second FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
@@ -1298,7 +1293,7 @@ async fn test_extract_date_part() -> Result<()> {
     );
     test_expression!(
         "EXTRACT(nanosecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
-        "12123456780"
+        "1.212345678e10"
     );
     test_expression!(
         "date_part('second', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
@@ -1314,8 +1309,26 @@ async fn test_extract_date_part() -> Result<()> {
     );
     test_expression!(
         "date_part('nanosecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
-        "12123456780"
+        "1.212345678e10"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_extract_epoch() -> Result<()> {
+    test_expression!(
+        "extract(epoch from '1870-01-01T07:29:10.256'::timestamp)",
+        "-3155646649.744"
+    );
+    test_expression!(
+        "extract(epoch from '2000-01-01T00:00:00.000'::timestamp)",
+        "946684800.0"
+    );
+    test_expression!(
+        "extract(epoch from to_timestamp('2000-01-01T00:00:00+00:00'))",
+        "946684800.0"
+    );
+    test_expression!("extract(epoch from NULL::timestamp)", "NULL");
     Ok(())
 }
 
@@ -1613,6 +1626,18 @@ async fn csv_query_sqrt_sqrt() -> Result<()> {
     let actual = execute(&ctx, sql).await;
     // sqrt(sqrt(c12=0.9294097332465232)) = 0.9818650561397431
     let expected = vec![vec!["0.9818650561397431"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_cbrt_cbrt() -> Result<()> {
+    let ctx = create_ctx();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT cbrt(cbrt(c12)) FROM aggregate_test_100 LIMIT 1";
+    let actual = execute(&ctx, sql).await;
+    // cbrt(cbrt(c12=0.9294097332465232)) = 0.9918990366780552
+    let expected = vec![vec!["0.9918990366780552"]];
     assert_float_eq(&expected, &actual);
     Ok(())
 }

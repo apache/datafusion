@@ -18,18 +18,21 @@
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::Result;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
 use datafusion_common::{plan_err, Column, DFSchemaRef};
+use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr::{BinaryExpr, Sort};
-use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
-use datafusion_expr::expr_visitor::inspect_expr_pre;
+use datafusion_expr::expr_rewriter::strip_outer_reference;
+use datafusion_expr::logical_plan::LogicalPlanBuilder;
+use datafusion_expr::utils::{
+    check_all_columns_from_schema, from_plan, inspect_expr_pre,
+};
 use datafusion_expr::{
     and,
     logical_plan::{Filter, LogicalPlan},
-    utils::from_plan,
     Expr, Operator,
 };
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
 /// Convenience rule for writing optimizers: recursively invoke
@@ -290,46 +293,52 @@ pub fn find_join_exprs(
     let mut joins = vec![];
     let mut others = vec![];
     for filter in exprs.iter() {
-        let (left, op, right) = match filter {
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                (*left.clone(), *op, *right.clone())
-            }
-            _ => {
+        // If the expression contains correlated predicates, add it to join filters
+        if filter.contains_outer() {
+            joins.push(strip_outer_reference((*filter).clone()));
+        } else {
+            // TODO remove the logic
+            let (left, op, right) = match filter {
+                Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                    (*left.clone(), *op, *right.clone())
+                }
+                _ => {
+                    others.push((*filter).clone());
+                    continue;
+                }
+            };
+            let left = match left {
+                Expr::Column(c) => c,
+                _ => {
+                    others.push((*filter).clone());
+                    continue;
+                }
+            };
+            let right = match right {
+                Expr::Column(c) => c,
+                _ => {
+                    others.push((*filter).clone());
+                    continue;
+                }
+            };
+            if fields.contains(&left.flat_name()) && fields.contains(&right.flat_name()) {
                 others.push((*filter).clone());
-                continue;
+                continue; // both columns present (none closed-upon)
             }
-        };
-        let left = match left {
-            Expr::Column(c) => c,
-            _ => {
+            if !fields.contains(&left.flat_name()) && !fields.contains(&right.flat_name())
+            {
                 others.push((*filter).clone());
-                continue;
+                continue; // neither column present (syntax error?)
             }
-        };
-        let right = match right {
-            Expr::Column(c) => c,
-            _ => {
-                others.push((*filter).clone());
-                continue;
+            match op {
+                Operator::Eq => {}
+                Operator::NotEq => {}
+                _ => {
+                    plan_err!(format!("can't optimize {op} column comparison"))?;
+                }
             }
-        };
-        if fields.contains(&left.flat_name()) && fields.contains(&right.flat_name()) {
-            others.push((*filter).clone());
-            continue; // both columns present (none closed-upon)
+            joins.push((*filter).clone())
         }
-        if !fields.contains(&left.flat_name()) && !fields.contains(&right.flat_name()) {
-            others.push((*filter).clone());
-            continue; // neither column present (syntax error?)
-        }
-        match op {
-            Operator::Eq => {}
-            Operator::NotEq => {}
-            _ => {
-                plan_err!(format!("can't optimize {op} column comparison"))?;
-            }
-        }
-
-        joins.push((*filter).clone())
     }
 
     Ok((joins, others))
@@ -415,11 +424,11 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 /// Rewrites `expr` using `rewriter`, ensuring that the output has the
 /// same name as `expr` prior to rewrite, adding an alias if necessary.
 ///
-/// This is important when optimzing plans to ensure the the output
+/// This is important when optimizing plans to ensure the output
 /// schema of plan nodes don't change after optimization
 pub fn rewrite_preserving_name<R>(expr: Expr, rewriter: &mut R) -> Result<Expr>
 where
-    R: ExprRewriter<Expr>,
+    R: TreeNodeRewriter<N = Expr>,
 {
     let original_name = name_for_alias(&expr)?;
     let expr = expr.rewrite(rewriter)?;
@@ -435,7 +444,7 @@ fn name_for_alias(expr: &Expr) -> Result<String> {
     }
 }
 
-/// Ensure `expr` has the name name as `original_name` by adding an
+/// Ensure `expr` has the name as `original_name` by adding an
 /// alias if necessary.
 fn add_alias_if_changed(original_name: String, expr: Expr) -> Result<Expr> {
     let new_name = name_for_alias(&expr)?;
@@ -454,6 +463,79 @@ fn add_alias_if_changed(original_name: String, expr: Expr) -> Result<Expr> {
             Expr::Sort(Sort::new(Box::new(expr), asc, nulls_first))
         }
         expr => expr.alias(original_name),
+    })
+}
+
+/// merge inputs schema into a single schema.
+pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
+    if inputs.len() == 1 {
+        inputs[0].schema().clone().as_ref().clone()
+    } else {
+        inputs.iter().map(|input| input.schema()).fold(
+            DFSchema::empty(),
+            |mut lhs, rhs| {
+                lhs.merge(rhs);
+                lhs
+            },
+        )
+    }
+}
+
+/// Extract join predicates from the correclated subquery.
+/// The join predicate means that the expression references columns
+/// from both the subquery and outer table or only from the outer table.
+///
+/// Returns join predicates and subquery(extracted).
+/// ```
+pub(crate) fn extract_join_filters(
+    maybe_filter: &LogicalPlan,
+) -> Result<(Vec<Expr>, LogicalPlan)> {
+    if let LogicalPlan::Filter(plan_filter) = maybe_filter {
+        let input_schema = plan_filter.input.schema();
+        let subquery_filter_exprs = split_conjunction(&plan_filter.predicate);
+
+        let mut join_filters: Vec<Expr> = vec![];
+        let mut subquery_filters: Vec<Expr> = vec![];
+        for expr in subquery_filter_exprs {
+            // If the expression contains correlated predicates, add it to join filters
+            if expr.contains_outer() {
+                join_filters.push(strip_outer_reference(expr.clone()))
+            } else {
+                let cols = expr.to_columns()?;
+                if check_all_columns_from_schema(&cols, input_schema.clone())? {
+                    subquery_filters.push(expr.clone());
+                } else {
+                    join_filters.push(expr.clone())
+                }
+            }
+        }
+
+        // if the subquery still has filter expressions, restore them.
+        let mut plan = LogicalPlanBuilder::from((*plan_filter.input).clone());
+        if let Some(expr) = conjunction(subquery_filters) {
+            plan = plan.filter(expr)?
+        }
+
+        Ok((join_filters, plan.build()?))
+    } else {
+        Ok((vec![], maybe_filter.clone()))
+    }
+}
+
+pub(crate) fn collect_subquery_cols(
+    exprs: &[Expr],
+    subquery_schema: DFSchemaRef,
+) -> Result<BTreeSet<Column>> {
+    exprs.iter().try_fold(BTreeSet::new(), |mut cols, expr| {
+        let mut using_cols: Vec<Column> = vec![];
+        for col in expr.to_columns()?.into_iter() {
+            if subquery_schema.has_column(&col) {
+                using_cols.push(col);
+            }
+        }
+
+        cols.extend(using_cols);
+        Result::<_>::Ok(cols)
     })
 }
 
@@ -636,7 +718,9 @@ mod tests {
             rewrite_to: Expr,
         }
 
-        impl ExprRewriter for TestRewriter {
+        impl TreeNodeRewriter for TestRewriter {
+            type N = Expr;
+
             fn mutate(&mut self, _: Expr) -> Result<Expr> {
                 Ok(self.rewrite_to.clone())
             }

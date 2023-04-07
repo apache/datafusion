@@ -16,8 +16,9 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow_schema::DataType;
-use datafusion_common::{parse_interval, DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{lit, Expr};
 use log::debug;
 use sqlparser::ast::{DateTimeField, Expr as SQLExpr, Value};
@@ -97,6 +98,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Parse the placeholder as a number because it is the only support from sqlparser and postgres
         let index = param[1..].parse::<usize>();
         let idx = match index {
+            Ok(0) => {
+                return Err(DataFusionError::Plan(format!(
+                    "Invalid placeholder, zero is not a valid index: {param}"
+                )));
+            }
             Ok(index) => index - 1,
             Err(_) => {
                 return Err(DataFusionError::Plan(format!(
@@ -197,11 +203,55 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        let leading_field = leading_field
-            .as_ref()
-            .map(|dt| dt.to_string())
-            .unwrap_or_else(|| "second".to_string());
+        let value = if has_units(&value) {
+            // If the interval already contains a unit
+            // `INTERVAL '5 month' rather than `INTERVAL '5' month`
+            // skip the other unit
+            value
+        } else {
+            // leading_field really means the unit if specified
+            // for example, "month" in  `INTERVAL '5' month`
+            match leading_field.as_ref() {
+                Some(leading_field) => {
+                    format!("{value} {leading_field}")
+                }
+                None => {
+                    // default to seconds for the units
+                    // `INTERVAL '5' is parsed as '5 seconds'
+                    format!("{value} seconds")
+                }
+            }
+        };
 
-        Ok(lit(parse_interval(&leading_field, &value)?))
+        let val = parse_interval_month_day_nano(&value)?;
+        Ok(lit(ScalarValue::IntervalMonthDayNano(Some(val))))
     }
+}
+
+// TODO make interval parsing better in arrow-rs / expose `IntervalType`
+fn has_units(val: &str) -> bool {
+    val.ends_with("century")
+        || val.ends_with("centuries")
+        || val.ends_with("decade")
+        || val.ends_with("decades")
+        || val.ends_with("year")
+        || val.ends_with("years")
+        || val.ends_with("month")
+        || val.ends_with("months")
+        || val.ends_with("week")
+        || val.ends_with("weeks")
+        || val.ends_with("day")
+        || val.ends_with("days")
+        || val.ends_with("hour")
+        || val.ends_with("hours")
+        || val.ends_with("minute")
+        || val.ends_with("minutes")
+        || val.ends_with("second")
+        || val.ends_with("seconds")
+        || val.ends_with("millisecond")
+        || val.ends_with("milliseconds")
+        || val.ends_with("microsecond")
+        || val.ends_with("microseconds")
+        || val.ends_with("nanosecond")
+        || val.ends_with("nanoseconds")
 }

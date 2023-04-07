@@ -29,6 +29,6 @@ This repository provides a Substrait producer and consumer for DataFusion:
 
 Potential uses of this crate:
 
-- Replace the current [DataFusion protobuf definition](https://github.com/apache/arrow-datafusion/blob/master/datafusion/proto/proto/datafusion.proto) used in Ballista for passing query plan fragments to executors
+- Replace the current [DataFusion protobuf definition](https://github.com/apache/arrow-datafusion/blob/main/datafusion/proto/proto/datafusion.proto) used in Ballista for passing query plan fragments to executors
 - Make it easier to pass query plans over FFI boundaries, such as from Python to Rust
 - Allow Apache Calcite query plans to be executed in DataFusion

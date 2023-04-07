@@ -241,7 +241,6 @@ impl Accumulator for SumAccumulator {
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-        let delta = sum_batch(values, &self.sum.get_datatype())?;
         self.sum = self.sum.sub(&delta)?;
         Ok(())
     }
@@ -375,7 +374,6 @@ mod tests {
         let array: ArrayRef = Arc::new(
             std::iter::repeat::<Option<i128>>(None)
                 .take(6)
-                .into_iter()
                 .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
