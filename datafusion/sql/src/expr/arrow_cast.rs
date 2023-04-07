@@ -427,9 +427,16 @@ impl<'a> Tokenizer<'a> {
                     if last_c != '"' || len < 2 {
                         return Err(make_error(
                             self.val,
-                            &format!("parsing {} as double quoted string", self.word),
+                            &format!("parsing {} as double quoted string: last char must be \"", self.word),
                         ));
                     }
+                }
+
+                if len == 2 {
+                    return Err(make_error(
+                        self.val,
+                        &format!("parsing {} as double quoted string: empty string isn't supported", self.word),
+                    ))
                 }
 
                 let val: String = self.word.parse().map_err(|e| {
@@ -438,7 +445,16 @@ impl<'a> Tokenizer<'a> {
                         &format!("parsing {} as double quoted string: {e}", self.word),
                     )
                 })?;
-                return Ok(Token::DoubleQuotedString(val[1..len - 1].to_owned()));
+
+                let s = val[1..len - 1].to_string();
+                if s.contains("\"") {
+                    return Err(make_error(
+                        self.val,
+                        &format!("parsing {} as double quoted string: escaped double quote isn't supported", self.word),
+                    ))
+                }
+
+                return Ok(Token::DoubleQuotedString(s));
             }
         }
 
@@ -738,7 +754,15 @@ mod test {
             ),
             (
                 r#"Timestamp(Nanosecond, Some("+00:00))"#,
-                r#"Error parsing "+00:00 as double quoted string"#,
+                r#"parsing "+00:00 as double quoted string: last char must be ""#,
+            ),
+            (
+                r#"Timestamp(Nanosecond, Some(""))"#,
+                r#"parsing "" as double quoted string: empty string isn't supported"#,
+            ),
+            (
+                r#"Timestamp(Nanosecond, Some("+00:00""))"#,
+                r#"parsing "+00:00"" as double quoted string: escaped double quote isn't supported"#,
             ),
             ("Timestamp(Nanosecond, ", "Error finding next token"),
             (
