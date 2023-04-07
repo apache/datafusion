@@ -21,6 +21,7 @@ pub mod parquet;
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::path::Path;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{env, error::Error, path::PathBuf, sync::Arc};
@@ -512,34 +513,22 @@ mod tests {
 }
 
 /// This function creates an unbounded sorted file for testing purposes.
-pub async fn test_create_unbounded_sorted_file(
+pub async fn register_unbounded_file_with_ordering(
     ctx: &SessionContext,
-    file_path: PathBuf,
+    schema: SchemaRef,
+    file_path: &Path,
     table_name: &str,
+    file_sort_order: Option<Vec<Expr>>,
+    with_unbounded_execution: bool,
 ) -> Result<()> {
-    // Create schema:
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("a1", DataType::UInt32, false),
-        Field::new("a2", DataType::UInt32, false),
-    ]));
-    // Specify the ordering:
-    let file_sort_order = [datafusion_expr::col("a1")]
-        .into_iter()
-        .map(|e| {
-            let ascending = true;
-            let nulls_first = false;
-            e.sort(ascending, nulls_first)
-        })
-        .collect::<Vec<_>>();
     // Mark infinite and provide schema:
     let fifo_options = CsvReadOptions::new()
         .schema(schema.as_ref())
-        .has_header(false)
-        .mark_infinite(true);
+        .mark_infinite(with_unbounded_execution);
     // Get listing options:
     let options_sort = fifo_options
         .to_listing_options(&ctx.copied_config())
-        .with_file_sort_order(Some(file_sort_order));
+        .with_file_sort_order(file_sort_order);
     // Register table:
     ctx.register_listing_table(
         table_name,

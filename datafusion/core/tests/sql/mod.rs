@@ -70,6 +70,7 @@ macro_rules! assert_metrics {
 
 macro_rules! test_expression {
     ($SQL:expr, $EXPECTED:expr) => {
+        println!("Input:\n  {}\nExpected:\n  {}\n", $SQL, $EXPECTED);
         let ctx = SessionContext::new();
         let sql = format!("SELECT {}", $SQL);
         let actual = execute(&ctx, sql.as_str()).await;
