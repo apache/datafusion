@@ -24,7 +24,7 @@ use datafusion_expr::ColumnarValue;
 /// If `expr1` evaluates to true, then returns `expr2`; otherwise returns `expr3`.
 /// Args: 0 - boolean array
 ///       1 - if expr1 is true, then the result is expr2
-///       2 - if expr1 is true, then the result is expr3.
+///       2 - if expr1 is false, then the result is expr3.
 ///
 pub fn if_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 3 {
