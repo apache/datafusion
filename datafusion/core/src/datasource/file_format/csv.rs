@@ -298,10 +298,12 @@ mod tests {
     use crate::datasource::file_format::test_util::VariableStream;
     use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
+    use crate::test::object_store::local_unpartitioned_file;
     use bytes::Bytes;
     use chrono::DateTime;
     use datafusion_common::cast::as_string_array;
     use futures::StreamExt;
+    use object_store::local::LocalFileSystem;
     use object_store::path::Path;
 
     #[tokio::test]
@@ -383,6 +385,46 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn infer_shcmea_with_limit() {
+        let session = SessionContext::new();
+        let ctx = session.state();
+        let store = Arc::new(LocalFileSystem::new()) as _;
+        let filename = "tests/csv/schema_infer_limit.csv";
+        let format = CsvFormat::default().with_schema_infer_max_rec(Some(3));
+
+        let file_schema = format
+            .infer_schema(&ctx, &store, &[local_unpartitioned_file(filename)])
+            .await
+            .expect("Schema inference");
+
+        let fields = file_schema
+            .fields()
+            .iter()
+            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            vec!["a: Int64", "b: Float64", "c: Int64", "d: Int64"],
+            fields
+        );
+
+        let format = CsvFormat::default().with_schema_infer_max_rec(Some(4));
+        let file_schema = format
+            .infer_schema(&ctx, &store, &[local_unpartitioned_file(filename)])
+            .await
+            .expect("Schema inference");
+
+        let fields = file_schema
+            .fields()
+            .iter()
+            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            vec!["a: Int64", "b: Float64", "c: Int64", "d: Utf8"],
+            fields
+        );
     }
 
     #[tokio::test]
