@@ -46,7 +46,7 @@ pub enum TypeSignature {
     // A function such as `array` is `VariadicEqual`
     // The first argument decides the type used for coercion
     VariadicEqual,
-    /// arbitrary number of arguments of an arbitrary type
+    /// arbitrary number of arguments with arbitrary types
     VariadicAny,
     /// fixed number of arguments of an arbitrary but equal type out of a list of valid types
     // A function of one argument of f64 is `Uniform(1, vec![DataType::Float64])`
@@ -91,7 +91,7 @@ impl Signature {
             volatility,
         }
     }
-    /// variadic_any - Creates a variadic signature that represents an arbitrary number of arguments of the any type.
+    /// variadic_any - Creates a variadic signature that represents an arbitrary number of arguments of any type.
     pub fn variadic_any(volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::VariadicAny,
