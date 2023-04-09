@@ -125,7 +125,7 @@ pub fn coerce_types(
                     || !is_timestamp(rhs_type)
                     || *op != Operator::Minus) =>
         {
-            temporal_add_sub_coercion(lhs_type, rhs_type, op)?
+            temporal_add_sub_coercion(lhs_type, rhs_type, op)
         }
         // for math expressions, the final value of the coercion is also the return type
         // because coercion favours higher information types
@@ -217,29 +217,33 @@ pub fn temporal_add_sub_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
     op: &Operator,
-) -> Result<Option<DataType>> {
+) -> Option<DataType> {
     match (lhs_type, rhs_type, op) {
         // if an interval is being added/subtracted from a date/timestamp, return the date/timestamp data type
         (lhs, rhs, _) if is_interval(lhs) && (is_date(rhs) || is_timestamp(rhs)) => {
-            Ok(Some(rhs.clone()))
+            Some(rhs.clone())
         }
         (lhs, rhs, _) if is_interval(rhs) && (is_date(lhs) || is_timestamp(lhs)) => {
-            Ok(Some(lhs.clone()))
+            Some(lhs.clone())
         }
         // if two timestamps are being subtracted, check their time units and return the corresponding interval data type
         (lhs, rhs, Operator::Minus) if is_timestamp(lhs) && is_timestamp(rhs) => {
             handle_timestamp_minus(lhs, rhs)
         }
         // if two intervals are being added/subtracted, check their interval units and return the corresponding interval data type
-        (lhs, rhs, _) if is_interval(lhs) && is_interval(rhs) => handle_interval_addition(lhs, rhs),
+        (lhs, rhs, _) if is_interval(lhs) && is_interval(rhs) => {
+            handle_interval_addition(lhs, rhs)
+        }
         // if two date/timestamp are being added/subtracted, return an error indicating that the operation is not supported
-        (lhs, rhs, _) if (is_date(lhs) || is_timestamp(lhs)) && (is_date(rhs) || is_timestamp(rhs)) => {
-            Err(DataFusionError::Plan(format!(
-                "{lhs_type:?} {rhs_type:?} is an unsupported operation. addition/subtraction on dates/timestamps only supported with interval types"
-            )))
+        (lhs, rhs, Operator::Minus)
+            if (is_date(lhs) || is_timestamp(lhs))
+                && (is_date(rhs) || is_timestamp(rhs)) =>
+        {
+            // TODO: support Minus
+            None
         }
         // return None if no coercion is possible
-        _ => Ok(None),
+        _ => None,
     }
 }
 
@@ -247,19 +251,19 @@ pub fn temporal_add_sub_coercion(
 // representing the sum of them. If the two interval data types have different units, it returns an interval data type
 // with "IntervalUnit::MonthDayNano". If the two interval data types are already "IntervalUnit::YearMonth" or "IntervalUnit::DayTime",
 // it returns an interval data type with the same unit as the operands.
-fn handle_interval_addition(lhs: &DataType, rhs: &DataType) -> Result<Option<DataType>> {
+fn handle_interval_addition(lhs: &DataType, rhs: &DataType) -> Option<DataType> {
     match (lhs, rhs) {
         // operation with the same types
         (
             DataType::Interval(IntervalUnit::YearMonth),
             DataType::Interval(IntervalUnit::YearMonth),
-        ) => Ok(Some(DataType::Interval(IntervalUnit::YearMonth))),
+        ) => Some(DataType::Interval(IntervalUnit::YearMonth)),
         (
             DataType::Interval(IntervalUnit::DayTime),
             DataType::Interval(IntervalUnit::DayTime),
-        ) => Ok(Some(DataType::Interval(IntervalUnit::DayTime))),
+        ) => Some(DataType::Interval(IntervalUnit::DayTime)),
         // operation with MonthDayNano's or different types
-        (_, _) => Ok(Some(DataType::Interval(IntervalUnit::MonthDayNano))),
+        (_, _) => Some(DataType::Interval(IntervalUnit::MonthDayNano)),
     }
 }
 
@@ -267,7 +271,7 @@ fn handle_interval_addition(lhs: &DataType, rhs: &DataType) -> Result<Option<Dat
 // representing the difference between them, either "IntervalUnit::DayTime" if the time unit is second or millisecond,
 // or "IntervalUnit::MonthDayNano" if the time unit is microsecond or nanosecond. If the two timestamp data types have
 // different time units, it returns an error indicating that "The timestamps have different types".
-fn handle_timestamp_minus(lhs: &DataType, rhs: &DataType) -> Result<Option<DataType>> {
+fn handle_timestamp_minus(lhs: &DataType, rhs: &DataType) -> Option<DataType> {
     match (lhs, rhs) {
         (
             DataType::Timestamp(TimeUnit::Second, _),
@@ -276,7 +280,7 @@ fn handle_timestamp_minus(lhs: &DataType, rhs: &DataType) -> Result<Option<DataT
         | (
             DataType::Timestamp(TimeUnit::Millisecond, _),
             DataType::Timestamp(TimeUnit::Millisecond, _),
-        ) => Ok(Some(DataType::Interval(IntervalUnit::DayTime))),
+        ) => Some(DataType::Interval(IntervalUnit::DayTime)),
         (
             DataType::Timestamp(TimeUnit::Microsecond, _),
             DataType::Timestamp(TimeUnit::Microsecond, _),
@@ -284,10 +288,8 @@ fn handle_timestamp_minus(lhs: &DataType, rhs: &DataType) -> Result<Option<DataT
         | (
             DataType::Timestamp(TimeUnit::Nanosecond, _),
             DataType::Timestamp(TimeUnit::Nanosecond, _),
-        ) => Ok(Some(DataType::Interval(IntervalUnit::MonthDayNano))),
-        (_, _) => Err(DataFusionError::Plan(
-            "The timestamps have different types".to_string(),
-        )),
+        ) => Some(DataType::Interval(IntervalUnit::MonthDayNano)),
+        (_, _) => None,
     }
 }
 
@@ -1003,12 +1005,12 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert_contains!(&err, "The timestamps have different types");
+        assert_contains!(&err, "Timestamp(Nanosecond, None) - Timestamp(Millisecond, None) can't be evaluated because there isn't a common type to coerce the types to");
 
         let err = coerce_types(&DataType::Date32, &Operator::Plus, &DataType::Date64)
             .unwrap_err()
             .to_string();
-        assert_contains!(&err, "Date32 Date64 is an unsupported operation. addition/subtraction on dates/timestamps only supported with interval types");
+        assert_contains!(&err, "Date32 + Date64 can't be evaluated because there isn't a common type to coerce the types to");
 
         Ok(())
     }
