@@ -161,7 +161,8 @@ struct FileStreamMetrics {
     ///
     /// Sum of time between when the [`FileStream`] requests data from
     /// the stream and when a [`RecordBatch`] is produced for all
-    /// record batches in the stream.
+    /// record batches in the stream. Note that this metric also
+    /// includes the time of the parent operator's execution.
     pub time_scanning_total: StartableTime,
     /// Wall clock time elapsed for data decompression + decoding
     ///
