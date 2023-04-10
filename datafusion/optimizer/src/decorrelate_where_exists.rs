@@ -210,9 +210,9 @@ fn optimize_subquery(subquery: &LogicalPlan) -> Result<Option<(Expr, LogicalPlan
     }
 }
 
-struct SubqueryInfo {
-    query: Subquery,
-    negated: bool,
+pub(crate) struct SubqueryInfo {
+    pub(crate) query: Subquery,
+    pub(crate) negated: bool,
 }
 
 impl SubqueryInfo {
