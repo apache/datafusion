@@ -69,9 +69,13 @@ expressions such as `col("a") + col("b")` to be used.
 | --------------------- | ------------------------------------------------- |
 | abs(x)                | absolute value                                    |
 | acos(x)               | inverse cosine                                    |
+| acosh(x)              | inverse hyperbolic cosine                         |
 | asin(x)               | inverse sine                                      |
+| asinh(x)              | inverse hyperbolic sine                           |
 | atan(x)               | inverse tangent                                   |
+| atanh(x)              | inverse hyperbolic tangent                        |
 | atan2(y, x)           | inverse tangent of y / x                          |
+| cbrt(x)               | cube root                                         |
 | ceil(x)               | nearest integer greater than or equal to argument |
 | cos(x)                | cosine                                            |
 | exp(x)                | exponential                                       |
@@ -85,7 +89,6 @@ expressions such as `col("a") + col("b")` to be used.
 | signum(x)             | sign of the argument (-1, 0, +1)                  |
 | sin(x)                | sine                                              |
 | sqrt(x)               | square root                                       |
-| cbrt(x)               | cube root                                         |
 | tan(x)                | tangent                                           |
 | trunc(x)              | truncate toward zero                              |
 
