@@ -278,7 +278,7 @@ pub fn get_arrayref_at_indices(
             )
             .map_err(DataFusionError::ArrowError)
         })
-        .collect::<Result<Vec<_>>>()
+        .collect()
 }
 
 pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {

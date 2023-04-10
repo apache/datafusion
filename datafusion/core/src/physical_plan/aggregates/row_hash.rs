@@ -724,5 +724,5 @@ fn get_at_indices(
     input_values
         .iter()
         .map(|array| get_arrayref_at_indices(array, batch_indices))
-        .collect::<Result<Vec<_>>>()
+        .collect()
 }
