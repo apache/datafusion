@@ -69,6 +69,32 @@ impl Default for ParserOptions {
     }
 }
 
+/// Ident Normalizer
+#[derive(Debug)]
+pub struct IdentNormalizer {
+    normalize: bool,
+}
+
+impl Default for IdentNormalizer {
+    fn default() -> Self {
+        Self { normalize: true }
+    }
+}
+
+impl IdentNormalizer {
+    pub fn new(normalize: bool) -> Self {
+        Self { normalize }
+    }
+
+    pub fn normalize(&self, ident: Ident) -> String {
+        if self.normalize {
+            crate::utils::normalize_ident(ident)
+        } else {
+            ident.value
+        }
+    }
+}
+
 /// Struct to store the states used by the Planner. The Planner will leverage the states to resolve
 /// CTEs, Views, subqueries and PREPARE statements. The states include
 /// Common Table Expression (CTE) provided with WITH clause and
@@ -155,6 +181,7 @@ impl PlannerContext {
 pub struct SqlToRel<'a, S: ContextProvider> {
     pub(crate) schema_provider: &'a S,
     pub(crate) options: ParserOptions,
+    pub(crate) normalizer: IdentNormalizer,
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -165,9 +192,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Create a new query planner
     pub fn new_with_options(schema_provider: &'a S, options: ParserOptions) -> Self {
+        let normalize = options.enable_ident_normalization;
         SqlToRel {
             schema_provider,
             options,
+            normalizer: IdentNormalizer::new(normalize),
         }
     }
 
@@ -181,7 +210,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .iter()
                 .any(|x| x.option == ColumnOption::NotNull);
             fields.push(Field::new(
-                normalize_ident(column.name, self.options.enable_ident_normalization),
+                self.normalizer.normalize(column.name),
                 data_type,
                 !not_nullable,
             ));
@@ -198,7 +227,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let apply_name_plan = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
             plan,
-            normalize_ident(alias.name, self.options.enable_ident_normalization),
+            self.normalizer.normalize(alias.name),
         )?);
 
         self.apply_expr_alias(apply_name_plan, alias.columns)
@@ -221,10 +250,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let fields = plan.schema().fields().clone();
             LogicalPlanBuilder::from(plan)
                 .project(fields.iter().zip(idents.into_iter()).map(|(field, ident)| {
-                    col(field.name()).alias(normalize_ident(
-                        ident,
-                        self.options.enable_ident_normalization,
-                    ))
+                    col(field.name()).alias(self.normalizer.normalize(ident))
                 }))?
                 .build()
         }
@@ -411,7 +437,7 @@ pub(crate) fn idents_to_table_reference(
     impl IdentTaker {
         fn take(&mut self, enable_normalization: bool) -> String {
             let ident = self.0.pop().expect("no more identifiers");
-            normalize_ident(ident, enable_normalization)
+            IdentNormalizer::new(enable_normalization).normalize(ident)
         }
     }
 
@@ -447,6 +473,7 @@ pub fn object_name_to_qualifier(
     enable_normalization: bool,
 ) -> String {
     let columns = vec!["table_name", "table_schema", "table_catalog"].into_iter();
+    let normalizer = IdentNormalizer::new(enable_normalization);
     sql_table_name
         .0
         .iter()
@@ -456,17 +483,9 @@ pub fn object_name_to_qualifier(
             format!(
                 r#"{} = '{}'"#,
                 column_name,
-                normalize_ident(ident.clone(), enable_normalization)
+                normalizer.normalize(ident.clone())
             )
         })
         .collect::<Vec<_>>()
         .join(" AND ")
-}
-
-fn normalize_ident(id: Ident, enable_normalization: bool) -> String {
-    if enable_normalization {
-        return crate::utils::normalize_ident(id);
-    }
-
-    id.value
 }
