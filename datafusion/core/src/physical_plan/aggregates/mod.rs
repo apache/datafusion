@@ -38,7 +38,7 @@ use datafusion_physical_expr::{
 use std::any::Any;
 use std::collections::HashMap;
 
-use datafusion_common::utils::calc_ordering_range;
+use datafusion_common::utils::longest_consecutive_prefix;
 use itertools::Itertools;
 use std::sync::Arc;
 
@@ -256,7 +256,7 @@ fn get_working_mode(
     // Find out how many expressions of the existing ordering, defines ordering for expressions in the group by clause.
     // If input is ordered by a, b, c, d and GROUP BY b, a, d is entered, below result would be 2. Meaning 2 elements (a, b)
     // among group by expressions defines ordering in the input.
-    let first_n = calc_ordering_range(&ordered_indices);
+    let first_n = longest_consecutive_prefix(ordered_indices);
     let ordered_exprs = ordering_exprs[0..first_n].to_vec();
     // Find the indices of the group by expressions such that when iterated with this order would match existing ordering.
     // For the example above, this would produce 1, 0. Meaning, among the GROUP BY expressions b, a, d: 1st and 0th entries (a, b)
