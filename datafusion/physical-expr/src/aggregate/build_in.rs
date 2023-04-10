@@ -60,8 +60,8 @@ pub fn create_aggregate_expr(
             ))
         }
         (AggregateFunction::Count, true) => Arc::new(expressions::DistinctCount::new(
-            input_phy_types[0].clone(),
-            input_phy_exprs[0].clone(),
+            input_phy_types,
+            input_phy_exprs,
             name,
         )),
         (AggregateFunction::Grouping, _) => Arc::new(expressions::Grouping::new(
