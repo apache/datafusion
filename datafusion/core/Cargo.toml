@@ -63,14 +63,14 @@ bytes = "1.4"
 bzip2 = { version = "0.4.3", optional = true }
 chrono = { version = "0.4.23", default-features = false }
 dashmap = "5.4.0"
-datafusion-common = { path = "../common", version = "21.1.0", features = ["parquet", "object_store"] }
-datafusion-execution = { path = "../execution", version = "21.1.0" }
-datafusion-expr = { path = "../expr", version = "21.1.0" }
-datafusion-jit = { path = "../jit", version = "21.1.0", optional = true }
-datafusion-optimizer = { path = "../optimizer", version = "21.1.0", default-features = false }
-datafusion-physical-expr = { path = "../physical-expr", version = "21.1.0", default-features = false }
-datafusion-row = { path = "../row", version = "21.1.0" }
-datafusion-sql = { path = "../sql", version = "21.1.0" }
+datafusion-common = { path = "../common", version = "22.0.0", features = ["parquet", "object_store"] }
+datafusion-execution = { path = "../execution", version = "22.0.0" }
+datafusion-expr = { path = "../expr", version = "22.0.0" }
+datafusion-jit = { path = "../jit", version = "22.0.0", optional = true }
+datafusion-optimizer = { path = "../optimizer", version = "22.0.0", default-features = false }
+datafusion-physical-expr = { path = "../physical-expr", version = "22.0.0", default-features = false }
+datafusion-row = { path = "../row", version = "22.0.0" }
+datafusion-sql = { path = "../sql", version = "22.0.0" }
 flate2 = { version = "1.0.24", optional = true }
 futures = "0.3"
 glob = "0.3.0"
