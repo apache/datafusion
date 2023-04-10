@@ -274,7 +274,7 @@ mod tests {
     #[tokio::test]
     async fn all_type_literal() -> Result<()> {
         roundtrip_all_types(
-            "select * from data where 
+            "select * from data where
             bool_col = TRUE AND
             int8_col = arrow_cast('0', 'Int8') AND
             uint8_col = arrow_cast('0', 'UInt8') AND
