@@ -31,9 +31,7 @@ use crate::{
         optimizer::PhysicalOptimizerRule,
     },
 };
-use datafusion_expr::{
-    logical_plan::Statement, DescribeTable, DmlStatement, StringifiedPlan, WriteOp,
-};
+use datafusion_expr::{logical_plan::Statement, DescribeTable, StringifiedPlan};
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
@@ -325,27 +323,9 @@ impl SessionContext {
     /// Execute the [`LogicalPlan`], return a [`DataFrame`]
     pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
-            LogicalPlan::Dml(DmlStatement {
-                table_name,
-                op: WriteOp::Insert,
-                input,
-                ..
-            }) => {
-                if self.table_exist(&table_name)? {
-                    let name = table_name.table();
-                    let provider = self.table_provider(name).await?;
-                    provider.insert_into(&self.state(), &input).await?;
-                } else {
-                    return Err(DataFusionError::Execution(format!(
-                        "Table '{table_name}' does not exist"
-                    )));
-                }
-                self.return_empty_dataframe()
-            }
             LogicalPlan::CreateExternalTable(cmd) => {
                 self.create_external_table(&cmd).await
             }
-
             LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                 name,
                 input,
@@ -1405,7 +1385,7 @@ impl SessionState {
             .resolve(&catalog.default_catalog, &catalog.default_schema)
     }
 
-    fn schema_for_ref<'a>(
+    pub(crate) fn schema_for_ref<'a>(
         &'a self,
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn SchemaProvider>> {
