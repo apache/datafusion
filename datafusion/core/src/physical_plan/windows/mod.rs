@@ -36,7 +36,7 @@ use datafusion_expr::{
 use datafusion_physical_expr::window::{
     BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr,
 };
-use itertools::Itertools;
+use std::borrow::Borrow;
 use std::convert::TryInto;
 use std::sync::Arc;
 
@@ -44,7 +44,7 @@ mod bounded_window_agg_exec;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
-use datafusion_common::utils::calc_ordering_range;
+use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
@@ -191,18 +191,23 @@ fn create_built_in_window_expr(
     })
 }
 
-pub(crate) fn calc_requirements(
-    partition_by_exprs: &[Arc<dyn PhysicalExpr>],
-    orderby_sort_exprs: &[PhysicalSortExpr],
+pub(crate) fn calc_requirements<
+    T: Borrow<Arc<dyn PhysicalExpr>>,
+    S: Borrow<PhysicalSortExpr>,
+>(
+    partition_by_exprs: impl IntoIterator<Item = T>,
+    orderby_sort_exprs: impl IntoIterator<Item = S>,
 ) -> Option<Vec<PhysicalSortRequirement>> {
-    let mut sort_reqs = vec![];
-    for partition_by in partition_by_exprs {
-        sort_reqs.push(PhysicalSortRequirement::new(partition_by.clone(), None))
-    }
-    for sort_expr in orderby_sort_exprs {
-        let contains = sort_reqs.iter().any(|e| sort_expr.expr.eq(e.expr()));
-        if !contains {
-            sort_reqs.push(PhysicalSortRequirement::from(sort_expr.clone()));
+    let mut sort_reqs = partition_by_exprs
+        .into_iter()
+        .map(|partition_by| {
+            PhysicalSortRequirement::new(partition_by.borrow().clone(), None)
+        })
+        .collect::<Vec<_>>();
+    for element in orderby_sort_exprs.into_iter() {
+        let PhysicalSortExpr { expr, options } = element.borrow();
+        if !sort_reqs.iter().any(|e| e.expr().eq(expr)) {
+            sort_reqs.push(PhysicalSortRequirement::new(expr.clone(), Some(*options)));
         }
     }
     // Convert empty result to None. Otherwise wrap result inside Some()
@@ -213,8 +218,7 @@ pub(crate) fn get_ordered_partition_by_indices(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Vec<usize> {
-    let input_ordering = input.output_ordering();
-    let input_ordering = input_ordering.unwrap_or(&[]);
+    let input_ordering = input.output_ordering().unwrap_or(&[]);
     let input_ordering_exprs = convert_to_expr(input_ordering);
     let equal_properties = || input.equivalence_properties();
     let input_places = get_indices_of_matching_exprs(
@@ -222,12 +226,13 @@ pub(crate) fn get_ordered_partition_by_indices(
         partition_by_exprs,
         equal_properties,
     );
-    let partition_places = get_indices_of_matching_exprs(
+    let mut partition_places = get_indices_of_matching_exprs(
         partition_by_exprs,
         &input_ordering_exprs,
         equal_properties,
     );
-    let first_n = calc_ordering_range(partition_places.into_iter().sorted().as_slice());
+    partition_places.sort();
+    let first_n = longest_consecutive_prefix(partition_places);
     input_places[0..first_n].to_vec()
 }
 
@@ -373,7 +378,7 @@ mod tests {
                     expected = Some(vec![res]);
                 }
             }
-            assert_eq!(calc_requirements(&partitionbys, &orderbys), expected);
+            assert_eq!(calc_requirements(partitionbys, orderbys), expected);
         }
         Ok(())
     }

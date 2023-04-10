@@ -29,6 +29,7 @@ use datafusion_common::tree_node::{
 };
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -153,19 +154,14 @@ pub fn normalize_expr_with_equivalence_properties(
     expr.clone()
         .transform(&|expr| {
             let normalized_form: Option<Arc<dyn PhysicalExpr>> =
-                match expr.as_any().downcast_ref::<Column>() {
-                    Some(column) => {
-                        let mut normalized: Option<Arc<dyn PhysicalExpr>> = None;
-                        for class in eq_properties {
-                            if class.contains(column) {
-                                normalized = Some(Arc::new(class.head().clone()));
-                                break;
-                            }
+                expr.as_any().downcast_ref::<Column>().and_then(|column| {
+                    for class in eq_properties {
+                        if class.contains(column) {
+                            return Some(Arc::new(class.head().clone()) as _);
                         }
-                        normalized
                     }
-                    None => None,
-                };
+                    None
+                });
             Ok(if let Some(normalized_form) = normalized_form {
                 Transformed::Yes(normalized_form)
             } else {
@@ -376,57 +372,59 @@ pub fn map_columns_before_projection(
     parent_required
         .iter()
         .filter_map(|r| {
-            if let Some(column) = r.as_any().downcast_ref::<Column>() {
-                column_mapping.get(column.name())
-            } else {
-                None
-            }
+            r.as_any()
+                .downcast_ref::<Column>()
+                .and_then(|c| column_mapping.get(c.name()))
         })
         .map(|e| Arc::new(e.clone()) as _)
         .collect()
 }
 
-/// Get `Arc<dyn PhysicalExpr>` content of the `PhysicalSortExpr` for each entry in the vector
-pub fn convert_to_expr(in1: &[PhysicalSortExpr]) -> Vec<Arc<dyn PhysicalExpr>> {
-    in1.iter().map(|elem| elem.expr.clone()).collect::<Vec<_>>()
+/// This function returns all `Arc<dyn PhysicalExpr>`s inside the given
+/// `PhysicalSortExpr` sequence.
+pub fn convert_to_expr<T: Borrow<PhysicalSortExpr>>(
+    sequence: impl IntoIterator<Item = T>,
+) -> Vec<Arc<dyn PhysicalExpr>> {
+    sequence
+        .into_iter()
+        .map(|elem| elem.borrow().expr.clone())
+        .collect()
 }
 
-// implementation for searching after normalization.
-fn get_indices_of_matching_exprs_normalized(
-    to_search: &[Arc<dyn PhysicalExpr>],
-    searched: &[Arc<dyn PhysicalExpr>],
-) -> Vec<usize> {
-    let mut result = vec![];
-    for item in to_search {
-        if let Some(idx) = searched.iter().position(|e| e.eq(item)) {
-            result.push(idx);
-        }
-    }
-    result
-}
-
-/// Find the indices of matching entries inside the `searched` vector for each element in the `to_search` vector
-pub fn get_indices_of_matching_exprs<F: FnOnce() -> EquivalenceProperties>(
-    to_search: &[Arc<dyn PhysicalExpr>],
-    searched: &[Arc<dyn PhysicalExpr>],
+/// This function finds the indices of `targets` within `items`, taking into
+/// account equivalences according to `equal_properties`.
+pub fn get_indices_of_matching_exprs<
+    T: Borrow<Arc<dyn PhysicalExpr>>,
+    F: FnOnce() -> EquivalenceProperties,
+>(
+    targets: impl IntoIterator<Item = T>,
+    items: &[Arc<dyn PhysicalExpr>],
     equal_properties: F,
 ) -> Vec<usize> {
     if let eq_classes @ [_, ..] = equal_properties().classes() {
-        let to_search_normalized = to_search
+        let normalized_targets = targets.into_iter().map(|e| {
+            normalize_expr_with_equivalence_properties(e.borrow().clone(), eq_classes)
+        });
+        let normalized_items = items
             .iter()
             .map(|e| normalize_expr_with_equivalence_properties(e.clone(), eq_classes))
             .collect::<Vec<_>>();
-        let searched_normalized = searched
-            .iter()
-            .map(|e| normalize_expr_with_equivalence_properties(e.clone(), eq_classes))
-            .collect::<Vec<_>>();
-        get_indices_of_matching_exprs_normalized(
-            &to_search_normalized,
-            &searched_normalized,
-        )
+        get_indices_of_exprs_strict(normalized_targets, &normalized_items)
     } else {
-        get_indices_of_matching_exprs_normalized(to_search, searched)
+        get_indices_of_exprs_strict(targets, items)
     }
+}
+
+/// This function finds the indices of `targets` within `items` using strict
+/// equality.
+fn get_indices_of_exprs_strict<T: Borrow<Arc<dyn PhysicalExpr>>>(
+    targets: impl IntoIterator<Item = T>,
+    items: &[Arc<dyn PhysicalExpr>],
+) -> Vec<usize> {
+    targets
+        .into_iter()
+        .filter_map(|target| items.iter().position(|e| e.eq(target.borrow())))
+        .collect()
 }
 
 #[derive(Clone, Debug)]
@@ -721,7 +719,7 @@ mod tests {
     fn test_convert_to_expr() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::UInt64, false)]);
         let sort_expr = vec![PhysicalSortExpr {
-            expr: col("a", &schema).unwrap(),
+            expr: col("a", &schema)?,
             options: Default::default(),
         }];
         assert!(convert_to_expr(&sort_expr)[0].eq(&sort_expr[0].expr));
@@ -729,7 +727,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_indices_of_matching_exprs() -> Result<()> {
+    fn test_get_indices_of_matching_exprs() {
         let empty_schema = &Arc::new(Schema {
             fields: vec![],
             metadata: Default::default(),
@@ -754,7 +752,6 @@ mod tests {
             get_indices_of_matching_exprs(&list2, &list1, equal_properties),
             vec![1, 2, 0]
         );
-        Ok(())
     }
 
     #[test]

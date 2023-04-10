@@ -125,8 +125,7 @@ impl BoundedWindowAggExec {
     // to calculate partition separation points
     pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
         // Partition by sort keys indices are stored in self.ordered_partition_by_indices.
-        let sort_keys = self.input.output_ordering();
-        let sort_keys = sort_keys.unwrap_or(&[]);
+        let sort_keys = self.input.output_ordering().unwrap_or(&[]);
         get_at_indices(sort_keys, &self.ordered_partition_by_indices)
     }
 }
@@ -170,9 +169,8 @@ impl ExecutionPlan for BoundedWindowAggExec {
             let partition_bys = self
                 .ordered_partition_by_indices
                 .iter()
-                .map(|idx| partition_bys[*idx].clone())
-                .collect::<Vec<_>>();
-            vec![calc_requirements(&partition_bys, order_keys)]
+                .map(|idx| &partition_bys[*idx]);
+            vec![calc_requirements(partition_bys, order_keys)]
         }
     }
 
@@ -641,7 +639,7 @@ impl SortedPartitionByBoundedWindowStream {
         self.ordered_partition_by_indices
             .iter()
             .map(|idx| self.partition_by_sort_keys[*idx].evaluate_to_sort_column(batch))
-            .collect::<Result<Vec<_>>>()
+            .collect()
     }
 }
 

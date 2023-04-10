@@ -24,7 +24,7 @@ use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::{Token, TokenWithLocation};
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
 use std::cmp::Ordering;
 use std::ops::Range;
 
@@ -271,29 +271,38 @@ pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
-/// Create a new vector from the elements at the `indices` of `searched` vector
-pub fn get_at_indices<T: Clone>(searched: &[T], indices: &[usize]) -> Result<Vec<T>> {
-    let result = indices
-        .iter()
-        .map(|idx| searched.get(*idx).cloned())
-        .collect::<Option<Vec<T>>>();
-    result.ok_or_else(|| {
-        DataFusionError::Execution(
-            "Expects indices to be in the range of searched vector".to_string(),
-        )
-    })
+/// This function "takes" the elements at `indices` from the slice `items`.
+pub fn get_at_indices<T: Clone, I: Borrow<usize>>(
+    items: &[T],
+    indices: impl IntoIterator<Item = I>,
+) -> Result<Vec<T>> {
+    indices
+        .into_iter()
+        .map(|idx| items.get(*idx.borrow()).cloned())
+        .collect::<Option<Vec<T>>>()
+        .ok_or_else(|| {
+            DataFusionError::Execution(
+                "Expects indices to be in the range of searched vector".to_string(),
+            )
+        })
 }
 
-/// Find the largest range that satisfy 0,1,2 .. n in the `in1`
-// For 0,1,2,4,5 we would produce 3. meaning 0,1,2 is the largest consecutive range (starting from zero).
-// For 1,2,3,4 we would produce 0. Meaning there is no consecutive range (starting from zero).
-pub fn calc_ordering_range(in1: &[usize]) -> usize {
-    for (idx, elem) in in1.iter().enumerate() {
-        if idx != *elem {
-            return idx;
+/// This function finds the longest prefix of the form 0, 1, 2, ... within the
+/// collection `sequence`. Examples:
+/// - For 0, 1, 2, 4, 5; we would produce 3, meaning 0, 1, 2 is the longest satisfying
+/// prefix.
+/// - For 1, 2, 3, 4; we would produce 0, meaning there is no such prefix.
+pub fn longest_consecutive_prefix<T: Borrow<usize>>(
+    sequence: impl IntoIterator<Item = T>,
+) -> usize {
+    let mut count = 0;
+    for item in sequence {
+        if !count.eq(item.borrow()) {
+            break;
         }
+        count += 1;
     }
-    in1.len()
+    count
 }
 
 #[cfg(test)]
@@ -609,19 +618,18 @@ mod tests {
     #[test]
     fn test_get_at_indices() -> Result<()> {
         let in_vec = vec![1, 2, 3, 4, 5, 6, 7];
-        assert_eq!(get_at_indices(&in_vec, &[0, 2])?, vec![1, 3]);
-        assert_eq!(get_at_indices(&in_vec, &[4, 2])?, vec![5, 3]);
+        assert_eq!(get_at_indices(&in_vec, [0, 2])?, vec![1, 3]);
+        assert_eq!(get_at_indices(&in_vec, [4, 2])?, vec![5, 3]);
         // 7 is outside the range
-        assert!(get_at_indices(&in_vec, &[7]).is_err());
+        assert!(get_at_indices(&in_vec, [7]).is_err());
         Ok(())
     }
 
     #[test]
-    fn test_calc_ordering_range() -> Result<()> {
-        assert_eq!(calc_ordering_range(&[0, 3, 4]), 1);
-        assert_eq!(calc_ordering_range(&[0, 1, 3, 4]), 2);
-        assert_eq!(calc_ordering_range(&[0, 1, 2, 3, 4]), 5);
-        assert_eq!(calc_ordering_range(&[1, 2, 3, 4]), 0);
-        Ok(())
+    fn test_longest_consecutive_prefix() {
+        assert_eq!(longest_consecutive_prefix([0, 3, 4]), 1);
+        assert_eq!(longest_consecutive_prefix([0, 1, 3, 4]), 2);
+        assert_eq!(longest_consecutive_prefix([0, 1, 2, 3, 4]), 5);
+        assert_eq!(longest_consecutive_prefix([1, 2, 3, 4]), 0);
     }
 }

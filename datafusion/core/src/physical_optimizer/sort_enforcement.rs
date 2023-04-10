@@ -37,9 +37,9 @@ use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::sort_pushdown::{pushdown_sorts, SortPushDown};
 use crate::physical_optimizer::utils::{
-    add_sort_above, find_match_indices, get_ordered_merged_indices, get_set_diff_indices,
-    is_ascending_ordered, is_coalesce_partitions, is_limit, is_repartition, is_sort,
-    is_sort_preserving_merge, is_union, is_window,
+    add_sort_above, find_indices, is_coalesce_partitions, is_limit, is_repartition,
+    is_sort, is_sort_preserving_merge, is_sorted, is_union, is_window,
+    merge_and_order_indices, set_difference,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -49,14 +49,14 @@ use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_common::utils::{calc_ordering_range, get_at_indices};
+use datafusion_common::utils::{get_at_indices, longest_consecutive_prefix};
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::utils::{
     convert_to_expr, get_indices_of_matching_exprs, ordering_satisfy,
     ordering_satisfy_requirement_concrete,
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
-use itertools::{concat, izip, Itertools};
+use itertools::{concat, izip};
 use std::sync::Arc;
 
 /// This rule inspects `SortExec`'s in the given physical plan and removes the
@@ -600,9 +600,8 @@ fn analyze_window_sort_removal(
                 continue;
             }
         }
-        // We can not skip the sort, or
-        // window reversal requirements are not uniform; then there is no
-        // opportunity for a sort removal -- we immediately return.
+        // We can not skip the sort, or window reversal requirements are not
+        // uniform; then sort removal is not possible -- we immediately return.
         return Ok(None);
     }
     let new_window_expr = if needs_reverse.unwrap() {
@@ -796,30 +795,27 @@ fn can_skip_sort(
         return Ok(None);
     }
     // indices of the partition by expressions among input ordering expressions
-    let pb_indices = get_indices_of_matching_exprs(
+    let mut pb_indices = get_indices_of_matching_exprs(
         partitionby_exprs,
         &physical_ordering_exprs,
         equal_properties,
     );
-    let ordered_merged_indices = get_ordered_merged_indices(&pb_indices, &ob_indices);
+    let ordered_merged_indices = merge_and_order_indices(&pb_indices, &ob_indices);
     // Indices of order by columns that doesn't seen in partition by
     // Equivalently (Order by columns) ∖ (Partition by columns) where `∖` represents set difference.
-    let unique_ob_indices = get_set_diff_indices(&ob_indices, &pb_indices);
-    if !is_ascending_ordered(&unique_ob_indices) {
+    let unique_ob_indices = set_difference(&ob_indices, &pb_indices);
+    if !is_sorted(&unique_ob_indices) {
         // ORDER BY indices should be ascending ordered
         return Ok(None);
     }
-    let first_n = calc_ordering_range(&ordered_merged_indices);
+    let first_n = longest_consecutive_prefix(ordered_merged_indices);
     let furthest_ob_index = *unique_ob_indices.last().unwrap_or(&0);
-    let consecutive_till_ob_end = first_n > furthest_ob_index;
-    if !consecutive_till_ob_end {
+    if first_n <= furthest_ob_index {
         return Ok(None);
     }
     let input_orderby_columns = get_at_indices(physical_ordering, &unique_ob_indices)?;
-    let expected_orderby_columns = get_at_indices(
-        orderby_keys,
-        &find_match_indices(&unique_ob_indices, &ob_indices)?,
-    )?;
+    let expected_orderby_columns =
+        get_at_indices(orderby_keys, find_indices(&ob_indices, unique_ob_indices)?)?;
     let should_reverse = if let Some(should_reverse) = check_alignments(
         &input.schema(),
         &input_orderby_columns,
@@ -831,9 +827,9 @@ fn can_skip_sort(
         return Ok(None);
     };
 
-    let ordered_pb_indices = pb_indices.iter().copied().sorted().collect::<Vec<_>>();
     // Determine how many elements in the partition by columns defines a consecutive range from zero.
-    let first_n = calc_ordering_range(&ordered_pb_indices);
+    pb_indices.sort();
+    let first_n = longest_consecutive_prefix(pb_indices);
     if first_n < partitionby_exprs.len() {
         return Ok(None);
     }
