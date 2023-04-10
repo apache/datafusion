@@ -85,7 +85,7 @@ impl ExecutionPlan for StreamingTableExec {
         Partitioning::UnknownPartitioning(self.partitions.len())
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         None
     }
 

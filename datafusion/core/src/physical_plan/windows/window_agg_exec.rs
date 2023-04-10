@@ -109,7 +109,7 @@ impl WindowAggExec {
         let mut result = vec![];
         // All window exprs have the same partition by, so we just use the first one:
         let partition_by = self.window_expr()[0].partition_by();
-        let sort_keys = self.input.output_ordering().unwrap_or(&[]);
+        let sort_keys = self.input.output_ordering().unwrap_or(vec![]);
         for item in partition_by {
             if let Some(a) = sort_keys.iter().find(|&e| e.expr.eq(item)) {
                 result.push(a.clone());
@@ -159,7 +159,7 @@ impl ExecutionPlan for WindowAggExec {
         }
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         self.input().output_ordering()
     }
 

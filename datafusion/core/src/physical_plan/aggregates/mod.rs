@@ -31,7 +31,7 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
-use datafusion_physical_expr::expressions::{col, Column};
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
     expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr,
 };
@@ -199,10 +199,6 @@ impl AggregateState {
             GroupByOrderMode::PartiallyOrdered(ordered_indices) => ordered_indices,
         }
     }
-
-    pub fn ordering(&self) -> &[PhysicalSortExpr] {
-        &self.ordering
-    }
 }
 
 /// Hash aggregate execution plan
@@ -227,10 +223,6 @@ pub struct AggregateExec {
     alias_map: HashMap<Column, Vec<Column>>,
     /// Execution Metrics
     metrics: ExecutionPlanMetricsSet,
-    // out_ordering: Option<Vec<PhysicalSortExpr>>,
-    // working_mode: Option<GroupByOrderMode>,
-    // Stores group by algorithm mode and output ordering
-    state: Option<AggregateState>,
 }
 
 /// Calculates the working mode for `GROUP BY` queries.
@@ -247,10 +239,10 @@ fn get_working_mode(
         return None;
     };
 
-    let output_ordering = input.output_ordering().unwrap_or(&[]);
+    let output_ordering = input.output_ordering().unwrap_or(vec![]);
     // Since direction of the ordering is not important for group by columns. We convert
     // PhysicalSortExpr to PhysicalExpr in the existing ordering.
-    let ordering_exprs = convert_to_expr(output_ordering);
+    let ordering_exprs = convert_to_expr(&output_ordering);
     let groupby_exprs = group_by
         .expr
         .iter()
@@ -285,35 +277,35 @@ fn get_working_mode(
     }
 }
 
-fn calc_aggregate_state(
-    input: &Arc<dyn ExecutionPlan>,
-    group_by: &PhysicalGroupBy,
-    schema: &Schema,
-) -> Result<Option<AggregateState>> {
-    let mode = get_working_mode(input, group_by);
-    Ok(if let Some(mode) = mode {
-        let existing_ordering = input.output_ordering().unwrap_or(&[]);
-        // Output ordering information for the executor.
-        let out_ordering = mode
-            .ordered_indices()
-            .iter()
-            .zip(existing_ordering)
-            .map(|(idx, input_col)| {
-                let name = group_by.expr[*idx].1.as_str();
-                Ok(PhysicalSortExpr {
-                    expr: col(name, schema)?,
-                    options: input_col.options,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Some(AggregateState {
-            mode,
-            ordering: out_ordering,
-        })
-    } else {
-        None
-    })
-}
+// fn calc_aggregate_state(
+//     input: &Arc<dyn ExecutionPlan>,
+//     group_by: &PhysicalGroupBy,
+//     schema: &Schema,
+// ) -> Result<Option<AggregateState>> {
+//     let mode = get_working_mode(input, group_by);
+//     Ok(if let Some(mode) = mode {
+//         let existing_ordering = input.output_ordering().unwrap_or(vec![]);
+//         // Output ordering information for the executor.
+//         let out_ordering = mode
+//             .ordered_indices()
+//             .iter()
+//             .zip(existing_ordering)
+//             .map(|(idx, input_col)| {
+//                 let name = group_by.expr[*idx].1.as_str();
+//                 Ok(PhysicalSortExpr {
+//                     expr: col(name, schema)?,
+//                     options: input_col.options,
+//                 })
+//             })
+//             .collect::<Result<Vec<_>>>()?;
+//         Some(AggregateState {
+//             mode,
+//             ordering: out_ordering,
+//         })
+//     } else {
+//         None
+//     })
+// }
 
 impl AggregateExec {
     /// Create a new hash aggregate execution plan
@@ -345,7 +337,6 @@ impl AggregateExec {
                 }
             };
         }
-        let state = calc_aggregate_state(&input, &group_by, &schema)?;
 
         Ok(AggregateExec {
             mode,
@@ -356,7 +347,6 @@ impl AggregateExec {
             input_schema,
             alias_map,
             metrics: ExecutionPlanMetricsSet::new(),
-            state,
         })
     }
 
@@ -407,7 +397,7 @@ impl AggregateExec {
         let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, Arc::clone(&context))?;
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-        let state = calc_aggregate_state(&self.input, &self.group_by, &self.schema)?;
+        let state = self.calc_aggregate_state();
 
         if self.group_by.expr.is_empty() {
             Ok(StreamType::AggregateStream(AggregateStream::new(
@@ -434,6 +424,30 @@ impl AggregateExec {
                     state,
                 )?,
             ))
+        }
+    }
+
+    fn calc_aggregate_state(&self) -> Option<AggregateState> {
+        let mode = get_working_mode(&self.input, &self.group_by);
+        if let Some(mode) = mode {
+            let existing_ordering = self.input.output_ordering().unwrap_or(vec![]);
+            let out_group_expr = self.output_group_expr();
+            // Output ordering information for the executor.
+            let out_ordering = mode
+                .ordered_indices()
+                .iter()
+                .zip(existing_ordering)
+                .map(|(idx, input_col)| PhysicalSortExpr {
+                    expr: out_group_expr[*idx].clone(),
+                    options: input_col.options,
+                })
+                .collect::<Vec<_>>();
+            Some(AggregateState {
+                mode,
+                ordering: out_ordering,
+            })
+        } else {
+            None
         }
     }
 }
@@ -480,8 +494,9 @@ impl ExecutionPlan for AggregateExec {
     /// If the plan does not support pipelining, but it its input(s) are
     /// infinite, returns an error to indicate this.    
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        let state = self.calc_aggregate_state();
         if children[0] {
-            if self.state.is_none() {
+            if state.is_none() {
                 // Cannot run without breaking pipeline.
                 Err(DataFusionError::Plan(
                     "Aggregate Error: `GROUP BY` clause (including the more general GROUPING SET) is not supported for unbounded inputs.".to_string(),
@@ -494,8 +509,9 @@ impl ExecutionPlan for AggregateExec {
         }
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.state.as_ref().map(|state| state.ordering())
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
+        let state = self.calc_aggregate_state();
+        state.map(|state| state.ordering)
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -1245,7 +1261,7 @@ mod tests {
             Partitioning::UnknownPartitioning(1)
         }
 
-        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
             None
         }
 

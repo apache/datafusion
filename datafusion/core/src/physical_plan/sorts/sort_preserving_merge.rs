@@ -35,9 +35,7 @@ use crate::physical_plan::{
     common::spawn_execution, expressions::PhysicalSortExpr, DisplayFormatType,
     Distribution, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
-use datafusion_physical_expr::{
-    make_sort_requirements_from_exprs, EquivalenceProperties, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
 /// Sort preserving merge execution plan
 ///
@@ -117,10 +115,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
-        vec![Some(make_sort_requirements_from_exprs(&self.expr))]
+        vec![Some(PhysicalSortRequirement::from_sort_exprs(&self.expr))]
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         self.input.output_ordering()
     }
 

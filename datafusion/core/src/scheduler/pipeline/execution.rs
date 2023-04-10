@@ -231,7 +231,7 @@ impl ExecutionPlan for ProxyExecutionPlan {
         self.inner.output_partitioning()
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         self.inner.output_ordering()
     }
 

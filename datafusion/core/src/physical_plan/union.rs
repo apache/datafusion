@@ -218,7 +218,7 @@ impl ExecutionPlan for UnionExec {
         }
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         // If the Union is partition aware, there is no output ordering.
         // Otherwise, the output ordering is the "meet" of its input orderings.
         // The meet is the finest ordering that satisfied by all the input

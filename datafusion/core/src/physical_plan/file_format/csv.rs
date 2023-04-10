@@ -117,7 +117,7 @@ impl ExecutionPlan for CsvExec {
     }
 
     /// See comments on `impl ExecutionPlan for ParquetExec`: output order can't be
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         get_output_ordering(&self.base_config)
     }
 

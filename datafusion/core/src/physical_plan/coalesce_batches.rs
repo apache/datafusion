@@ -102,7 +102,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
         Ok(children[0])
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         // The coalesce batches operator does not make any changes to the sorting of its input
         self.input.output_ordering()
     }

@@ -76,7 +76,7 @@ impl ExecutionPlan for AvroExec {
         Ok(self.base_config().infinite_source)
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         get_output_ordering(&self.base_config)
     }
 

@@ -50,10 +50,9 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::utils::{
-    make_sort_exprs_from_requirements, ordering_satisfy,
-    ordering_satisfy_requirement_concrete,
+    ordering_satisfy, ordering_satisfy_requirement_concrete,
 };
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
 use itertools::{concat, izip};
 use std::iter::zip;
 use std::sync::Arc;
@@ -462,13 +461,14 @@ fn ensure_sorting(
         match (required_ordering, physical_ordering) {
             (Some(required_ordering), Some(physical_ordering)) => {
                 if !ordering_satisfy_requirement_concrete(
-                    physical_ordering,
+                    &physical_ordering,
                     &required_ordering,
                     || child.equivalence_properties(),
                 ) {
                     // Make sure we preserve the ordering requirements:
                     update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
-                    let sort_expr = make_sort_exprs_from_requirements(&required_ordering);
+                    let sort_expr =
+                        PhysicalSortRequirement::to_sort_exprs(required_ordering);
                     add_sort_above(child, sort_expr)?;
                     if is_sort(child) {
                         *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
@@ -479,7 +479,7 @@ fn ensure_sorting(
             }
             (Some(required), None) => {
                 // Ordering requirement is not met, we should add a `SortExec` to the plan.
-                let sort_expr = make_sort_exprs_from_requirements(&required);
+                let sort_expr = PhysicalSortRequirement::to_sort_exprs(required);
                 add_sort_above(child, sort_expr)?;
                 *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
             }
@@ -527,8 +527,8 @@ fn analyze_immediate_sort_removal(
         let sort_input = sort_exec.input().clone();
         // If this sort is unnecessary, we should remove it:
         if ordering_satisfy(
-            sort_input.output_ordering(),
-            sort_exec.output_ordering(),
+            sort_input.output_ordering().as_deref(),
+            sort_exec.output_ordering().as_deref(),
             || sort_input.equivalence_properties(),
         ) {
             // Since we know that a `SortExec` has exactly one child,
@@ -606,7 +606,7 @@ fn analyze_window_sort_removal(
                 window_expr[0].partition_by(),
                 required_ordering,
                 &sort_input.schema(),
-                physical_ordering,
+                &physical_ordering,
             )? {
                 if should_reverse == *needs_reverse.get_or_insert(should_reverse) {
                     continue;

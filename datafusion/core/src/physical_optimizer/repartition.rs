@@ -339,9 +339,7 @@ mod tests {
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::union::UnionExec;
     use crate::physical_plan::{displayable, DisplayFormatType, Statistics};
-    use datafusion_physical_expr::{
-        make_sort_requirements_from_exprs, PhysicalSortRequirement,
-    };
+    use datafusion_physical_expr::PhysicalSortRequirement;
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]))
@@ -1150,7 +1148,7 @@ mod tests {
             self.input.output_partitioning()
         }
 
-        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
             self.input.output_ordering()
         }
 
@@ -1162,7 +1160,8 @@ mod tests {
         fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
             vec![self
                 .output_ordering()
-                .map(make_sort_requirements_from_exprs)]
+                .as_deref()
+                .map(PhysicalSortRequirement::from_sort_exprs)]
         }
 
         fn with_new_children(

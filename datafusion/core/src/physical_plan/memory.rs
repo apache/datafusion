@@ -78,8 +78,8 @@ impl ExecutionPlan for MemoryExec {
         Partitioning::UnknownPartitioning(self.partitions.len())
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.sort_information.as_deref()
+    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
+        self.sort_information.clone()
     }
 
     fn with_new_children(
