@@ -44,7 +44,6 @@ use arrow::{
 };
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use hashbrown::raw::RawTable;
-use smallvec::{smallvec, SmallVec};
 use std::fmt;
 use std::sync::Arc;
 use std::task::Poll;
@@ -100,7 +99,7 @@ use super::{
 // but the values don't match. Those are checked in the [equal_rows] macro
 // TODO: speed up collision check and move away from using a hashbrown HashMap
 // https://github.com/apache/arrow-datafusion/issues/50
-pub struct JoinHashMap(pub RawTable<(u64, SmallVec<[u64; 1]>)>);
+pub struct JoinHashMap(pub RawTable<(u64, Vec<u64>)>);
 
 impl fmt::Debug for JoinHashMap {
     fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
@@ -543,7 +542,7 @@ async fn collect_left_input(
         )
     })? / 7)
         .next_power_of_two();
-    // 32 bytes per `(u64, SmallVec<[u64; 1]>)`
+    // 32 bytes per `(u64, Vec<[u64; 1]>)`
     // + 1 byte for each bucket
     // + 16 bytes fixed
     let estimated_hastable_size = 32 * estimated_buckets + estimated_buckets + 16;
@@ -604,7 +603,7 @@ pub fn update_hash(
         } else {
             hash_map.0.insert(
                 *hash_value,
-                (*hash_value, smallvec![row as u64]),
+                (*hash_value, vec![row as u64]),
                 |(hash, _)| *hash,
             );
         }
@@ -1289,7 +1288,6 @@ mod tests {
 
     use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
     use arrow::datatypes::{DataType, Field, Schema};
-    use smallvec::smallvec;
 
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
@@ -2647,8 +2645,8 @@ mod tests {
             create_hashes(&[left.columns()[0].clone()], &random_state, hashes_buff)?;
 
         // Create hash collisions (same hashes)
-        hashmap_left.insert(hashes[0], (hashes[0], smallvec![0, 1]), |(h, _)| *h);
-        hashmap_left.insert(hashes[1], (hashes[1], smallvec![0, 1]), |(h, _)| *h);
+        hashmap_left.insert(hashes[0], (hashes[0], vec![0, 1]), |(h, _)| *h);
+        hashmap_left.insert(hashes[1], (hashes[1], vec![0, 1]), |(h, _)| *h);
 
         let right = build_table_i32(
             ("a", &vec![10, 20]),
