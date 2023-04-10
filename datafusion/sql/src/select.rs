@@ -61,6 +61,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if !select.sort_by.is_empty() {
             return Err(DataFusionError::NotImplemented("SORT BY".to_string()));
         }
+        if select.into.is_some() {
+            return Err(DataFusionError::NotImplemented("INTO".to_string()));
+        }
 
         // process `from` clause
         let plan = self.plan_from_tables(select.from, planner_context)?;
