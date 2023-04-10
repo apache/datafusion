@@ -1080,9 +1080,14 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Expression> {
 }
 
 fn try_to_substrait_null(v: &ScalarValue) -> Result<LiteralType> {
-    // let default_type_ref = 0;
     let default_nullability = r#type::Nullability::Nullable as i32;
     match v {
+        ScalarValue::Boolean(None) => Ok(LiteralType::Null(substrait::proto::Type {
+            kind: Some(r#type::Kind::Bool(r#type::Boolean {
+                type_variation_reference: DEFAULT_TYPE_REF,
+                nullability: default_nullability,
+            })),
+        })),
         ScalarValue::Int8(None) => Ok(LiteralType::Null(substrait::proto::Type {
             kind: Some(r#type::Kind::I8(r#type::I8 {
                 type_variation_reference: DEFAULT_TYPE_REF,
@@ -1330,9 +1335,7 @@ mod test {
     fn round_trip_literal(scalar: ScalarValue) -> Result<()> {
         println!("Checking round trip of {:?}", scalar);
 
-        let scalar = ScalarValue::Int32(Some(i32::MAX));
         let substrait = to_substrait_literal(&scalar)?;
-
         let Expression { rex_type: Some(RexType::Literal(substrait_literal)) } = substrait else {
             panic!("Expected Literal expression, got {:?}", substrait);
         };
