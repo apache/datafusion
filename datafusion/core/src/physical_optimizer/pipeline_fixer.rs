@@ -200,10 +200,9 @@ fn hash_join_swap_subrule(
 /// this rule converts from `WindowAggExec` to `BoundedWindowAggExec`
 /// when input source is unbounded. (To prevent pipeline breaking)
 fn reverse_window(
-    input: PipelineStatePropagator,
+    mut input: PipelineStatePropagator,
 ) -> Option<Result<PipelineStatePropagator>> {
-    let plan = input.plan;
-    if let Some(exec) = plan.as_any().downcast_ref::<WindowAggExec>() {
+    if let Some(exec) = input.plan.as_any().downcast_ref::<WindowAggExec>() {
         // WindowAggExec has single child
         let child_unbounded = input.children_unbounded[0];
         if !child_unbounded {
@@ -224,20 +223,19 @@ fn reverse_window(
             }
 
             // We can use BoundedWindowAggExec
-            let input = exec.input();
+            let input_exec = exec.input();
 
             let new_exec = BoundedWindowAggExec::try_new(
-                window_expr.to_vec(),
-                input.clone(),
-                input.schema(),
+                window_expr,
+                input_exec.clone(),
+                input_exec.schema(),
                 exec.partition_keys.clone(),
             );
             let new_plan = new_exec.map(|elem| Arc::new(elem) as _);
 
-            return Some(new_plan.map(|plan| PipelineStatePropagator {
-                plan,
-                unbounded: child_unbounded,
-                children_unbounded: vec![child_unbounded],
+            return Some(new_plan.map(|plan| {
+                input.plan = plan;
+                input
             }));
         }
     }
