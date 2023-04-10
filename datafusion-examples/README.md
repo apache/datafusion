@@ -21,9 +21,24 @@
 
 This crate includes several examples of how to use various DataFusion APIs and help you on your way.
 
-Prerequisites:
+## Prerequisites:
 
 Run `git submodule update --init` to init test files.
+
+## Running Examples
+
+To run the examples, use the `cargo run` command, such as:
+
+```bash
+git clone https://github.com/apache/arrow-datafusion
+cd arrow-datafusion
+# Download test data
+git submodule update --init
+
+# Run the `csv_sql` example:
+# ... use the equivalent for other examples
+cargo run --example csv_sql
+```
 
 ## Single Process
 
