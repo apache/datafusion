@@ -195,7 +195,7 @@ impl PhysicalSortRequirement {
     ///
     /// This function converts `PhysicalSortRequirement` to `PhysicalSortExpr`
     /// for each entry in the input. If required ordering is None for an entry
-    /// default ordering `ASC, NULLS LAST` if given (see [`into_sort_expr`])
+    /// default ordering `ASC, NULLS LAST` if given (see [`Self::into_sort_expr`])
     pub fn to_sort_exprs(
         requirements: impl IntoIterator<Item = PhysicalSortRequirement>,
     ) -> Vec<PhysicalSortExpr> {

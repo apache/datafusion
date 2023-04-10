@@ -106,7 +106,7 @@ pub struct PlannerContext {
     /// in `PREPARE` statement
     prepare_param_data_types: Vec<DataType>,
     /// Map of CTE name to logical plan of the WITH clause.
-    /// Use Arc<LogicalPlan> to allow cheap cloning
+    /// Use `Arc<LogicalPlan>` to allow cheap cloning
     ctes: HashMap<String, Arc<LogicalPlan>>,
     /// The query schema of the outer query plan, used to resolve the columns in subquery
     outer_query_schema: Option<DFSchema>,
