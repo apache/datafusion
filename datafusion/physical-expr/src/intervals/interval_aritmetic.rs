@@ -39,7 +39,90 @@ pub enum IntervalBound {
     Closed(ScalarValue),
 }
 
-#[derive(Debug, PartialEq, Clone, Eq, Hash)]
+impl IntervalBound {
+    pub fn get_bound_scalar(&self) -> &ScalarValue {
+        match self {
+            IntervalBound::Open(scalar) | IntervalBound::Closed(scalar) => scalar,
+        }
+    }
+
+    pub fn is_null(&self) -> bool {
+        self.get_bound_scalar().is_null()
+    }
+
+    pub fn is_scalar_lt_eq(&self, other: &IntervalBound) -> bool {
+        let ord = self
+            .get_bound_scalar()
+            .partial_cmp(other.get_bound_scalar());
+        if let Some(ord) = ord {
+            match ord {
+                std::cmp::Ordering::Less | std::cmp::Ordering::Equal => return true,
+                std::cmp::Ordering::Greater => return false,
+            }
+        }
+        false
+    }
+
+    pub fn is_scalar_lt(&self, other: &IntervalBound) -> bool {
+        let ord = self
+            .get_bound_scalar()
+            .partial_cmp(other.get_bound_scalar());
+        if let Some(ord) = ord {
+            match ord {
+                std::cmp::Ordering::Less => return true,
+                std::cmp::Ordering::Greater | std::cmp::Ordering::Equal => return false,
+            }
+        }
+        false
+    }
+
+    pub fn is_scalar_gt_eq(&self, other: &IntervalBound) -> bool {
+        let ord = self
+            .get_bound_scalar()
+            .partial_cmp(other.get_bound_scalar());
+        if let Some(ord) = ord {
+            match ord {
+                std::cmp::Ordering::Less => return false,
+                std::cmp::Ordering::Greater | std::cmp::Ordering::Equal => return true,
+            }
+        }
+        false
+    }
+
+    pub fn is_scalar_gt(&self, other: &IntervalBound) -> bool {
+        let ord = self
+            .get_bound_scalar()
+            .partial_cmp(other.get_bound_scalar());
+        if let Some(ord) = ord {
+            match ord {
+                std::cmp::Ordering::Less | std::cmp::Ordering::Equal => return false,
+                std::cmp::Ordering::Greater => return true,
+            }
+        }
+        false
+    }
+
+    pub fn is_scalar_equal(&self, other: &IntervalBound) -> bool {
+        let ord = self
+            .get_bound_scalar()
+            .partial_cmp(other.get_bound_scalar());
+        if let Some(ord) = ord {
+            match ord {
+                std::cmp::Ordering::Less | std::cmp::Ordering::Greater => return false,
+                std::cmp::Ordering::Equal => return true,
+            }
+        }
+        false
+    }
+}
+
+impl Display for IntervalBound {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "IntervalBound [{}]", self.get_bound_scalar())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Interval {
     pub lower: IntervalBound,
     pub upper: IntervalBound,
@@ -51,12 +134,6 @@ impl Default for Interval {
             lower: IntervalBound::Open(ScalarValue::Null),
             upper: IntervalBound::Open(ScalarValue::Null),
         }
-    }
-}
-
-impl Display for IntervalBound {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "IntervalBound [{}]", self.get_bound_scalar())
     }
 }
 
@@ -115,16 +192,16 @@ impl Interval {
     /// or can't be greater than `other` by returning [true, true],
     /// [false, true] or [false, false] respectively.
     pub(crate) fn gt(&self, other: &Interval) -> Interval {
-        let flags = if !self.upper.get_bound_scalar().is_null()
-            && !other.lower.get_bound_scalar().is_null()
-            && (self.upper.get_bound_scalar() <= other.lower.get_bound_scalar())
+        let flags = if !self.upper.is_null()
+            && !other.lower.is_null()
+            && (self.upper.is_scalar_lt_eq(&other.lower))
         {
             (false, false)
-        } else if !self.lower.get_bound_scalar().is_null()
-            && !other.upper.get_bound_scalar().is_null()
-            && (self.lower.get_bound_scalar() >= other.upper.get_bound_scalar())
+        } else if !self.lower.is_null()
+            && !other.upper.is_null()
+            && (self.lower.is_scalar_gt_eq(&other.upper))
         {
-            if self.lower.get_bound_scalar() > other.upper.get_bound_scalar() {
+            if self.lower.is_scalar_gt(&other.upper) {
                 (true, true)
             } else if is_bound_closed(&self.lower, &other.upper) {
                 (false, true)
@@ -145,20 +222,20 @@ impl Interval {
     /// or equal to, or can't be greater than or equal to `other` by returning [true, true],
     /// [false, true] or [false, false] respectively.
     pub(crate) fn gt_eq(&self, other: &Interval) -> Interval {
-        let flags = if !self.upper.get_bound_scalar().is_null()
-            && !other.lower.get_bound_scalar().is_null()
-            && (self.upper.get_bound_scalar() <= other.lower.get_bound_scalar())
+        let flags = if !self.upper.is_null()
+            && !other.lower.is_null()
+            && (self.upper.is_scalar_lt_eq(&other.lower))
         {
-            if self.upper.get_bound_scalar() < other.lower.get_bound_scalar() {
+            if self.upper.is_scalar_lt(&other.lower) {
                 (false, false)
             } else if is_bound_closed(&self.upper, &other.lower) {
                 (false, true)
             } else {
                 (false, false)
             }
-        } else if !self.lower.get_bound_scalar().is_null()
-            && !other.upper.get_bound_scalar().is_null()
-            && (self.lower.get_bound_scalar() >= other.upper.get_bound_scalar())
+        } else if !self.lower.is_null()
+            && !other.upper.is_null()
+            && (self.lower.is_scalar_gt_eq(&other.upper))
         {
             (true, true)
         } else {
@@ -189,38 +266,12 @@ impl Interval {
     /// or can't be equal to `other` by returning [true, true],
     /// [false, true] or [false, false] respectively.    
     pub(crate) fn equal(&self, other: &Interval) -> Interval {
-        let flags = if !self.lower.get_bound_scalar().is_null()
-            && (self.lower == self.upper)
-            && (other.lower == other.upper)
-            && (self.lower == other.lower)
+        let flags = if !self.lower.is_null()
+            && (self.lower.is_scalar_equal(&self.upper))
+            && (other.lower.is_scalar_equal(&other.upper))
+            && (self.lower.is_scalar_equal(&other.lower))
         {
-            match (&self.lower, &self.upper, &other.lower, &other.upper) {
-                (
-                    IntervalBound::Open(_),
-                    IntervalBound::Open(_),
-                    IntervalBound::Open(_),
-                    IntervalBound::Open(_),
-                )
-                | (
-                    IntervalBound::Closed(_),
-                    IntervalBound::Closed(_),
-                    IntervalBound::Closed(_),
-                    IntervalBound::Closed(_),
-                )
-                | (
-                    IntervalBound::Open(_),
-                    IntervalBound::Closed(_),
-                    IntervalBound::Open(_),
-                    IntervalBound::Closed(_),
-                )
-                | (
-                    IntervalBound::Closed(_),
-                    IntervalBound::Open(_),
-                    IntervalBound::Closed(_),
-                    IntervalBound::Open(_),
-                ) => (true, true),
-                (_, _, _, _) => (false, true),
-            }
+            (true, true)
         } else if self.gt(other)
             == (Interval {
                 lower: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
@@ -283,26 +334,26 @@ impl Interval {
     pub(crate) fn intersect(&self, other: &Interval) -> Result<Option<Interval>> {
         // If it is evident that the result is an empty interval,
         // do not make any calculation and directly return None.
-        if (!self.lower.get_bound_scalar().is_null()
-            && !other.upper.get_bound_scalar().is_null()
-            && self.lower.get_bound_scalar() > other.upper.get_bound_scalar())
-            || (!self.upper.get_bound_scalar().is_null()
-                && !other.lower.get_bound_scalar().is_null()
-                && self.upper.get_bound_scalar() < other.lower.get_bound_scalar())
+        if (!self.lower.is_null()
+            && !other.upper.is_null()
+            && self.lower.is_scalar_gt(&other.upper))
+            || (!self.upper.is_null()
+                && !other.lower.is_null()
+                && self.upper.is_scalar_lt(&other.lower))
         {
             // This None value signals an empty interval.
             return Ok(None);
         }
-        let lower = if self.lower.get_bound_scalar().is_null() {
+        let lower = if self.lower.is_null() {
             other.lower.clone()
-        } else if other.lower.get_bound_scalar().is_null() {
+        } else if other.lower.is_null() {
             self.lower.clone()
         } else {
             let max_scalar = max(
                 self.lower.get_bound_scalar(),
                 other.lower.get_bound_scalar(),
             )?;
-            if self.lower.get_bound_scalar() != other.lower.get_bound_scalar() {
+            if !self.lower.is_scalar_equal(&other.lower) {
                 if max_scalar == *self.lower.get_bound_scalar() {
                     self.lower.clone()
                 } else {
@@ -314,16 +365,16 @@ impl Interval {
                 IntervalBound::Open(other.lower.get_bound_scalar().clone())
             }
         };
-        let upper = if self.upper.get_bound_scalar().is_null() {
+        let upper = if self.upper.is_null() {
             other.upper.clone()
-        } else if other.upper.get_bound_scalar().is_null() {
+        } else if other.upper.is_null() {
             self.upper.clone()
         } else {
             let min_scalar = min(
                 self.upper.get_bound_scalar(),
                 other.upper.get_bound_scalar(),
             )?;
-            if self.upper.get_bound_scalar() != other.upper.get_bound_scalar() {
+            if !self.upper.is_scalar_equal(&other.upper) {
                 if min_scalar == *self.upper.get_bound_scalar() {
                     self.upper.clone()
                 } else {
@@ -336,10 +387,7 @@ impl Interval {
             }
         };
         Ok(
-            if !lower.get_bound_scalar().is_null()
-                && !upper.get_bound_scalar().is_null()
-                && lower.get_bound_scalar() == upper.get_bound_scalar()
-            {
+            if !lower.is_null() && !upper.is_null() && lower.is_scalar_equal(&upper) {
                 // This match handles such cases: [3, 4) ∩ [4, 5) is an empty interval,
                 // while [3, 4] ∩ [4, 5) is not.
                 match (&lower, &upper) {
@@ -354,47 +402,13 @@ impl Interval {
         )
     }
 
-    // Compute the negation of the interval.
-    // #[allow(dead_code)]
-    // pub(crate) fn arithmetic_negate(&self) -> Result<Interval> {
-    //     match (self.lower, self.upper) {
-    //         (IntervalBound::Open(scalar_lower), IntervalBound::Open(scalar_upper)) => {
-    //             Ok(Interval {
-    //                 lower: IntervalBound::Open(scalar_upper.arithmetic_negate()?),
-    //                 upper: IntervalBound::Open(scalar_lower.arithmetic_negate()?),
-    //             })
-    //         }
-    //         (IntervalBound::Open(scalar_lower), IntervalBound::Closed(scalar_upper)) => {
-    //             Ok(Interval {
-    //                 lower: IntervalBound::Closed(scalar_upper.arithmetic_negate()?),
-    //                 upper: IntervalBound::Open(scalar_lower.arithmetic_negate()?),
-    //             })
-    //         }
-    //         (IntervalBound::Closed(scalar_lower), IntervalBound::Open(scalar_upper)) => {
-    //             Ok(Interval {
-    //                 lower: IntervalBound::Open(scalar_upper.arithmetic_negate()?),
-    //                 upper: IntervalBound::Closed(scalar_lower.arithmetic_negate()?),
-    //             })
-    //         }
-    //         (
-    //             IntervalBound::Closed(scalar_lower),
-    //             IntervalBound::Closed(scalar_upper),
-    //         ) => Ok(Interval {
-    //             lower: IntervalBound::Closed(scalar_upper.arithmetic_negate()?),
-    //             upper: IntervalBound::Closed(scalar_lower.arithmetic_negate()?),
-    //         }),
-    //     }
-    // }
-
     /// Add the given interval (`other`) to this interval. Say we have
     /// intervals [a1, b1] and [a2, b2], then their sum is [a1 + a2, b1 + b2].
     /// Note that this represents all possible values the sum can take if
     /// one can choose single values arbitrarily from each of the operands.
     pub fn add<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
-        let lower = if self.lower.get_bound_scalar().is_null()
-            || rhs.lower.get_bound_scalar().is_null()
-        {
+        let lower = if self.lower.is_null() || rhs.lower.is_null() {
             IntervalBound::Open(ScalarValue::try_from(
                 self.lower.get_bound_scalar().get_datatype(),
             )?)
@@ -409,9 +423,7 @@ impl Interval {
                 IntervalBound::Open(res)
             }
         };
-        let upper = if self.upper.get_bound_scalar().is_null()
-            || rhs.upper.get_bound_scalar().is_null()
-        {
+        let upper = if self.upper.is_null() || rhs.upper.get_bound_scalar().is_null() {
             IntervalBound::Open(ScalarValue::try_from(
                 self.upper.get_bound_scalar().get_datatype(),
             )?)
@@ -435,9 +447,7 @@ impl Interval {
     /// if one can choose single values arbitrarily from each of the operands.
     pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
-        let lower = if self.lower.get_bound_scalar().is_null()
-            || rhs.upper.get_bound_scalar().is_null()
-        {
+        let lower = if self.lower.is_null() || rhs.upper.is_null() {
             IntervalBound::Open(ScalarValue::try_from(
                 self.lower.get_bound_scalar().get_datatype(),
             )?)
@@ -452,9 +462,7 @@ impl Interval {
                 IntervalBound::Open(res)
             }
         };
-        let upper = if self.upper.get_bound_scalar().is_null()
-            || rhs.lower.get_bound_scalar().is_null()
-        {
+        let upper = if self.upper.is_null() || rhs.lower.is_null() {
             IntervalBound::Open(ScalarValue::try_from(
                 self.upper.get_bound_scalar().get_datatype(),
             )?)
@@ -470,14 +478,6 @@ impl Interval {
             }
         };
         Ok(Interval { lower, upper })
-    }
-}
-
-impl IntervalBound {
-    pub fn get_bound_scalar(&self) -> &ScalarValue {
-        match self {
-            IntervalBound::Open(scalar) | IntervalBound::Closed(scalar) => scalar,
-        }
     }
 }
 
@@ -546,6 +546,8 @@ fn cast_scalar_value(
 mod tests {
     use crate::intervals::{Interval, IntervalBound};
     use datafusion_common::{Result, ScalarValue};
+    use IntervalBound::{Closed, Open};
+    use ScalarValue::{Boolean, Int64};
 
     #[test]
     fn intersect_test() -> Result<()> {
@@ -788,9 +790,6 @@ mod tests {
 
     #[test]
     fn sub_test_various_bounds() -> Result<()> {
-        use IntervalBound::{Closed, Open};
-        use ScalarValue::Int64;
-
         let cases = vec![
             (
                 Interval::new(Closed(Int64(Some(100))), Closed(Int64(Some(200)))),
@@ -824,60 +823,24 @@ mod tests {
     fn add_test_various_bounds() -> Result<()> {
         let cases = vec![
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(None)),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(None)),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(400))),
-                },
+                Interval::new(Closed(Int64(Some(100))), Closed(Int64(Some(200)))),
+                Interval::new(Open(Int64(None)), Closed(Int64(Some(200)))),
+                Interval::new(Open(Int64(None)), Closed(Int64(Some(400)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(300))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(150))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(400))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(350))),
-                },
+                Interval::new(Closed(Int64(Some(100))), Open(Int64(Some(200)))),
+                Interval::new(Closed(Int64(Some(-300))), Open(Int64(Some(150)))),
+                Interval::new(Closed(Int64(Some(-200))), Open(Int64(Some(350)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(Some(200))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(None)),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(Some(300))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(None)),
-                },
+                Interval::new(Closed(Int64(Some(100))), Open(Int64(Some(200)))),
+                Interval::new(Open(Int64(Some(200))), Open(Int64(None))),
+                Interval::new(Open(Int64(Some(300))), Open(Int64(None))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(11))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(11))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(12))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(12))),
-                },
+                Interval::new(Closed(Int64(Some(1))), Closed(Int64(Some(1)))),
+                Interval::new(Closed(Int64(Some(11))), Closed(Int64(Some(11)))),
+                Interval::new(Closed(Int64(Some(12))), Closed(Int64(Some(12)))),
             ),
         ];
 
@@ -891,88 +854,34 @@ mod tests {
     fn lt_test_various_bounds() -> Result<()> {
         let cases = vec![
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(None)),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                },
+                Interval::new(Closed(Int64(Some(100))), Closed(Int64(Some(200)))),
+                Interval::new(Open(Int64(None)), Closed(Int64(Some(100)))),
+                Interval::new(Closed(Boolean(Some(false))), Closed(Boolean(Some(false)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(None)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(100))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                },
+                Interval::new(Closed(Int64(Some(100))), Closed(Int64(Some(200)))),
+                Interval::new(Open(Int64(None)), Open(Int64(Some(100)))),
+                Interval::new(Closed(Boolean(Some(false))), Closed(Boolean(Some(false)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(0))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                },
+                Interval::new(Open(Int64(Some(100))), Open(Int64(Some(200)))),
+                Interval::new(Closed(Int64(Some(0))), Closed(Int64(Some(100)))),
+                Interval::new(Closed(Boolean(Some(false))), Closed(Boolean(Some(false)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                },
+                Interval::new(Closed(Int64(Some(2))), Closed(Int64(Some(2)))),
+                Interval::new(Closed(Int64(Some(1))), Closed(Int64(Some(2)))),
+                Interval::new(Closed(Boolean(Some(false))), Closed(Boolean(Some(false)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                },
+                Interval::new(Closed(Int64(Some(2))), Closed(Int64(Some(2)))),
+                Interval::new(Closed(Int64(Some(1))), Open(Int64(Some(2)))),
+                Interval::new(Closed(Boolean(Some(false))), Closed(Boolean(Some(false)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                },
+                Interval::new(Closed(Int64(Some(1))), Closed(Int64(Some(1)))),
+                Interval::new(Open(Int64(Some(1))), Open(Int64(Some(2)))),
+                Interval::new(Closed(Boolean(Some(true))), Closed(Boolean(Some(true)))),
             ),
         ];
 
@@ -986,88 +895,34 @@ mod tests {
     fn gt_test_various_bounds() -> Result<()> {
         let cases = vec![
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(None)),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                },
+                Interval::new(Closed(Int64(Some(100))), Closed(Int64(Some(200)))),
+                Interval::new(Open(Int64(None)), Closed(Int64(Some(100)))),
+                Interval::new(Closed(Boolean(Some(false))), Closed(Boolean(Some(true)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(None)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(100))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                },
+                Interval::new(Closed(Int64(Some(100))), Closed(Int64(Some(200)))),
+                Interval::new(Open(Int64(None)), Open(Int64(Some(100)))),
+                Interval::new(Closed(Boolean(Some(true))), Closed(Boolean(Some(true)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(0))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                },
+                Interval::new(Open(Int64(Some(100))), Open(Int64(Some(200)))),
+                Interval::new(Closed(Int64(Some(0))), Closed(Int64(Some(100)))),
+                Interval::new(Closed(Boolean(Some(true))), Closed(Boolean(Some(true)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                },
+                Interval::new(Closed(Int64(Some(2))), Closed(Int64(Some(2)))),
+                Interval::new(Closed(Int64(Some(1))), Closed(Int64(Some(2)))),
+                Interval::new(Closed(Boolean(Some(false))), Closed(Boolean(Some(true)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                },
+                Interval::new(Closed(Int64(Some(2))), Closed(Int64(Some(2)))),
+                Interval::new(Closed(Int64(Some(1))), Open(Int64(Some(2)))),
+                Interval::new(Closed(Boolean(Some(true))), Closed(Boolean(Some(true)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                },
+                Interval::new(Closed(Int64(Some(1))), Closed(Int64(Some(1)))),
+                Interval::new(Open(Int64(Some(1))), Open(Int64(Some(2)))),
+                Interval::new(Closed(Boolean(Some(false))), Closed(Boolean(Some(false)))),
             ),
         ];
 
@@ -1081,88 +936,34 @@ mod tests {
     fn lt_eq_test_various_bounds() -> Result<()> {
         let cases = vec![
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(None)),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                },
+                Interval::new(Closed(Int64(Some(100))), Closed(Int64(Some(200)))),
+                Interval::new(Open(Int64(None)), Closed(Int64(Some(100)))),
+                Interval::new(Closed(Boolean(Some(false))), Closed(Boolean(Some(true)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(None)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(100))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                },
+                Interval::new(Closed(Int64(Some(100))), Closed(Int64(Some(200)))),
+                Interval::new(Open(Int64(None)), Open(Int64(Some(100)))),
+                Interval::new(Closed(Boolean(Some(false))), Closed(Boolean(Some(false)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                },
+                Interval::new(Closed(Int64(Some(2))), Closed(Int64(Some(2)))),
+                Interval::new(Closed(Int64(Some(1))), Closed(Int64(Some(2)))),
+                Interval::new(Closed(Boolean(Some(false))), Closed(Boolean(Some(true)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                },
+                Interval::new(Closed(Int64(Some(2))), Closed(Int64(Some(2)))),
+                Interval::new(Closed(Int64(Some(1))), Open(Int64(Some(2)))),
+                Interval::new(Closed(Boolean(Some(false))), Closed(Boolean(Some(false)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                },
+                Interval::new(Closed(Int64(Some(1))), Closed(Int64(Some(1)))),
+                Interval::new(Closed(Int64(Some(1))), Open(Int64(Some(2)))),
+                Interval::new(Closed(Boolean(Some(true))), Closed(Boolean(Some(true)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                },
+                Interval::new(Closed(Int64(Some(1))), Closed(Int64(Some(1)))),
+                Interval::new(Open(Int64(Some(1))), Open(Int64(Some(2)))),
+                Interval::new(Closed(Boolean(Some(true))), Closed(Boolean(Some(true)))),
             ),
         ];
 
@@ -1176,88 +977,34 @@ mod tests {
     fn gt_eq_test_various_bounds() -> Result<()> {
         let cases = vec![
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(None)),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                },
+                Interval::new(Closed(Int64(Some(100))), Closed(Int64(Some(200)))),
+                Interval::new(Open(Int64(None)), Closed(Int64(Some(100)))),
+                Interval::new(Closed(Boolean(Some(true))), Closed(Boolean(Some(true)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(None)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(100))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                },
+                Interval::new(Closed(Int64(Some(100))), Closed(Int64(Some(200)))),
+                Interval::new(Open(Int64(None)), Open(Int64(Some(100)))),
+                Interval::new(Closed(Boolean(Some(true))), Closed(Boolean(Some(true)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                },
+                Interval::new(Closed(Int64(Some(2))), Closed(Int64(Some(2)))),
+                Interval::new(Closed(Int64(Some(1))), Closed(Int64(Some(2)))),
+                Interval::new(Closed(Boolean(Some(true))), Closed(Boolean(Some(true)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                },
+                Interval::new(Closed(Int64(Some(2))), Closed(Int64(Some(2)))),
+                Interval::new(Closed(Int64(Some(1))), Open(Int64(Some(2)))),
+                Interval::new(Closed(Boolean(Some(true))), Closed(Boolean(Some(true)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                },
+                Interval::new(Closed(Int64(Some(1))), Closed(Int64(Some(1)))),
+                Interval::new(Closed(Int64(Some(1))), Open(Int64(Some(2)))),
+                Interval::new(Closed(Boolean(Some(false))), Closed(Boolean(Some(true)))),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                },
+                Interval::new(Closed(Int64(Some(1))), Closed(Int64(Some(1)))),
+                Interval::new(Open(Int64(Some(1))), Open(Int64(Some(2)))),
+                Interval::new(Closed(Boolean(Some(false))), Closed(Boolean(Some(false)))),
             ),
         ];
 
@@ -1271,90 +1018,45 @@ mod tests {
     fn intersect_test_various_bounds() -> Result<()> {
         let cases = vec![
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(None)),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                },
-                Some(Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                }),
+                Interval::new(Closed(Int64(Some(100))), Closed(Int64(Some(200)))),
+                Interval::new(Open(Int64(None)), Closed(Int64(Some(100)))),
+                Some(Interval::new(
+                    Closed(Int64(Some(100))),
+                    Closed(Int64(Some(100))),
+                )),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(None)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(100))),
-                },
+                Interval::new(Closed(Int64(Some(100))), Closed(Int64(Some(200)))),
+                Interval::new(Open(Int64(None)), Open(Int64(Some(100)))),
                 None,
             ),
             (
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(Some(100))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(200))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(0))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(100))),
-                },
+                Interval::new(Open(Int64(Some(100))), Open(Int64(Some(200)))),
+                Interval::new(Closed(Int64(Some(0))), Closed(Int64(Some(100)))),
                 None,
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                },
-                Some(Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                }),
+                Interval::new(Closed(Int64(Some(2))), Closed(Int64(Some(2)))),
+                Interval::new(Closed(Int64(Some(1))), Closed(Int64(Some(2)))),
+                Some(Interval::new(
+                    Closed(Int64(Some(2))),
+                    Closed(Int64(Some(2))),
+                )),
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(2))),
-                },
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(2))),
-                },
+                Interval::new(Closed(Int64(Some(2))), Closed(Int64(Some(2)))),
+                Interval::new(Closed(Int64(Some(1))), Open(Int64(Some(2)))),
                 None,
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(2))),
-                },
+                Interval::new(Closed(Int64(Some(1))), Closed(Int64(Some(1)))),
+                Interval::new(Open(Int64(Some(1))), Open(Int64(Some(2)))),
                 None,
             ),
             (
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Closed(ScalarValue::Int64(Some(3))),
-                },
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(2))),
-                },
-                Some(Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(Some(1))),
-                    upper: IntervalBound::Open(ScalarValue::Int64(Some(2))),
-                }),
+                Interval::new(Closed(Int64(Some(1))), Closed(Int64(Some(3)))),
+                Interval::new(Open(Int64(Some(1))), Open(Int64(Some(2)))),
+                Some(Interval::new(Open(Int64(Some(1))), Open(Int64(Some(2))))),
             ),
         ];
 

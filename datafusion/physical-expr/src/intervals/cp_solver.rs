@@ -552,7 +552,7 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intervals::test_utils::gen_conjunctive_numeric_expr_open_bounds;
+    use crate::intervals::test_utils::{gen_conjunctive_numeric_expr, BoundType};
     use itertools::Itertools;
 
     use crate::expressions::{BinaryExpr, Column};
@@ -717,7 +717,7 @@ mod tests {
         let left_col = Arc::new(Column::new("left_watermark", 0));
         let right_col = Arc::new(Column::new("right_watermark", 0));
         // left_watermark + 1 > right_watermark + 11 AND left_watermark + 3 < right_watermark + 33
-        let expr = gen_conjunctive_numeric_expr_open_bounds(
+        let expr = gen_conjunctive_numeric_expr(
             left_col.clone(),
             right_col.clone(),
             Operator::Plus,
@@ -728,6 +728,7 @@ mod tests {
             11,
             3,
             33,
+            BoundType::Open,
         );
         // l > r + 10 AND r > l - 30
         let l_gt_r = 10;
@@ -756,7 +757,7 @@ mod tests {
         let left_col = Arc::new(Column::new("left_watermark", 0));
         let right_col = Arc::new(Column::new("right_watermark", 0));
         // left_watermark - 1 > right_watermark + 5 AND left_watermark + 3 < right_watermark + 10
-        let expr = gen_conjunctive_numeric_expr_open_bounds(
+        let expr = gen_conjunctive_numeric_expr(
             left_col.clone(),
             right_col.clone(),
             Operator::Minus,
@@ -767,6 +768,7 @@ mod tests {
             5,
             3,
             10,
+            BoundType::Open,
         );
         // l > r + 6 AND r > l - 7
         let l_gt_r = 6;
@@ -796,7 +798,7 @@ mod tests {
         let left_col = Arc::new(Column::new("left_watermark", 0));
         let right_col = Arc::new(Column::new("right_watermark", 0));
         // left_watermark - 1 > right_watermark + 5 AND left_watermark - 3 < right_watermark + 10
-        let expr = gen_conjunctive_numeric_expr_open_bounds(
+        let expr = gen_conjunctive_numeric_expr(
             left_col.clone(),
             right_col.clone(),
             Operator::Minus,
@@ -807,6 +809,7 @@ mod tests {
             5,
             3,
             10,
+            BoundType::Open,
         );
         // l > r + 6 AND r > l - 13
         let l_gt_r = 6;
@@ -835,7 +838,7 @@ mod tests {
         let left_col = Arc::new(Column::new("left_watermark", 0));
         let right_col = Arc::new(Column::new("right_watermark", 0));
         // left_watermark - 10 > right_watermark - 5 AND left_watermark - 3 < right_watermark + 10
-        let expr = gen_conjunctive_numeric_expr_open_bounds(
+        let expr = gen_conjunctive_numeric_expr(
             left_col.clone(),
             right_col.clone(),
             Operator::Minus,
@@ -846,6 +849,7 @@ mod tests {
             5,
             3,
             10,
+            BoundType::Open,
         );
         // l > r + 5 AND r > l - 13
         let l_gt_r = 5;
@@ -875,7 +879,7 @@ mod tests {
         let right_col = Arc::new(Column::new("right_watermark", 0));
         // left_watermark - 10 > right_watermark - 5 AND left_watermark - 30 < right_watermark - 3
 
-        let expr = gen_conjunctive_numeric_expr_open_bounds(
+        let expr = gen_conjunctive_numeric_expr(
             left_col.clone(),
             right_col.clone(),
             Operator::Minus,
@@ -886,6 +890,7 @@ mod tests {
             5,
             30,
             3,
+            BoundType::Open,
         );
         // l > r + 5 AND r > l - 27
         let l_gt_r = 5;

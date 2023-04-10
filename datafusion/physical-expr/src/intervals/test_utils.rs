@@ -24,53 +24,16 @@ use crate::PhysicalExpr;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Operator;
 
-#[allow(clippy::too_many_arguments)]
-/// This test function generates a conjunctive statement with two numeric
-/// terms with the following form:
-/// left_col (op_1) a  > right_col (op_2) b AND left_col (op_3) c < right_col (op_4) d
-pub fn gen_conjunctive_numeric_expr_open_bounds(
-    left_col: Arc<dyn PhysicalExpr>,
-    right_col: Arc<dyn PhysicalExpr>,
-    op_1: Operator,
-    op_2: Operator,
-    op_3: Operator,
-    op_4: Operator,
-    a: i32,
-    b: i32,
-    c: i32,
-    d: i32,
-) -> Arc<dyn PhysicalExpr> {
-    let left_and_1 = Arc::new(BinaryExpr::new(
-        left_col.clone(),
-        op_1,
-        Arc::new(Literal::new(ScalarValue::Int32(Some(a)))),
-    ));
-    let left_and_2 = Arc::new(BinaryExpr::new(
-        right_col.clone(),
-        op_2,
-        Arc::new(Literal::new(ScalarValue::Int32(Some(b)))),
-    ));
-
-    let right_and_1 = Arc::new(BinaryExpr::new(
-        left_col,
-        op_3,
-        Arc::new(Literal::new(ScalarValue::Int32(Some(c)))),
-    ));
-    let right_and_2 = Arc::new(BinaryExpr::new(
-        right_col,
-        op_4,
-        Arc::new(Literal::new(ScalarValue::Int32(Some(d)))),
-    ));
-    let left_expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, left_and_2));
-    let right_expr = Arc::new(BinaryExpr::new(right_and_1, Operator::Lt, right_and_2));
-    Arc::new(BinaryExpr::new(left_expr, Operator::And, right_expr))
+pub enum BoundType {
+    Open,
+    Close,
 }
 
 #[allow(clippy::too_many_arguments)]
 /// This test function generates a conjunctive statement with two numeric
 /// terms with the following form:
-/// left_col (op_1) a  >= right_col (op_2) b AND left_col (op_3) c <= right_col (op_4) d
-pub fn gen_conjunctive_numeric_expr_closed_bounds(
+/// left_col (op_1) a  >/>= right_col (op_2) b AND left_col (op_3) c </<= right_col (op_4) d
+pub fn gen_conjunctive_numeric_expr(
     left_col: Arc<dyn PhysicalExpr>,
     right_col: Arc<dyn PhysicalExpr>,
     op_1: Operator,
@@ -81,6 +44,7 @@ pub fn gen_conjunctive_numeric_expr_closed_bounds(
     b: i32,
     c: i32,
     d: i32,
+    bounds: BoundType,
 ) -> Arc<dyn PhysicalExpr> {
     let left_and_1 = Arc::new(BinaryExpr::new(
         left_col.clone(),
@@ -103,7 +67,12 @@ pub fn gen_conjunctive_numeric_expr_closed_bounds(
         op_4,
         Arc::new(Literal::new(ScalarValue::Int32(Some(d)))),
     ));
-    let left_expr = Arc::new(BinaryExpr::new(left_and_1, Operator::GtEq, left_and_2));
-    let right_expr = Arc::new(BinaryExpr::new(right_and_1, Operator::LtEq, right_and_2));
+    let (greater_op, less_op) = match bounds {
+        BoundType::Open => (Operator::Gt, Operator::Lt),
+        BoundType::Close => (Operator::GtEq, Operator::LtEq),
+    };
+
+    let left_expr = Arc::new(BinaryExpr::new(left_and_1, greater_op, left_and_2));
+    let right_expr = Arc::new(BinaryExpr::new(right_and_1, less_op, right_and_2));
     Arc::new(BinaryExpr::new(left_expr, Operator::And, right_expr))
 }
