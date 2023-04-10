@@ -33,7 +33,6 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::DataFusionError;
 use datafusion_expr::logical_plan::JoinType;
 
-use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use std::sync::Arc;
 
 /// The [`PipelineFixer`] rule tries to modify a given plan so that it can
@@ -65,7 +64,6 @@ impl PhysicalOptimizerRule for PipelineFixer {
         let physical_optimizer_subrules: Vec<Box<PipelineFixerSubrule>> = vec![
             Box::new(hash_join_convert_symmetric_subrule),
             Box::new(hash_join_swap_subrule),
-            Box::new(reverse_window),
         ];
         let state = pipeline.transform_up(&|p| {
             apply_subrules_and_check_finiteness_requirements(
@@ -196,53 +194,6 @@ fn hash_join_swap_subrule(
     }
 }
 
-/// If possible (e.g. reverse window expressions can be calculated with bounded memory),
-/// this rule converts from `WindowAggExec` to `BoundedWindowAggExec`
-/// when input source is unbounded. (To prevent pipeline breaking)
-fn reverse_window(
-    mut input: PipelineStatePropagator,
-) -> Option<Result<PipelineStatePropagator>> {
-    if let Some(exec) = input.plan.as_any().downcast_ref::<WindowAggExec>() {
-        // WindowAggExec has single child
-        let child_unbounded = input.children_unbounded[0];
-        if !child_unbounded {
-            // If children is bounded, no need to convert to BoundedWindowAggExec
-            return None;
-        }
-        let window_expr = exec.window_expr();
-        if let Some(window_expr) = window_expr
-            .iter()
-            .map(|e| e.get_reverse_expr())
-            .collect::<Option<Vec<_>>>()
-        {
-            let uses_bounded_memory = window_expr.iter().all(|e| e.uses_bounded_memory());
-            if !uses_bounded_memory {
-                // If reversed window expression cannot be calculated with bounded memory
-                // Cannot convert it to BoundedWindowAggExec
-                return None;
-            }
-
-            // We can use BoundedWindowAggExec
-            let input_exec = exec.input();
-
-            let new_exec = BoundedWindowAggExec::try_new(
-                window_expr,
-                input_exec.clone(),
-                input_exec.schema(),
-                exec.partition_keys.clone(),
-            );
-            let new_plan = new_exec.map(|elem| Arc::new(elem) as _);
-
-            return Some(new_plan.map(|plan| {
-                input.plan = plan;
-                input
-            }));
-        }
-    }
-    // There is no way to change current Executor to BoundedWindowAggExec
-    None
-}
-
 /// This function swaps sides of a hash join to make it runnable even if one of its
 /// inputs are infinite. Note that this is not always possible; i.e. [JoinType::Full],
 /// [JoinType::Right], [JoinType::RightAnti] and [JoinType::RightSemi] can not run with
@@ -278,13 +229,16 @@ fn apply_subrules_and_check_finiteness_requirements(
             input = value;
         }
     }
-    input
+    let is_unbounded = input
         .plan
         .unbounded_output(&input.children_unbounded)
-        .map(|value| {
-            input.unbounded = value;
-            Transformed::Yes(input)
-        })
+        // Treat the cases where executor cannot be run on unbounded data
+        // as generating unbounded data. These executors may be fixed during optimization
+        // (Sort will be removed, Window will be swapped etc.), If cannot
+        // be fixed Pipeline checker will generate error anyway.
+        .unwrap_or(true);
+    input.unbounded = is_unbounded;
+    Ok(Transformed::Yes(input))
 }
 
 #[cfg(test)]
