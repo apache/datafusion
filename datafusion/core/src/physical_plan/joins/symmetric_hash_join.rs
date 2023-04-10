@@ -677,15 +677,10 @@ fn prune_hash_values(
         }
     }
     for (hash_value, index_set) in hash_value_map.iter() {
-        if let Some((_, separation_chain)) = hashmap
-            .0
-            .get_mut(*hash_value, |(hash, _)| hash_value == hash)
-        {
+        if let Some((_, separation_chain)) = hashmap.0.get_mut(*hash_value, |_| true) {
             separation_chain.retain(|n| !index_set.contains(n));
             if separation_chain.is_empty() {
-                hashmap
-                    .0
-                    .remove_entry(*hash_value, |(hash, _)| hash_value == hash);
+                hashmap.0.remove_entry(*hash_value, |_| true);
             }
         }
     }

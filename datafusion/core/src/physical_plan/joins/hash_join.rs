@@ -594,16 +594,17 @@ pub fn update_hash(
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
 
     // insert hashes to key of the hashmap
-    for (row, hash_value) in hash_values.iter().enumerate() {
-        let item = hash_map
-            .0
-            .get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
+    let row_start = offset;
+    let row_end = offset + hash_values.len();
+    for (row, hash_value) in (row_start..row_end).zip(hash_values.iter()) {
+        // the hash value is the key, always true
+        let item = hash_map.0.get_mut(*hash_value, |_| true);
         if let Some((_, indices)) = item {
-            indices.push((row + offset) as u64);
+            indices.push(row as u64);
         } else {
             hash_map.0.insert(
                 *hash_value,
-                (*hash_value, smallvec![(row + offset) as u64]),
+                (*hash_value, smallvec![row as u64]),
                 |(hash, _)| *hash,
             );
         }
@@ -760,10 +761,7 @@ pub fn build_equal_condition_join_indices(
         // For every item on the build and probe we check if it matches
         // This possibly contains rows with hash collisions,
         // So we have to check here whether rows are equal or not
-        if let Some((_, indices)) = build_hashmap
-            .0
-            .get(*hash_value, |(hash, _)| *hash_value == *hash)
-        {
+        if let Some((_, indices)) = build_hashmap.0.get(*hash_value, |_| true) {
             for &i in indices {
                 // Check hash collisions
                 let offset_build_index = i as usize - offset_value;
