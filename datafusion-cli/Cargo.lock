@@ -694,7 +694,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "21.1.0"
+version = "22.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -740,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "21.1.0"
+version = "22.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -758,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "21.1.0"
+version = "22.0.0"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -771,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-execution"
-version = "21.1.0"
+version = "22.0.0"
 dependencies = [
  "dashmap",
  "datafusion-common",
@@ -787,7 +787,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "21.1.0"
+version = "22.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -797,7 +797,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-optimizer"
-version = "21.1.0"
+version = "22.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -813,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "21.1.0"
+version = "22.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-row"
-version = "21.1.0"
+version = "22.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -853,7 +853,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "21.1.0"
+version = "22.0.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -963,7 +963,7 @@ checksum = "4bcfec3a70f97c962c307b2d2c56e358cf1d00b558d74262b5f929ee8cc7e73a"
 dependencies = [
  "errno-dragonfly",
  "libc",
- "windows-sys 0.48.0",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]
@@ -2148,9 +2148,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "0.37.11"
+version = "0.37.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85597d61f83914ddeba6a47b3b8ffe7365107221c2e557ed94426489fefb5f77"
+checksum = "1aef160324be24d31a62147fae491c14d2204a3865c7ca8c3b0d7f7bcb3ea635"
 dependencies = [
  "bitflags",
  "errno",
