@@ -277,36 +277,6 @@ fn get_working_mode(
     }
 }
 
-// fn calc_aggregate_state(
-//     input: &Arc<dyn ExecutionPlan>,
-//     group_by: &PhysicalGroupBy,
-//     schema: &Schema,
-// ) -> Result<Option<AggregateState>> {
-//     let mode = get_working_mode(input, group_by);
-//     Ok(if let Some(mode) = mode {
-//         let existing_ordering = input.output_ordering().unwrap_or(vec![]);
-//         // Output ordering information for the executor.
-//         let out_ordering = mode
-//             .ordered_indices()
-//             .iter()
-//             .zip(existing_ordering)
-//             .map(|(idx, input_col)| {
-//                 let name = group_by.expr[*idx].1.as_str();
-//                 Ok(PhysicalSortExpr {
-//                     expr: col(name, schema)?,
-//                     options: input_col.options,
-//                 })
-//             })
-//             .collect::<Result<Vec<_>>>()?;
-//         Some(AggregateState {
-//             mode,
-//             ordering: out_ordering,
-//         })
-//     } else {
-//         None
-//     })
-// }
-
 impl AggregateExec {
     /// Create a new hash aggregate execution plan
     pub fn try_new(
