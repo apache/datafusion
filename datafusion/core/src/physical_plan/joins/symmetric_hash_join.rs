@@ -1153,7 +1153,7 @@ impl OneSideHashJoiner {
         null_equals_null: bool,
     ) -> Result<Option<RecordBatch>> {
         if self.input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
-            return Ok(Some(RecordBatch::new_empty(schema.clone())));
+            return Ok(None);
         }
         let (build_indices, probe_indices) = build_join_indices(
             probe_batch,

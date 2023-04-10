@@ -90,7 +90,6 @@ mod unix_test {
     #[rstest]
     #[timeout(std::time::Duration::from_secs(30))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    #[ignore]
     async fn unbounded_file_with_swapped_join(
         #[values(true, false)] unbounded_file: bool,
     ) -> Result<()> {
