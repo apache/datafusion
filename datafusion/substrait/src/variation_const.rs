@@ -16,6 +16,14 @@
 // under the License.
 
 //! Type variation constants
+//!
+//! To add support for types not in the [core specification](https://substrait.io/types/type_classes/),
+//! we make use of the [simple extensions](https://substrait.io/extensions/#simple-extensions) of substrait
+//! type. This module contains the constants used to identify the type variation.
+//!
+//! The rules of type variations here are:
+//! - Default type reference is 0. It is used when the actual type is the same with the original type.
+//! - Extended variant type references start from 1, and ususlly increase by 1.
 
 pub const DEFAULT_TYPE_REF: u32 = 0;
 pub const UNSIGNED_INTEGER_TYPE_REF: u32 = 1;

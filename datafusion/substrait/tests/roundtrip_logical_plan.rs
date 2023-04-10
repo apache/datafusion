@@ -265,74 +265,60 @@ mod tests {
         roundtrip("SELECT a,b,c,d,e FROM datafusion.public.data;").await
     }
 
+    /// Construct a plan that contains several literals of types that are currently supported.
+    /// This case ignores:
+    /// - Date64, for this literal is not supported
+    /// - FixedSizeBinary, for converting UTF-8 literal to FixedSizeBinary is not supported
+    /// - List, this nested type is not supported in arrow_cast
+    /// - Decimal128 and Decimal256, them will fallback to UTF8 cast expr rather than plain literal.
     #[tokio::test]
-    async fn read_all_types() -> Result<()> {
-        let mut ctx = create_all_type_context().await?;
-        let df = ctx
-            .sql(
-                "select * from data where 
-                a = TRUE AND
-                b = 0 AND
-                c = 0 AND
-                d = 0 AND
-                e = 0 AND
-                f = 0 AND
-                g = 0 AND
-                h = 0 AND
-                i = 0;",
-            )
-            .await?;
-        println!("{:?}", df.clone().collect().await.unwrap());
-        let plan = df.into_optimized_plan()?;
-        let proto = to_substrait_plan(&plan)?;
-        let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
-        let plan2 = ctx.state().optimize(&plan2)?;
-
-        println!("{plan:#?}");
-        println!("{plan2:#?}");
-
-        let plan1str = format!("{plan:?}");
-        let plan2str = format!("{plan2:?}");
-        assert_eq!(plan1str, plan2str);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn integer_type_literal() -> Result<()> {
+    async fn all_type_literal() -> Result<()> {
         roundtrip_all_types(
             "select * from data where 
-            a = TRUE AND
-            b = 0 AND
-            c = 0 AND
-            d = 0 AND
-            e = 0 AND
-            f = 0 AND
-            g = 0 AND
-            h = 0 AND
-            i = 0;",
+            bool_col = TRUE AND
+            int8_col = arrow_cast('0', 'Int8') AND
+            uint8_col = arrow_cast('0', 'UInt8') AND
+            int16_col = arrow_cast('0', 'Int16') AND
+            uint16_col = arrow_cast('0', 'UInt16') AND
+            int32_col = arrow_cast('0', 'Int32') AND
+            uint32_col = arrow_cast('0', 'UInt32') AND
+            int64_col = arrow_cast('0', 'Int64') AND
+            uint64_col = arrow_cast('0', 'UInt64') AND
+            float32_col = arrow_cast('0', 'Float32') AND
+            float64_col = arrow_cast('0', 'Float64') AND
+            sec_timestamp_col = arrow_cast('2020-01-01 00:00:00', 'Timestamp (Second, None)') AND
+            ms_timestamp_col = arrow_cast('2020-01-01 00:00:00', 'Timestamp (Millisecond, None)') AND
+            us_timestamp_col = arrow_cast('2020-01-01 00:00:00', 'Timestamp (Microsecond, None)') AND
+            ns_timestamp_col = arrow_cast('2020-01-01 00:00:00', 'Timestamp (Nanosecond, None)') AND
+            date32_col = arrow_cast('2020-01-01', 'Date32') AND
+            binary_col = arrow_cast('binary', 'Binary') AND
+            large_binary_col = arrow_cast('large_binary', 'LargeBinary') AND
+            utf8_col = arrow_cast('utf8', 'Utf8') AND
+            large_utf8_col = arrow_cast('large_utf8', 'LargeUtf8');",
         )
         .await
     }
 
-    // Literal in this cases have incorrect type. This is not a good case
+    /// Construct a plan that cast columns. Only those SQL types are supported for now.
     #[tokio::test]
-    async fn other_type_literal() -> Result<()> {
+    async fn new_test_grammar() -> Result<()> {
         roundtrip_all_types(
-            "select * from data where 
-            j = 0.0 AND
-            k = 0.0 AND
-            l = TIMESTAMP '2020-01-01 00:00:00' AND
-            m = TIMESTAMP '2020-01-01 00:00:00' AND
-            n = TIMESTAMP '2020-01-01 00:00:00' AND
-            o = TIMESTAMP '2020-01-01 00:00:00' AND
-            p = 0 AND
-            -- Date64 is not supported
-            -- binarys are ignored in this test
-            u = 'foo' AND
-            v = 'foo' AND
-            -- lists are ignored in this test
-            y = 1.0 AND
-            z = 1.0;",
+            "select
+            bool_col::boolean,
+            int8_col::tinyint,
+            uint8_col::tinyint unsigned,
+            int16_col::smallint,
+            uint16_col::smallint unsigned,
+            int32_col::integer,
+            uint32_col::integer unsigned,
+            int64_col::bigint,
+            uint64_col::bigint unsigned,
+            float32_col::float,
+            float64_col::double,
+            decimal_128_col::decimal(10, 2),
+            date32_col::date,
+            binary_col::bytea
+            from data",
         )
         .await
     }
@@ -468,40 +454,56 @@ mod tests {
         let ctx = SessionContext::new();
         let mut explicit_options = CsvReadOptions::new();
         let schema = Schema::new(vec![
-            Field::new("a", DataType::Boolean, true),
-            Field::new("b", DataType::Int8, true),
-            Field::new("c", DataType::UInt8, true),
-            Field::new("d", DataType::Int16, true),
-            Field::new("e", DataType::UInt16, true),
-            Field::new("f", DataType::Int32, true),
-            Field::new("g", DataType::UInt32, true),
-            Field::new("h", DataType::Int64, true),
-            Field::new("i", DataType::UInt64, true),
-            Field::new("j", DataType::Float32, true),
-            Field::new("k", DataType::Float64, true),
-            Field::new("l", DataType::Timestamp(TimeUnit::Second, None), true),
-            Field::new("m", DataType::Timestamp(TimeUnit::Millisecond, None), true),
-            Field::new("n", DataType::Timestamp(TimeUnit::Microsecond, None), true),
-            Field::new("o", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
-            Field::new("p", DataType::Date32, true),
-            Field::new("q", DataType::Date64, true),
-            Field::new("r", DataType::Binary, true),
-            Field::new("s", DataType::LargeBinary, true),
-            Field::new("t", DataType::FixedSizeBinary(42), true),
-            Field::new("u", DataType::Utf8, true),
-            Field::new("v", DataType::LargeUtf8, true),
+            Field::new("bool_col", DataType::Boolean, true),
+            Field::new("int8_col", DataType::Int8, true),
+            Field::new("uint8_col", DataType::UInt8, true),
+            Field::new("int16_col", DataType::Int16, true),
+            Field::new("uint16_col", DataType::UInt16, true),
+            Field::new("int32_col", DataType::Int32, true),
+            Field::new("uint32_col", DataType::UInt32, true),
+            Field::new("int64_col", DataType::Int64, true),
+            Field::new("uint64_col", DataType::UInt64, true),
+            Field::new("float32_col", DataType::Float32, true),
+            Field::new("float64_col", DataType::Float64, true),
             Field::new(
-                "w",
+                "sec_timestamp_col",
+                DataType::Timestamp(TimeUnit::Second, None),
+                true,
+            ),
+            Field::new(
+                "ms_timestamp_col",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                true,
+            ),
+            Field::new(
+                "us_timestamp_col",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+            ),
+            Field::new(
+                "ns_timestamp_col",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            ),
+            Field::new("date32_col", DataType::Date32, true),
+            Field::new("date64_col", DataType::Date64, true),
+            Field::new("binary_col", DataType::Binary, true),
+            Field::new("large_binary_col", DataType::LargeBinary, true),
+            Field::new("fixed_size_binary_col", DataType::FixedSizeBinary(42), true),
+            Field::new("utf8_col", DataType::Utf8, true),
+            Field::new("large_utf8_col", DataType::LargeUtf8, true),
+            Field::new(
+                "list_col",
                 DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
                 true,
             ),
             Field::new(
-                "x",
+                "large_list_col",
                 DataType::LargeList(Box::new(Field::new("item", DataType::Int64, true))),
                 true,
             ),
-            Field::new("y", DataType::Decimal128(12, 34), true),
-            Field::new("z", DataType::Decimal256(12, 34), true),
+            Field::new("decimal_128_col", DataType::Decimal128(10, 2), true),
+            Field::new("decimal_256_col", DataType::Decimal256(10, 2), true),
         ]);
         explicit_options.schema = Some(&schema);
         explicit_options.has_header = false;
