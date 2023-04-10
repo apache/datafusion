@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{collections::HashMap, mem, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
@@ -1021,15 +1021,13 @@ fn to_substrait_literal(value: &ScalarValue) -> Result<Expression> {
             (LiteralType::I16(*n as i32), UNSIGNED_INTEGER_TYPE_REF)
         }
         ScalarValue::Int32(Some(n)) => (LiteralType::I32(*n), DEFAULT_TYPE_REF),
-        ScalarValue::UInt32(Some(n)) => (
-            LiteralType::I32(unsafe { mem::transmute_copy::<u32, i32>(n) }),
-            UNSIGNED_INTEGER_TYPE_REF,
-        ),
+        ScalarValue::UInt32(Some(n)) => {
+            (LiteralType::I32(*n as i32), UNSIGNED_INTEGER_TYPE_REF)
+        }
         ScalarValue::Int64(Some(n)) => (LiteralType::I64(*n), DEFAULT_TYPE_REF),
-        ScalarValue::UInt64(Some(n)) => (
-            LiteralType::I64(unsafe { mem::transmute_copy::<u64, i64>(n) }),
-            UNSIGNED_INTEGER_TYPE_REF,
-        ),
+        ScalarValue::UInt64(Some(n)) => {
+            (LiteralType::I64(*n as i64), UNSIGNED_INTEGER_TYPE_REF)
+        }
         ScalarValue::Float32(Some(f)) => (LiteralType::Fp32(*f), DEFAULT_TYPE_REF),
         ScalarValue::Float64(Some(f)) => (LiteralType::Fp64(*f), DEFAULT_TYPE_REF),
         ScalarValue::TimestampSecond(Some(t), _) => {
@@ -1284,4 +1282,63 @@ fn substrait_field_ref(index: usize) -> Result<Expression> {
             root_type: None,
         }))),
     })
+}
+
+#[cfg(test)]
+mod test {
+    use crate::logical_plan::consumer::from_substrait_literal;
+
+    use super::*;
+
+    #[test]
+    fn round_trip_literals() -> Result<()> {
+        round_trip_literal(ScalarValue::Boolean(None))?;
+        round_trip_literal(ScalarValue::Boolean(Some(true)))?;
+        round_trip_literal(ScalarValue::Boolean(Some(false)))?;
+
+        round_trip_literal(ScalarValue::Int8(None))?;
+        round_trip_literal(ScalarValue::Int8(Some(i8::MIN)))?;
+        round_trip_literal(ScalarValue::Int8(Some(i8::MAX)))?;
+        round_trip_literal(ScalarValue::UInt8(None))?;
+        round_trip_literal(ScalarValue::UInt8(Some(u8::MIN)))?;
+        round_trip_literal(ScalarValue::UInt8(Some(u8::MAX)))?;
+
+        round_trip_literal(ScalarValue::Int16(None))?;
+        round_trip_literal(ScalarValue::Int16(Some(i16::MIN)))?;
+        round_trip_literal(ScalarValue::Int16(Some(i16::MAX)))?;
+        round_trip_literal(ScalarValue::UInt16(None))?;
+        round_trip_literal(ScalarValue::UInt16(Some(u16::MIN)))?;
+        round_trip_literal(ScalarValue::UInt16(Some(u16::MAX)))?;
+
+        round_trip_literal(ScalarValue::Int32(None))?;
+        round_trip_literal(ScalarValue::Int32(Some(i32::MIN)))?;
+        round_trip_literal(ScalarValue::Int32(Some(i32::MAX)))?;
+        round_trip_literal(ScalarValue::UInt32(None))?;
+        round_trip_literal(ScalarValue::UInt32(Some(u32::MIN)))?;
+        round_trip_literal(ScalarValue::UInt32(Some(u32::MAX)))?;
+
+        round_trip_literal(ScalarValue::Int64(None))?;
+        round_trip_literal(ScalarValue::Int64(Some(i64::MIN)))?;
+        round_trip_literal(ScalarValue::Int64(Some(i64::MAX)))?;
+        round_trip_literal(ScalarValue::UInt64(None))?;
+        round_trip_literal(ScalarValue::UInt64(Some(u64::MIN)))?;
+        round_trip_literal(ScalarValue::UInt64(Some(u64::MAX)))?;
+
+        Ok(())
+    }
+
+    fn round_trip_literal(scalar: ScalarValue) -> Result<()> {
+        println!("Checking round trip of {:?}", scalar);
+
+        let scalar = ScalarValue::Int32(Some(i32::MAX));
+        let substrait = to_substrait_literal(&scalar)?;
+
+        let Expression { rex_type: Some(RexType::Literal(substrait_literal)) } = substrait else {
+            panic!("Expected Literal expression, got {:?}", substrait);
+        };
+
+        let roundtrip_scalar = from_substrait_literal(&substrait_literal)?;
+        assert_eq!(scalar, roundtrip_scalar);
+        Ok(())
+    }
 }
