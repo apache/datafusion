@@ -1057,15 +1057,9 @@ pub fn build_join_schema(
             // left then right, right set to nullable in case of not matched scenario
             let right_fields_nullable: Vec<DFField> = right_fields
                 .iter()
-                .map(|f| {
-                    let field = f.field().as_ref().clone().with_nullable(true);
-                    if let Some(q) = f.qualifier() {
-                        DFField::from_qualified(q, field)
-                    } else {
-                        DFField::from(field)
-                    }
-                })
+                .map(|f| f.clone().with_nullable(true))
                 .collect();
+
             left_fields
                 .iter()
                 .chain(&right_fields_nullable)
