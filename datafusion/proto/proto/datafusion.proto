@@ -530,6 +530,7 @@ enum ScalarFunction {
   Sinh = 77;
   Cosh = 78;
   Tanh = 79;
+  Pi = 80;
 }
 
 message ScalarFunctionNode {

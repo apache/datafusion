@@ -39,7 +39,7 @@ use datafusion_expr::{
     expr::{self, Sort, WindowFunction},
     floor, from_unixtime, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
-    lower, lpad, ltrim, md5, now, nullif, octet_length, power, random, regexp_match,
+    lower, lpad, ltrim, md5, now, nullif, octet_length, pi, power, random, regexp_match,
     regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
     sha384, sha512, signum, sin, sinh, split_part, sqrt, starts_with, strpos, substr,
     substring, tan, tanh, to_hex, to_timestamp_micros, to_timestamp_millis,
@@ -474,6 +474,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Translate => Self::Translate,
             ScalarFunction::RegexpMatch => Self::RegexpMatch,
             ScalarFunction::Coalesce => Self::Coalesce,
+            ScalarFunction::Pi => Self::Pi,
             ScalarFunction::Power => Self::Power,
             ScalarFunction::StructFun => Self::Struct,
             ScalarFunction::FromUnixtime => Self::FromUnixtime,
@@ -1317,6 +1318,7 @@ pub fn parse_expr(
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
+                ScalarFunction::Pi => Ok(pi()),
                 ScalarFunction::Power => Ok(power(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
