@@ -729,14 +729,13 @@ mod test {
     use arrow::datatypes::{DataType, TimeUnit};
 
     use datafusion_common::tree_node::TreeNode;
-    use datafusion_common::ScalarValue::Utf8;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::expr::{self, Like};
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true,
-        AccumulatorFunctionImplementation, AggregateFunction, AggregateUDF, Between,
-        BinaryExpr, BuiltinScalarFunction, Case, Cast, ColumnarValue, ExprSchemable,
-        Filter, Operator, StateTypeFunction, Subquery,
+        AccumulatorFunctionImplementation, AggregateFunction, AggregateUDF, BinaryExpr,
+        BuiltinScalarFunction, Case, ColumnarValue, ExprSchemable, Filter, Operator,
+        StateTypeFunction, Subquery,
     };
     use datafusion_expr::{
         lit,
@@ -1013,20 +1012,12 @@ mod test {
 
     #[test]
     fn between_case() -> Result<()> {
-        let expr = Expr::Between(Between::new(
-            Box::new(col("a")),
-            false,
-            Box::new(Expr::Literal(Utf8(Some("2002-05-08".to_string())))),
+        let expr = col("a").between(
+            lit("2002-05-08"),
             // (cast('2002-05-08' as date) + interval '1 months')
-            Box::new(Expr::BinaryExpr(BinaryExpr {
-                left: Box::new(Expr::Cast(Cast {
-                    expr: Box::new(Expr::Literal(Utf8(Some("2002-05-08".to_string())))),
-                    data_type: DataType::Date32,
-                })),
-                op: Operator::Plus,
-                right: Box::new(Expr::Literal(ScalarValue::IntervalYearMonth(Some(1)))),
-            })),
-        ));
+            cast(lit("2002-05-08"), DataType::Date32)
+                + lit(ScalarValue::new_interval_ym(0, 1)),
+        );
         let empty = empty_with_type(DataType::Utf8);
         let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
         let expected =
@@ -1037,20 +1028,12 @@ mod test {
 
     #[test]
     fn between_infer_cheap_type() -> Result<()> {
-        let expr = Expr::Between(Between::new(
-            Box::new(col("a")),
-            false,
+        let expr = col("a").between(
             // (cast('2002-05-08' as date) + interval '1 months')
-            Box::new(Expr::BinaryExpr(BinaryExpr {
-                left: Box::new(Expr::Cast(Cast {
-                    expr: Box::new(Expr::Literal(Utf8(Some("2002-05-08".to_string())))),
-                    data_type: DataType::Date32,
-                })),
-                op: Operator::Plus,
-                right: Box::new(Expr::Literal(ScalarValue::IntervalYearMonth(Some(1)))),
-            })),
-            Box::new(Expr::Literal(Utf8(Some("2002-12-08".to_string())))),
-        ));
+            cast(lit("2002-05-08"), DataType::Date32)
+                + lit(ScalarValue::new_interval_ym(0, 1)),
+            lit("2002-12-08"),
+        );
         let empty = empty_with_type(DataType::Utf8);
         let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
         // TODO: we should cast col(a).
