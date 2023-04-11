@@ -274,7 +274,7 @@ mod tests {
 
         FieldCursor {
             offset: 0,
-            values: PrimitiveValues(values.into()),
+            values: PrimitiveValues(values),
             null_threshold,
             options,
         }
