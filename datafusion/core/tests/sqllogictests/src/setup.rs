@@ -159,3 +159,23 @@ async fn register_aggregate_test_100(ctx: &SessionContext) {
     .await
     .unwrap();
 }
+
+pub async fn register_scalar_tables(ctx: &SessionContext) {
+    register_nan_table(ctx)
+}
+
+/// Register a table  with a nAN (different than NULL)
+fn register_nan_table(ctx: &SessionContext) {
+    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Float64, true)]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Float64Array::from(vec![
+            Some(1.0),
+            None,
+            Some(f64::NAN),
+        ]))],
+    )
+    .unwrap();
+    ctx.register_batch("test_float", data).unwrap();
+}
