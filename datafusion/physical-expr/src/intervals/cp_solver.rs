@@ -552,7 +552,7 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intervals::test_utils::{gen_conjunctive_numeric_expr, BoundType};
+    use crate::intervals::test_utils::gen_conjunctive_numeric_expr;
     use itertools::Itertools;
 
     use crate::expressions::{BinaryExpr, Column};
@@ -728,7 +728,7 @@ mod tests {
             11,
             3,
             33,
-            BoundType::Open,
+            (Operator::Gt, Operator::Lt),
         );
         // l > r + 10 AND r > l - 30
         let l_gt_r = 10;
@@ -768,7 +768,7 @@ mod tests {
             5,
             3,
             10,
-            BoundType::Open,
+            (Operator::Gt, Operator::Lt),
         );
         // l > r + 6 AND r > l - 7
         let l_gt_r = 6;
@@ -809,7 +809,7 @@ mod tests {
             5,
             3,
             10,
-            BoundType::Open,
+            (Operator::Gt, Operator::Lt),
         );
         // l > r + 6 AND r > l - 13
         let l_gt_r = 6;
@@ -849,7 +849,7 @@ mod tests {
             5,
             3,
             10,
-            BoundType::Open,
+            (Operator::Gt, Operator::Lt),
         );
         // l > r + 5 AND r > l - 13
         let l_gt_r = 5;
@@ -890,7 +890,7 @@ mod tests {
             5,
             30,
             3,
-            BoundType::Open,
+            (Operator::Gt, Operator::Lt),
         );
         // l > r + 5 AND r > l - 27
         let l_gt_r = 5;

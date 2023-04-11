@@ -1506,9 +1506,7 @@ mod tests {
 
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, col, Column};
-    use datafusion_physical_expr::intervals::test_utils::{
-        gen_conjunctive_numeric_expr, BoundType,
-    };
+    use datafusion_physical_expr::intervals::test_utils::gen_conjunctive_numeric_expr;
     use datafusion_physical_expr::PhysicalExpr;
 
     use crate::physical_plan::joins::{
@@ -1677,7 +1675,7 @@ mod tests {
                 5,
                 3,
                 10,
-                BoundType::Open,
+                (Operator::Gt, Operator::Lt),
             ),
             // left_col - 1 > right_col + 5 AND left_col + 3 < right_col + 10
             1 => gen_conjunctive_numeric_expr(
@@ -1691,7 +1689,7 @@ mod tests {
                 5,
                 3,
                 10,
-                BoundType::Open,
+                (Operator::Gt, Operator::Lt),
             ),
             // left_col - 1 > right_col + 5 AND left_col - 3 < right_col + 10
             2 => gen_conjunctive_numeric_expr(
@@ -1705,7 +1703,7 @@ mod tests {
                 5,
                 3,
                 10,
-                BoundType::Open,
+                (Operator::Gt, Operator::Lt),
             ),
             // left_col - 10 > right_col - 5 AND left_col - 3 < right_col + 10
             3 => gen_conjunctive_numeric_expr(
@@ -1719,7 +1717,7 @@ mod tests {
                 5,
                 3,
                 10,
-                BoundType::Open,
+                (Operator::Gt, Operator::Lt),
             ),
             // left_col - 10 > right_col - 5 AND left_col - 30 < right_col - 3
             4 => gen_conjunctive_numeric_expr(
@@ -1733,7 +1731,7 @@ mod tests {
                 5,
                 30,
                 3,
-                BoundType::Open,
+                (Operator::Gt, Operator::Lt),
             ),
             // left_col - 2 >= right_col - 5 AND left_col - 7 <= right_col - 3
             5 => gen_conjunctive_numeric_expr(
@@ -1747,7 +1745,7 @@ mod tests {
                 5,
                 7,
                 3,
-                BoundType::Close,
+                (Operator::GtEq, Operator::LtEq),
             ),
             // left_col - 28 >= right_col - 11 AND left_col - 21 <= right_col - 39
             6 => gen_conjunctive_numeric_expr(
@@ -1761,7 +1759,7 @@ mod tests {
                 11,
                 21,
                 39,
-                BoundType::Close,
+                (Operator::GtEq, Operator::LtEq),
             ),
             _ => unreachable!(),
         }
@@ -2701,7 +2699,7 @@ mod tests {
             3,
             0,
             3,
-            BoundType::Open,
+            (Operator::Gt, Operator::Lt),
         );
         let column_indices = vec![
             ColumnIndex {

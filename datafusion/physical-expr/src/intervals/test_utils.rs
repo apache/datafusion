@@ -24,11 +24,6 @@ use crate::PhysicalExpr;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Operator;
 
-pub enum BoundType {
-    Open,
-    Close,
-}
-
 #[allow(clippy::too_many_arguments)]
 /// This test function generates a conjunctive statement with two numeric
 /// terms with the following form:
@@ -44,7 +39,7 @@ pub fn gen_conjunctive_numeric_expr(
     b: i32,
     c: i32,
     d: i32,
-    bounds: BoundType,
+    bounds: (Operator, Operator),
 ) -> Arc<dyn PhysicalExpr> {
     let left_and_1 = Arc::new(BinaryExpr::new(
         left_col.clone(),
@@ -67,10 +62,7 @@ pub fn gen_conjunctive_numeric_expr(
         op_4,
         Arc::new(Literal::new(ScalarValue::Int32(Some(d)))),
     ));
-    let (greater_op, less_op) = match bounds {
-        BoundType::Open => (Operator::Gt, Operator::Lt),
-        BoundType::Close => (Operator::GtEq, Operator::LtEq),
-    };
+    let (greater_op, less_op) = bounds;
 
     let left_expr = Arc::new(BinaryExpr::new(left_and_1, greater_op, left_and_2));
     let right_expr = Arc::new(BinaryExpr::new(right_and_1, less_op, right_and_2));

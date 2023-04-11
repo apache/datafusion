@@ -50,69 +50,78 @@ impl IntervalBound {
         self.get_bound_scalar().is_null()
     }
 
-    pub fn is_scalar_lt_eq(&self, other: &IntervalBound) -> bool {
-        let ord = self
-            .get_bound_scalar()
-            .partial_cmp(other.get_bound_scalar());
-        if let Some(ord) = ord {
-            match ord {
-                std::cmp::Ordering::Less | std::cmp::Ordering::Equal => return true,
-                std::cmp::Ordering::Greater => return false,
+    /// Add the given IntervalBound to this IntervalBound.
+    /// If either bound is null, the result is an open bound with the same data type.
+    /// Otherwise, the bounds are added, and the result is closed if both original bounds are closed,
+    /// or open otherwise.
+    pub fn add<T: Borrow<IntervalBound>>(&self, other: T) -> Result<IntervalBound> {
+        let rhs = other.borrow();
+        let res = if self.is_null() || rhs.is_null() {
+            IntervalBound::Open(ScalarValue::try_from(
+                self.get_bound_scalar().get_datatype(),
+            )?)
+        } else {
+            let res = self.get_bound_scalar().add(rhs.get_bound_scalar())?;
+            if is_bound_closed(self, rhs) {
+                IntervalBound::Closed(res)
+            } else {
+                IntervalBound::Open(res)
             }
-        }
-        false
+        };
+        Ok(res)
+    }
+
+    /// Subtract the given IntervalBound from this IntervalBound.
+    /// If either bound is null, the result is an open bound with the same data type.
+    /// Otherwise, the bounds are subtracted, and the result is closed if both original bounds are closed,
+    /// or open otherwise.
+    pub fn sub<T: Borrow<IntervalBound>>(&self, other: T) -> Result<IntervalBound> {
+        let rhs = other.borrow();
+        let res = if self.is_null() || rhs.is_null() {
+            IntervalBound::Open(ScalarValue::try_from(
+                self.get_bound_scalar().get_datatype(),
+            )?)
+        } else {
+            let res = self.get_bound_scalar().sub(rhs.get_bound_scalar())?;
+            if is_bound_closed(self, rhs) {
+                IntervalBound::Closed(res)
+            } else {
+                IntervalBound::Open(res)
+            }
+        };
+        Ok(res)
+    }
+
+    fn compare_scalar(&self, other: &IntervalBound) -> Option<std::cmp::Ordering> {
+        self.get_bound_scalar()
+            .partial_cmp(other.get_bound_scalar())
+    }
+
+    pub fn is_scalar_lt_eq(&self, other: &IntervalBound) -> bool {
+        self.compare_scalar(other).map_or(false, |ord| {
+            matches!(ord, std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+        })
     }
 
     pub fn is_scalar_lt(&self, other: &IntervalBound) -> bool {
-        let ord = self
-            .get_bound_scalar()
-            .partial_cmp(other.get_bound_scalar());
-        if let Some(ord) = ord {
-            match ord {
-                std::cmp::Ordering::Less => return true,
-                std::cmp::Ordering::Greater | std::cmp::Ordering::Equal => return false,
-            }
-        }
-        false
+        self.compare_scalar(other)
+            .map_or(false, |ord| ord == std::cmp::Ordering::Less)
     }
 
     pub fn is_scalar_gt_eq(&self, other: &IntervalBound) -> bool {
-        let ord = self
-            .get_bound_scalar()
-            .partial_cmp(other.get_bound_scalar());
-        if let Some(ord) = ord {
-            match ord {
-                std::cmp::Ordering::Less => return false,
-                std::cmp::Ordering::Greater | std::cmp::Ordering::Equal => return true,
-            }
-        }
-        false
+        self.compare_scalar(other).map_or(false, |ord| {
+            matches!(ord, std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+        })
     }
 
     pub fn is_scalar_gt(&self, other: &IntervalBound) -> bool {
-        let ord = self
-            .get_bound_scalar()
-            .partial_cmp(other.get_bound_scalar());
-        if let Some(ord) = ord {
-            match ord {
-                std::cmp::Ordering::Less | std::cmp::Ordering::Equal => return false,
-                std::cmp::Ordering::Greater => return true,
-            }
-        }
-        false
+        self.compare_scalar(other)
+            .map_or(false, |ord| ord == std::cmp::Ordering::Greater)
     }
 
     pub fn is_scalar_equal(&self, other: &IntervalBound) -> bool {
-        let ord = self
-            .get_bound_scalar()
-            .partial_cmp(other.get_bound_scalar());
-        if let Some(ord) = ord {
-            match ord {
-                std::cmp::Ordering::Less | std::cmp::Ordering::Greater => return false,
-                std::cmp::Ordering::Equal => return true,
-            }
-        }
-        false
+        self.compare_scalar(other)
+            .map_or(false, |ord| ord == std::cmp::Ordering::Equal)
     }
 }
 
@@ -153,24 +162,59 @@ impl Interval {
         data_type: &DataType,
         cast_options: &CastOptions,
     ) -> Result<Interval> {
-        let lower =
-            match &self.lower {
-                IntervalBound::Open(scalar_lower) => IntervalBound::Open(
-                    cast_scalar_value(scalar_lower, data_type, cast_options)?,
-                ),
-                IntervalBound::Closed(scalar_lower) => IntervalBound::Closed(
-                    cast_scalar_value(scalar_lower, data_type, cast_options)?,
-                ),
-            };
-        let upper =
-            match &self.upper {
-                IntervalBound::Open(scalar_upper) => IntervalBound::Open(
-                    cast_scalar_value(scalar_upper, data_type, cast_options)?,
-                ),
-                IntervalBound::Closed(scalar_upper) => IntervalBound::Closed(
-                    cast_scalar_value(scalar_upper, data_type, cast_options)?,
-                ),
-            };
+        let (lower, upper) = match (&self.lower, &self.upper) {
+            (IntervalBound::Open(scalar_lower), IntervalBound::Open(scalar_upper)) => (
+                IntervalBound::Open(cast_scalar_value(
+                    scalar_lower,
+                    data_type,
+                    cast_options,
+                )?),
+                IntervalBound::Open(cast_scalar_value(
+                    scalar_upper,
+                    data_type,
+                    cast_options,
+                )?),
+            ),
+            (
+                IntervalBound::Closed(scalar_lower),
+                IntervalBound::Closed(scalar_upper),
+            ) => (
+                IntervalBound::Closed(cast_scalar_value(
+                    scalar_lower,
+                    data_type,
+                    cast_options,
+                )?),
+                IntervalBound::Closed(cast_scalar_value(
+                    scalar_upper,
+                    data_type,
+                    cast_options,
+                )?),
+            ),
+            (IntervalBound::Open(scalar_lower), IntervalBound::Closed(scalar_upper)) => (
+                IntervalBound::Open(cast_scalar_value(
+                    scalar_lower,
+                    data_type,
+                    cast_options,
+                )?),
+                IntervalBound::Closed(cast_scalar_value(
+                    scalar_upper,
+                    data_type,
+                    cast_options,
+                )?),
+            ),
+            (IntervalBound::Closed(scalar_lower), IntervalBound::Open(scalar_upper)) => (
+                IntervalBound::Closed(cast_scalar_value(
+                    scalar_lower,
+                    data_type,
+                    cast_options,
+                )?),
+                IntervalBound::Open(cast_scalar_value(
+                    scalar_upper,
+                    data_type,
+                    cast_options,
+                )?),
+            ),
+        };
         Ok(Interval::new(lower, upper))
     }
 
@@ -196,11 +240,13 @@ impl Interval {
             && !other.lower.is_null()
             && (self.upper.is_scalar_lt_eq(&other.lower))
         {
+            // If self.upper is less than or equal to other.lower, self can't be greater than other.
             (false, false)
         } else if !self.lower.is_null()
             && !other.upper.is_null()
             && (self.lower.is_scalar_gt_eq(&other.upper))
         {
+            // If self.lower is greater than or equal to other.upper, self is certainly greater than other.
             if self.lower.is_scalar_gt(&other.upper) {
                 (true, true)
             } else if is_bound_closed(&self.lower, &other.upper) {
@@ -209,6 +255,7 @@ impl Interval {
                 (true, true)
             }
         } else {
+            // Otherwise, self is possibly greater than other.
             (false, true)
         };
 
@@ -226,6 +273,7 @@ impl Interval {
             && !other.lower.is_null()
             && (self.upper.is_scalar_lt_eq(&other.lower))
         {
+            // If self.upper is less than or equal to other.lower, self can't be greater than or equal to other.
             if self.upper.is_scalar_lt(&other.lower) {
                 (false, false)
             } else if is_bound_closed(&self.upper, &other.lower) {
@@ -237,8 +285,10 @@ impl Interval {
             && !other.upper.is_null()
             && (self.lower.is_scalar_gt_eq(&other.upper))
         {
+            // If self.lower is greater than or equal to other.upper, self is certainly greater than or equal to other.
             (true, true)
         } else {
+            // Otherwise, self is possibly greater than or equal to other.
             (false, true)
         };
 
@@ -297,7 +347,7 @@ impl Interval {
     /// Compute the logical conjunction of this (boolean) interval with the
     /// given boolean interval. Boolean intervals always have closed bounds.
     pub(crate) fn and(&self, other: &Interval) -> Result<Interval> {
-        let flags = match (
+        match (
             self.lower.get_bound_scalar(),
             self.upper.get_bound_scalar(),
             other.lower.get_bound_scalar(),
@@ -309,24 +359,18 @@ impl Interval {
                 ScalarValue::Boolean(Some(other_lower)),
                 ScalarValue::Boolean(Some(other_upper)),
             ) => {
-                if *self_lower && *other_lower {
-                    (true, true)
-                } else if *self_upper && *other_upper {
-                    (false, true)
-                } else {
-                    (false, false)
-                }
+                let lower = *self_lower && *other_lower;
+                let upper = *self_upper && *other_upper;
+
+                Ok(Interval {
+                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(lower))),
+                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(upper))),
+                })
             }
-            _ => {
-                return Err(DataFusionError::Internal(
-                    "Incompatible types for logical conjunction".to_string(),
-                ))
-            }
-        };
-        Ok(Interval {
-            lower: IntervalBound::Closed(ScalarValue::Boolean(Some(flags.0))),
-            upper: IntervalBound::Closed(ScalarValue::Boolean(Some(flags.1))),
-        })
+            _ => Err(DataFusionError::Internal(
+                "Incompatible types for logical conjunction".to_string(),
+            )),
+        }
     }
 
     /// Compute the intersection of the interval with the given interval.
@@ -408,36 +452,10 @@ impl Interval {
     /// one can choose single values arbitrarily from each of the operands.
     pub fn add<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
-        let lower = if self.lower.is_null() || rhs.lower.is_null() {
-            IntervalBound::Open(ScalarValue::try_from(
-                self.lower.get_bound_scalar().get_datatype(),
-            )?)
-        } else {
-            let res = self
-                .lower
-                .get_bound_scalar()
-                .add(rhs.lower.get_bound_scalar())?;
-            if is_bound_closed(&self.lower, &rhs.lower) {
-                IntervalBound::Closed(res)
-            } else {
-                IntervalBound::Open(res)
-            }
-        };
-        let upper = if self.upper.is_null() || rhs.upper.get_bound_scalar().is_null() {
-            IntervalBound::Open(ScalarValue::try_from(
-                self.upper.get_bound_scalar().get_datatype(),
-            )?)
-        } else {
-            let res = self
-                .upper
-                .get_bound_scalar()
-                .add(rhs.upper.get_bound_scalar())?;
-            if is_bound_closed(&self.upper, &rhs.upper) {
-                IntervalBound::Closed(res)
-            } else {
-                IntervalBound::Open(res)
-            }
-        };
+
+        let lower = self.lower.add(&rhs.lower)?;
+        let upper = self.upper.add(&rhs.upper)?;
+
         Ok(Interval { lower, upper })
     }
 
@@ -447,36 +465,8 @@ impl Interval {
     /// if one can choose single values arbitrarily from each of the operands.
     pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
-        let lower = if self.lower.is_null() || rhs.upper.is_null() {
-            IntervalBound::Open(ScalarValue::try_from(
-                self.lower.get_bound_scalar().get_datatype(),
-            )?)
-        } else {
-            let res = self
-                .lower
-                .get_bound_scalar()
-                .sub(rhs.upper.get_bound_scalar())?;
-            if is_bound_closed(&self.lower, &rhs.upper) {
-                IntervalBound::Closed(res)
-            } else {
-                IntervalBound::Open(res)
-            }
-        };
-        let upper = if self.upper.is_null() || rhs.lower.is_null() {
-            IntervalBound::Open(ScalarValue::try_from(
-                self.upper.get_bound_scalar().get_datatype(),
-            )?)
-        } else {
-            let res = self
-                .upper
-                .get_bound_scalar()
-                .sub(rhs.lower.get_bound_scalar())?;
-            if is_bound_closed(&self.upper, &rhs.lower) {
-                IntervalBound::Closed(res)
-            } else {
-                IntervalBound::Open(res)
-            }
-        };
+        let lower = self.lower.sub(&rhs.upper)?;
+        let upper = self.upper.sub(&rhs.lower)?;
         Ok(Interval { lower, upper })
     }
 }
