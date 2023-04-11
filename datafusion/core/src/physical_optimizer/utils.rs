@@ -184,6 +184,8 @@ mod tests {
     async fn test_find_indices() -> Result<()> {
         assert_eq!(find_indices(&[0, 3, 4], [0, 3, 4])?, vec![0, 1, 2]);
         assert_eq!(find_indices(&[0, 3, 4], [0, 4, 3])?, vec![0, 2, 1]);
+        assert_eq!(find_indices(&[3, 0, 4], [0, 3])?, vec![1, 0]);
+        assert!(find_indices(&[0, 3], [0, 3, 4]).is_err());
         assert!(find_indices(&[0, 3, 4], [0, 2]).is_err());
         Ok(())
     }
