@@ -1631,11 +1631,7 @@ mod roundtrip_tests {
     fn roundtrip_get_indexed_field() -> Result<()> {
         let fields = vec![
             Field::new("id", DataType::Int64, true),
-            Field::new(
-                "a",
-                DataType::List(Box::new(Field::new("item", DataType::Float64, true))),
-                true,
-            ),
+            Field::new_list("a", Field::new("item", DataType::Float64, true), true),
         ];
 
         let schema = Schema::new(fields);
