@@ -19,15 +19,30 @@ use crate::common::Result;
 use crate::physical_plan::metrics::MemTrackingMetrics;
 use crate::physical_plan::sorts::builder::BatchBuilder;
 use crate::physical_plan::sorts::cursor::Cursor;
-use crate::physical_plan::sorts::stream::{PartitionedStream, RowCursorStream};
+use crate::physical_plan::sorts::stream::{
+    PartitionedStream, PrimitiveCursorStream, RowCursorStream,
+};
 use crate::physical_plan::{
     PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream,
 };
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use arrow_array::downcast_primitive;
 use futures::Stream;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
+
+macro_rules! primitive_merge_helper {
+    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident) => {{
+        let streams = PrimitiveCursorStream::<$t>::new($sort, $streams);
+        return Ok(Box::pin(SortPreservingMergeStream::new(
+            Box::new(streams),
+            $schema,
+            $tracking_metrics,
+            $batch_size,
+        )));
+    }};
+}
 
 /// Perform a streaming merge of [`SendableRecordBatchStream`]
 pub(crate) fn streaming_merge(
@@ -37,8 +52,17 @@ pub(crate) fn streaming_merge(
     tracking_metrics: MemTrackingMetrics,
     batch_size: usize,
 ) -> Result<SendableRecordBatchStream> {
-    let streams = RowCursorStream::try_new(schema.as_ref(), expressions, streams)?;
+    // Special case single column comparisons with optimized cursor implementations
+    if expressions.len() == 1 {
+        let sort = expressions[0].clone();
+        let data_type = sort.expr.data_type(schema.as_ref())?;
+        downcast_primitive! {
+            data_type => (primitive_merge_helper, sort, streams, schema, tracking_metrics, batch_size),
+            _ => {}
+        }
+    }
 
+    let streams = RowCursorStream::try_new(schema.as_ref(), expressions, streams)?;
     Ok(Box::pin(SortPreservingMergeStream::new(
         Box::new(streams),
         schema,

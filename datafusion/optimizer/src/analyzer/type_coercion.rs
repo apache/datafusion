@@ -242,20 +242,19 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 op,
                 ref right,
             }) => {
+                // this is a workaround for https://github.com/apache/arrow-datafusion/issues/3419
                 let left_type = left.get_type(&self.schema)?;
                 let right_type = right.get_type(&self.schema)?;
                 match (&left_type, &right_type) {
+                    // Handle some case about Interval.
                     (
                         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
                         &DataType::Interval(_),
-                    )
-                    | (
+                    ) if matches!(op, Operator::Plus | Operator::Minus) => Ok(expr),
+                    (
                         &DataType::Interval(_),
                         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
-                    ) => {
-                        // this is a workaround for https://github.com/apache/arrow-datafusion/issues/3419
-                        Ok(expr.clone())
-                    }
+                    ) if matches!(op, Operator::Plus) => Ok(expr),
                     (DataType::Timestamp(_, _), DataType::Timestamp(_, _))
                         if op.is_numerical_operators() =>
                     {
@@ -867,7 +866,12 @@ mod test {
             DataType::Float64,
             Arc::new(DataType::Float64),
             Volatility::Immutable,
-            Arc::new(|_| Ok(Box::new(AvgAccumulator::try_new(&DataType::Float64)?))),
+            Arc::new(|_| {
+                Ok(Box::new(AvgAccumulator::try_new(
+                    &DataType::Float64,
+                    &DataType::Float64,
+                )?))
+            }),
             Arc::new(vec![DataType::UInt64, DataType::Float64]),
         );
         let udaf = Expr::AggregateUDF {
@@ -887,8 +891,12 @@ mod test {
             Arc::new(move |_| Ok(Arc::new(DataType::Float64)));
         let state_type: StateTypeFunction =
             Arc::new(move |_| Ok(Arc::new(vec![DataType::UInt64, DataType::Float64])));
-        let accumulator: AccumulatorFunctionImplementation =
-            Arc::new(|_| Ok(Box::new(AvgAccumulator::try_new(&DataType::Float64)?)));
+        let accumulator: AccumulatorFunctionImplementation = Arc::new(|_| {
+            Ok(Box::new(AvgAccumulator::try_new(
+                &DataType::Float64,
+                &DataType::Float64,
+            )?))
+        });
         let my_avg = AggregateUDF::new(
             "MY_AVG",
             &Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
