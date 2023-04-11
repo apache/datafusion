@@ -31,13 +31,14 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::expressions::{Avg, CastExpr, Column, Sum};
 use datafusion_physical_expr::{
     expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr,
 };
 use std::any::Any;
 use std::collections::HashMap;
 
+use arrow::compute::DEFAULT_CAST_OPTIONS;
 use std::sync::Arc;
 
 mod no_grouping;
@@ -566,9 +567,44 @@ fn aggregate_expressions(
     col_idx_base: usize,
 ) -> Result<Vec<Vec<Arc<dyn PhysicalExpr>>>> {
     match mode {
-        AggregateMode::Partial => {
-            Ok(aggr_expr.iter().map(|agg| agg.expressions()).collect())
-        }
+        AggregateMode::Partial => Ok(aggr_expr
+            .iter()
+            .map(|agg| {
+                let pre_cast_type = if let Some(Sum {
+                    data_type,
+                    pre_cast_to_sum_type,
+                    ..
+                }) = agg.as_any().downcast_ref::<Sum>()
+                {
+                    if *pre_cast_to_sum_type {
+                        Some(data_type.clone())
+                    } else {
+                        None
+                    }
+                } else if let Some(Avg {
+                    sum_data_type,
+                    pre_cast_to_sum_type,
+                    ..
+                }) = agg.as_any().downcast_ref::<Avg>()
+                {
+                    if *pre_cast_to_sum_type {
+                        Some(sum_data_type.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                agg.expressions()
+                    .into_iter()
+                    .map(|expr| {
+                        pre_cast_type.clone().map_or(expr.clone(), |cast_type| {
+                            Arc::new(CastExpr::new(expr, cast_type, DEFAULT_CAST_OPTIONS))
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()),
         // in this mode, we build the merge expressions of the aggregation
         AggregateMode::Final | AggregateMode::FinalPartitioned => {
             let mut col_idx_base = col_idx_base;

@@ -2039,7 +2039,12 @@ mod tests {
             DataType::Float64,
             Arc::new(DataType::Float64),
             Volatility::Immutable,
-            Arc::new(|_| Ok(Box::new(AvgAccumulator::try_new(&DataType::Float64)?))),
+            Arc::new(|_| {
+                Ok(Box::new(AvgAccumulator::try_new(
+                    &DataType::Float64,
+                    &DataType::Float64,
+                )?))
+            }),
             Arc::new(vec![DataType::UInt64, DataType::Float64]),
         );
 
