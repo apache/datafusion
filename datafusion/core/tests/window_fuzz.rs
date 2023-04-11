@@ -430,7 +430,7 @@ async fn run_window_test(
     // Table is ordered according to ORDER BY a, b, c In linear test we use PARTITION BY b, ORDER BY a
     // For WindowAggExec  to produce correct result it need table to be ordered by b,a. Hence add a sort.
     if is_linear {
-        exec1 = Arc::new(SortExec::try_new(sort_keys.clone(), exec1, None)?) as _;
+        exec1 = Arc::new(SortExec::new(sort_keys.clone(), exec1)) as _;
     }
     let usual_window_exec = Arc::new(
         WindowAggExec::try_new(

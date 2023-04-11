@@ -89,6 +89,18 @@ fn parse_ident_normalization() {
             "Err(Plan(\"No table named: PERSON found\"))",
             false,
         ),
+        (
+            "SELECT Id FROM UPPERCASE_test",
+            "Ok(Projection: UPPERCASE_test.Id\
+                \n  TableScan: UPPERCASE_test)",
+            false,
+        ),
+        (
+            "SELECT \"Id\", lower FROM \"UPPERCASE_test\"",
+            "Ok(Projection: UPPERCASE_test.Id, UPPERCASE_test.lower\
+                \n  TableScan: UPPERCASE_test)",
+            true,
+        ),
     ];
 
     for (sql, expected, enable_ident_normalization) in test_data {
@@ -2634,6 +2646,10 @@ impl ContextProvider for MockContextProvider {
                 Field::new("c11", DataType::Float32, false),
                 Field::new("c12", DataType::Float64, false),
                 Field::new("c13", DataType::Utf8, false),
+            ])),
+            "UPPERCASE_test" => Ok(Schema::new(vec![
+                Field::new("Id", DataType::UInt32, false),
+                Field::new("lower", DataType::UInt32, false),
             ])),
             _ => Err(DataFusionError::Plan(format!(
                 "No table named: {} found",
