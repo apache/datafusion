@@ -2469,6 +2469,7 @@ mod tests {
                 AggregateMode::Final,
                 PhysicalGroupBy::default(),
                 vec![],
+                vec![],
                 input,
                 schema,
             )

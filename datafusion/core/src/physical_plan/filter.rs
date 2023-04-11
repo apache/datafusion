@@ -235,7 +235,7 @@ struct FilterExecStream {
     baseline_metrics: BaselineMetrics,
 }
 
-fn batch_filter(
+pub(crate) fn batch_filter(
     batch: &RecordBatch,
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> Result<RecordBatch> {

@@ -1791,6 +1791,12 @@ pub struct WindowAggExecNode {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MaybeFilter {
+    #[prost(message, optional, tag = "1")]
+    pub expr: ::core::option::Option<PhysicalExprNode>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateExecNode {
     #[prost(message, repeated, tag = "1")]
     pub group_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
@@ -1811,6 +1817,8 @@ pub struct AggregateExecNode {
     pub null_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(bool, repeated, tag = "9")]
     pub groups: ::prost::alloc::vec::Vec<bool>,
+    #[prost(message, repeated, tag = "10")]
+    pub filter_expr: ::prost::alloc::vec::Vec<MaybeFilter>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
