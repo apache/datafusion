@@ -1058,7 +1058,7 @@ pub fn build_join_schema(
             let right_fields_nullable: Vec<DFField> = right_fields
                 .iter()
                 .map(|f| {
-                    let field = f.field().clone().with_nullable(true);
+                    let field = f.field().as_ref().clone().with_nullable(true);
                     if let Some(q) = f.qualifier() {
                         DFField::from_qualified(q, field)
                     } else {
@@ -1866,19 +1866,19 @@ mod tests {
 
     fn nested_table_scan(table_name: &str) -> Result<LogicalPlanBuilder> {
         // Create a schema with a scalar field, a list of strings, and a list of structs.
-        let struct_field = Box::new(Field::new(
+        let struct_field = Field::new_struct(
             "item",
-            DataType::Struct(vec![
+            vec![
                 Field::new("a", DataType::UInt32, false),
                 Field::new("b", DataType::UInt32, false),
-            ]),
+            ],
             false,
-        ));
-        let string_field = Box::new(Field::new("item", DataType::Utf8, false));
+        );
+        let string_field = Field::new("item", DataType::Utf8, false);
         let schema = Schema::new(vec![
             Field::new("scalar", DataType::UInt32, false),
-            Field::new("strings", DataType::List(string_field), false),
-            Field::new("structs", DataType::List(struct_field), false),
+            Field::new_list("strings", string_field, false),
+            Field::new_list("structs", struct_field, false),
         ]);
 
         table_scan(Some(table_name), &schema, None)

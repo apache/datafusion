@@ -22,7 +22,7 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
@@ -242,7 +242,7 @@ impl CsvFormat {
                     ));
                 }
 
-                column_type_possibilities.iter_mut().zip(fields).for_each(
+                column_type_possibilities.iter_mut().zip(&fields).for_each(
                     |(possibilities, field)| {
                         possibilities.insert(field.data_type().clone());
                     },
@@ -287,7 +287,7 @@ fn build_schema_helper(names: Vec<String>, types: &[HashSet<DataType>]) -> Schem
                 _ => Field::new(field_name, DataType::Utf8, true),
             }
         })
-        .collect();
+        .collect::<Fields>();
     Schema::new(fields)
 }
 

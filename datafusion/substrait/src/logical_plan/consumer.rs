@@ -845,7 +845,7 @@ fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
                             "List type must have inner type".to_string(),
                         )
                     })?)?;
-                let field = Box::new(Field::new("list_item", inner_type, true));
+                let field = Arc::new(Field::new("list_item", inner_type, true));
                 match list.type_variation_reference {
                     DEFAULT_CONTAINER_TYPE_REF => Ok(DataType::List(field)),
                     LARGE_CONTAINER_TYPE_REF => Ok(DataType::LargeList(field)),

@@ -277,7 +277,7 @@ pub fn make_partition(sz: i32) -> RecordBatch {
 
 /// Return a RecordBatch with a single array with row_count sz
 pub fn make_batch_no_column(sz: usize) -> RecordBatch {
-    let schema = Arc::new(Schema::new(vec![]));
+    let schema = Arc::new(Schema::empty());
 
     let options = RecordBatchOptions::new().with_row_count(Option::from(sz));
     RecordBatch::try_new_with_options(schema, vec![], &options).unwrap()

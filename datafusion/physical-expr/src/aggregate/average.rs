@@ -189,7 +189,7 @@ impl Accumulator for AvgAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
 
-        self.count += (values.len() - values.data().null_count()) as u64;
+        self.count += (values.len() - values.null_count()) as u64;
         self.sum = self
             .sum
             .add(&sum::sum_batch(values, &self.sum_data_type)?)?;
@@ -198,8 +198,8 @@ impl Accumulator for AvgAccumulator {
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-        self.count -= (values.len() - values.data().null_count()) as u64;
-        let delta = sum_batch(values, &self.sum_data_type)?;
+        self.count -= (values.len() - values.null_count()) as u64;
+        let delta = sum_batch(values, &self.sum.get_datatype())?;
         self.sum = self.sum.sub(&delta)?;
         Ok(())
     }
@@ -269,7 +269,7 @@ impl RowAccumulator for AvgRowAccumulator {
     ) -> Result<()> {
         let values = &values[0];
         // count
-        let delta = (values.len() - values.data().null_count()) as u64;
+        let delta = (values.len() - values.null_count()) as u64;
         accessor.add_u64(self.state_index(), delta);
 
         // sum

@@ -68,6 +68,7 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use arrow::datatypes::{DataType, Field, Schema};
+    use arrow_schema::Fields;
     use datafusion_common::DataFusionError;
     use datafusion_expr::Volatility;
 
@@ -79,7 +80,7 @@ mod tests {
                 t.iter()
                     .enumerate()
                     .map(|(i, t)| Field::new(format!("c{i}"), t.clone(), true))
-                    .collect(),
+                    .collect::<Fields>(),
             )
         };
 

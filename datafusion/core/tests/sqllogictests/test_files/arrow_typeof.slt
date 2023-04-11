@@ -180,10 +180,10 @@ drop table foo
 
 statement ok
 create table foo as select
-  arrow_cast(100, 'Decimal128(3,2)') as col_d128
+  arrow_cast(100, 'Decimal128(5,2)') as col_d128
   -- Can't make a decimal 156:
   -- This feature is not implemented: Can't create a scalar from array of type "Decimal256(3, 2)"
-  --arrow_cast(100, 'Decimal256(3,2)') as col_d256
+  --arrow_cast(100, 'Decimal256(5,2)') as col_d256
 ;
 
 
@@ -195,7 +195,7 @@ SELECT
   -- arrow_typeof(col_d256),
   FROM foo;
 ----
-Decimal128(3, 2)
+Decimal128(5, 2)
 
 
 statement ok

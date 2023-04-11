@@ -290,7 +290,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Array(Some(inner_sql_type)) => {
                 let data_type = self.convert_simple_data_type(inner_sql_type)?;
 
-                Ok(DataType::List(Box::new(Field::new(
+                Ok(DataType::List(Arc::new(Field::new(
                     "field", data_type, true,
                 ))))
             }
@@ -333,7 +333,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // Timestamp Without Time zone
                     None
                 };
-                Ok(DataType::Timestamp(TimeUnit::Nanosecond, tz))
+                Ok(DataType::Timestamp(TimeUnit::Nanosecond, tz.map(Into::into)))
             }
             SQLDataType::Date => Ok(DataType::Date32),
             SQLDataType::Time(None, tz_info) => {
