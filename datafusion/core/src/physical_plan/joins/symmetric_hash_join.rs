@@ -1738,7 +1738,7 @@ mod tests {
         left_col: Arc<dyn PhysicalExpr>,
         right_col: Arc<dyn PhysicalExpr>,
         schema: &Schema,
-    ) -> Arc<dyn PhysicalExpr> {
+    ) -> Result<Arc<dyn PhysicalExpr>> {
         match expr_id {
             // constructs ((left_col - INTERVAL '100ms')  > (right_col - INTERVAL '200ms')) AND ((left_col - INTERVAL '450ms') < (right_col - INTERVAL '300ms'))
             0 => gen_conjunctive_temporal_expr(
@@ -2841,7 +2841,7 @@ mod tests {
             col("left", &intermediate_schema)?,
             col("right", &intermediate_schema)?,
             &intermediate_schema,
-        );
+        )?;
         let column_indices = vec![
             ColumnIndex {
                 index: 3,
@@ -2917,7 +2917,7 @@ mod tests {
             col("left", &intermediate_schema)?,
             col("right", &intermediate_schema)?,
             &intermediate_schema,
-        );
+        )?;
         let column_indices = vec![
             ColumnIndex {
                 index: 9,
