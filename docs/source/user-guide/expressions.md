@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Expressions
+# Expression API
 
 DataFrame methods such as `select` and `filter` accept one or more logical expressions and there are many functions
 available for creating logical expressions. These are documented below.
