@@ -727,6 +727,13 @@ impl DFField {
         self.qualifier = None;
         self
     }
+
+    /// Return field with nullable specified
+    pub fn with_nullable(mut self, nullable: bool) -> Self {
+        let f = self.field().as_ref().clone().with_nullable(nullable);
+        self.field = f.into();
+        self
+    }
 }
 
 impl From<FieldRef> for DFField {
