@@ -230,3 +230,28 @@ select CASE
 END;
 ----
 2
+
+# Binary Expression for LargeUtf8
+# issue: https://github.com/apache/arrow-datafusion/issues/5893
+statement ok
+CREATE TABLE t as select arrow_cast('Bar', 'LargeUtf8') as column1, 'B%' as column2;
+
+query B
+select column1 like column2 from t;
+----
+true
+
+query B
+select column1 ilike column2 from t;
+----
+true
+
+query B
+select column1 not like column2 from t;
+----
+false
+
+query B
+select column1 not ilike column2 from t;
+----
+false

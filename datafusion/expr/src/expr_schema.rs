@@ -302,22 +302,13 @@ impl ExprSchemable for Expr {
         // like all of the binary expressions below. Perhaps Expr should track the
         // type of the expression?
 
-        // TODO(jackwener): Handle subqueries separately, need to refactor it.
-        match self {
-            Expr::ScalarSubquery(subquery) => {
-                return Ok(Expr::ScalarSubquery(cast_subquery(subquery, cast_to_type)?));
-            }
-            Expr::Exists { subquery, negated } => {
-                return Ok(Expr::Exists {
-                    subquery: cast_subquery(subquery, cast_to_type)?,
-                    negated,
-                });
-            }
-            _ => {}
-        }
-
         if can_cast_types(&this_type, cast_to_type) {
-            Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone())))
+            match self {
+                Expr::ScalarSubquery(subquery) => {
+                    Ok(Expr::ScalarSubquery(cast_subquery(subquery, cast_to_type)?))
+                }
+                _ => Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone()))),
+            }
         } else {
             Err(DataFusionError::Plan(format!(
                 "Cannot automatically convert {this_type:?} to {cast_to_type:?}"
@@ -326,7 +317,12 @@ impl ExprSchemable for Expr {
     }
 }
 
-fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subquery> {
+/// cast subquery in InSubquery/ScalarSubquery to a given type.
+pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subquery> {
+    if subquery.subquery.schema().field(0).data_type() == cast_to_type {
+        return Ok(subquery);
+    }
+
     let plan = subquery.subquery.as_ref();
     let new_plan = match plan {
         LogicalPlan::Projection(projection) => {
@@ -343,7 +339,7 @@ fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subquery
                 .cast_to(cast_to_type, subquery.subquery.schema())?;
             LogicalPlan::Projection(Projection::try_new(
                 vec![cast_expr],
-                subquery.subquery.clone(),
+                subquery.subquery,
             )?)
         }
     };

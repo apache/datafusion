@@ -524,6 +524,12 @@ enum ScalarFunction {
   CurrentTime = 71;
   Uuid = 72;
   Cbrt = 73;
+  Acosh = 74;
+  Asinh = 75;
+  Atanh = 76;
+  Sinh = 77;
+  Cosh = 78;
+  Tanh = 79;
 }
 
 message ScalarFunctionNode {

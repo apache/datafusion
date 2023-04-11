@@ -263,6 +263,14 @@ fn check_arg_count(
                 )));
             }
         }
+        TypeSignature::VariadicAny => {
+            if input_types.is_empty() {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} expects at least one argument",
+                    agg_fun
+                )));
+            }
+        }
         _ => {
             return Err(DataFusionError::Internal(format!(
                 "Aggregate functions do not support this {signature:?}"

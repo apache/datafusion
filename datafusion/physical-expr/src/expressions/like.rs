@@ -18,7 +18,7 @@
 use std::{any::Any, sync::Arc};
 
 use arrow::{
-    array::{new_null_array, Array, ArrayRef, StringArray},
+    array::{new_null_array, Array, ArrayRef, LargeStringArray, StringArray},
     record_batch::RecordBatch,
 };
 use arrow_schema::{DataType, Schema};
@@ -206,6 +206,7 @@ macro_rules! binary_string_array_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
             DataType::Utf8 => compute_utf8_op_scalar!($LEFT, $RIGHT, $OP, StringArray, $OP_TYPE),
+            DataType::LargeUtf8 => compute_utf8_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray, $OP_TYPE),
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for scalar operation '{}' on string array",
                 other, stringify!($OP)

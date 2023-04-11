@@ -683,6 +683,12 @@ async fn test_mathematical_expressions_with_null() -> Result<()> {
     test_expression!("asin(NULL)", "NULL");
     test_expression!("acos(NULL)", "NULL");
     test_expression!("atan(NULL)", "NULL");
+    test_expression!("sinh(NULL)", "NULL");
+    test_expression!("cosh(NULL)", "NULL");
+    test_expression!("tanh(NULL)", "NULL");
+    test_expression!("asinh(NULL)", "NULL");
+    test_expression!("acosh(NULL)", "NULL");
+    test_expression!("atanh(NULL)", "NULL");
     test_expression!("floor(NULL)", "NULL");
     test_expression!("ceil(NULL)", "NULL");
     test_expression!("round(NULL)", "NULL");

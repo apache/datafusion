@@ -52,11 +52,13 @@ pub fn create_aggregate_expr(
     let input_phy_exprs = input_phy_exprs.to_vec();
 
     Ok(match (fun, distinct) {
-        (AggregateFunction::Count, false) => Arc::new(expressions::Count::new(
-            input_phy_exprs[0].clone(),
-            name,
-            return_type,
-        )),
+        (AggregateFunction::Count, false) => {
+            Arc::new(expressions::Count::new_with_multiple_exprs(
+                input_phy_exprs,
+                name,
+                return_type,
+            ))
+        }
         (AggregateFunction::Count, true) => Arc::new(expressions::DistinctCount::new(
             input_phy_types[0].clone(),
             input_phy_exprs[0].clone(),

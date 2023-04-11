@@ -19,13 +19,17 @@
 
 use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::ArrayRef;
-use arrow::compute::SortOptions;
+use arrow::compute;
+use arrow::compute::{lexicographical_partition_ranges, SortColumn, SortOptions};
+use arrow_array::types::UInt32Type;
+use arrow_array::PrimitiveArray;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::{Token, TokenWithLocation};
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::ops::Range;
 
 /// Given column vectors, returns row at `idx`.
 pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValue>> {
@@ -163,6 +167,23 @@ where
     Ok(low)
 }
 
+/// This function finds the partition points according to `partition_columns`.
+/// If there are no sort columns, then the result will be a single element
+/// vector containing one partition range spanning all data.
+pub fn evaluate_partition_ranges(
+    num_rows: usize,
+    partition_columns: &[SortColumn],
+) -> Result<Vec<Range<usize>>> {
+    Ok(if partition_columns.is_empty() {
+        vec![Range {
+            start: 0,
+            end: num_rows,
+        }]
+    } else {
+        lexicographical_partition_ranges(partition_columns)?.collect()
+    })
+}
+
 /// Wraps identifier string in double quotes, escaping any double quotes in
 /// the identifier by replacing it with two double quotes
 ///
@@ -242,6 +263,24 @@ pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
     Ok(idents)
 }
 
+/// Construct a new Vec<ArrayRef> from the rows of the `arrays` at the `indices`.
+pub fn get_arrayref_at_indices(
+    arrays: &[ArrayRef],
+    indices: &PrimitiveArray<UInt32Type>,
+) -> Result<Vec<ArrayRef>> {
+    arrays
+        .iter()
+        .map(|array| {
+            compute::take(
+                array.as_ref(),
+                indices,
+                None, // None: no index check
+            )
+            .map_err(DataFusionError::ArrowError)
+        })
+        .collect()
+}
+
 pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
     parse_identifiers(s)
         .unwrap_or_default()
@@ -256,6 +295,7 @@ pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use arrow::array::Float64Array;
+    use arrow_array::Array;
     use std::sync::Arc;
 
     use crate::from_slice::FromSlice;
@@ -427,6 +467,40 @@ mod tests {
     }
 
     #[test]
+    fn test_evaluate_partition_ranges() -> Result<()> {
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(Float64Array::from_slice([1.0, 1.0, 1.0, 2.0, 2.0, 2.0])),
+            Arc::new(Float64Array::from_slice([4.0, 4.0, 3.0, 2.0, 1.0, 1.0])),
+        ];
+        let n_row = arrays[0].len();
+        let options: Vec<SortOptions> = vec![
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        ];
+        let sort_columns = arrays
+            .into_iter()
+            .zip(options)
+            .map(|(values, options)| SortColumn {
+                values,
+                options: Some(options),
+            })
+            .collect::<Vec<_>>();
+        let ranges = evaluate_partition_ranges(n_row, &sort_columns)?;
+        assert_eq!(ranges.len(), 4);
+        assert_eq!(ranges[0], Range { start: 0, end: 2 });
+        assert_eq!(ranges[1], Range { start: 2, end: 3 });
+        assert_eq!(ranges[2], Range { start: 3, end: 4 });
+        assert_eq!(ranges[3], Range { start: 4, end: 6 });
+        Ok(())
+    }
+
+    #[test]
     fn test_parse_identifiers() -> Result<()> {
         let s = "CATALOG.\"F(o)o. \"\"bar\".table";
         let actual = parse_identifiers(s)?;
@@ -524,6 +598,39 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_arrayref_at_indices() -> Result<()> {
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.])),
+            Arc::new(Float64Array::from_slice([2.0, 3.0, 3.0, 4.0, 5.0])),
+            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 10., 11.0])),
+            Arc::new(Float64Array::from_slice([15.0, 13.0, 8.0, 5., 0.0])),
+        ];
+
+        let row_indices_vec: Vec<Vec<u32>> = vec![
+            // Get rows 0 and 1
+            vec![0, 1],
+            // Get rows 0 and 1
+            vec![0, 2],
+            // Get rows 1 and 3
+            vec![1, 3],
+            // Get rows 2 and 4
+            vec![2, 4],
+        ];
+        for row_indices in row_indices_vec {
+            let indices = PrimitiveArray::from_iter_values(row_indices.iter().cloned());
+            let chunk = get_arrayref_at_indices(&arrays, &indices)?;
+            for (arr_orig, arr_chunk) in arrays.iter().zip(&chunk) {
+                for (idx, orig_idx) in row_indices.iter().enumerate() {
+                    let res1 = ScalarValue::try_from_array(arr_orig, *orig_idx as usize)?;
+                    let res2 = ScalarValue::try_from_array(arr_chunk, idx)?;
+                    assert_eq!(res1, res2);
+                }
+            }
+        }
         Ok(())
     }
 }
