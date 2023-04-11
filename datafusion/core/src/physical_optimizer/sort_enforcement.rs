@@ -739,7 +739,7 @@ fn can_skip_sort(
     }
     let input_orderby_columns = get_at_indices(physical_ordering, &unique_ob_indices)?;
     let expected_orderby_columns =
-        get_at_indices(orderby_keys, find_indices(&unique_ob_indices, &ob_indices)?)?;
+        get_at_indices(orderby_keys, find_indices(&ob_indices, &unique_ob_indices)?)?;
     let should_reverse = if let Some(should_reverse) = check_alignments(
         &input.schema(),
         &input_orderby_columns,

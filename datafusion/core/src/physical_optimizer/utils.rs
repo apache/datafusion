@@ -83,12 +83,12 @@ pub fn add_sort_above(
 /// Find indices of each element in `targets` inside `items`. If one of the
 /// elements is absent in `items`, returns an error.
 pub fn find_indices<T: PartialEq, S: Borrow<T>>(
-    items: impl IntoIterator<Item = S>,
-    targets: &[T],
+    items: &[T],
+    targets: impl IntoIterator<Item = S>,
 ) -> Result<Vec<usize>> {
-    items
+    targets
         .into_iter()
-        .map(|item| targets.iter().position(|e| item.borrow().eq(e)))
+        .map(|target| items.iter().position(|e| target.borrow().eq(e)))
         .collect::<Option<_>>()
         .ok_or_else(|| DataFusionError::Execution("Target not found".to_string()))
 }
@@ -181,11 +181,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_indices() -> Result<()> {
-        assert_eq!(find_indices([0, 3, 4], &[0, 3, 4])?, vec![0, 1, 2]);
-        assert_eq!(find_indices([0, 3, 4], &[0, 4, 3])?, vec![0, 2, 1]);
-        assert_eq!(find_indices([0, 3], &[3, 0, 4])?, vec![1, 0]);
-        assert!(find_indices([0, 3, 4], &[0, 3]).is_err());
-        assert!(find_indices([0, 3, 4], &[0, 2]).is_err());
+        assert_eq!(find_indices(&[0, 3, 4], [0, 3, 4])?, vec![0, 1, 2]);
+        assert_eq!(find_indices(&[0, 3, 4], [0, 4, 3])?, vec![0, 2, 1]);
+        assert_eq!(find_indices(&[3, 0, 4], [0, 3])?, vec![1, 0]);
+        assert!(find_indices(&[0, 3], [0, 3, 4]).is_err());
+        assert!(find_indices(&[0, 3, 4], [0, 2]).is_err());
         Ok(())
     }
 
