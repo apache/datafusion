@@ -231,8 +231,8 @@ impl RowAccumulator for CountRowAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
     use crate::expressions::tests::aggregate;
+    use crate::expressions::{col, lit};
     use crate::generic_test_op;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
@@ -284,5 +284,31 @@ mod tests {
         let a: ArrayRef =
             Arc::new(LargeStringArray::from(vec!["a", "bb", "ccc", "dddd", "ad"]));
         generic_test_op!(a, DataType::LargeUtf8, Count, ScalarValue::from(5i64))
+    }
+
+    #[test]
+    fn count_eq() -> Result<()> {
+        let count = Count::new(lit(1i8), "COUNT(1)".to_string(), DataType::Int64);
+        let arc_count: Arc<dyn AggregateExpr> = Arc::new(Count::new(
+            lit(1i8),
+            "COUNT(1)".to_string(),
+            DataType::Int64,
+        ));
+        let box_count: Box<dyn AggregateExpr> = Box::new(Count::new(
+            lit(1i8),
+            "COUNT(1)".to_string(),
+            DataType::Int64,
+        ));
+        let count2 = Count::new(lit(1i8), "COUNT(2)".to_string(), DataType::Int64);
+
+        assert!(arc_count.eq(&box_count));
+        assert!(box_count.eq(&arc_count));
+        assert!(arc_count.eq(&count));
+        assert!(count.eq(&box_count));
+        assert!(count.eq(&arc_count));
+
+        assert!(count2.ne(&arc_count));
+
+        Ok(())
     }
 }
