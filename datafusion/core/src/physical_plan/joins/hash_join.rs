@@ -597,7 +597,9 @@ pub fn update_hash(
     let row_end = offset + hash_values.len();
     for (row, hash_value) in (row_start..row_end).zip(hash_values.iter()) {
         // the hash value is the key, always true
-        let item = hash_map.0.get_mut(*hash_value, |_| true);
+        let item = hash_map
+            .0
+            .get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
         if let Some((_, indices)) = item {
             indices.push(row as u64);
         } else {
@@ -760,7 +762,10 @@ pub fn build_equal_condition_join_indices(
         // For every item on the build and probe we check if it matches
         // This possibly contains rows with hash collisions,
         // So we have to check here whether rows are equal or not
-        if let Some((_, indices)) = build_hashmap.0.get(*hash_value, |_| true) {
+        if let Some((_, indices)) = build_hashmap
+            .0
+            .get(*hash_value, |(hash, _)| *hash_value == *hash)
+        {
             for &i in indices {
                 // Check hash collisions
                 let offset_build_index = i as usize - offset_value;
