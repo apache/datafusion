@@ -132,9 +132,24 @@ pub fn return_type(
         BuiltinScalarFunction::Concat => Ok(DataType::Utf8),
         BuiltinScalarFunction::ConcatWithSeparator => Ok(DataType::Utf8),
         BuiltinScalarFunction::DatePart => Ok(DataType::Float64),
-        BuiltinScalarFunction::DateTrunc => {
-            Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
-        }
+        BuiltinScalarFunction::DateTrunc => match input_expr_types[1] {
+            DataType::Timestamp(TimeUnit::Nanosecond, _) | DataType::Utf8 => {
+                Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
+            }
+            DataType::Timestamp(TimeUnit::Second, _) => {
+                Ok(DataType::Timestamp(TimeUnit::Second, None))
+            }
+            _ => Err(DataFusionError::Internal(
+                "The date_trunc function can only accept timestamp as the second arg."
+                    .to_string(),
+            )),
+        },
         BuiltinScalarFunction::DateBin => {
             Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
         }
@@ -266,8 +281,12 @@ pub fn return_type(
         | BuiltinScalarFunction::Acos
         | BuiltinScalarFunction::Asin
         | BuiltinScalarFunction::Atan
+        | BuiltinScalarFunction::Acosh
+        | BuiltinScalarFunction::Asinh
+        | BuiltinScalarFunction::Atanh
         | BuiltinScalarFunction::Ceil
         | BuiltinScalarFunction::Cos
+        | BuiltinScalarFunction::Cosh
         | BuiltinScalarFunction::Exp
         | BuiltinScalarFunction::Floor
         | BuiltinScalarFunction::Ln
@@ -276,8 +295,11 @@ pub fn return_type(
         | BuiltinScalarFunction::Round
         | BuiltinScalarFunction::Signum
         | BuiltinScalarFunction::Sin
+        | BuiltinScalarFunction::Sinh
         | BuiltinScalarFunction::Sqrt
+        | BuiltinScalarFunction::Cbrt
         | BuiltinScalarFunction::Tan
+        | BuiltinScalarFunction::Tanh
         | BuiltinScalarFunction::Trunc => match input_expr_types[0] {
             DataType::Float32 => Ok(DataType::Float32),
             _ => Ok(DataType::Float64),

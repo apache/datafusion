@@ -89,6 +89,18 @@ fn parse_ident_normalization() {
             "Err(Plan(\"No table named: PERSON found\"))",
             false,
         ),
+        (
+            "SELECT Id FROM UPPERCASE_test",
+            "Ok(Projection: UPPERCASE_test.Id\
+                \n  TableScan: UPPERCASE_test)",
+            false,
+        ),
+        (
+            "SELECT \"Id\", lower FROM \"UPPERCASE_test\"",
+            "Ok(Projection: UPPERCASE_test.Id, UPPERCASE_test.lower\
+                \n  TableScan: UPPERCASE_test)",
+            true,
+        ),
     ];
 
     for (sql, expected, enable_ident_normalization) in test_data {
@@ -324,11 +336,11 @@ Dml: op=[Insert] table=[test_decimal]
 #[rstest]
 #[case::duplicate_columns(
     "INSERT INTO test_decimal (id, price, price) VALUES (1, 2, 3), (4, 5, 6)",
-    "Schema error: Schema contains duplicate unqualified field name \"price\""
+    "Schema error: Schema contains duplicate unqualified field name price"
 )]
 #[case::non_existing_column(
     "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
-    "Schema error: No field named \"nonexistent\". Valid fields are \"id\", \"price\"."
+    "Schema error: No field named nonexistent. Valid fields are id, price."
 )]
 #[case::type_mismatch(
     "INSERT INTO test_decimal SELECT '2022-01-01', to_timestamp('2022-01-01T12:00:00')",
@@ -1218,9 +1230,9 @@ fn select_simple_aggregate_with_groupby_column_unselected() {
 fn select_simple_aggregate_with_groupby_and_column_in_group_by_does_not_exist() {
     let sql = "SELECT SUM(age) FROM person GROUP BY doesnotexist";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!("Schema error: No field named \"doesnotexist\". Valid fields are \"SUM(person.age)\", \
-        \"person\".\"id\", \"person\".\"first_name\", \"person\".\"last_name\", \"person\".\"age\", \"person\".\"state\", \
-        \"person\".\"salary\", \"person\".\"birth_date\", \"person\".\"😀\".", format!("{err}"));
+    assert_eq!("Schema error: No field named doesnotexist. Valid fields are \"SUM(person.age)\", \
+        person.id, person.first_name, person.last_name, person.age, person.state, \
+        person.salary, person.birth_date, person.\"😀\".", format!("{err}"));
 }
 
 #[test]
@@ -2635,6 +2647,10 @@ impl ContextProvider for MockContextProvider {
                 Field::new("c12", DataType::Float64, false),
                 Field::new("c13", DataType::Utf8, false),
             ])),
+            "UPPERCASE_test" => Ok(Schema::new(vec![
+                Field::new("Id", DataType::UInt32, false),
+                Field::new("lower", DataType::UInt32, false),
+            ])),
             _ => Err(DataFusionError::Plan(format!(
                 "No table named: {} found",
                 name.table()
@@ -3072,7 +3088,7 @@ fn order_by_unaliased_name() {
 #[test]
 fn order_by_ambiguous_name() {
     let sql = "select * from person a join person b using (id) order by age";
-    let expected = "Schema error: Ambiguous reference to unqualified field \"age\"";
+    let expected = "Schema error: Ambiguous reference to unqualified field age";
 
     let err = logical_plan(sql).unwrap_err();
     assert_eq!(err.to_string(), expected);
@@ -3081,7 +3097,7 @@ fn order_by_ambiguous_name() {
 #[test]
 fn group_by_ambiguous_name() {
     let sql = "select max(id) from person a join person b using (id) group by age";
-    let expected = "Schema error: Ambiguous reference to unqualified field \"age\"";
+    let expected = "Schema error: Ambiguous reference to unqualified field age";
 
     let err = logical_plan(sql).unwrap_err();
     assert_eq!(err.to_string(), expected);
@@ -3398,7 +3414,7 @@ fn test_ambiguous_column_references_in_on_join() {
             INNER JOIN person as p2
             ON id = 1";
 
-    let expected = "Schema error: Ambiguous reference to unqualified field \"id\"";
+    let expected = "Schema error: Ambiguous reference to unqualified field id";
 
     // It should return error.
     let result = logical_plan(sql);
@@ -4038,7 +4054,7 @@ fn assert_field_not_found(err: DataFusionError, name: &str) {
     match err {
         DataFusionError::SchemaError { .. } => {
             let msg = format!("{err}");
-            let expected = format!("Schema error: No field named \"{name}\".");
+            let expected = format!("Schema error: No field named {name}.");
             if !msg.starts_with(&expected) {
                 panic!("error [{msg}] did not start with [{expected}]");
             }

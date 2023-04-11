@@ -288,7 +288,7 @@ async fn run_filter_benchmarks(opt: Opt, test_file: &TestParquetFile) -> Result<
                 let (rows, elapsed) =
                     exec_scan(&ctx, test_file, filter_expr.clone(), opt.debug).await?;
                 let ms = elapsed.as_secs_f64() * 1000.0;
-                println!("Iteration {} returned {} rows in {ms} ms", i, rows);
+                println!("Iteration {i} returned {rows} rows in {ms} ms");
                 rundata.write_iter(elapsed, rows);
             }
         }
@@ -325,7 +325,7 @@ async fn exec_sort(
 ) -> Result<(usize, std::time::Duration)> {
     let start = Instant::now();
     let scan = test_file.create_scan(None).await?;
-    let exec = Arc::new(SortExec::try_new(expr.to_owned(), scan, None)?);
+    let exec = Arc::new(SortExec::new(expr.to_owned(), scan));
     let task_ctx = ctx.task_ctx();
     let result = collect(exec, task_ctx).await?;
     let elapsed = start.elapsed();

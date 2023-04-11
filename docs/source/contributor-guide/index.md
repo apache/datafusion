@@ -23,9 +23,9 @@ We welcome and encourage contributions of all kinds, such as:
 
 1. Tickets with issue reports of feature requests
 2. Documentation improvements
-3. Code (PR or PR Review)
+3. Code, both PR and (especially) PR Review.
 
-In addition to submitting new PRs, we have a healthy tradition of community members helping review each other's PRs. Doing so is a great way to help the community as well as get more familiar with Rust and the relevant codebases.
+In addition to submitting new PRs, we have a healthy tradition of community members reviewing each other's PRs. Doing so is a great way to help the community as well as get more familiar with Rust and the relevant codebases.
 
 You can find a curated
 [good-first-issue](https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
@@ -40,6 +40,11 @@ We welcome pull requests (PRs) from anyone from the community.
 DataFusion is a very active fast-moving project and we try to review and merge PRs quickly to keep the review backlog down and the pace up. After review and approval, one of the [many people with commit access](https://arrow.apache.org/committers/) will merge your PR.
 
 Review bandwidth is currently our most limited resource, and we highly encourage reviews by the broader community. If you are waiting for your PR to be reviewed, consider helping review other PRs that are waiting. Such review both helps the reviewer to learn the codebase and become more expert, as well as helps identify issues in the PR (such as lack of test coverage), that can be addressed and make future reviews faster and more efficient.
+
+Things to help look for in a PR:
+
+1. Is the feature or fix covered sufficiently with tests (see `Test Organization` below)?
+2. Is the code clear, and fits the style of the existing codebase?
 
 Since we are a worldwide community, we have contributors in many timezones who review and comment. To ensure anyone who wishes has an opportunity to review a PR, our committers try to ensure that at least 24 hours passes between when a "major" PR is approved and when it is merged.
 
@@ -112,15 +117,17 @@ or run them all at once:
 
 ### Test Organization
 
+Tests are very important to ensure that improvemens or fixes are not accidentally broken during subsequent refactorings.
+
 DataFusion has several levels of tests in its [Test
 Pyramid](https://martinfowler.com/articles/practical-test-pyramid.html)
-and tries to follow [Testing Organization](https://doc.rust-lang.org/book/ch11-03-test-organization.html) in the The Book.
+and tries to follow rust standard [Testing Organization](https://doc.rust-lang.org/book/ch11-03-test-organization.html) in the The Book.
 
 This section highlights the most important test modules that exist
 
 #### Unit tests
 
-Tests for the code in an individual module are defined in the same source file with a `test` module, following Rust convention
+Tests for the code in an individual module are defined in the same source file with a `test` module, following Rust convention.
 
 #### Rust Integration Tests
 
@@ -129,7 +136,7 @@ There are several tests of the public interface of the DataFusion library in the
 You can run these tests individually using a command such as
 
 ```shell
-cargo test -p datafusion --tests sql_integration
+cargo test -p datafusion --test sql_integration
 ```
 
 One very important test is the [sql_integration](https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sql_integration.rs) test which validates DataFusion's ability to run a large assortment of SQL queries against an assortment of data setups.
@@ -240,7 +247,7 @@ dot -Tpdf < /tmp/plan.dot > /tmp/plan.pdf
 
 ## Specifications
 
-We formalize DataFusion semantics and behaviors through specification
+We formalize some DataFusion semantics and behaviors through specification
 documents. These specifications are useful to be used as references to help
 resolve ambiguities during development or code reviews.
 

@@ -824,7 +824,9 @@ impl DefaultPhysicalPlanner {
                             )),
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    Ok(Arc::new(SortExec::try_new(sort_expr, physical_input, *fetch)?))
+                    let new_sort = SortExec::new(sort_expr, physical_input)
+                        .with_fetch(*fetch);
+                    Ok(Arc::new(new_sort))
                 }
                 LogicalPlan::Join(Join {
                     left,
@@ -2195,9 +2197,7 @@ mod tests {
 
         assert_contains!(
             &e,
-            r#"type_coercion
-caused by
-Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: Error during planning: Can not find compatible types to compare Boolean with [Struct([Field { name: "foo", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), Utf8]. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"#
+            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct([Field { name: "foo", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), Utf8]"#
         );
 
         Ok(())
