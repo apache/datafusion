@@ -52,6 +52,7 @@ pub(crate) fn streaming_merge(
     tracking_metrics: MemTrackingMetrics,
     batch_size: usize,
 ) -> Result<SendableRecordBatchStream> {
+    // Special case single column comparisons with optimized cursor implementations
     if expressions.len() == 1 {
         let sort = expressions[0].clone();
         let data_type = sort.expr.data_type(schema.as_ref())?;

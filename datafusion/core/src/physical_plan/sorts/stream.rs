@@ -143,6 +143,7 @@ impl PartitionedStream for RowCursorStream {
     }
 }
 
+/// Specialized stream for sorts on single primitive columns
 pub struct PrimitiveCursorStream<T: ArrowPrimitiveType> {
     /// The physical expressions to sort by
     sort: PhysicalSortExpr,
