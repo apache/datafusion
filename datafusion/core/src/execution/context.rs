@@ -1841,6 +1841,7 @@ impl From<&SessionState> for TaskContext {
     }
 }
 
+// TODO: remove when https://github.com/sqlparser-rs/sqlparser-rs/pull/848 is released
 fn create_dialect_from_str(dialect_name: &str) -> Result<Box<dyn Dialect>> {
     match dialect_name.to_lowercase().as_str() {
         "generic" => Ok(Box::new(GenericDialect)),
