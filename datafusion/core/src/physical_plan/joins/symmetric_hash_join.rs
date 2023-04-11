@@ -1759,7 +1759,21 @@ mod tests {
                 11,
                 21,
                 39,
-                (Operator::GtEq, Operator::LtEq),
+                (Operator::Gt, Operator::LtEq),
+            ),
+            // left_col - 28 >= right_col - 11 AND left_col - 21 <= right_col - 39
+            7 => gen_conjunctive_numeric_expr(
+                left_col,
+                right_col,
+                Operator::Minus,
+                Operator::Minus,
+                Operator::Minus,
+                Operator::Minus,
+                28,
+                11,
+                21,
+                39,
+                (Operator::GtEq, Operator::Lt),
             ),
             _ => unreachable!(),
         }
@@ -1993,7 +2007,7 @@ mod tests {
             (99, 12),
         )]
         cardinality: (i32, i32),
-        #[values(0, 1, 2, 3, 4, 5, 6)] case_expr: usize,
+        #[values(0, 1, 2, 3, 4, 5, 6, 7)] case_expr: usize,
     ) -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();

@@ -50,6 +50,21 @@ impl IntervalBound {
         self.get_bound_scalar().is_null()
     }
 
+    pub(crate) fn cast_to(
+        &self,
+        data_type: &DataType,
+        cast_options: &CastOptions,
+    ) -> Result<IntervalBound> {
+        Ok(match &self {
+            IntervalBound::Open(scalar) => {
+                IntervalBound::Open(cast_scalar_value(scalar, data_type, cast_options)?)
+            }
+            IntervalBound::Closed(scalar) => {
+                IntervalBound::Closed(cast_scalar_value(scalar, data_type, cast_options)?)
+            }
+        })
+    }
+
     /// Add the given IntervalBound to this IntervalBound.
     /// If either bound is null, the result is an open bound with the same data type.
     /// Otherwise, the bounds are added, and the result is closed if both original bounds are closed,
@@ -162,59 +177,8 @@ impl Interval {
         data_type: &DataType,
         cast_options: &CastOptions,
     ) -> Result<Interval> {
-        let (lower, upper) = match (&self.lower, &self.upper) {
-            (IntervalBound::Open(scalar_lower), IntervalBound::Open(scalar_upper)) => (
-                IntervalBound::Open(cast_scalar_value(
-                    scalar_lower,
-                    data_type,
-                    cast_options,
-                )?),
-                IntervalBound::Open(cast_scalar_value(
-                    scalar_upper,
-                    data_type,
-                    cast_options,
-                )?),
-            ),
-            (
-                IntervalBound::Closed(scalar_lower),
-                IntervalBound::Closed(scalar_upper),
-            ) => (
-                IntervalBound::Closed(cast_scalar_value(
-                    scalar_lower,
-                    data_type,
-                    cast_options,
-                )?),
-                IntervalBound::Closed(cast_scalar_value(
-                    scalar_upper,
-                    data_type,
-                    cast_options,
-                )?),
-            ),
-            (IntervalBound::Open(scalar_lower), IntervalBound::Closed(scalar_upper)) => (
-                IntervalBound::Open(cast_scalar_value(
-                    scalar_lower,
-                    data_type,
-                    cast_options,
-                )?),
-                IntervalBound::Closed(cast_scalar_value(
-                    scalar_upper,
-                    data_type,
-                    cast_options,
-                )?),
-            ),
-            (IntervalBound::Closed(scalar_lower), IntervalBound::Open(scalar_upper)) => (
-                IntervalBound::Closed(cast_scalar_value(
-                    scalar_lower,
-                    data_type,
-                    cast_options,
-                )?),
-                IntervalBound::Open(cast_scalar_value(
-                    scalar_upper,
-                    data_type,
-                    cast_options,
-                )?),
-            ),
-        };
+        let lower = self.lower.cast_to(data_type, cast_options)?;
+        let upper = self.upper.cast_to(data_type, cast_options)?;
         Ok(Interval::new(lower, upper))
     }
 

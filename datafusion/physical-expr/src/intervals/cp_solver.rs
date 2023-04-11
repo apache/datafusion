@@ -867,6 +867,7 @@ mod tests {
         let r_lt_l = -l_gt_r;
         let l_lt_r = -r_gt_l;
         generate_case::<false>(expr, left_col, right_col, seed, l_lt_r, r_lt_l)?;
+
         Ok(())
     }
 
@@ -908,6 +909,130 @@ mod tests {
         let r_lt_l = -l_gt_r;
         let l_lt_r = -r_gt_l;
         generate_case::<false>(expr, left_col, right_col, seed, l_lt_r, r_lt_l)?;
+
+        Ok(())
+    }
+
+    #[rstest]
+    #[test]
+    fn case_6(
+        #[values(0, 1, 2, 123, 756, 63, 345, 6443, 12341, 142, 123, 8900)] seed: u64,
+    ) -> Result<()> {
+        let left_col = Arc::new(Column::new("left_watermark", 0));
+        let right_col = Arc::new(Column::new("right_watermark", 0));
+        // left_watermark - 1 >= right_watermark + 5 AND left_watermark - 10 <= right_watermark + 3
+
+        let expr = gen_conjunctive_numeric_expr(
+            left_col.clone(),
+            right_col.clone(),
+            Operator::Minus,
+            Operator::Plus,
+            Operator::Minus,
+            Operator::Plus,
+            1,
+            5,
+            10,
+            3,
+            (Operator::GtEq, Operator::LtEq),
+        );
+        // l >= r + 6 AND r >= l - 13
+        let l_gt_r = 6;
+        let r_gt_l = -13;
+
+        generate_case::<true>(
+            expr.clone(),
+            left_col.clone(),
+            right_col.clone(),
+            seed,
+            l_gt_r,
+            r_gt_l,
+        )?;
+        generate_case::<true>(expr, left_col, right_col, seed, l_gt_r, r_gt_l)?;
+
+        Ok(())
+    }
+
+    #[rstest]
+    #[test]
+    fn case_7(
+        #[values(0, 1, 2, 123, 77, 93, 104, 624, 115, 613, 8365, 9345)] seed: u64,
+    ) -> Result<()> {
+        let left_col = Arc::new(Column::new("left_watermark", 0));
+        let right_col = Arc::new(Column::new("right_watermark", 0));
+        // left_watermark + 4 >= right_watermark + 5 AND left_watermark - 20 < right_watermark - 5
+
+        let expr = gen_conjunctive_numeric_expr(
+            left_col.clone(),
+            right_col.clone(),
+            Operator::Plus,
+            Operator::Plus,
+            Operator::Minus,
+            Operator::Minus,
+            4,
+            5,
+            20,
+            5,
+            (Operator::GtEq, Operator::Lt),
+        );
+        // l >= r + 1 AND r > l - 15
+        let l_gt_r = 1;
+        let r_gt_l = -15;
+        generate_case::<true>(
+            expr.clone(),
+            left_col.clone(),
+            right_col.clone(),
+            seed,
+            l_gt_r,
+            r_gt_l,
+        )?;
+        // Descending tests
+        // r < l - 5 AND l < r + 27
+        let r_lt_l = -l_gt_r;
+        let l_lt_r = -r_gt_l;
+        generate_case::<false>(expr, left_col, right_col, seed, l_lt_r, r_lt_l)?;
+
+        Ok(())
+    }
+
+    #[rstest]
+    #[test]
+    fn case_8(
+        #[values(0, 1, 2, 24, 53, 412, 364, 345, 737, 1010, 52, 1554)] seed: u64,
+    ) -> Result<()> {
+        let left_col = Arc::new(Column::new("left_watermark", 0));
+        let right_col = Arc::new(Column::new("right_watermark", 0));
+        // left_watermark + 4 >= right_watermark + 5 AND left_watermark - 20 < right_watermark - 5
+
+        let expr = gen_conjunctive_numeric_expr(
+            left_col.clone(),
+            right_col.clone(),
+            Operator::Plus,
+            Operator::Plus,
+            Operator::Minus,
+            Operator::Minus,
+            4,
+            5,
+            20,
+            5,
+            (Operator::Gt, Operator::LtEq),
+        );
+        // l >= r + 1 AND r > l - 15
+        let l_gt_r = 1;
+        let r_gt_l = -15;
+        generate_case::<true>(
+            expr.clone(),
+            left_col.clone(),
+            right_col.clone(),
+            seed,
+            l_gt_r,
+            r_gt_l,
+        )?;
+        // Descending tests
+        // r < l - 5 AND l < r + 27
+        let r_lt_l = -l_gt_r;
+        let l_lt_r = -r_gt_l;
+        generate_case::<false>(expr, left_col, right_col, seed, l_lt_r, r_lt_l)?;
+
         Ok(())
     }
 
