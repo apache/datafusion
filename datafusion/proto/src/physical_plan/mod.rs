@@ -613,12 +613,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 } else {
                     Some(sort.fetch as usize)
                 };
-                Ok(Arc::new(SortExec::new_with_partitioning(
-                    exprs,
-                    input,
-                    sort.preserve_partitioning,
-                    fetch,
-                )))
+                let new_sort = SortExec::new(exprs, input)
+                    .with_fetch(fetch)
+                    .with_preserve_partitioning(sort.preserve_partitioning);
+
+                Ok(Arc::new(new_sort))
             }
             PhysicalPlanType::SortPreservingMerge(sort) => {
                 let input: Arc<dyn ExecutionPlan> =
@@ -1441,11 +1440,10 @@ mod roundtrip_tests {
                 },
             },
         ];
-        roundtrip_test(Arc::new(SortExec::try_new(
+        roundtrip_test(Arc::new(SortExec::new(
             sort_exprs,
             Arc::new(EmptyExec::new(false, schema)),
-            None,
-        )?))
+        )))
     }
 
     #[test]
@@ -1470,19 +1468,15 @@ mod roundtrip_tests {
             },
         ];
 
-        roundtrip_test(Arc::new(SortExec::new_with_partitioning(
+        roundtrip_test(Arc::new(SortExec::new(
             sort_exprs.clone(),
             Arc::new(EmptyExec::new(false, schema.clone())),
-            false,
-            None,
         )))?;
 
-        roundtrip_test(Arc::new(SortExec::new_with_partitioning(
-            sort_exprs,
-            Arc::new(EmptyExec::new(false, schema)),
-            true,
-            None,
-        )))
+        roundtrip_test(Arc::new(
+            SortExec::new(sort_exprs, Arc::new(EmptyExec::new(false, schema)))
+                .with_preserve_partitioning(true),
+        ))
     }
 
     #[test]

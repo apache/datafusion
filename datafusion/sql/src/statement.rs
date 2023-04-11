@@ -924,7 +924,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .iter()
                 .map(|c| {
                     Ok(table_schema
-                        .field_with_unqualified_name(&normalize_ident(c.clone()))?
+                        .field_with_unqualified_name(
+                            &self.normalizer.normalize(c.clone()),
+                        )?
                         .clone())
                 })
                 .collect::<Result<Vec<DFField>>>()?;

@@ -18,19 +18,9 @@
 //! Defines the sort preserving merge plan
 
 use std::any::Any;
-use std::collections::VecDeque;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
-use arrow::row::{RowConverter, SortField};
-use arrow::{
-    array::{make_array as make_arrow_array, MutableArrayData},
-    datatypes::SchemaRef,
-    record_batch::RecordBatch,
-};
-use futures::stream::{Fuse, FusedStream};
-use futures::{ready, Stream, StreamExt};
+use arrow::datatypes::SchemaRef;
 use log::debug;
 use tokio::sync::mpsc;
 
@@ -39,16 +29,13 @@ use crate::execution::context::TaskContext;
 use crate::physical_plan::metrics::{
     ExecutionPlanMetricsSet, MemTrackingMetrics, MetricsSet,
 };
-use crate::physical_plan::sorts::{RowIndex, SortKeyCursor, SortedStream};
+use crate::physical_plan::sorts::streaming_merge;
 use crate::physical_plan::stream::RecordBatchReceiverStream;
 use crate::physical_plan::{
     common::spawn_execution, expressions::PhysicalSortExpr, DisplayFormatType,
-    Distribution, ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    Distribution, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
-use datafusion_physical_expr::{
-    make_sort_requirements_from_exprs, EquivalenceProperties, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
 /// Sort preserving merge execution plan
 ///
@@ -128,7 +115,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
-        vec![Some(make_sort_requirements_from_exprs(&self.expr))]
+        vec![Some(PhysicalSortRequirement::from_sort_exprs(&self.expr))]
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
@@ -206,34 +193,27 @@ impl ExecutionPlan for SortPreservingMergeExec {
                                 context.clone(),
                             );
 
-                            SortedStream::new(
-                                RecordBatchReceiverStream::create(
-                                    &schema,
-                                    receiver,
-                                    join_handle,
-                                ),
-                                0,
+                            RecordBatchReceiverStream::create(
+                                &schema,
+                                receiver,
+                                join_handle,
                             )
                         })
                         .collect(),
                     Err(_) => (0..input_partitions)
-                        .map(|partition| {
-                            let stream =
-                                self.input.execute(partition, context.clone())?;
-                            Ok(SortedStream::new(stream, 0))
-                        })
+                        .map(|partition| self.input.execute(partition, context.clone()))
                         .collect::<Result<_>>()?,
                 };
 
                 debug!("Done setting up sender-receiver for SortPreservingMergeExec::execute");
 
-                let result = Box::pin(SortPreservingMergeStream::new_from_streams(
+                let result = streaming_merge(
                     receivers,
                     schema,
                     &self.expr,
                     tracking_metrics,
                     context.session_config().batch_size(),
-                )?);
+                )?;
 
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
 
@@ -264,445 +244,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 }
 
-struct MergingStreams {
-    /// The sorted input streams to merge together
-    streams: Vec<Fuse<SendableRecordBatchStream>>,
-    /// number of streams
-    num_streams: usize,
-}
-
-impl std::fmt::Debug for MergingStreams {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MergingStreams")
-            .field("num_streams", &self.num_streams)
-            .finish()
-    }
-}
-
-impl MergingStreams {
-    fn new(input_streams: Vec<Fuse<SendableRecordBatchStream>>) -> Self {
-        Self {
-            num_streams: input_streams.len(),
-            streams: input_streams,
-        }
-    }
-
-    fn num_streams(&self) -> usize {
-        self.num_streams
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct SortPreservingMergeStream {
-    /// The schema of the RecordBatches yielded by this stream
-    schema: SchemaRef,
-
-    /// The sorted input streams to merge together
-    streams: MergingStreams,
-
-    /// For each input stream maintain a dequeue of RecordBatches
-    ///
-    /// Exhausted batches will be popped off the front once all
-    /// their rows have been yielded to the output
-    batches: Vec<VecDeque<RecordBatch>>,
-
-    /// The accumulated row indexes for the next record batch
-    in_progress: Vec<RowIndex>,
-
-    /// The physical expressions to sort by
-    column_expressions: Vec<Arc<dyn PhysicalExpr>>,
-
-    /// used to record execution metrics
-    tracking_metrics: MemTrackingMetrics,
-
-    /// If the stream has encountered an error
-    aborted: bool,
-
-    /// Vector that holds all [`SortKeyCursor`]s
-    cursors: Vec<Option<SortKeyCursor>>,
-
-    /// A loser tree that always produces the minimum cursor
-    ///
-    /// Node 0 stores the top winner, Nodes 1..num_streams store
-    /// the loser nodes
-    ///
-    /// This implements a "Tournament Tree" (aka Loser Tree) to keep
-    /// track of the current smallest element at the top. When the top
-    /// record is taken, the tree structure is not modified, and only
-    /// the path from bottom to top is visited, keeping the number of
-    /// comparisons close to the theoretical limit of `log(S)`.
-    ///
-    /// reference: <https://en.wikipedia.org/wiki/K-way_merge_algorithm#Tournament_Tree>
-    loser_tree: Vec<usize>,
-
-    /// If the most recently yielded overall winner has been replaced
-    /// within the loser tree. A value of `false` indicates that the
-    /// overall winner has been yielded but the loser tree has not
-    /// been updated
-    loser_tree_adjusted: bool,
-
-    /// target batch size
-    batch_size: usize,
-
-    /// row converter
-    row_converter: RowConverter,
-}
-
-impl SortPreservingMergeStream {
-    pub(crate) fn new_from_streams(
-        streams: Vec<SortedStream>,
-        schema: SchemaRef,
-        expressions: &[PhysicalSortExpr],
-        mut tracking_metrics: MemTrackingMetrics,
-        batch_size: usize,
-    ) -> Result<Self> {
-        let stream_count = streams.len();
-        let batches = (0..stream_count).map(|_| VecDeque::new()).collect();
-        tracking_metrics.init_mem_used(streams.iter().map(|s| s.mem_used).sum());
-        let wrappers = streams.into_iter().map(|s| s.stream.fuse()).collect();
-
-        let sort_fields = expressions
-            .iter()
-            .map(|expr| {
-                let data_type = expr.expr.data_type(&schema)?;
-                Ok(SortField::new_with_options(data_type, expr.options))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let row_converter = RowConverter::new(sort_fields)?;
-
-        Ok(Self {
-            schema,
-            batches,
-            streams: MergingStreams::new(wrappers),
-            column_expressions: expressions.iter().map(|x| x.expr.clone()).collect(),
-            tracking_metrics,
-            aborted: false,
-            in_progress: vec![],
-            cursors: (0..stream_count).map(|_| None).collect(),
-            loser_tree: Vec::with_capacity(stream_count),
-            loser_tree_adjusted: false,
-            batch_size,
-            row_converter,
-        })
-    }
-
-    /// If the stream at the given index is not exhausted, and the last cursor for the
-    /// stream is finished, poll the stream for the next RecordBatch and create a new
-    /// cursor for the stream from the returned result
-    fn maybe_poll_stream(
-        &mut self,
-        cx: &mut Context<'_>,
-        idx: usize,
-    ) -> Poll<Result<()>> {
-        if self.cursors[idx]
-            .as_ref()
-            .map(|cursor| !cursor.is_finished())
-            .unwrap_or(false)
-        {
-            // Cursor is not finished - don't need a new RecordBatch yet
-            return Poll::Ready(Ok(()));
-        }
-        let mut empty_batch = false;
-        {
-            let stream = &mut self.streams.streams[idx];
-            if stream.is_terminated() {
-                return Poll::Ready(Ok(()));
-            }
-
-            // Fetch a new input record and create a cursor from it
-            match futures::ready!(stream.poll_next_unpin(cx)) {
-                None => return Poll::Ready(Ok(())),
-                Some(Err(e)) => {
-                    return Poll::Ready(Err(e));
-                }
-                Some(Ok(batch)) => {
-                    if batch.num_rows() > 0 {
-                        let cols = self
-                            .column_expressions
-                            .iter()
-                            .map(|expr| {
-                                Ok(expr.evaluate(&batch)?.into_array(batch.num_rows()))
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-
-                        let rows = match self.row_converter.convert_columns(&cols) {
-                            Ok(rows) => rows,
-                            Err(e) => {
-                                return Poll::Ready(Err(DataFusionError::ArrowError(e)));
-                            }
-                        };
-
-                        self.cursors[idx] = Some(SortKeyCursor::new(idx, rows));
-                        self.batches[idx].push_back(batch)
-                    } else {
-                        empty_batch = true;
-                    }
-                }
-            }
-        }
-
-        if empty_batch {
-            self.maybe_poll_stream(cx, idx)
-        } else {
-            Poll::Ready(Ok(()))
-        }
-    }
-
-    /// Drains the in_progress row indexes, and builds a new RecordBatch from them
-    ///
-    /// Will then drop any batches for which all rows have been yielded to the output
-    fn build_record_batch(&mut self) -> Result<RecordBatch> {
-        // Mapping from stream index to the index of the first buffer from that stream
-        let mut buffer_idx = 0;
-        let mut stream_to_buffer_idx = Vec::with_capacity(self.batches.len());
-
-        for batches in &self.batches {
-            stream_to_buffer_idx.push(buffer_idx);
-            buffer_idx += batches.len();
-        }
-
-        let columns = self
-            .schema
-            .fields()
-            .iter()
-            .enumerate()
-            .map(|(column_idx, field)| {
-                let arrays = self
-                    .batches
-                    .iter()
-                    .flat_map(|batch| {
-                        batch.iter().map(|batch| batch.column(column_idx).data())
-                    })
-                    .collect();
-
-                let mut array_data = MutableArrayData::new(
-                    arrays,
-                    field.is_nullable(),
-                    self.in_progress.len(),
-                );
-
-                if self.in_progress.is_empty() {
-                    return make_arrow_array(array_data.freeze());
-                }
-
-                let first = &self.in_progress[0];
-                let mut buffer_idx =
-                    stream_to_buffer_idx[first.stream_idx] + first.batch_idx;
-                let mut start_row_idx = first.row_idx;
-                let mut end_row_idx = start_row_idx + 1;
-
-                for row_index in self.in_progress.iter().skip(1) {
-                    let next_buffer_idx =
-                        stream_to_buffer_idx[row_index.stream_idx] + row_index.batch_idx;
-
-                    if next_buffer_idx == buffer_idx && row_index.row_idx == end_row_idx {
-                        // subsequent row in same batch
-                        end_row_idx += 1;
-                        continue;
-                    }
-
-                    // emit current batch of rows for current buffer
-                    array_data.extend(buffer_idx, start_row_idx, end_row_idx);
-
-                    // start new batch of rows
-                    buffer_idx = next_buffer_idx;
-                    start_row_idx = row_index.row_idx;
-                    end_row_idx = start_row_idx + 1;
-                }
-
-                // emit final batch of rows
-                array_data.extend(buffer_idx, start_row_idx, end_row_idx);
-                make_arrow_array(array_data.freeze())
-            })
-            .collect();
-
-        self.in_progress.clear();
-
-        // New cursors are only created once the previous cursor for the stream
-        // is finished. This means all remaining rows from all but the last batch
-        // for each stream have been yielded to the newly created record batch
-        //
-        // Additionally as `in_progress` has been drained, there are no longer
-        // any RowIndex's reliant on the batch indexes
-        //
-        // We can therefore drop all but the last batch for each stream
-        for batches in &mut self.batches {
-            if batches.len() > 1 {
-                // Drain all but the last batch
-                batches.drain(0..(batches.len() - 1));
-            }
-        }
-
-        RecordBatch::try_new(self.schema.clone(), columns).map_err(Into::into)
-    }
-}
-
-impl Stream for SortPreservingMergeStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        let poll = self.poll_next_inner(cx);
-        self.tracking_metrics.record_poll(poll)
-    }
-}
-
-impl SortPreservingMergeStream {
-    #[inline]
-    fn poll_next_inner(
-        self: &mut Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<RecordBatch>>> {
-        if self.aborted {
-            return Poll::Ready(None);
-        }
-        // try to initialize the loser tree
-        if let Err(e) = ready!(self.init_loser_tree(cx)) {
-            return Poll::Ready(Some(Err(e)));
-        }
-
-        // NB timer records time taken on drop, so there are no
-        // calls to `timer.done()` below.
-        let elapsed_compute = self.tracking_metrics.elapsed_compute().clone();
-        let _timer = elapsed_compute.timer();
-
-        loop {
-            // Adjust the loser tree if necessary, returning control if needed
-            if let Err(e) = ready!(self.update_loser_tree(cx)) {
-                return Poll::Ready(Some(Err(e)));
-            }
-
-            let min_cursor_idx = self.loser_tree[0];
-            let next = self.cursors[min_cursor_idx]
-                .as_mut()
-                .filter(|cursor| !cursor.is_finished())
-                .map(|cursor| (cursor.stream_idx(), cursor.advance()));
-
-            if let Some((stream_idx, row_idx)) = next {
-                self.loser_tree_adjusted = false;
-                let batch_idx = self.batches[stream_idx].len() - 1;
-                self.in_progress.push(RowIndex {
-                    stream_idx,
-                    batch_idx,
-                    row_idx,
-                });
-                if self.in_progress.len() == self.batch_size {
-                    return Poll::Ready(Some(self.build_record_batch()));
-                }
-            } else if !self.in_progress.is_empty() {
-                return Poll::Ready(Some(self.build_record_batch()));
-            } else {
-                return Poll::Ready(None);
-            }
-        }
-    }
-
-    /// Attempts to initialize the loser tree with one value from each
-    /// non exhausted input, if possible.
-    ///
-    /// Returns
-    /// * Poll::Pending when more data is needed
-    /// * Poll::Ready(Ok()) on success
-    /// * Poll::Ready(Err..) if any of the inputs  errored
-    #[inline]
-    fn init_loser_tree(
-        self: &mut Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<()>> {
-        let num_streams = self.streams.num_streams();
-
-        if !self.loser_tree.is_empty() {
-            return Poll::Ready(Ok(()));
-        }
-
-        // Ensure all non-exhausted streams have a cursor from which
-        // rows can be pulled
-        for i in 0..num_streams {
-            if let Err(e) = ready!(self.maybe_poll_stream(cx, i)) {
-                self.aborted = true;
-                return Poll::Ready(Err(e));
-            }
-        }
-
-        // Init loser tree
-        self.loser_tree.resize(num_streams, usize::MAX);
-        for i in 0..num_streams {
-            let mut winner = i;
-            let mut cmp_node = (num_streams + i) / 2;
-            while cmp_node != 0 && self.loser_tree[cmp_node] != usize::MAX {
-                let challenger = self.loser_tree[cmp_node];
-                let challenger_win =
-                    match (&self.cursors[winner], &self.cursors[challenger]) {
-                        (None, _) => true,
-                        (_, None) => false,
-                        (Some(winner), Some(challenger)) => challenger < winner,
-                    };
-
-                if challenger_win {
-                    self.loser_tree[cmp_node] = winner;
-                    winner = challenger;
-                }
-
-                cmp_node /= 2;
-            }
-            self.loser_tree[cmp_node] = winner;
-        }
-        self.loser_tree_adjusted = true;
-        Poll::Ready(Ok(()))
-    }
-
-    /// Attempts to updated the loser tree, if possible
-    ///
-    /// Returns
-    /// * Poll::Pending when the winning unput was not ready
-    /// * Poll::Ready(Ok()) on success
-    /// * Poll::Ready(Err..) if any of the winning input erroed
-    #[inline]
-    fn update_loser_tree(
-        self: &mut Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<()>> {
-        if self.loser_tree_adjusted {
-            return Poll::Ready(Ok(()));
-        }
-
-        let num_streams = self.streams.num_streams();
-        let mut winner = self.loser_tree[0];
-        if let Err(e) = ready!(self.maybe_poll_stream(cx, winner)) {
-            self.aborted = true;
-            return Poll::Ready(Err(e));
-        }
-
-        // Replace overall winner by walking tree of losers
-        let mut cmp_node = (num_streams + winner) / 2;
-        while cmp_node != 0 {
-            let challenger = self.loser_tree[cmp_node];
-            let challenger_win = match (&self.cursors[winner], &self.cursors[challenger])
-            {
-                (None, _) => true,
-                (_, None) => false,
-                (Some(winner), Some(challenger)) => challenger < winner,
-            };
-            if challenger_win {
-                self.loser_tree[cmp_node] = winner;
-                winner = challenger;
-            }
-            cmp_node /= 2;
-        }
-        self.loser_tree[0] = winner;
-        self.loser_tree_adjusted = true;
-        Poll::Ready(Ok(()))
-    }
-}
-
-impl RecordBatchStream for SortPreservingMergeStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::iter::FromIterator;
@@ -710,6 +251,7 @@ mod tests {
     use arrow::array::ArrayRef;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
     use futures::FutureExt;
     use tokio_stream::StreamExt;
 
@@ -980,12 +522,8 @@ mod tests {
         sort: Vec<PhysicalSortExpr>,
         context: Arc<TaskContext>,
     ) -> RecordBatch {
-        let sort_exec = Arc::new(SortExec::new_with_partitioning(
-            sort.clone(),
-            input,
-            true,
-            None,
-        ));
+        let sort_exec =
+            Arc::new(SortExec::new(sort.clone(), input).with_preserve_partitioning(true));
         sorted_merge(sort_exec, sort, context).await
     }
 
@@ -995,7 +533,7 @@ mod tests {
         context: Arc<TaskContext>,
     ) -> RecordBatch {
         let merge = Arc::new(CoalescePartitionsExec::new(src));
-        let sort_exec = Arc::new(SortExec::try_new(sort, merge, None).unwrap());
+        let sort_exec = Arc::new(SortExec::new(sort, merge));
         let mut result = collect(sort_exec, context).await.unwrap();
         assert_eq!(result.len(), 1);
         result.remove(0)
@@ -1284,9 +822,10 @@ mod tests {
                 }
             });
 
-            streams.push(SortedStream::new(
-                RecordBatchReceiverStream::create(&schema, receiver, join_handle),
-                0,
+            streams.push(RecordBatchReceiverStream::create(
+                &schema,
+                receiver,
+                join_handle,
             ));
         }
 
@@ -1294,7 +833,7 @@ mod tests {
         let tracking_metrics =
             MemTrackingMetrics::new(&metrics, task_ctx.memory_pool(), 0);
 
-        let merge_stream = SortPreservingMergeStream::new_from_streams(
+        let merge_stream = streaming_merge(
             streams,
             batches.schema(),
             sort.as_slice(),
@@ -1303,7 +842,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut merged = common::collect(Box::pin(merge_stream)).await.unwrap();
+        let mut merged = common::collect(merge_stream).await.unwrap();
 
         assert_eq!(merged.len(), 1);
         let merged = merged.remove(0);

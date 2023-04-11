@@ -149,11 +149,20 @@ select
 Interval(MonthDayNano) Interval(MonthDayNano)
 
 
-# Should work tables with interval values
-# https://github.com/apache/arrow-datafusion/issues/5802
-statement error DataFusion error: This feature is not implemented: Unsupported value Interval \{ value: Value\(SingleQuotedString\("5 days 3 nanoseconds"\)\), leading_field: None, leading_precision: None, last_field: None, fractional_seconds_precision: None \} in a values list expression
+statement ok
 create table t (i interval) as values (interval '5 days 3 nanoseconds');
 
+query ?T rowsort
+select
+  i,
+  arrow_typeof(i)
+from t;
+----
+0 years 0 mons 5 days 0 hours 0 mins 0.000000003 secs Interval(MonthDayNano)
+
+
+statement ok
+drop table t;
 
 # Create tables with interval values
 statement ok

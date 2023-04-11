@@ -178,8 +178,8 @@ pub fn sum_type_of_avg(input_expr_types: &[DataType]) -> Result<DataType> {
 pub fn signature(fun: &AggregateFunction) -> Signature {
     // note: the physical expression must accept the type returned by this function or the execution panics.
     match fun {
-        AggregateFunction::Count
-        | AggregateFunction::ApproxDistinct
+        AggregateFunction::Count => Signature::variadic_any(Volatility::Immutable),
+        AggregateFunction::ApproxDistinct
         | AggregateFunction::Grouping
         | AggregateFunction::ArrayAgg => Signature::any(1, Volatility::Immutable),
         AggregateFunction::Min | AggregateFunction::Max => {

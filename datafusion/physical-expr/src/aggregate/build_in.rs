@@ -52,8 +52,8 @@ pub fn create_aggregate_expr(
     let input_phy_exprs = input_phy_exprs.to_vec();
 
     Ok(match (fun, distinct) {
-        (AggregateFunction::Count, false) => Arc::new(expressions::Count::new(
-            input_phy_exprs[0].clone(),
+        (AggregateFunction::Count, false) => Arc::new(expressions::Count::new_with_multiple_exprs(
+            input_phy_exprs,
             name,
             rt_type,
         )),
