@@ -171,6 +171,8 @@ pub struct AggregateExec {
     pub(crate) group_by: PhysicalGroupBy,
     /// Aggregate expressions
     pub(crate) aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+    /// FILTER (WHERE clause) expression for each aggregate expression
+    pub(crate) filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied
@@ -192,6 +194,7 @@ impl AggregateExec {
         mode: AggregateMode,
         group_by: PhysicalGroupBy,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
@@ -221,6 +224,7 @@ impl AggregateExec {
             mode,
             group_by,
             aggr_expr,
+            filter_expr,
             input,
             schema,
             input_schema,
@@ -258,6 +262,11 @@ impl AggregateExec {
         &self.aggr_expr
     }
 
+    /// FILTER (WHERE clause) expression for each aggregate expression
+    pub fn filter_expr(&self) -> &[Option<Arc<dyn PhysicalExpr>>] {
+        &self.filter_expr
+    }
+
     /// Input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
@@ -281,6 +290,7 @@ impl AggregateExec {
                 self.mode,
                 self.schema.clone(),
                 self.aggr_expr.clone(),
+                self.filter_expr.clone(),
                 input,
                 baseline_metrics,
                 context,
@@ -293,6 +303,7 @@ impl AggregateExec {
                     self.schema.clone(),
                     self.group_by.clone(),
                     self.aggr_expr.clone(),
+                    self.filter_expr.clone(),
                     input,
                     baseline_metrics,
                     batch_size,
@@ -391,6 +402,7 @@ impl ExecutionPlan for AggregateExec {
             self.mode,
             self.group_by.clone(),
             self.aggr_expr.clone(),
+            self.filter_expr.clone(),
             children[0].clone(),
             self.input_schema.clone(),
         )?))
@@ -703,6 +715,20 @@ fn evaluate_many(
         .collect::<Result<Vec<_>>>()
 }
 
+fn evaluate_optional(
+    expr: &[Option<Arc<dyn PhysicalExpr>>],
+    batch: &RecordBatch,
+) -> Result<Vec<Option<ArrayRef>>> {
+    expr.iter()
+        .map(|expr| {
+            expr.as_ref()
+                .map(|expr| expr.evaluate(batch))
+                .transpose()
+                .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+        })
+        .collect::<Result<Vec<_>>>()
+}
+
 fn evaluate_group_by(
     group_by: &PhysicalGroupBy,
     batch: &RecordBatch,
@@ -839,6 +865,7 @@ mod tests {
             AggregateMode::Partial,
             grouping_set.clone(),
             aggregates.clone(),
+            vec![None],
             input,
             input_schema.clone(),
         )?);
@@ -881,6 +908,7 @@ mod tests {
             AggregateMode::Final,
             final_grouping_set,
             aggregates,
+            vec![None],
             merge,
             input_schema,
         )?);
@@ -944,6 +972,7 @@ mod tests {
             AggregateMode::Partial,
             grouping_set.clone(),
             aggregates.clone(),
+            vec![None],
             input,
             input_schema.clone(),
         )?);
@@ -976,6 +1005,7 @@ mod tests {
             AggregateMode::Final,
             final_grouping_set,
             aggregates,
+            vec![None],
             merge,
             input_schema,
         )?);
@@ -1191,6 +1221,7 @@ mod tests {
                 AggregateMode::Partial,
                 groups,
                 aggregates,
+                vec![None; 3],
                 input.clone(),
                 input_schema.clone(),
             )?);
@@ -1246,6 +1277,7 @@ mod tests {
             AggregateMode::Partial,
             groups.clone(),
             aggregates.clone(),
+            vec![None],
             blocking_exec,
             schema,
         )?);
@@ -1284,6 +1316,7 @@ mod tests {
             AggregateMode::Partial,
             groups,
             aggregates.clone(),
+            vec![None],
             blocking_exec,
             schema,
         )?);
