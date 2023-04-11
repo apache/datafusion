@@ -672,12 +672,7 @@ mod tests {
     #[test]
     fn simplify_not_between() -> Result<()> {
         let table_scan = test_table_scan();
-        let qual = Expr::Between(Between::new(
-            Box::new(col("d")),
-            false,
-            Box::new(lit(1)),
-            Box::new(lit(10)),
-        ));
+        let qual = col("d").between(lit(1), lit(10));
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(qual.not())?
@@ -691,12 +686,7 @@ mod tests {
     #[test]
     fn simplify_not_not_between() -> Result<()> {
         let table_scan = test_table_scan();
-        let qual = Expr::Between(Between::new(
-            Box::new(col("d")),
-            true,
-            Box::new(lit(1)),
-            Box::new(lit(10)),
-        ));
+        let qual = col("d").not_between(lit(1), lit(10));
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(qual.not())?
