@@ -172,7 +172,7 @@ impl<T: FieldArray> FieldCursorStream<T> {
     fn convert_batch(&mut self, batch: &RecordBatch) -> Result<FieldCursor<T::Values>> {
         let value = self.sort.expr.evaluate(batch)?;
         let array = value.into_array(batch.num_rows());
-        let array = array.as_any().downcast_ref::<T>().expect("array type");
+        let array = array.as_any().downcast_ref::<T>().expect("field values");
         Ok(FieldCursor::new(self.sort.options, array))
     }
 }

@@ -19,7 +19,8 @@ use crate::physical_plan::sorts::sort::SortOptions;
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::ArrowNativeTypeOp;
 use arrow::row::{Row, Rows};
-use arrow_array::{Array, ArrowPrimitiveType, PrimitiveArray};
+use arrow_array::types::ByteArrayType;
+use arrow_array::{Array, ArrowPrimitiveType, GenericByteArray, PrimitiveArray};
 use std::cmp::Ordering;
 
 /// A [`Cursor`] for [`Rows`]
@@ -107,7 +108,7 @@ pub trait FieldArray: Array + 'static {
 
 /// A comparable set of non-nullable values
 pub trait FieldValues {
-    type Value;
+    type Value: ?Sized;
 
     fn len(&self) -> usize;
 
@@ -142,6 +143,34 @@ impl<T: ArrowNativeTypeOp> FieldValues for PrimitiveValues<T> {
     #[inline]
     fn value(&self, idx: usize) -> &Self::Value {
         &self.0[idx]
+    }
+}
+
+impl<T: ByteArrayType> FieldArray for GenericByteArray<T> {
+    type Values = Self;
+
+    fn values(&self) -> Self::Values {
+        self.clone()
+    }
+}
+
+impl<T: ByteArrayType> FieldValues for GenericByteArray<T> {
+    type Value = T::Native;
+
+    fn len(&self) -> usize {
+        Array::len(self)
+    }
+
+    #[inline]
+    fn compare(a: &Self::Value, b: &Self::Value) -> Ordering {
+        let a: &[u8] = a.as_ref();
+        let b: &[u8] = b.as_ref();
+        a.cmp(b)
+    }
+
+    #[inline]
+    fn value(&self, idx: usize) -> &Self::Value {
+        self.value(idx)
     }
 }
 
