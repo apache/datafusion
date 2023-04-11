@@ -30,7 +30,6 @@ for parallel query execution.
 
 [Ballista](https://github.com/apache/arrow-ballista) is a distributed compute platform built on DataFusion.
 
-
 # How does DataFusion Compare with `XYZ`?
 
 When compared to similar systems, DataFusion typically is:

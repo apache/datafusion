@@ -66,7 +66,6 @@ features, and avoid reimplementing general (but still necessary)
 features such as an expression representation, standard optimizations,
 execution plans, file format support, etc.
 
-
 ## Known Users
 
 Here are some of the projects known to use DataFusion:
@@ -132,7 +131,6 @@ provide integrations with other systems.
 
 - [datafusion-bigtable](https://github.com/datafusion-contrib/datafusion-bigtable)
 - [datafusion-catalogprovider-glue](https://github.com/datafusion-contrib/datafusion-catalogprovider-glue)
-
 
 ## Why DataFusion?
 
