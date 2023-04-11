@@ -331,17 +331,24 @@ macro_rules! typed_min_max_string {
     }};
 }
 
+macro_rules! interval_choose_min_max {
+    (min) => {
+        std::cmp::Ordering::Greater
+    };
+    (max) => {
+        std::cmp::Ordering::Less
+    };
+}
+
 macro_rules! interval_min_max {
-    ($OP:expr, $LHS:expr, $RHS:expr) => {{
-        match (stringify!($OP), $LHS.partial_cmp(&$RHS)) {
-            ("min", Some(std::cmp::Ordering::Greater))
-            | ("max", Some(std::cmp::Ordering::Less)) => $RHS.clone(),
-            (_, Some(_)) => $LHS.clone(),
-            (_, _) => {
-                return Err(DataFusionError::Internal(format!(
-                    "MIN/MAX is not expected to receive {} operation",
-                    stringify!($OP)
-                )))
+    ($OP:tt, $LHS:expr, $RHS:expr) => {{
+        match $LHS.partial_cmp(&$RHS) {
+            Some(interval_choose_min_max!($OP)) => $RHS.clone(),
+            Some(_) => $LHS.clone(),
+            None => {
+                return Err(DataFusionError::Internal(
+                    "Comparison error while computing interval min/max".to_string(),
+                ))
             }
         }
     }};
