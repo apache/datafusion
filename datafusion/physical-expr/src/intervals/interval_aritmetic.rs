@@ -18,6 +18,7 @@
 //! Interval arithmetic library
 
 use std::borrow::Borrow;
+use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
@@ -33,7 +34,7 @@ use crate::aggregate::min_max::{max, min};
 /// subtraction, but more capabilities will be added in the future.
 /// Upper/lower bounds having NULL values indicate an unbounded side. For
 /// example; [10, 20], [10, ∞], [-∞, 100] and [-∞, ∞] are all valid intervals.
-#[derive(Debug, PartialEq, Clone, Eq, Hash)]
+#[derive(Debug, Clone, Eq)]
 pub enum IntervalBound {
     Open(ScalarValue),
     Closed(ScalarValue),
@@ -106,38 +107,6 @@ impl IntervalBound {
         };
         Ok(res)
     }
-
-    fn compare_scalar(&self, other: &IntervalBound) -> Option<std::cmp::Ordering> {
-        self.get_bound_scalar()
-            .partial_cmp(other.get_bound_scalar())
-    }
-
-    pub fn is_scalar_lt_eq(&self, other: &IntervalBound) -> bool {
-        self.compare_scalar(other).map_or(false, |ord| {
-            matches!(ord, std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
-        })
-    }
-
-    pub fn is_scalar_lt(&self, other: &IntervalBound) -> bool {
-        self.compare_scalar(other)
-            .map_or(false, |ord| ord == std::cmp::Ordering::Less)
-    }
-
-    pub fn is_scalar_gt_eq(&self, other: &IntervalBound) -> bool {
-        self.compare_scalar(other).map_or(false, |ord| {
-            matches!(ord, std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
-        })
-    }
-
-    pub fn is_scalar_gt(&self, other: &IntervalBound) -> bool {
-        self.compare_scalar(other)
-            .map_or(false, |ord| ord == std::cmp::Ordering::Greater)
-    }
-
-    pub fn is_scalar_equal(&self, other: &IntervalBound) -> bool {
-        self.compare_scalar(other)
-            .map_or(false, |ord| ord == std::cmp::Ordering::Equal)
-    }
 }
 
 impl Display for IntervalBound {
@@ -146,7 +115,20 @@ impl Display for IntervalBound {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+impl PartialOrd for IntervalBound {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.get_bound_scalar()
+            .partial_cmp(other.get_bound_scalar())
+    }
+}
+
+impl PartialEq for IntervalBound {
+    fn eq(&self, other: &Self) -> bool {
+        self.get_bound_scalar() == other.get_bound_scalar()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interval {
     pub lower: IntervalBound,
     pub upper: IntervalBound,
@@ -202,16 +184,16 @@ impl Interval {
     pub(crate) fn gt(&self, other: &Interval) -> Interval {
         let flags = if !self.upper.is_null()
             && !other.lower.is_null()
-            && (self.upper.is_scalar_lt_eq(&other.lower))
+            && (self.upper <= other.lower)
         {
             // If self.upper is less than or equal to other.lower, self can't be greater than other.
             (false, false)
         } else if !self.lower.is_null()
             && !other.upper.is_null()
-            && (self.lower.is_scalar_gt_eq(&other.upper))
+            && (self.lower >= other.upper)
         {
             // If self.lower is greater than or equal to other.upper, self is certainly greater than other.
-            if self.lower.is_scalar_gt(&other.upper) {
+            if self.lower > other.upper {
                 (true, true)
             } else if is_bound_closed(&self.lower, &other.upper) {
                 (false, true)
@@ -235,10 +217,10 @@ impl Interval {
     pub(crate) fn gt_eq(&self, other: &Interval) -> Interval {
         let flags = if !self.upper.is_null()
             && !other.lower.is_null()
-            && (self.upper.is_scalar_lt_eq(&other.lower))
+            && (self.upper <= other.lower)
         {
             // If self.upper is less than or equal to other.lower, self can't be greater than or equal to other.
-            if self.upper.is_scalar_lt(&other.lower) {
+            if self.upper < other.lower {
                 (false, false)
             } else if is_bound_closed(&self.upper, &other.lower) {
                 (false, true)
@@ -247,7 +229,7 @@ impl Interval {
             }
         } else if !self.lower.is_null()
             && !other.upper.is_null()
-            && (self.lower.is_scalar_gt_eq(&other.upper))
+            && (self.lower >= other.upper)
         {
             // If self.lower is greater than or equal to other.upper, self is certainly greater than or equal to other.
             (true, true)
@@ -281,9 +263,9 @@ impl Interval {
     /// [false, true] or [false, false] respectively.    
     pub(crate) fn equal(&self, other: &Interval) -> Interval {
         let flags = if !self.lower.is_null()
-            && (self.lower.is_scalar_equal(&self.upper))
-            && (other.lower.is_scalar_equal(&other.upper))
-            && (self.lower.is_scalar_equal(&other.lower))
+            && (self.lower == self.upper)
+            && (other.lower == other.upper)
+            && (self.lower == other.lower)
         {
             (true, true)
         } else if self.gt(other)
@@ -342,12 +324,10 @@ impl Interval {
     pub(crate) fn intersect(&self, other: &Interval) -> Result<Option<Interval>> {
         // If it is evident that the result is an empty interval,
         // do not make any calculation and directly return None.
-        if (!self.lower.is_null()
-            && !other.upper.is_null()
-            && self.lower.is_scalar_gt(&other.upper))
+        if (!self.lower.is_null() && !other.upper.is_null() && self.lower > other.upper)
             || (!self.upper.is_null()
                 && !other.lower.is_null()
-                && self.upper.is_scalar_lt(&other.lower))
+                && self.upper < other.lower)
         {
             // This None value signals an empty interval.
             return Ok(None);
@@ -361,7 +341,7 @@ impl Interval {
                 self.lower.get_bound_scalar(),
                 other.lower.get_bound_scalar(),
             )?;
-            if !self.lower.is_scalar_equal(&other.lower) {
+            if self.lower != other.lower {
                 if max_scalar == *self.lower.get_bound_scalar() {
                     self.lower.clone()
                 } else {
@@ -382,7 +362,7 @@ impl Interval {
                 self.upper.get_bound_scalar(),
                 other.upper.get_bound_scalar(),
             )?;
-            if !self.upper.is_scalar_equal(&other.upper) {
+            if self.upper != other.upper {
                 if min_scalar == *self.upper.get_bound_scalar() {
                     self.upper.clone()
                 } else {
@@ -395,7 +375,7 @@ impl Interval {
             }
         };
         Ok(
-            if !lower.is_null() && !upper.is_null() && lower.is_scalar_equal(&upper) {
+            if !lower.is_null() && !upper.is_null() && (lower == upper) {
                 // This match handles such cases: [3, 4) ∩ [4, 5) is an empty interval,
                 // while [3, 4] ∩ [4, 5) is not.
                 match (&lower, &upper) {
