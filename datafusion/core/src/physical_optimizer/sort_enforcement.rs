@@ -1352,12 +1352,10 @@ mod tests {
             sort_expr("non_nullable_col", &schema),
         ];
         let repartition_exec = repartition_exec(spm);
-        let sort2 = Arc::new(SortExec::new_with_partitioning(
-            sort_exprs.clone(),
-            repartition_exec,
-            true,
-            None,
-        )) as _;
+        let sort2 = Arc::new(
+            SortExec::new(sort_exprs.clone(), repartition_exec)
+                .with_preserve_partitioning(true),
+        ) as _;
         let spm2 = sort_preserving_merge_exec(sort_exprs, sort2);
 
         let physical_plan = aggregate_exec(spm2);
@@ -1395,12 +1393,9 @@ mod tests {
 
         let sort_exprs = vec![sort_expr("non_nullable_col", &schema)];
         // let sort = sort_exec(sort_exprs.clone(), union);
-        let sort = Arc::new(SortExec::new_with_partitioning(
-            sort_exprs.clone(),
-            union,
-            true,
-            None,
-        )) as _;
+        let sort = Arc::new(
+            SortExec::new(sort_exprs.clone(), union).with_preserve_partitioning(true),
+        ) as _;
         let spm = sort_preserving_merge_exec(sort_exprs, sort);
 
         let filter = filter_exec(
@@ -2406,12 +2401,8 @@ mod tests {
         let window = bounded_window_exec("nullable_col", sort_exprs.clone(), memory_exec);
         let repartition = repartition_exec(window);
 
-        let orig_plan = Arc::new(SortExec::new_with_partitioning(
-            sort_exprs,
-            repartition,
-            false,
-            None,
-        )) as Arc<dyn ExecutionPlan>;
+        let orig_plan =
+            Arc::new(SortExec::new(sort_exprs, repartition)) as Arc<dyn ExecutionPlan>;
 
         let mut plan = orig_plan.clone();
         let rules = vec![
@@ -2447,12 +2438,10 @@ mod tests {
         let repartition = repartition_exec(coalesce_partitions);
         let sort_exprs = vec![sort_expr("nullable_col", &schema)];
         // Add local sort
-        let sort = Arc::new(SortExec::new_with_partitioning(
-            sort_exprs.clone(),
-            repartition,
-            true,
-            None,
-        )) as _;
+        let sort = Arc::new(
+            SortExec::new(sort_exprs.clone(), repartition)
+                .with_preserve_partitioning(true),
+        ) as _;
         let spm = sort_preserving_merge_exec(sort_exprs.clone(), sort);
         let sort = sort_exec(sort_exprs, spm);
 
@@ -2504,7 +2493,7 @@ mod tests {
         input: Arc<dyn ExecutionPlan>,
     ) -> Arc<dyn ExecutionPlan> {
         let sort_exprs = sort_exprs.into_iter().collect();
-        Arc::new(SortExec::try_new(sort_exprs, input, None).unwrap())
+        Arc::new(SortExec::new(sort_exprs, input))
     }
 
     fn sort_preserving_merge_exec(

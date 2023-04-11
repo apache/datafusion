@@ -113,7 +113,7 @@ impl Operator {
     /// Return true if the operator is a numerical operator.
     ///
     /// For example, 'Binary(a, +, b)' would be a numerical expression.
-    /// PostgresSQL concept: https://www.postgresql.org/docs/7.0/operators2198.htm
+    /// PostgresSQL concept: <https://www.postgresql.org/docs/7.0/operators2198.htm>
     pub fn is_numerical_operators(&self) -> bool {
         matches!(
             self,

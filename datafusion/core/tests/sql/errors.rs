@@ -58,7 +58,7 @@ async fn test_aggregation_with_bad_arguments() -> Result<()> {
     assert_eq!(
         err,
         DataFusionError::Plan(
-            "The function Count expects 1 arguments, but 0 were provided".to_string()
+            "The function Count expects at least one argument".to_string()
         )
         .to_string()
     );
