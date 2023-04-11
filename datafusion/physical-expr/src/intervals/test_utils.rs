@@ -28,81 +28,30 @@ use datafusion_expr::Operator;
 /// This test function generates a conjunctive statement with two numeric
 /// terms with the following form:
 /// left_col (op_1) a  > right_col (op_2) b AND left_col (op_3) c < right_col (op_4) d
-pub fn gen_conjunctive_numeric_expr(
+pub fn gen_conjunctive_numerical_expr(
     left_col: Arc<dyn PhysicalExpr>,
     right_col: Arc<dyn PhysicalExpr>,
-    op_1: Operator,
-    op_2: Operator,
-    op_3: Operator,
-    op_4: Operator,
-    a: i32,
-    b: i32,
-    c: i32,
-    d: i32,
+    op: (Operator, Operator, Operator, Operator),
+    a: ScalarValue,
+    b: ScalarValue,
+    c: ScalarValue,
+    d: ScalarValue,
 ) -> Arc<dyn PhysicalExpr> {
+    let (op_1, op_2, op_3, op_4) = op;
     let left_and_1 = Arc::new(BinaryExpr::new(
         left_col.clone(),
         op_1,
-        Arc::new(Literal::new(ScalarValue::Int32(Some(a)))),
+        Arc::new(Literal::new(a)),
     ));
     let left_and_2 = Arc::new(BinaryExpr::new(
         right_col.clone(),
         op_2,
-        Arc::new(Literal::new(ScalarValue::Int32(Some(b)))),
+        Arc::new(Literal::new(b)),
     ));
-
-    let right_and_1 = Arc::new(BinaryExpr::new(
-        left_col,
-        op_3,
-        Arc::new(Literal::new(ScalarValue::Int32(Some(c)))),
-    ));
-    let right_and_2 = Arc::new(BinaryExpr::new(
-        right_col,
-        op_4,
-        Arc::new(Literal::new(ScalarValue::Int32(Some(d)))),
-    ));
-    let left_expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, left_and_2));
-    let right_expr = Arc::new(BinaryExpr::new(right_and_1, Operator::Lt, right_and_2));
-    Arc::new(BinaryExpr::new(left_expr, Operator::And, right_expr))
-}
-
-#[allow(clippy::too_many_arguments)]
-/// This test function generates a conjunctive statement with two numeric
-/// terms with the following form:
-/// left_col (op_1) a  > right_col (op_2) b AND left_col (op_3) c < right_col (op_4) d
-pub fn gen_conjunctive_float64_expr(
-    left_col: Arc<dyn PhysicalExpr>,
-    right_col: Arc<dyn PhysicalExpr>,
-    op_1: Operator,
-    op_2: Operator,
-    op_3: Operator,
-    op_4: Operator,
-    a: f64,
-    b: f64,
-    c: f64,
-    d: f64,
-) -> Arc<dyn PhysicalExpr> {
-    let left_and_1 = Arc::new(BinaryExpr::new(
-        left_col.clone(),
-        op_1,
-        Arc::new(Literal::new(ScalarValue::Float64(Some(a)))),
-    ));
-    let left_and_2 = Arc::new(BinaryExpr::new(
-        right_col.clone(),
-        op_2,
-        Arc::new(Literal::new(ScalarValue::Float64(Some(b)))),
-    ));
-
-    let right_and_1 = Arc::new(BinaryExpr::new(
-        left_col,
-        op_3,
-        Arc::new(Literal::new(ScalarValue::Float64(Some(c)))),
-    ));
-    let right_and_2 = Arc::new(BinaryExpr::new(
-        right_col,
-        op_4,
-        Arc::new(Literal::new(ScalarValue::Float64(Some(d)))),
-    ));
+    let right_and_1 =
+        Arc::new(BinaryExpr::new(left_col, op_3, Arc::new(Literal::new(c))));
+    let right_and_2 =
+        Arc::new(BinaryExpr::new(right_col, op_4, Arc::new(Literal::new(d))));
     let left_expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, left_and_2));
     let right_expr = Arc::new(BinaryExpr::new(right_and_1, Operator::Lt, right_and_2));
     Arc::new(BinaryExpr::new(left_expr, Operator::And, right_expr))

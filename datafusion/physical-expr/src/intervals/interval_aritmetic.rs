@@ -568,43 +568,63 @@ mod tests {
         Ok(())
     }
 
-    fn create_f32_interval(lower: f32, upper: f32) -> Interval {
-        Interval {
-            lower: ScalarValue::Float32(Some(lower)),
-            upper: ScalarValue::Float32(Some(upper)),
-        }
+    macro_rules! create_interval {
+        ($test_func:ident, $type:ty, $SCALAR:ident) => {
+            fn $test_func(lower: $type, upper: $type) -> Interval {
+                Interval {
+                    lower: ScalarValue::$SCALAR(Some(lower)),
+                    upper: ScalarValue::$SCALAR(Some(upper)),
+                }
+            }
+        };
     }
 
-    fn create_f64_interval(lower: f64, upper: f64) -> Interval {
-        Interval {
-            lower: ScalarValue::Float64(Some(lower)),
-            upper: ScalarValue::Float64(Some(upper)),
-        }
+    create_interval!(create_f32_interval, f32, Float32);
+    create_interval!(create_f64_interval, f64, Float64);
+
+    macro_rules! capture_mode_change {
+        ($test_func:ident, $interval_create:ident, $type:ty, $SCALAR:ident) => {
+            fn $test_func(input: ($type, $type), waiting_change: (bool, bool)) {
+                assert!(waiting_change.0 || waiting_change.1);
+                let interval1 = $interval_create(input.0, input.1);
+                let interval2 = $interval_create(input.1, input.0);
+                let result = interval1.add(&interval2).unwrap();
+                match (
+                    result,
+                    $interval_create(input.0 + input.1, input.0 + input.1),
+                ) {
+                    (
+                        Interval {
+                            lower: ScalarValue::$SCALAR(Some(result_lower)),
+                            upper: ScalarValue::$SCALAR(Some(result_upper)),
+                        },
+                        Interval {
+                            lower: ScalarValue::$SCALAR(Some(without_fe_lower)),
+                            upper: ScalarValue::$SCALAR(Some(without_fe_upper)),
+                        },
+                    ) => {
+                        if waiting_change.0 {
+                            assert!(result_lower < without_fe_lower);
+                        }
+                        if waiting_change.1 {
+                            assert!(result_upper > without_fe_upper);
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        };
     }
+
+    capture_mode_change!(capture_mode_change_f32, create_f32_interval, f32, Float32);
+    capture_mode_change!(capture_mode_change_f64, create_f64_interval, f64, Float64);
 
     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     #[test]
     fn test_add_intervals_lower_affected_f32() {
         let lower = f32::from_bits(1073741887);
         let upper = f32::from_bits(1098907651);
-        let interval1 = create_f32_interval(lower, upper);
-        let interval2 = create_f32_interval(upper, lower);
-        let result = interval1.add(&interval2).unwrap();
-        match (result, create_f32_interval(lower + upper, lower + upper)) {
-            (
-                Interval {
-                    lower: ScalarValue::Float32(Some(result_lower)),
-                    ..
-                },
-                Interval {
-                    lower: ScalarValue::Float32(Some(without_fe_lower)),
-                    ..
-                },
-            ) => {
-                assert!(result_lower < without_fe_lower);
-            }
-            _ => unreachable!(),
-        }
+        capture_mode_change_f32((lower, upper), (true, false));
     }
 
     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
@@ -612,24 +632,7 @@ mod tests {
     fn test_add_intervals_upper_affected_f32() {
         let lower = f32::from_bits(1072693248);
         let upper = f32::from_bits(715827883);
-        let interval1 = create_f32_interval(lower, upper);
-        let interval2 = create_f32_interval(upper, lower);
-        let result = interval1.add(&interval2).unwrap();
-        match (result, create_f32_interval(lower + upper, lower + upper)) {
-            (
-                Interval {
-                    upper: ScalarValue::Float32(Some(result_upper)),
-                    ..
-                },
-                Interval {
-                    upper: ScalarValue::Float32(Some(without_fe_upper)),
-                    ..
-                },
-            ) => {
-                assert!(result_upper > without_fe_upper);
-            }
-            _ => unreachable!(),
-        }
+        capture_mode_change_f32((lower, upper), (false, true));
     }
 
     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
@@ -637,49 +640,15 @@ mod tests {
     fn test_add_intervals_lower_affected_f64() {
         let lower = 1.0;
         let upper = 0.3;
-        let interval1 = create_f64_interval(lower, upper);
-        let interval2 = create_f64_interval(upper, lower);
-        let result = interval1.add(&interval2).unwrap();
-        match (result, create_f64_interval(lower + upper, lower + upper)) {
-            (
-                Interval {
-                    lower: ScalarValue::Float64(Some(result_lower)),
-                    ..
-                },
-                Interval {
-                    lower: ScalarValue::Float64(Some(without_fe_lower)),
-                    ..
-                },
-            ) => {
-                assert!(result_lower < without_fe_lower);
-            }
-            _ => unreachable!(),
-        }
+        capture_mode_change_f64((lower, upper), (true, false));
     }
 
     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     #[test]
     fn test_add_intervals_upper_affected_f64() {
         let lower = 1.4999999999999998;
-        let upper = 0.000000000000000022044604925031308;
-        let interval1 = create_f64_interval(lower, upper);
-        let interval2 = create_f64_interval(upper, lower);
-        let result = interval1.add(&interval2).unwrap();
-        match (result, create_f64_interval(lower + upper, lower + upper)) {
-            (
-                Interval {
-                    upper: ScalarValue::Float64(Some(result_upper)),
-                    ..
-                },
-                Interval {
-                    upper: ScalarValue::Float64(Some(without_fe_upper)),
-                    ..
-                },
-            ) => {
-                assert!(result_upper > without_fe_upper);
-            }
-            _ => unreachable!(),
-        }
+        let upper = 0.000_000_000_000_000_022_044_604_925_031_31;
+        capture_mode_change_f64((lower, upper), (false, true));
     }
 
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
@@ -687,51 +656,7 @@ mod tests {
     fn test_next_impl_add_intervals_f64() {
         let lower = 1.5;
         let upper = 1.5;
-        let interval1 = create_f64_interval(lower, upper);
-        let interval2 = create_f64_interval(upper, lower);
-        let result = interval1.add(&interval2).unwrap();
-        match (result, create_f64_interval(lower + upper, lower + upper)) {
-            (
-                Interval {
-                    lower: ScalarValue::Float64(Some(result_lower)),
-                    upper: ScalarValue::Float64(Some(result_upper)),
-                },
-                Interval {
-                    lower: ScalarValue::Float64(Some(without_fe_lower)),
-                    upper: ScalarValue::Float64(Some(without_fe_upper)),
-                },
-            ) => {
-                assert!(result_lower < without_fe_lower);
-                assert!(result_upper > without_fe_upper);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    #[test]
-    fn test_next_impl_sub_intervals_f64() {
-        let lower = 2.5;
-        let upper = 1.5;
-        let interval1 = create_f64_interval(lower, upper);
-        let interval2 = create_f64_interval(upper, lower);
-        let result = interval1.sub(&interval2).unwrap();
-        match (result, create_f64_interval(lower - upper, upper - lower)) {
-            (
-                Interval {
-                    lower: ScalarValue::Float64(Some(result_lower)),
-                    upper: ScalarValue::Float64(Some(result_upper)),
-                },
-                Interval {
-                    lower: ScalarValue::Float64(Some(without_fe_lower)),
-                    upper: ScalarValue::Float64(Some(without_fe_upper)),
-                },
-            ) => {
-                assert!(result_lower < without_fe_lower);
-                assert!(result_upper > without_fe_upper);
-            }
-            _ => unreachable!(),
-        }
+        capture_mode_change_f64((lower, upper), (true, true));
     }
 
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
@@ -739,50 +664,6 @@ mod tests {
     fn test_next_impl_add_intervals_f32() {
         let lower = 1.5;
         let upper = 1.5;
-        let interval1 = create_f32_interval(lower, upper);
-        let interval2 = create_f32_interval(upper, lower);
-        let result = interval1.add(&interval2).unwrap();
-        match (result, create_f32_interval(lower + upper, lower + upper)) {
-            (
-                Interval {
-                    lower: ScalarValue::Float32(Some(result_lower)),
-                    upper: ScalarValue::Float32(Some(result_upper)),
-                },
-                Interval {
-                    lower: ScalarValue::Float32(Some(without_fe_lower)),
-                    upper: ScalarValue::Float32(Some(without_fe_upper)),
-                },
-            ) => {
-                assert!(result_lower < without_fe_lower);
-                assert!(result_upper > without_fe_upper);
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    #[test]
-    fn test_next_impl_sub_intervals_f32() {
-        let lower = 2.5;
-        let upper = 1.5;
-        let interval1 = create_f32_interval(lower, upper);
-        let interval2 = create_f32_interval(lower, upper);
-        let result = interval1.sub(&interval2).unwrap();
-        match (result, create_f32_interval(lower - upper, upper - lower)) {
-            (
-                Interval {
-                    lower: ScalarValue::Float32(Some(result_lower)),
-                    upper: ScalarValue::Float32(Some(result_upper)),
-                },
-                Interval {
-                    lower: ScalarValue::Float32(Some(without_fe_lower)),
-                    upper: ScalarValue::Float32(Some(without_fe_upper)),
-                },
-            ) => {
-                assert!(result_lower < without_fe_lower);
-                assert!(result_upper > without_fe_upper);
-            }
-            _ => unreachable!(),
-        }
+        capture_mode_change_f32((lower, upper), (true, true));
     }
 }

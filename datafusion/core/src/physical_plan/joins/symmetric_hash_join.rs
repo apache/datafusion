@@ -1423,7 +1423,7 @@ impl SymmetricHashJoinStream {
 mod tests {
     use std::fs::File;
 
-    use arrow::array::ArrayRef;
+    use arrow::array::{ArrayRef, Float64Array};
     use arrow::array::{Int32Array, TimestampNanosecondArray};
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1433,7 +1433,7 @@ mod tests {
 
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, col, Column};
-    use datafusion_physical_expr::intervals::test_utils::gen_conjunctive_numeric_expr;
+    use datafusion_physical_expr::intervals::test_utils::gen_conjunctive_numerical_expr;
     use datafusion_physical_expr::PhysicalExpr;
 
     use crate::physical_plan::joins::{
@@ -1584,80 +1584,130 @@ mod tests {
         Ok(result)
     }
 
-    fn join_expr_tests_fixture(
-        expr_id: usize,
-        left_col: Arc<dyn PhysicalExpr>,
-        right_col: Arc<dyn PhysicalExpr>,
-    ) -> Arc<dyn PhysicalExpr> {
-        match expr_id {
-            // left_col + 1 > right_col + 5 AND left_col + 3 < right_col + 10
-            0 => gen_conjunctive_numeric_expr(
-                left_col,
-                right_col,
-                Operator::Plus,
-                Operator::Plus,
-                Operator::Plus,
-                Operator::Plus,
-                1,
-                5,
-                3,
-                10,
-            ),
-            // left_col - 1 > right_col + 5 AND left_col + 3 < right_col + 10
-            1 => gen_conjunctive_numeric_expr(
-                left_col,
-                right_col,
-                Operator::Minus,
-                Operator::Plus,
-                Operator::Plus,
-                Operator::Plus,
-                1,
-                5,
-                3,
-                10,
-            ),
-            // left_col - 1 > right_col + 5 AND left_col - 3 < right_col + 10
-            2 => gen_conjunctive_numeric_expr(
-                left_col,
-                right_col,
-                Operator::Minus,
-                Operator::Plus,
-                Operator::Minus,
-                Operator::Plus,
-                1,
-                5,
-                3,
-                10,
-            ),
-            // left_col - 10 > right_col - 5 AND left_col - 3 < right_col + 10
-            3 => gen_conjunctive_numeric_expr(
-                left_col,
-                right_col,
-                Operator::Minus,
-                Operator::Minus,
-                Operator::Minus,
-                Operator::Plus,
-                10,
-                5,
-                3,
-                10,
-            ),
-            // left_col - 10 > right_col - 5 AND left_col - 30 < right_col - 3
-            4 => gen_conjunctive_numeric_expr(
-                left_col,
-                right_col,
-                Operator::Minus,
-                Operator::Minus,
-                Operator::Minus,
-                Operator::Minus,
-                10,
-                5,
-                30,
-                3,
-            ),
-            _ => unreachable!(),
+    macro_rules! join_expr_tests {
+        ($func_name:ident, $type:ty, $SCALAR:ident) => {
+            fn $func_name(
+                expr_id: usize,
+                left_col: Arc<dyn PhysicalExpr>,
+                right_col: Arc<dyn PhysicalExpr>,
+            ) -> Arc<dyn PhysicalExpr> {
+                match expr_id {
+                    // left_col + 1 > right_col + 5 AND left_col + 3 < right_col + 10
+                    0 => gen_conjunctive_numerical_expr(
+                        left_col,
+                        right_col,
+                        (
+                            Operator::Plus,
+                            Operator::Plus,
+                            Operator::Plus,
+                            Operator::Plus,
+                        ),
+                        ScalarValue::$SCALAR(Some(1 as $type)),
+                        ScalarValue::$SCALAR(Some(5 as $type)),
+                        ScalarValue::$SCALAR(Some(3 as $type)),
+                        ScalarValue::$SCALAR(Some(10 as $type)),
+                    ),
+                    // left_col - 1 > right_col + 5 AND left_col + 3 < right_col + 10
+                    1 => gen_conjunctive_numerical_expr(
+                        left_col,
+                        right_col,
+                        (
+                            Operator::Minus,
+                            Operator::Plus,
+                            Operator::Plus,
+                            Operator::Plus,
+                        ),
+                        ScalarValue::$SCALAR(Some(1 as $type)),
+                        ScalarValue::$SCALAR(Some(5 as $type)),
+                        ScalarValue::$SCALAR(Some(3 as $type)),
+                        ScalarValue::$SCALAR(Some(10 as $type)),
+                    ),
+                    // left_col - 1 > right_col + 5 AND left_col - 3 < right_col + 10
+                    2 => gen_conjunctive_numerical_expr(
+                        left_col,
+                        right_col,
+                        (
+                            Operator::Minus,
+                            Operator::Plus,
+                            Operator::Minus,
+                            Operator::Plus,
+                        ),
+                        ScalarValue::$SCALAR(Some(1 as $type)),
+                        ScalarValue::$SCALAR(Some(5 as $type)),
+                        ScalarValue::$SCALAR(Some(3 as $type)),
+                        ScalarValue::$SCALAR(Some(10 as $type)),
+                    ),
+                    // left_col - 10 > right_col - 5 AND left_col - 3 < right_col + 10
+                    3 => gen_conjunctive_numerical_expr(
+                        left_col,
+                        right_col,
+                        (
+                            Operator::Minus,
+                            Operator::Minus,
+                            Operator::Minus,
+                            Operator::Plus,
+                        ),
+                        ScalarValue::$SCALAR(Some(10 as $type)),
+                        ScalarValue::$SCALAR(Some(5 as $type)),
+                        ScalarValue::$SCALAR(Some(3 as $type)),
+                        ScalarValue::$SCALAR(Some(10 as $type)),
+                    ),
+                    // left_col - 10 > right_col - 5 AND left_col - 30 < right_col - 3
+                    4 => gen_conjunctive_numerical_expr(
+                        left_col,
+                        right_col,
+                        (
+                            Operator::Minus,
+                            Operator::Minus,
+                            Operator::Minus,
+                            Operator::Minus,
+                        ),
+                        ScalarValue::$SCALAR(Some(10 as $type)),
+                        ScalarValue::$SCALAR(Some(5 as $type)),
+                        ScalarValue::$SCALAR(Some(30 as $type)),
+                        ScalarValue::$SCALAR(Some(3 as $type)),
+                    ),
+                    _ => panic!("No case"),
+                }
+            }
+        };
+    }
+
+    join_expr_tests!(join_expr_tests_fixture_i32, i32, Int32);
+    join_expr_tests!(join_expr_tests_fixture_f64, f64, Float64);
+
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+    use std::iter::Iterator;
+
+    struct AscendingRandomFloatIterator {
+        prev: f64,
+        max: f64,
+        rng: StdRng,
+    }
+
+    impl AscendingRandomFloatIterator {
+        fn new(min: f64, max: f64) -> Self {
+            let mut rng = StdRng::seed_from_u64(42);
+            let initial = rng.gen_range(min..max);
+            AscendingRandomFloatIterator {
+                prev: initial,
+                max,
+                rng,
+            }
         }
     }
+
+    impl Iterator for AscendingRandomFloatIterator {
+        type Item = f64;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let new_value = self.rng.gen_range(self.prev..self.max);
+            self.prev = new_value;
+            Some(new_value)
+        }
+    }
+
     fn build_sides_record_batches(
         table_size: i32,
         key_cardinality: (i32, i32),
@@ -1708,6 +1758,11 @@ mod tests {
                 .collect::<Vec<i64>>(),
         ));
 
+        let float_asc = Arc::new(Float64Array::from_iter_values(
+            AscendingRandomFloatIterator::new(0., table_size as f64)
+                .take(table_size as usize),
+        ));
+
         let left = RecordBatch::try_from_iter(vec![
             ("la1", ordered.clone()),
             ("lb1", cardinality.clone()),
@@ -1718,6 +1773,7 @@ mod tests {
             ("l_asc_null_first", ordered_asc_null_first.clone()),
             ("l_asc_null_last", ordered_asc_null_last.clone()),
             ("l_desc_null_first", ordered_desc_null_first.clone()),
+            ("l_float", float_asc.clone()),
         ])?;
         let right = RecordBatch::try_from_iter(vec![
             ("ra1", ordered.clone()),
@@ -1729,6 +1785,7 @@ mod tests {
             ("r_asc_null_first", ordered_asc_null_first),
             ("r_asc_null_last", ordered_asc_null_last),
             ("r_desc_null_first", ordered_desc_null_first),
+            ("r_float", float_asc),
         ])?;
         Ok((left, right))
     }
@@ -1913,7 +1970,7 @@ mod tests {
             Field::new("left", DataType::Int32, true),
             Field::new("right", DataType::Int32, true),
         ]);
-        let filter_expr = join_expr_tests_fixture(
+        let filter_expr = join_expr_tests_fixture_i32(
             case_expr,
             col("left", &intermediate_schema)?,
             col("right", &intermediate_schema)?,
@@ -1925,65 +1982,6 @@ mod tests {
             },
             ColumnIndex {
                 index: 0,
-                side: JoinSide::Right,
-            },
-        ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
-
-        experiment(left, right, filter, join_type, on, task_ctx).await?;
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn single_test() -> Result<()> {
-        let case_expr = 1;
-        let cardinality = (11, 21);
-        let join_type = JoinType::Full;
-        let config = SessionConfig::new().with_repartition_joins(false);
-        let session_ctx = SessionContext::with_config(config);
-        let task_ctx = session_ctx.task_ctx();
-        let (left_batch, right_batch) =
-            build_sides_record_batches(TABLE_SIZE, cardinality)?;
-        let left_schema = &left_batch.schema();
-        let right_schema = &right_batch.schema();
-        let left_sorted = vec![PhysicalSortExpr {
-            expr: col("la1_des", left_schema)?,
-            options: SortOptions {
-                descending: true,
-                nulls_first: true,
-            },
-        }];
-        let right_sorted = vec![PhysicalSortExpr {
-            expr: col("ra1_des", right_schema)?,
-            options: SortOptions {
-                descending: true,
-                nulls_first: true,
-            },
-        }];
-        let (left, right) =
-            create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
-
-        let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
-        )];
-
-        let intermediate_schema = Schema::new(vec![
-            Field::new("left", DataType::Int32, true),
-            Field::new("right", DataType::Int32, true),
-        ]);
-        let filter_expr = join_expr_tests_fixture(
-            case_expr,
-            col("left", &intermediate_schema)?,
-            col("right", &intermediate_schema)?,
-        );
-        let column_indices = vec![
-            ColumnIndex {
-                index: 5,
-                side: JoinSide::Left,
-            },
-            ColumnIndex {
-                index: 5,
                 side: JoinSide::Right,
             },
         ];
@@ -2049,7 +2047,7 @@ mod tests {
             Field::new("left", DataType::Int32, true),
             Field::new("right", DataType::Int32, true),
         ]);
-        let filter_expr = join_expr_tests_fixture(
+        let filter_expr = join_expr_tests_fixture_i32(
             case_expr,
             col("left", &intermediate_schema)?,
             col("right", &intermediate_schema)?,
@@ -2141,7 +2139,7 @@ mod tests {
             Field::new("left", DataType::Int32, true),
             Field::new("right", DataType::Int32, true),
         ]);
-        let filter_expr = join_expr_tests_fixture(
+        let filter_expr = join_expr_tests_fixture_i32(
             case_expr,
             col("left", &intermediate_schema)?,
             col("right", &intermediate_schema)?,
@@ -2199,7 +2197,7 @@ mod tests {
             Field::new("left", DataType::Int32, true),
             Field::new("right", DataType::Int32, true),
         ]);
-        let filter_expr = join_expr_tests_fixture(
+        let filter_expr = join_expr_tests_fixture_i32(
             case_expr,
             col("left", &intermediate_schema)?,
             col("right", &intermediate_schema)?,
@@ -2258,7 +2256,7 @@ mod tests {
             Field::new("left", DataType::Int32, true),
             Field::new("right", DataType::Int32, true),
         ]);
-        let filter_expr = join_expr_tests_fixture(
+        let filter_expr = join_expr_tests_fixture_i32(
             case_expr,
             col("left", &intermediate_schema)?,
             col("right", &intermediate_schema)?,
@@ -2386,17 +2384,19 @@ mod tests {
             Field::new("0", DataType::Int32, true),
             Field::new("1", DataType::Int32, true),
         ]);
-        let filter_expr = gen_conjunctive_numeric_expr(
+        let filter_expr = gen_conjunctive_numerical_expr(
             col("0", &intermediate_schema)?,
             col("1", &intermediate_schema)?,
-            Operator::Plus,
-            Operator::Minus,
-            Operator::Plus,
-            Operator::Plus,
-            0,
-            3,
-            0,
-            3,
+            (
+                Operator::Plus,
+                Operator::Minus,
+                Operator::Plus,
+                Operator::Plus,
+            ),
+            ScalarValue::Int32(Some(0)),
+            ScalarValue::Int32(Some(3)),
+            ScalarValue::Int32(Some(0)),
+            ScalarValue::Int32(Some(3)),
         );
         let column_indices = vec![
             ColumnIndex {
@@ -2468,6 +2468,77 @@ mod tests {
             false,
         )?;
         assert_eq!(left_side_joiner.visited_rows.is_empty(), should_be_empty);
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn testing_ascending_float_pruning(
+        #[values(
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::RightSemi,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::RightAnti,
+            JoinType::Full
+        )]
+        join_type: JoinType,
+        #[values(
+        (4, 5),
+        (11, 21),
+        (31, 71),
+        (99, 12),
+        )]
+        cardinality: (i32, i32),
+        #[values(0, 1, 2, 3, 4)] case_expr: usize,
+    ) -> Result<()> {
+        let config = SessionConfig::new().with_repartition_joins(false);
+        let session_ctx = SessionContext::with_config(config);
+        let task_ctx = session_ctx.task_ctx();
+        let (left_batch, right_batch) =
+            build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_schema = &left_batch.schema();
+        let right_schema = &right_batch.schema();
+        let left_sorted = vec![PhysicalSortExpr {
+            expr: col("l_float", left_schema)?,
+            options: SortOptions::default(),
+        }];
+        let right_sorted = vec![PhysicalSortExpr {
+            expr: col("r_float", right_schema)?,
+            options: SortOptions::default(),
+        }];
+        let (left, right) =
+            create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
+
+        let on = vec![(
+            Column::new_with_schema("lc1", left_schema)?,
+            Column::new_with_schema("rc1", right_schema)?,
+        )];
+
+        let intermediate_schema = Schema::new(vec![
+            Field::new("left", DataType::Float64, true),
+            Field::new("right", DataType::Float64, true),
+        ]);
+        let filter_expr = join_expr_tests_fixture_f64(
+            case_expr,
+            col("left", &intermediate_schema)?,
+            col("right", &intermediate_schema)?,
+        );
+        let column_indices = vec![
+            ColumnIndex {
+                index: 9,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 9,
+                side: JoinSide::Right,
+            },
+        ];
+        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+
+        experiment(left, right, filter, join_type, on, task_ctx).await?;
         Ok(())
     }
 }
