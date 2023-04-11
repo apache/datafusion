@@ -100,7 +100,7 @@ use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
 use crate::physical_optimizer::sort_enforcement::EnforceSorting;
-use datafusion_optimizer::OptimizerConfig;
+use datafusion_optimizer::{analyzer::AnalyzerRule, OptimizerConfig};
 use datafusion_sql::planner::object_name_to_table_reference;
 use uuid::Uuid;
 
@@ -1451,9 +1451,10 @@ impl SessionState {
     /// Replace the optimizer rules
     pub fn with_optimizer_rules(
         mut self,
+        analyzer_rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
         rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
     ) -> Self {
-        self.optimizer = Optimizer::with_rules(rules);
+        self.optimizer = Optimizer::with_rules(analyzer_rules, rules);
         self
     }
 

@@ -47,7 +47,7 @@ pub fn main() -> Result<()> {
     );
 
     // now run the optimizer with our custom rule
-    let optimizer = Optimizer::with_rules(vec![Arc::new(MyRule {})]);
+    let optimizer = Optimizer::with_rules(vec![], vec![Arc::new(MyRule {})]);
     let config = OptimizerContext::default().with_skip_failing_rules(false);
     let optimized_plan = optimizer.optimize(&logical_plan, &config, observe)?;
     println!(

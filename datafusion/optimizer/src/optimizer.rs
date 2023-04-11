@@ -17,7 +17,10 @@
 
 //! Query optimizer traits
 
-use crate::analyzer::Analyzer;
+use crate::analyzer::count_wildcard_rule::CountWildcardRule;
+use crate::analyzer::inline_table_scan::InlineTableScan;
+use crate::analyzer::type_coercion::TypeCoercion;
+use crate::analyzer::{Analyzer, AnalyzerRule};
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_where_exists::DecorrelateWhereExists;
 use crate::decorrelate_where_in::DecorrelateWhereIn;
@@ -156,7 +159,10 @@ impl OptimizerConfig for OptimizerContext {
 /// A rule-based optimizer.
 #[derive(Clone)]
 pub struct Optimizer {
-    /// All rules to apply
+    /// All analyzer rules to apply
+    pub analyzer_rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
+
+    /// All optimizer rules to apply
     pub rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
 }
 
@@ -207,6 +213,12 @@ impl Default for Optimizer {
 impl Optimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new() -> Self {
+        let analyzer_rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
+            Arc::new(InlineTableScan::new()),
+            Arc::new(TypeCoercion::new()),
+            Arc::new(CountWildcardRule::new()),
+        ];
+
         let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
@@ -244,12 +256,18 @@ impl Optimizer {
             Arc::new(PushDownLimit::new()),
         ];
 
-        Self::with_rules(rules)
+        Self::with_rules(analyzer_rules, rules)
     }
 
     /// Create a new optimizer with the given rules
-    pub fn with_rules(rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>) -> Self {
-        Self { rules }
+    pub fn with_rules(
+        analyzer_rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
+        rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
+    ) -> Self {
+        Self {
+            analyzer_rules,
+            rules,
+        }
     }
 
     /// Optimizes the logical plan by applying optimizer rules, and
@@ -265,7 +283,8 @@ impl Optimizer {
     {
         let options = config.options();
         // execute_and_check has it's own timer
-        let mut new_plan = Analyzer::default().execute_and_check(plan, options)?;
+        let mut new_plan = Analyzer::with_rules(self.analyzer_rules.clone())
+            .execute_and_check(plan, options)?;
 
         let start_time = Instant::now();
 
@@ -456,7 +475,7 @@ mod tests {
 
     #[test]
     fn skip_failing_rule() {
-        let opt = Optimizer::with_rules(vec![Arc::new(BadRule {})]);
+        let opt = Optimizer::with_rules(vec![], vec![Arc::new(BadRule {})]);
         let config = OptimizerContext::new().with_skip_failing_rules(true);
         let plan = LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
@@ -467,7 +486,7 @@ mod tests {
 
     #[test]
     fn no_skip_failing_rule() {
-        let opt = Optimizer::with_rules(vec![Arc::new(BadRule {})]);
+        let opt = Optimizer::with_rules(vec![], vec![Arc::new(BadRule {})]);
         let config = OptimizerContext::new().with_skip_failing_rules(false);
         let plan = LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
@@ -485,7 +504,7 @@ mod tests {
 
     #[test]
     fn generate_different_schema() {
-        let opt = Optimizer::with_rules(vec![Arc::new(GetTableScanRule {})]);
+        let opt = Optimizer::with_rules(vec![], vec![Arc::new(GetTableScanRule {})]);
         let config = OptimizerContext::new().with_skip_failing_rules(false);
         let plan = LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
@@ -511,7 +530,7 @@ mod tests {
     fn generate_same_schema_different_metadata() -> Result<()> {
         // if the plan creates more metadata than previously (because
         // some wrapping functions are removed, etc) do not error
-        let opt = Optimizer::with_rules(vec![Arc::new(GetTableScanRule {})]);
+        let opt = Optimizer::with_rules(vec![], vec![Arc::new(GetTableScanRule {})]);
         let config = OptimizerContext::new().with_skip_failing_rules(false);
 
         let input = Arc::new(test_table_scan()?);
@@ -536,7 +555,10 @@ mod tests {
         // Run a goofy optimizer, which rotates projection columns
         // [1, 2, 3] -> [2, 3, 1] -> [3, 1, 2] -> [1, 2, 3]
 
-        let opt = Optimizer::with_rules(vec![Arc::new(RotateProjectionRule::new(false))]);
+        let opt = Optimizer::with_rules(
+            vec![],
+            vec![Arc::new(RotateProjectionRule::new(false))],
+        );
         let config = OptimizerContext::new().with_max_passes(16);
 
         let initial_plan = LogicalPlanBuilder::empty(false)
@@ -562,7 +584,10 @@ mod tests {
         // Run a goofy optimizer, which reverses and rotates projection columns
         // [1, 2, 3] -> [3, 2, 1] -> [2, 1, 3] -> [1, 3, 2] -> [3, 2, 1]
 
-        let opt = Optimizer::with_rules(vec![Arc::new(RotateProjectionRule::new(true))]);
+        let opt = Optimizer::with_rules(
+            vec![],
+            vec![Arc::new(RotateProjectionRule::new(true))],
+        );
         let config = OptimizerContext::new().with_max_passes(16);
 
         let initial_plan = LogicalPlanBuilder::empty(false)

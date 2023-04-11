@@ -211,10 +211,13 @@ mod tests {
         expected: &str,
     ) -> Result<()> {
         fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
-        let optimizer = Optimizer::with_rules(vec![
-            Arc::new(EliminateFilter::new()),
-            Arc::new(PropagateEmptyRelation::new()),
-        ]);
+        let optimizer = Optimizer::with_rules(
+            vec![],
+            vec![
+                Arc::new(EliminateFilter::new()),
+                Arc::new(PropagateEmptyRelation::new()),
+            ],
+        );
         let config = &mut OptimizerContext::new()
             .with_max_passes(1)
             .with_skip_failing_rules(false);
