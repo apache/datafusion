@@ -100,7 +100,10 @@ use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
 use crate::physical_optimizer::sort_enforcement::EnforceSorting;
-use datafusion_optimizer::{analyzer::AnalyzerRule, OptimizerConfig};
+use datafusion_optimizer::{
+    analyzer::{Analyzer, AnalyzerRule},
+    OptimizerConfig,
+};
 use datafusion_sql::planner::object_name_to_table_reference;
 use uuid::Uuid;
 
@@ -1198,6 +1201,8 @@ impl QueryPlanner for DefaultQueryPlanner {
 pub struct SessionState {
     /// UUID for the session
     session_id: String,
+    /// Responsible for analyzing and rewrite a logical plan before optimization
+    analyzer: Analyzer,
     /// Responsible for optimizing a logical plan
     optimizer: Optimizer,
     /// Responsible for optimizing a physical execution plan
@@ -1336,6 +1341,7 @@ impl SessionState {
 
         SessionState {
             session_id,
+            analyzer: Analyzer::new(),
             optimizer: Optimizer::new(),
             physical_optimizers,
             query_planner: Arc::new(DefaultQueryPlanner {}),
@@ -1448,13 +1454,21 @@ impl SessionState {
         self
     }
 
+    /// Replace the analyzer rules
+    pub fn with_analyzer_rules(
+        mut self,
+        rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
+    ) -> Self {
+        self.analyzer = Analyzer::with_rules(rules);
+        self
+    }
+
     /// Replace the optimizer rules
     pub fn with_optimizer_rules(
         mut self,
-        analyzer_rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
         rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
     ) -> Self {
-        self.optimizer = Optimizer::with_rules(analyzer_rules, rules);
+        self.optimizer = Optimizer::with_rules(rules);
         self
     }
 
@@ -1464,6 +1478,15 @@ impl SessionState {
         physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
     ) -> Self {
         self.physical_optimizers = physical_optimizers;
+        self
+    }
+
+    /// Adds a new [`AnalyzerRule`]
+    pub fn add_analyzer_rule(
+        mut self,
+        analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
+    ) -> Self {
+        self.analyzer.rules.push(analyzer_rule);
         self
     }
 
@@ -1640,9 +1663,12 @@ impl SessionState {
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();
 
+            let analyzed_plan = self
+                .analyzer
+                .execute_and_check(e.plan.as_ref(), self.options())?;
             // optimize the child plan, capturing the output of each optimizer
             let (plan, logical_optimization_succeeded) = match self.optimizer.optimize(
-                e.plan.as_ref(),
+                &analyzed_plan,
                 self,
                 |optimized_plan, optimizer| {
                     let optimizer_name = optimizer.name().to_string();
@@ -1668,7 +1694,8 @@ impl SessionState {
                 logical_optimization_succeeded,
             }))
         } else {
-            self.optimizer.optimize(plan, self, |_, _| {})
+            let analyzed_plan = self.analyzer.execute_and_check(plan, self.options())?;
+            self.optimizer.optimize(&analyzed_plan, self, |_, _| {})
         }
     }
 

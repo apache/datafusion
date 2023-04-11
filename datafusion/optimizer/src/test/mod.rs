@@ -127,7 +127,7 @@ pub fn assert_optimized_plan_eq(
     plan: &LogicalPlan,
     expected: &str,
 ) -> Result<()> {
-    let optimizer = Optimizer::with_rules(vec![], vec![rule]);
+    let optimizer = Optimizer::with_rules(vec![rule]);
     let optimized_plan = optimizer
         .optimize_recursively(
             optimizer.rules.get(0).unwrap(),
@@ -146,7 +146,7 @@ pub fn assert_optimized_plan_eq_display_indent(
     plan: &LogicalPlan,
     expected: &str,
 ) {
-    let optimizer = Optimizer::with_rules(vec![], vec![rule]);
+    let optimizer = Optimizer::with_rules(vec![rule]);
     let optimized_plan = optimizer
         .optimize_recursively(
             optimizer.rules.get(0).unwrap(),
@@ -164,7 +164,7 @@ pub fn assert_optimizer_err(
     plan: &LogicalPlan,
     expected: &str,
 ) {
-    let optimizer = Optimizer::with_rules(vec![], vec![rule]);
+    let optimizer = Optimizer::with_rules(vec![rule]);
     let res = optimizer.optimize_recursively(
         optimizer.rules.get(0).unwrap(),
         plan,
@@ -185,7 +185,7 @@ pub fn assert_optimization_skipped(
     rule: Arc<dyn OptimizerRule + Send + Sync>,
     plan: &LogicalPlan,
 ) -> Result<()> {
-    let optimizer = Optimizer::with_rules(vec![], vec![rule]);
+    let optimizer = Optimizer::with_rules(vec![rule]);
     let new_plan = optimizer
         .optimize_recursively(
             optimizer.rules.get(0).unwrap(),

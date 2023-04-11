@@ -94,8 +94,7 @@ mod tests {
     use crate::push_down_limit::PushDownLimit;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
-        let optimizer =
-            Optimizer::with_rules(vec![], vec![Arc::new(EliminateLimit::new())]);
+        let optimizer = Optimizer::with_rules(vec![Arc::new(EliminateLimit::new())]);
         let optimized_plan = optimizer
             .optimize_recursively(
                 optimizer.rules.get(0).unwrap(),
@@ -116,13 +115,10 @@ mod tests {
     ) -> Result<()> {
         fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
         let config = OptimizerContext::new().with_max_passes(1);
-        let optimizer = Optimizer::with_rules(
-            vec![],
-            vec![
-                Arc::new(PushDownLimit::new()),
-                Arc::new(EliminateLimit::new()),
-            ],
-        );
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(PushDownLimit::new()),
+            Arc::new(EliminateLimit::new()),
+        ]);
         let optimized_plan = optimizer
             .optimize(plan, &config, observe)
             .expect("failed to optimize plan");

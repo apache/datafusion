@@ -919,13 +919,10 @@ mod tests {
         plan: &LogicalPlan,
         expected: &str,
     ) -> Result<()> {
-        let optimizer = Optimizer::with_rules(
-            vec![],
-            vec![
-                Arc::new(RewriteDisjunctivePredicate::new()),
-                Arc::new(PushDownFilter::new()),
-            ],
-        );
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(RewriteDisjunctivePredicate::new()),
+            Arc::new(PushDownFilter::new()),
+        ]);
         let mut optimized_plan = optimizer
             .optimize_recursively(
                 optimizer.rules.get(0).unwrap(),

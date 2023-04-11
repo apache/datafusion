@@ -28,6 +28,12 @@ use crate::analyzer::AnalyzerRule;
 /// Resolve issue: https://github.com/apache/arrow-datafusion/issues/5473.
 pub struct CountWildcardRule {}
 
+impl Default for CountWildcardRule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CountWildcardRule {
     pub fn new() -> Self {
         CountWildcardRule {}

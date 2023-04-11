@@ -1061,13 +1061,10 @@ mod tests {
     }
 
     fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
-        let optimizer = Optimizer::with_rules(
-            vec![],
-            vec![
-                Arc::new(PushDownProjection::new()),
-                Arc::new(EliminateProjection::new()),
-            ],
-        );
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(PushDownProjection::new()),
+            Arc::new(EliminateProjection::new()),
+        ]);
         let mut optimized_plan = optimizer
             .optimize_recursively(
                 optimizer.rules.get(0).unwrap(),
