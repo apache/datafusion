@@ -485,7 +485,7 @@ mod tests {
             options: SortOptions::default(),
         }];
         let memory_exec = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?) as _;
-        let sort_exec = Arc::new(SortExec::try_new(sort_expr.clone(), memory_exec, None)?)
+        let sort_exec = Arc::new(SortExec::new(sort_expr.clone(), memory_exec))
             as Arc<dyn ExecutionPlan>;
         let memory_exec2 = Arc::new(MemoryExec::try_new(&[], schema, None)?) as _;
         // memory_exec2 doesn't have output ordering

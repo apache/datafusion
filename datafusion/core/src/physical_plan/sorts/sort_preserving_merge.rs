@@ -522,12 +522,8 @@ mod tests {
         sort: Vec<PhysicalSortExpr>,
         context: Arc<TaskContext>,
     ) -> RecordBatch {
-        let sort_exec = Arc::new(SortExec::new_with_partitioning(
-            sort.clone(),
-            input,
-            true,
-            None,
-        ));
+        let sort_exec =
+            Arc::new(SortExec::new(sort.clone(), input).with_preserve_partitioning(true));
         sorted_merge(sort_exec, sort, context).await
     }
 
@@ -537,7 +533,7 @@ mod tests {
         context: Arc<TaskContext>,
     ) -> RecordBatch {
         let merge = Arc::new(CoalescePartitionsExec::new(src));
-        let sort_exec = Arc::new(SortExec::try_new(sort, merge, None).unwrap());
+        let sort_exec = Arc::new(SortExec::new(sort, merge));
         let mut result = collect(sort_exec, context).await.unwrap();
         assert_eq!(result.len(), 1);
         result.remove(0)

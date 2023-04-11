@@ -222,7 +222,7 @@ fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
         })?
         .with_nanosecond(0);
     let value = match granularity {
-        "second" => value,
+        "second" | "millisecond" | "microsecond" => value,
         "minute" => value.and_then(|d| d.with_second(0)),
         "hour" => value
             .and_then(|d| d.with_second(0))
@@ -280,10 +280,41 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                (f)(*v)?,
-                tz_opt.clone(),
-            ))
+            let nano = (f)(*v)?;
+            match granularity.as_str() {
+                "minute" => {
+                    // cast to second
+                    let second = ScalarValue::TimestampSecond(
+                        Some(nano.unwrap() / 1_000_000_000),
+                        tz_opt.clone(),
+                    );
+                    ColumnarValue::Scalar(second)
+                }
+                "second" => {
+                    // cast to millisecond
+                    let mill = ScalarValue::TimestampMillisecond(
+                        Some(nano.unwrap() / 1_000_000),
+                        tz_opt.clone(),
+                    );
+                    ColumnarValue::Scalar(mill)
+                }
+                "millisecond" => {
+                    // cast to microsecond
+                    let micro = ScalarValue::TimestampMicrosecond(
+                        Some(nano.unwrap() / 1_000),
+                        tz_opt.clone(),
+                    );
+                    ColumnarValue::Scalar(micro)
+                }
+                _ => {
+                    // cast to nanosecond
+                    let nano = ScalarValue::TimestampNanosecond(
+                        Some(nano.unwrap()),
+                        tz_opt.clone(),
+                    );
+                    ColumnarValue::Scalar(nano)
+                }
+            }
         }
         ColumnarValue::Array(array) => {
             let array = as_timestamp_nanosecond_array(array)?;

@@ -263,6 +263,24 @@ pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
     Ok(idents)
 }
 
+/// Construct a new Vec<ArrayRef> from the rows of the `arrays` at the `indices`.
+pub fn get_arrayref_at_indices(
+    arrays: &[ArrayRef],
+    indices: &PrimitiveArray<UInt32Type>,
+) -> Result<Vec<ArrayRef>> {
+    arrays
+        .iter()
+        .map(|array| {
+            compute::take(
+                array.as_ref(),
+                indices,
+                None, // None: no index check
+            )
+            .map_err(DataFusionError::ArrowError)
+        })
+        .collect()
+}
+
 pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
     parse_identifiers(s)
         .unwrap_or_default()
@@ -290,24 +308,6 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
         count += 1;
     }
     count
-}
-
-/// Construct a new Vec<ArrayRef> from the rows of the `arrays` at the `indices`.
-pub fn get_arrayref_at_indices(
-    arrays: &[ArrayRef],
-    indices: &PrimitiveArray<UInt32Type>,
-) -> Result<Vec<ArrayRef>> {
-    arrays
-        .iter()
-        .map(|array| {
-            compute::take(
-                array.as_ref(),
-                indices,
-                None, // None: no index check
-            )
-            .map_err(DataFusionError::ArrowError)
-        })
-        .collect::<Result<Vec<_>>>()
 }
 
 #[cfg(test)]

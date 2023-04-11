@@ -363,6 +363,7 @@ impl GroupedHashAggregateStream {
         Ok(res)
     }
 
+    // Update the row_aggr_state according to groub_by values (result of group_by_expressions)
     fn update_group_state(
         &mut self,
         group_values: &[ArrayRef],
@@ -470,6 +471,7 @@ impl GroupedHashAggregateStream {
         Ok(groups_with_rows)
     }
 
+    // Update the accumulator results, according to row_aggr_state.
     fn update_accumulators(
         &mut self,
         groups_with_rows: &[usize],
@@ -908,5 +910,5 @@ fn get_at_indices(
     input_values
         .iter()
         .map(|array| get_arrayref_at_indices(array, batch_indices))
-        .collect::<Result<Vec<_>>>()
+        .collect()
 }
