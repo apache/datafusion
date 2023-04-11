@@ -316,7 +316,7 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 strct
                     .sub_field_types
                     .iter()
-                    .map(|field| Field::try_from(field))
+                    .map(Field::try_from)
                     .collect::<Result<_, _>>()?,
             ),
             arrow_type::ArrowTypeEnum::Union(union) => {
