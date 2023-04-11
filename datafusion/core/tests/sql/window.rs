@@ -432,4 +432,84 @@ mod tests {
         assert_batches_eq!(expected, &actual);
         Ok(())
     }
+
+    fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+        let formatted = displayable(plan.as_ref()).indent().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        println!("{:#?}", actual);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_source_rn_ordered() -> Result<()> {
+        let tmpdir = TempDir::new().unwrap();
+        let ctx = get_test_context(&tmpdir, 1).await?;
+
+        let sql = "SELECT ts, rn1 FROM (SELECT ts, inc_col,
+           ROW_NUMBER() OVER() as rn1
+           FROM annotated_data
+           ORDER BY ts ASC)
+           ORDER BY rn1
+           LIMIT 5";
+        // let sql = "SELECT ts, rn1 FROM (SELECT ts, inc_col,
+        //    ROW_NUMBER() OVER() as rn1
+        //    FROM annotated_data
+        //    ORDER BY ts ASC)
+        //    ORDER BY rn1
+        //    LIMIT 5";
+        // let sql = "SELECT ts, rn1, SUM(RN1) OVER(ORDER BY rn1 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS sum1
+        //  FROM (SELECT ts, inc_col,
+        //    ROW_NUMBER() OVER() as rn1
+        //    FROM annotated_data
+        //    ORDER BY ts ASC)
+        //    LIMIT 5";
+
+        // let sql = "SELECT ts, rn1 FROM (SELECT ts, inc_col,
+        //    ROW_NUMBER() OVER(ORDER BY ts DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as rn1
+        //    FROM annotated_data
+        //    ORDER BY ts DESC)
+        //    ORDER BY rn1 ASC";
+
+        // let sql = "SELECT ts, inc_col,
+        //    ROW_NUMBER() OVER(ORDER BY ts ASC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as rn1,
+        //    ROW_NUMBER() OVER(ORDER BY ts ASC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as rn2
+        //    FROM annotated_data
+        //    ORDER BY ts ASC";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let expected = {
+            vec![
+                "GlobalLimitExec: skip=0, fetch=5",
+                "  ProjectionExec: expr=[ts@0 as ts, ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as rn1]",
+                "    BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: \"ROW_NUMBER()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        let actual_len = actual.len();
+        let actual_trim_last = &actual[..actual_len - 1];
+        assert_eq!(
+            expected, actual_trim_last,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+----+-----+",
+            "| ts | rn1 |",
+            "+----+-----+",
+            "| 1  | 1   |",
+            "| 1  | 2   |",
+            "| 5  | 3   |",
+            "| 9  | 4   |",
+            "| 10 | 5   |",
+            "+----+-----+",
+        ];
+        assert_batches_eq!(expected, &actual);
+        Ok(())
+    }
 }

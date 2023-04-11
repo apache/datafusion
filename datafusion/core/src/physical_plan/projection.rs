@@ -95,9 +95,12 @@ impl ProjectionExec {
         for (expression, name) in expr.iter() {
             if let Some(column) = expression.as_any().downcast_ref::<Column>() {
                 let new_col_idx = schema.index_of(name)?;
+                let matching_input_column = input_schema.field(column.index());
+                let new_column =
+                    Column::new(matching_input_column.name(), column.index());
                 // When the column name is the same, but index does not equal, treat it as Alias
                 if (column.name() != name) || (column.index() != new_col_idx) {
-                    let entry = alias_map.entry(column.clone()).or_insert_with(Vec::new);
+                    let entry = alias_map.entry(new_column).or_insert_with(Vec::new);
                     entry.push(Column::new(name, new_col_idx));
                 }
             };
@@ -125,7 +128,6 @@ impl ProjectionExec {
             }
             None => None,
         };
-
         Ok(Self {
             expr,
             schema,
@@ -204,6 +206,16 @@ impl ExecutionPlan for ProjectionExec {
         let mut new_properties = EquivalenceProperties::new(self.schema());
         project_equivalence_properties(
             self.input.equivalence_properties(),
+            &self.alias_map,
+            &mut new_properties,
+        );
+        new_properties
+    }
+
+    fn ordering_equivalence_properties(&self) -> EquivalenceProperties {
+        let mut new_properties = EquivalenceProperties::new(self.schema());
+        project_equivalence_properties(
+            self.input.ordering_equivalence_properties(),
             &self.alias_map,
             &mut new_properties,
         );

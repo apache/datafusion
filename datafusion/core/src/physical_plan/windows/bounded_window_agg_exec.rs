@@ -48,16 +48,16 @@ use std::task::{Context, Poll};
 
 use crate::physical_plan::windows::calc_requirements;
 use datafusion_common::utils::evaluate_partition_ranges;
+use datafusion_physical_expr::expressions::{Column, RowNumber};
 use datafusion_physical_expr::window::{
-    PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
-    WindowAggState, WindowState,
+    BuiltInWindowExpr, PartitionBatchState, PartitionBatches, PartitionKey,
+    PartitionWindowAggStates, WindowAggState, WindowState,
 };
 use datafusion_physical_expr::{
-    EquivalenceProperties, PhysicalExpr, PhysicalSortRequirement,
+    EquivalenceProperties, EquivalentClass, PhysicalExpr, PhysicalSortRequirement,
 };
 use indexmap::IndexMap;
 use log::debug;
-
 /// Window execution plan
 #[derive(Debug)]
 pub struct BoundedWindowAggExec {
@@ -181,6 +181,47 @@ impl ExecutionPlan for BoundedWindowAggExec {
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input().equivalence_properties()
+    }
+
+    /// Get the EquivalenceProperties within the plan
+    fn ordering_equivalence_properties(&self) -> EquivalenceProperties {
+        // We need to update schema. Hence we do not use input.ordering_equivalence_properties() directly.
+        let mut res = EquivalenceProperties::new(self.schema());
+        let eq_properties = self.equivalence_properties();
+        let eq_classes = eq_properties.classes().to_vec();
+        res.extend(eq_classes);
+        let mut eq_classes = vec![];
+        let out_ordering = self.output_ordering().unwrap_or(&[]);
+        if let Some(first) = out_ordering.first() {
+            if let Some(column) = first.expr.as_any().downcast_ref::<Column>() {
+                let mut columns = vec![column.clone()];
+                for expr in &self.window_expr {
+                    if let Some(builtin_window_expr) =
+                        expr.as_any().downcast_ref::<BuiltInWindowExpr>()
+                    {
+                        if builtin_window_expr
+                            .get_built_in_func_expr()
+                            .as_any()
+                            .is::<RowNumber>()
+                            // ASCENDING
+                            && !first.options.descending
+                        {
+                            let tmp = self
+                                .schema
+                                .column_with_name(expr.field().unwrap().name());
+                            if let Some((idx, elem)) = tmp {
+                                let new_col = Column::new(elem.name(), idx);
+                                columns.push(new_col.clone());
+                                res.add_equal_conditions((column, &new_col));
+                            }
+                        }
+                    }
+                }
+
+                eq_classes.push(EquivalentClass::new(column.clone(), columns.clone()));
+            }
+        }
+        res
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

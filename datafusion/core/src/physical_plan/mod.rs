@@ -187,6 +187,11 @@ pub trait ExecutionPlan: Debug + Send + Sync {
         EquivalenceProperties::new(self.schema())
     }
 
+    /// Get the EquivalenceProperties within the plan
+    fn ordering_equivalence_properties(&self) -> EquivalenceProperties {
+        self.equivalence_properties()
+    }
+
     /// Get a list of child execution plans that provide the input for this plan. The returned list
     /// will be empty for leaf nodes, will contain a single value for unary nodes, or two
     /// values for binary nodes (such as joins).
