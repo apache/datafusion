@@ -656,7 +656,7 @@ SELECT ts1 + i FROM foo;
 2003-07-12T01:31:15.000123463
 
 # Timestamp + Timestamp => error
-statement error DataFusion error: Error during planning: Timestamp\(Nanosecond, None\) Timestamp\(Nanosecond, None\) is an unsupported operation. addition/subtraction on dates/timestamps only supported with interval types
+statement error DataFusion error: Error during planning: Timestamp\(Nanosecond, None\) \+ Timestamp\(Nanosecond, None\) can't be evaluated because there isn't a common type to coerce the types to
 SELECT ts1 + ts2
 FROM foo;
 
