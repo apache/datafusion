@@ -37,9 +37,9 @@ use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::sort_pushdown::{pushdown_sorts, SortPushDown};
 use crate::physical_optimizer::utils::{
-    add_sort_above, calc_ordering_range, find_match_indices, get_ordered_merged_indices,
-    get_set_diff_indices, is_ascending_ordered, is_coalesce_partitions, is_limit,
-    is_repartition, is_sort, is_sort_preserving_merge, is_union, is_window,
+    add_sort_above, find_indices, is_coalesce_partitions, is_limit, is_repartition,
+    is_sort, is_sort_preserving_merge, is_sorted, is_union, is_window,
+    merge_and_order_indices, set_difference,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -51,7 +51,7 @@ use crate::physical_plan::windows::{
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_common::utils::get_at_indices;
+use datafusion_common::utils::{get_at_indices, longest_consecutive_prefix};
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::utils::{
     convert_to_expr, get_indices_of_matching_exprs, ordering_satisfy,
@@ -723,25 +723,23 @@ fn can_skip_sort(
         &physical_ordering_exprs,
         equal_properties,
     );
-    let ordered_merged_indices = get_ordered_merged_indices(&pb_indices, &ob_indices);
+    let ordered_merged_indices = merge_and_order_indices(&pb_indices, &ob_indices);
     // Indices of order by columns that doesn't seen in partition by
     // Equivalently (Order by columns) ∖ (Partition by columns) where `∖` represents set difference.
-    let unique_ob_indices = get_set_diff_indices(&ob_indices, &pb_indices);
-    if !is_ascending_ordered(&unique_ob_indices) {
+    let unique_ob_indices = set_difference(&ob_indices, &pb_indices);
+    if !is_sorted(&unique_ob_indices) {
         // ORDER BY indices should be ascending ordered
         return Ok(None);
     }
-    let first_n = calc_ordering_range(&ordered_merged_indices);
+    let first_n = longest_consecutive_prefix(ordered_merged_indices);
     let furthest_ob_index = *unique_ob_indices.last().unwrap_or(&0);
     let consecutive_till_ob_end = first_n > furthest_ob_index;
     if !consecutive_till_ob_end {
         return Ok(None);
     }
     let input_orderby_columns = get_at_indices(physical_ordering, &unique_ob_indices)?;
-    let expected_orderby_columns = get_at_indices(
-        orderby_keys,
-        &find_match_indices(&unique_ob_indices, &ob_indices)?,
-    )?;
+    let expected_orderby_columns =
+        get_at_indices(orderby_keys, find_indices(&unique_ob_indices, &ob_indices)?)?;
     let should_reverse = if let Some(should_reverse) = check_alignments(
         &input.schema(),
         &input_orderby_columns,
@@ -755,7 +753,7 @@ fn can_skip_sort(
 
     let ordered_pb_indices = pb_indices.iter().copied().sorted().collect::<Vec<_>>();
     // Determine how many elements in the partition by columns defines a consecutive range from zero.
-    let first_n = calc_ordering_range(&ordered_pb_indices);
+    let first_n = longest_consecutive_prefix(&ordered_pb_indices);
     let mode = if first_n == partitionby_exprs.len() {
         // All of the partition by columns defines a consecutive range from zero.
         PartitionSearchMode::Sorted

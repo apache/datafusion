@@ -215,7 +215,7 @@ impl ExecutionPlan for WindowAggExec {
             BaselineMetrics::new(&self.metrics, partition),
             self.partition_by_sort_keys()?,
             self.ordered_partition_by_indices.clone(),
-        ));
+        )?);
         Ok(stream)
     }
 
@@ -315,13 +315,14 @@ impl WindowAggStream {
         baseline_metrics: BaselineMetrics,
         partition_by_sort_keys: Vec<PhysicalSortExpr>,
         ordered_partition_by_indices: Vec<usize>,
-    ) -> Self {
+    ) -> Result<Self> {
         // In WindowAggExec all partition by columns should be ordered.
-        assert_eq!(
-            ordered_partition_by_indices.len(),
-            window_expr[0].partition_by().len()
-        );
-        Self {
+        if window_expr[0].partition_by().len() != ordered_partition_by_indices.len() {
+            return Err(DataFusionError::Execution(
+                "All partition by columns should have an ordering".to_string(),
+            ));
+        }
+        Ok(Self {
             schema,
             input,
             batches: vec![],
@@ -330,7 +331,7 @@ impl WindowAggStream {
             baseline_metrics,
             partition_by_sort_keys,
             ordered_partition_by_indices,
-        }
+        })
     }
 
     fn compute_aggregates(&self) -> Result<RecordBatch> {

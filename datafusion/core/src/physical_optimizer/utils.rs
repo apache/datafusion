@@ -18,6 +18,7 @@
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
 use super::optimizer::PhysicalOptimizerRule;
+use std::borrow::Borrow;
 use std::collections::HashSet;
 
 use crate::config::ConfigOptions;
@@ -34,7 +35,6 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::utils::ordering_satisfy;
 use datafusion_physical_expr::PhysicalSortExpr;
-use itertools::Itertools;
 use std::sync::Arc;
 
 /// Convenience rule for writing optimizers: recursively invoke
@@ -80,68 +80,62 @@ pub fn add_sort_above(
     Ok(())
 }
 
-// Find the indices of each element if the to_search vector inside the searched vector
-// Assumes that each entry in the `to_search` occurs in the `searched`.
-pub(crate) fn find_match_indices<T: PartialEq>(
-    to_search: &[T],
-    searched: &[T],
+/// Find indices of each element in `targets` inside `items`. If one of the
+/// elements is absent in `items`, returns an error.
+pub fn find_indices<T: PartialEq, S: Borrow<T>>(
+    items: impl IntoIterator<Item = S>,
+    targets: &[T],
 ) -> Result<Vec<usize>> {
-    let mut result = vec![];
-    for item in to_search {
-        if let Some(idx) = searched.iter().position(|e| e.eq(item)) {
-            result.push(idx);
-        } else {
-            return Err(DataFusionError::Execution("item not found".to_string()));
+    items
+        .into_iter()
+        .map(|item| targets.iter().position(|e| item.borrow().eq(e)))
+        .collect::<Option<_>>()
+        .ok_or_else(|| DataFusionError::Execution("Target not found".to_string()))
+}
+
+/// Merges collections `first` and `second`, removes duplicates and sorts the
+/// result, returning it as a [`Vec`].
+pub fn merge_and_order_indices<T: Borrow<usize>, S: Borrow<usize>>(
+    first: impl IntoIterator<Item = T>,
+    second: impl IntoIterator<Item = S>,
+) -> Vec<usize> {
+    let mut result: Vec<_> = first
+        .into_iter()
+        .map(|e| *e.borrow())
+        .chain(second.into_iter().map(|e| *e.borrow()))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    result.sort();
+    result
+}
+
+/// Checks whether the given index sequence is monotonically non-decreasing.
+pub fn is_sorted<T: Borrow<usize>>(sequence: impl IntoIterator<Item = T>) -> bool {
+    // TODO: Remove this function when `is_sorted` graduates from Rust nightly.
+    let mut previous = 0;
+    for item in sequence.into_iter() {
+        let current = *item.borrow();
+        if current < previous {
+            return false;
         }
+        previous = current;
     }
-    Ok(result)
+    true
 }
 
-// Merges vectors `in1` and `in2` (removes duplicates) then sorts the result.
-pub(crate) fn get_ordered_merged_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
-    let set: HashSet<_> = in1.iter().chain(in2.iter()).copied().collect();
-    let mut res: Vec<_> = set.into_iter().collect();
-    res.sort();
-    res
-}
-
-// Checks if the vector in the form 1,2,3,..n (Consecutive) not necessarily starting from zero
-// Assumes input has ascending order
-pub(crate) fn is_ascending_ordered(in1: &[usize]) -> bool {
-    if !in1.is_empty() {
-        in1.iter()
-            .zip(in1.iter().skip(1))
-            .all(|(prev, cur)| cur >= prev)
-    } else {
-        true
-    }
-}
-
-// Returns the vector consisting of elements inside `in1` that are not inside `in2`.
-// Resulting vector have the same ordering as `in1` (except elements inside `in2` are removed.)
-pub(crate) fn get_set_diff_indices(in1: &[usize], in2: &[usize]) -> Vec<usize> {
-    let mut res = vec![];
-    for lhs in in1 {
-        if !in2.iter().contains(lhs) {
-            res.push(*lhs);
-        }
-    }
-    res
-}
-
-// Find the largest range that satisfy 0,1,2 .. n in the `in1`
-// For 0,1,2,4,5 we would produce 3. meaning 0,1,2 is the largest consecutive range (starting from zero).
-// For 1,2,3,4 we would produce 0. Meaning there is no consecutive range (starting from zero).
-pub(crate) fn calc_ordering_range(in1: &[usize]) -> usize {
-    let mut count = 0;
-    for (idx, elem) in in1.iter().enumerate() {
-        if idx != *elem {
-            break;
-        } else {
-            count += 1
-        }
-    }
-    count
+/// Calculates the set difference between sequences `first` and `second`,
+/// returning the result as a [`Vec`]. Preserves the ordering of `first`.
+pub fn set_difference<T: Borrow<usize>, S: Borrow<usize>>(
+    first: impl IntoIterator<Item = T>,
+    second: impl IntoIterator<Item = S>,
+) -> Vec<usize> {
+    let set: HashSet<_> = second.into_iter().map(|e| *e.borrow()).collect();
+    first
+        .into_iter()
+        .map(|e| *e.borrow())
+        .filter(|e| !set.contains(e))
+        .collect()
 }
 
 /// Checks whether the given operator is a limit;
@@ -186,52 +180,43 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_sorted_merged_indices() -> Result<()> {
+    async fn test_find_indices() -> Result<()> {
+        assert_eq!(find_indices([0, 3, 4], &[0, 3, 4])?, vec![0, 1, 2]);
+        assert_eq!(find_indices([0, 3, 4], &[0, 4, 3])?, vec![0, 2, 1]);
+        assert_eq!(find_indices([0, 3], &[3, 0, 4])?, vec![1, 0]);
+        assert!(find_indices([0, 3, 4], &[0, 3]).is_err());
+        assert!(find_indices([0, 3, 4], &[0, 2]).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_merge_and_order_indices() {
         assert_eq!(
-            get_ordered_merged_indices(&[0, 3, 4], &[1, 3, 5]),
+            merge_and_order_indices([0, 3, 4], [1, 3, 5]),
             vec![0, 1, 3, 4, 5]
         );
         // Result should be ordered, even if inputs are not
         assert_eq!(
-            get_ordered_merged_indices(&[3, 0, 4], &[5, 1, 3]),
+            merge_and_order_indices([3, 0, 4], [5, 1, 3]),
             vec![0, 1, 3, 4, 5]
         );
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_is_ascending_ordered() -> Result<()> {
-        assert!(is_ascending_ordered(&[0, 3, 4]));
-        assert!(is_ascending_ordered(&[0, 1, 2]));
-        assert!(is_ascending_ordered(&[0, 1, 4]));
-        assert!(is_ascending_ordered(&[]));
-        assert!(is_ascending_ordered(&[1, 2]));
-        assert!(!is_ascending_ordered(&[3, 2]));
-        Ok(())
+    async fn test_is_sorted() {
+        assert!(is_sorted([0, 3, 4]));
+        assert!(is_sorted([0, 1, 2]));
+        assert!(is_sorted([0, 1, 4]));
+        assert!(is_sorted([0usize; 0]));
+        assert!(is_sorted([1, 2]));
+        assert!(!is_sorted([3, 2]));
     }
 
     #[tokio::test]
-    async fn test_get_set_diff_indices() -> Result<()> {
-        assert_eq!(get_set_diff_indices(&[0, 3, 4], &[1, 2]), vec![0, 3, 4]);
-        assert_eq!(get_set_diff_indices(&[0, 3, 4], &[1, 2, 4]), vec![0, 3]);
+    async fn test_set_difference() {
+        assert_eq!(set_difference([0, 3, 4], [1, 2]), vec![0, 3, 4]);
+        assert_eq!(set_difference([0, 3, 4], [1, 2, 4]), vec![0, 3]);
         // return value should have same ordering with the in1
-        assert_eq!(get_set_diff_indices(&[3, 4, 0], &[1, 2, 4]), vec![3, 0]);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_calc_ordering_range() -> Result<()> {
-        assert_eq!(calc_ordering_range(&[0, 3, 4]), 1);
-        assert_eq!(calc_ordering_range(&[0, 1, 3, 4]), 2);
-        assert_eq!(calc_ordering_range(&[0, 1, 2, 3, 4]), 5);
-        assert_eq!(calc_ordering_range(&[1, 2, 3, 4]), 0);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_find_match_indices() -> Result<()> {
-        assert_eq!(find_match_indices(&[0, 3, 4], &[0, 3, 4])?, vec![0, 1, 2]);
-        assert_eq!(find_match_indices(&[0, 4, 3], &[0, 3, 4])?, vec![0, 2, 1]);
-        Ok(())
+        assert_eq!(set_difference([3, 4, 0], [1, 2, 4]), vec![3, 0]);
     }
 }

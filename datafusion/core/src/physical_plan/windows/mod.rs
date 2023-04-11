@@ -44,6 +44,7 @@ mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
 pub use bounded_window_agg_exec::PartitionSearchMode;
+use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
@@ -212,15 +213,22 @@ pub(crate) fn get_ordered_partition_by_indices(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Vec<usize> {
-    let input_ordering = input.output_ordering();
-    let input_ordering = input_ordering.unwrap_or(&[]);
+    let input_ordering = input.output_ordering().unwrap_or(&[]);
     let input_ordering_exprs = convert_to_expr(input_ordering);
     let equal_properties = || input.equivalence_properties();
-    get_indices_of_matching_exprs(
+    let input_places = get_indices_of_matching_exprs(
         &input_ordering_exprs,
         partition_by_exprs,
         equal_properties,
-    )
+    );
+    let mut partition_places = get_indices_of_matching_exprs(
+        partition_by_exprs,
+        &input_ordering_exprs,
+        equal_properties,
+    );
+    partition_places.sort();
+    let first_n = longest_consecutive_prefix(partition_places);
+    input_places[0..first_n].to_vec()
 }
 
 #[cfg(test)]
@@ -291,6 +299,7 @@ mod tests {
             (vec!["a", "b"], vec![0, 1]),
             (vec!["b", "a"], vec![1, 0]),
             (vec!["b", "a", "c"], vec![1, 0, 2]),
+            (vec!["d", "b", "a"], vec![2, 1]),
         ];
         for (pb_names, expected) in test_data {
             let pb_exprs = pb_names
