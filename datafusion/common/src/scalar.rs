@@ -3760,7 +3760,7 @@ mod tests {
         let int_value = ScalarValue::Int32(Some(i32::MAX));
         let int_value_2 = ScalarValue::Int32(Some(i32::MIN));
         assert!(matches!(
-            int_value.sub(&int_value_2),
+            int_value.sub_checked(&int_value_2),
             Err(DataFusionError::Execution(msg)) if msg == "Overflow while calculating ScalarValue."
         ));
         Ok(())
@@ -3780,7 +3780,7 @@ mod tests {
         let int_value = ScalarValue::Int64(Some(i64::MAX));
         let int_value_2 = ScalarValue::Int64(Some(i64::MIN));
         assert!(matches!(
-            int_value.sub(&int_value_2),
+            int_value.sub_checked(&int_value_2),
             Err(DataFusionError::Execution(msg)) if msg == "Overflow while calculating ScalarValue."
         ));
         Ok(())
