@@ -127,7 +127,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{DateTime, TimeZone, Utc};
     use datafusion_common::ScalarValue;
-    use datafusion_expr::{or, Between, BinaryExpr, Cast, Operator};
+    use datafusion_expr::{or, BinaryExpr, Cast, Operator};
 
     use crate::OptimizerContext;
     use datafusion_expr::logical_plan::table_scan;
