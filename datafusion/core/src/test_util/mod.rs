@@ -399,9 +399,10 @@ pub async fn get_test_context(
     get_test_context_helper(tmpdir, infinite_source, session_config, get_test_data).await
 }
 
-/// Creates a test_context with table name `annotated_data` which has 100 rows.
-// Columns in the table are a, b, c, d. Source is CsvExec which is ordered by
-// a, b, c columns.
+/// Creates a test_context with table name `annotated_data`, which has 100 rows.
+// Columns in the table are a,b,c,d. Source is CsvExec which is ordered by
+// a,b,c column. Column a has cardinality 2, column b has cardinality 4.
+// Column c has cardinality 100 (unique entries). Column d has cardinality 5.
 pub async fn get_test_context2(
     tmpdir: &TempDir,
     infinite_source: bool,
