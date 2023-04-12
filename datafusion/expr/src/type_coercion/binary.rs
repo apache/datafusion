@@ -183,7 +183,7 @@ pub fn coerce_types(
         | Operator::Minus
         | Operator::Modulo
         | Operator::Divide
-        | Operator::Multiply => mathematics_numerical_coercion(op, lhs_type, rhs_type),
+        | Operator::Multiply => mathematics_numerical_coercion(lhs_type, rhs_type),
         Operator::RegexMatch
         | Operator::RegexIMatch
         | Operator::RegexNotMatch
@@ -516,7 +516,6 @@ fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
 /// Returns the output type of applying mathematics operations such as
 /// `+` to arguments of `lhs_type` and `rhs_type`.
 fn mathematics_numerical_coercion(
-    mathematics_op: &Operator,
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {
@@ -541,16 +540,15 @@ fn mathematics_numerical_coercion(
     // that the coercion removes the least amount of information
     match (lhs_type, rhs_type) {
         (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
-            mathematics_numerical_coercion(mathematics_op, lhs_value_type, rhs_value_type)
+            mathematics_numerical_coercion(lhs_value_type, rhs_value_type)
         }
         (Dictionary(key_type, value_type), _) => {
-            let value_type =
-                mathematics_numerical_coercion(mathematics_op, value_type, rhs_type);
+            let value_type = mathematics_numerical_coercion(value_type, rhs_type);
             value_type
                 .map(|value_type| Dictionary(key_type.clone(), Box::new(value_type)))
         }
         (_, Dictionary(_, value_type)) => {
-            mathematics_numerical_coercion(mathematics_op, lhs_type, value_type)
+            mathematics_numerical_coercion(lhs_type, value_type)
         }
         (Float64, _) | (_, Float64) => Some(Float64),
         (_, Float32) | (Float32, _) => Some(Float32),
