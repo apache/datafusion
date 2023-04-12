@@ -289,9 +289,9 @@ impl<F: FileOpener> FileStream<F> {
                     Ok(reader) => {
                         let partition_values = mem::take(partition_values);
 
-                        let next = self.start_next_file().transpose();
-
+                        // include time needed to start opening in `start_next_file`
                         self.file_stream_metrics.time_opening.stop();
+                        let next = self.start_next_file().transpose();
                         self.file_stream_metrics.time_scanning_until_data.start();
                         self.file_stream_metrics.time_scanning_total.start();
 

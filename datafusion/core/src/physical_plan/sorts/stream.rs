@@ -16,13 +16,15 @@
 // under the License.
 
 use crate::common::Result;
-use crate::physical_plan::sorts::cursor::RowCursor;
+use crate::physical_plan::sorts::cursor::{FieldArray, FieldCursor, RowCursor};
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{PhysicalExpr, PhysicalSortExpr};
+use arrow::array::Array;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
 use futures::stream::{Fuse, StreamExt};
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
@@ -75,7 +77,7 @@ impl FusedStreams {
 /// A [`PartitionedStream`] that wraps a set of [`SendableRecordBatchStream`]
 /// and computes [`RowCursor`] based on the provided [`PhysicalSortExpr`]
 #[derive(Debug)]
-pub(crate) struct RowCursorStream {
+pub struct RowCursorStream {
     /// Converter to convert output of physical expressions
     converter: RowConverter,
     /// The physical expressions to sort by
@@ -85,7 +87,7 @@ pub(crate) struct RowCursorStream {
 }
 
 impl RowCursorStream {
-    pub(crate) fn try_new(
+    pub fn try_new(
         schema: &Schema,
         expressions: &[PhysicalSortExpr],
         streams: Vec<SendableRecordBatchStream>,
@@ -121,6 +123,62 @@ impl RowCursorStream {
 
 impl PartitionedStream for RowCursorStream {
     type Output = Result<(RowCursor, RecordBatch)>;
+
+    fn partitions(&self) -> usize {
+        self.streams.0.len()
+    }
+
+    fn poll_next(
+        &mut self,
+        cx: &mut Context<'_>,
+        stream_idx: usize,
+    ) -> Poll<Option<Self::Output>> {
+        Poll::Ready(ready!(self.streams.poll_next(cx, stream_idx)).map(|r| {
+            r.and_then(|batch| {
+                let cursor = self.convert_batch(&batch)?;
+                Ok((cursor, batch))
+            })
+        }))
+    }
+}
+
+/// Specialized stream for sorts on single primitive columns
+pub struct FieldCursorStream<T: FieldArray> {
+    /// The physical expressions to sort by
+    sort: PhysicalSortExpr,
+    /// Input streams
+    streams: FusedStreams,
+    phantom: PhantomData<fn(T) -> T>,
+}
+
+impl<T: FieldArray> std::fmt::Debug for FieldCursorStream<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrimitiveCursorStream")
+            .field("num_streams", &self.streams)
+            .finish()
+    }
+}
+
+impl<T: FieldArray> FieldCursorStream<T> {
+    pub fn new(sort: PhysicalSortExpr, streams: Vec<SendableRecordBatchStream>) -> Self {
+        let streams = streams.into_iter().map(|s| s.fuse()).collect();
+        Self {
+            sort,
+            streams: FusedStreams(streams),
+            phantom: Default::default(),
+        }
+    }
+
+    fn convert_batch(&mut self, batch: &RecordBatch) -> Result<FieldCursor<T::Values>> {
+        let value = self.sort.expr.evaluate(batch)?;
+        let array = value.into_array(batch.num_rows());
+        let array = array.as_any().downcast_ref::<T>().expect("field values");
+        Ok(FieldCursor::new(self.sort.options, array))
+    }
+}
+
+impl<T: FieldArray> PartitionedStream for FieldCursorStream<T> {
+    type Output = Result<(FieldCursor<T::Values>, RecordBatch)>;
 
     fn partitions(&self) -> usize {
         self.streams.0.len()

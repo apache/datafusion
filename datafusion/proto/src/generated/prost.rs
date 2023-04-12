@@ -1791,6 +1791,12 @@ pub struct WindowAggExecNode {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MaybeFilter {
+    #[prost(message, optional, tag = "1")]
+    pub expr: ::core::option::Option<PhysicalExprNode>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateExecNode {
     #[prost(message, repeated, tag = "1")]
     pub group_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
@@ -1811,6 +1817,8 @@ pub struct AggregateExecNode {
     pub null_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(bool, repeated, tag = "9")]
     pub groups: ::prost::alloc::vec::Vec<bool>,
+    #[prost(message, repeated, tag = "10")]
+    pub filter_expr: ::prost::alloc::vec::Vec<MaybeFilter>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2127,6 +2135,12 @@ pub enum ScalarFunction {
     CurrentTime = 71,
     Uuid = 72,
     Cbrt = 73,
+    Acosh = 74,
+    Asinh = 75,
+    Atanh = 76,
+    Sinh = 77,
+    Cosh = 78,
+    Tanh = 79,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2209,6 +2223,12 @@ impl ScalarFunction {
             ScalarFunction::CurrentTime => "CurrentTime",
             ScalarFunction::Uuid => "Uuid",
             ScalarFunction::Cbrt => "Cbrt",
+            ScalarFunction::Acosh => "Acosh",
+            ScalarFunction::Asinh => "Asinh",
+            ScalarFunction::Atanh => "Atanh",
+            ScalarFunction::Sinh => "Sinh",
+            ScalarFunction::Cosh => "Cosh",
+            ScalarFunction::Tanh => "Tanh",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2288,6 +2308,12 @@ impl ScalarFunction {
             "CurrentTime" => Some(Self::CurrentTime),
             "Uuid" => Some(Self::Uuid),
             "Cbrt" => Some(Self::Cbrt),
+            "Acosh" => Some(Self::Acosh),
+            "Asinh" => Some(Self::Asinh),
+            "Atanh" => Some(Self::Atanh),
+            "Sinh" => Some(Self::Sinh),
+            "Cosh" => Some(Self::Cosh),
+            "Tanh" => Some(Self::Tanh),
             _ => None,
         }
     }
@@ -2632,6 +2658,7 @@ pub enum AggregateMode {
     Partial = 0,
     Final = 1,
     FinalPartitioned = 2,
+    Single = 3,
 }
 impl AggregateMode {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2643,6 +2670,7 @@ impl AggregateMode {
             AggregateMode::Partial => "PARTIAL",
             AggregateMode::Final => "FINAL",
             AggregateMode::FinalPartitioned => "FINAL_PARTITIONED",
+            AggregateMode::Single => "SINGLE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2651,6 +2679,7 @@ impl AggregateMode {
             "PARTIAL" => Some(Self::Partial),
             "FINAL" => Some(Self::Final),
             "FINAL_PARTITIONED" => Some(Self::FinalPartitioned),
+            "SINGLE" => Some(Self::Single),
             _ => None,
         }
     }

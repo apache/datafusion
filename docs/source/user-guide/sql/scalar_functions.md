@@ -23,11 +23,16 @@
 
 - [abs](#abs)
 - [acos](#acos)
+- [acosh](#acosh)
 - [asin](#asin)
+- [asinh](#asinh)
 - [atan](#atan)
+- [atanh](#atanh)
 - [atan2](#atan2)
+- [cbrt](#cbrt)
 - [ceil](#ceil)
 - [cos](#cos)
+- [cosh](#cosh)
 - [exp](#exp)
 - [floor](#floor)
 - [ln](#ln)
@@ -38,9 +43,10 @@
 - [round](#round)
 - [signum](#signum)
 - [sin](#sin)
+- [sinh](#sinh)
 - [sqrt](#sqrt)
-- [cbrt](#cbrt)
 - [tan](#tan)
+- [tanh](#tanh)
 - [trunc](#trunc)
 
 ### `abs`
@@ -69,6 +75,19 @@ acos(numeric_expression)
 - **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
+### `acosh`
+
+Returns the area hyperbolic cosine or inverse hyperbolic cosine of a number.
+
+```
+acosh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
 ### `asin`
 
 Returns the arc sine or inverse sine of a number.
@@ -82,12 +101,38 @@ asin(numeric_expression)
 - **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
+### `asinh`
+
+Returns the area hyperbolic sine or inverse hyperbolic sine of a number.
+
+```
+asinh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
 ### `atan`
 
 Returns the arc tangent or inverse tangent of a number.
 
 ```
 atan(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `atanh`
+
+Returns the area hyperbolic tangent or inverse hyperbolic tangent of a number.
+
+```
+atanh(numeric_expression)
 ```
 
 #### Arguments
@@ -110,6 +155,19 @@ atan2(expression_y, expression_x)
 - **expression_x**: Second numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
+### `cbrt`
+
+Returns the cube root of a number.
+
+```
+cbrt(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
 ### `ceil`
 
 Returns the nearest integer greater than or equal to a number.
@@ -129,6 +187,19 @@ Returns the cosine of a number.
 
 ```
 cos(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `cosh`
+
+Returns the hyperbolic cosine of a number.
+
+```
+cosh(numeric_expression)
 ```
 
 #### Arguments
@@ -266,6 +337,19 @@ sin(numeric_expression)
 - **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
+### `sinh`
+
+Returns the hyperbolic sine of a number.
+
+```
+sinh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
 ### `sqrt`
 
 Returns the square root of a number.
@@ -279,12 +363,12 @@ sqrt(numeric_expression)
 - **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
-### `cbrt`
+### `tan`
 
-Returns the cube root of a number.
+Returns the tangent of a number.
 
 ```
-cbrt(numeric_expression)
+tan(numeric_expression)
 ```
 
 #### Arguments
@@ -292,12 +376,12 @@ cbrt(numeric_expression)
 - **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
-### `tan`
+### `tanh`
 
-Returns the tangent of a number.
+Returns the hyperbolic tangent of a number.
 
 ```
-tan(numeric_expression)
+tanh(numeric_expression)
 ```
 
 #### Arguments

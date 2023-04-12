@@ -453,7 +453,12 @@ pub async fn from_substrait_sorts(
         let asc_nullfirst = match &s.sort_kind {
             Some(k) => match k {
                 Direction(d) => {
-                    let direction: SortDirection = unsafe { ::std::mem::transmute(*d) };
+                    let Some(direction) = SortDirection::from_i32(*d) else {
+                        return Err(DataFusionError::NotImplemented(
+                            format!("Unsupported Substrait SortDirection value {d}"),
+                        ))
+                    };
+
                     match direction {
                         SortDirection::AscNullsFirst => Ok((true, true)),
                         SortDirection::AscNullsLast => Ok((true, false)),
@@ -840,7 +845,7 @@ fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
                             "List type must have inner type".to_string(),
                         )
                     })?)?;
-                let field = Box::new(Field::new("list_item", inner_type, true));
+                let field = Arc::new(Field::new("list_item", inner_type, true));
                 match list.type_variation_reference {
                     DEFAULT_CONTAINER_TYPE_REF => Ok(DataType::List(field)),
                     LARGE_CONTAINER_TYPE_REF => Ok(DataType::LargeList(field)),
@@ -908,7 +913,7 @@ fn from_substrait_bound(
     }
 }
 
-fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
+pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
     let scalar_value = match &lit.literal_type {
         Some(LiteralType::Boolean(b)) => ScalarValue::Boolean(Some(*b)),
         Some(LiteralType::I8(n)) => match lit.type_variation_reference {
@@ -931,9 +936,7 @@ fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
         },
         Some(LiteralType::I32(n)) => match lit.type_variation_reference {
             DEFAULT_TYPE_REF => ScalarValue::Int32(Some(*n)),
-            UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt32(Some(unsafe {
-                std::mem::transmute_copy::<i32, u32>(n)
-            })),
+            UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt32(Some(*n as u32)),
             others => {
                 return Err(DataFusionError::Substrait(format!(
                     "Unknown type variation reference {others}",
@@ -942,9 +945,7 @@ fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
         },
         Some(LiteralType::I64(n)) => match lit.type_variation_reference {
             DEFAULT_TYPE_REF => ScalarValue::Int64(Some(*n)),
-            UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt64(Some(unsafe {
-                std::mem::transmute_copy::<i64, u64>(n)
-            })),
+            UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt64(Some(*n as u64)),
             others => {
                 return Err(DataFusionError::Substrait(format!(
                     "Unknown type variation reference {others}",

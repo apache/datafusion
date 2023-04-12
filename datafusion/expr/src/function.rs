@@ -24,7 +24,7 @@ use crate::{
     array_expressions, conditional_expressions, struct_expressions, Accumulator,
     BuiltinScalarFunction, Signature, TypeSignature,
 };
-use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
+use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::{DataFusionError, Result};
 use std::sync::Arc;
 
@@ -112,7 +112,7 @@ pub fn return_type(
     // Some built-in functions' return type depends on the incoming type.
     match fun {
         BuiltinScalarFunction::MakeArray => Ok(DataType::FixedSizeList(
-            Box::new(Field::new("item", input_expr_types[0].clone(), true)),
+            Arc::new(Field::new("item", input_expr_types[0].clone(), true)),
             input_expr_types.len() as i32,
         )),
         BuiltinScalarFunction::Ascii => Ok(DataType::Int32),
@@ -132,9 +132,24 @@ pub fn return_type(
         BuiltinScalarFunction::Concat => Ok(DataType::Utf8),
         BuiltinScalarFunction::ConcatWithSeparator => Ok(DataType::Utf8),
         BuiltinScalarFunction::DatePart => Ok(DataType::Float64),
-        BuiltinScalarFunction::DateTrunc => {
-            Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
-        }
+        BuiltinScalarFunction::DateTrunc => match input_expr_types[1] {
+            DataType::Timestamp(TimeUnit::Nanosecond, _) | DataType::Utf8 => {
+                Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
+            }
+            DataType::Timestamp(TimeUnit::Second, _) => {
+                Ok(DataType::Timestamp(TimeUnit::Second, None))
+            }
+            _ => Err(DataFusionError::Internal(
+                "The date_trunc function can only accept timestamp as the second arg."
+                    .to_string(),
+            )),
+        },
         BuiltinScalarFunction::DateBin => {
             Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
         }
@@ -218,7 +233,7 @@ pub fn return_type(
         }
         BuiltinScalarFunction::Now => Ok(DataType::Timestamp(
             TimeUnit::Nanosecond,
-            Some("+00:00".to_owned()),
+            Some("+00:00".into()),
         )),
         BuiltinScalarFunction::CurrentDate => Ok(DataType::Date32),
         BuiltinScalarFunction::CurrentTime => Ok(DataType::Time64(TimeUnit::Nanosecond)),
@@ -229,10 +244,10 @@ pub fn return_type(
         BuiltinScalarFunction::Upper => utf8_to_str_type(&input_expr_types[0], "upper"),
         BuiltinScalarFunction::RegexpMatch => Ok(match input_expr_types[0] {
             DataType::LargeUtf8 => {
-                DataType::List(Box::new(Field::new("item", DataType::LargeUtf8, true)))
+                DataType::List(Arc::new(Field::new("item", DataType::LargeUtf8, true)))
             }
             DataType::Utf8 => {
-                DataType::List(Box::new(Field::new("item", DataType::Utf8, true)))
+                DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)))
             }
             DataType::Null => DataType::Null,
             _ => {
@@ -248,7 +263,7 @@ pub fn return_type(
             _ => Ok(DataType::Float64),
         },
 
-        BuiltinScalarFunction::Struct => Ok(DataType::Struct(vec![])),
+        BuiltinScalarFunction::Struct => Ok(DataType::Struct(Fields::empty())),
 
         BuiltinScalarFunction::Atan2 => match &input_expr_types[0] {
             DataType::Float32 => Ok(DataType::Float32),
@@ -266,8 +281,12 @@ pub fn return_type(
         | BuiltinScalarFunction::Acos
         | BuiltinScalarFunction::Asin
         | BuiltinScalarFunction::Atan
+        | BuiltinScalarFunction::Acosh
+        | BuiltinScalarFunction::Asinh
+        | BuiltinScalarFunction::Atanh
         | BuiltinScalarFunction::Ceil
         | BuiltinScalarFunction::Cos
+        | BuiltinScalarFunction::Cosh
         | BuiltinScalarFunction::Exp
         | BuiltinScalarFunction::Floor
         | BuiltinScalarFunction::Ln
@@ -276,9 +295,11 @@ pub fn return_type(
         | BuiltinScalarFunction::Round
         | BuiltinScalarFunction::Signum
         | BuiltinScalarFunction::Sin
+        | BuiltinScalarFunction::Sinh
         | BuiltinScalarFunction::Sqrt
         | BuiltinScalarFunction::Cbrt
         | BuiltinScalarFunction::Tan
+        | BuiltinScalarFunction::Tanh
         | BuiltinScalarFunction::Trunc => match input_expr_types[0] {
             DataType::Float32 => Ok(DataType::Float32),
             _ => Ok(DataType::Float64),
@@ -494,7 +515,7 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 ]),
                 TypeSignature::Exact(vec![
                     DataType::Utf8,
-                    DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".to_owned())),
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
                 ]),
             ],
             fun.volatility(),

@@ -498,3 +498,16 @@ impl From<JoinSide> for protobuf::JoinSide {
         }
     }
 }
+
+impl TryFrom<Option<Arc<dyn PhysicalExpr>>> for protobuf::MaybeFilter {
+    type Error = DataFusionError;
+
+    fn try_from(expr: Option<Arc<dyn PhysicalExpr>>) -> Result<Self, Self::Error> {
+        match expr {
+            None => Ok(protobuf::MaybeFilter { expr: None }),
+            Some(expr) => Ok(protobuf::MaybeFilter {
+                expr: Some(expr.try_into()?),
+            }),
+        }
+    }
+}
