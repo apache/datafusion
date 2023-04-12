@@ -112,7 +112,9 @@ pub fn coerce_types(
         | Operator::Lt
         | Operator::Gt
         | Operator::GtEq
-        | Operator::LtEq => comparison_coercion(lhs_type, rhs_type),
+        | Operator::LtEq
+        | Operator::IsDistinctFrom
+        | Operator::IsNotDistinctFrom => comparison_coercion(lhs_type, rhs_type),
         // interval - timestamp is an erroneous case, cannot coerce a type
         Operator::Plus | Operator::Minus
             if (is_date(lhs_type)
@@ -140,9 +142,6 @@ pub fn coerce_types(
         | Operator::RegexNotIMatch => regex_coercion(lhs_type, rhs_type),
         // "||" operator has its own rules, and always return a string type
         Operator::StringConcat => string_concat_coercion(lhs_type, rhs_type),
-        Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => {
-            eq_coercion(lhs_type, rhs_type)
-        }
     };
 
     // re-write the error message of failed coercions to include the operator's information
@@ -211,8 +210,8 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
 }
 
 // This function performs temporal coercion between the two input data types and the provided operator.
-// It returns an error if the operands are date or timestamp data types with an unsupported operation,
-// or None if the coercion is not possible. If the coercion is possible, it returns a new data type as Some(DataType).
+// It returns None (it will convert a Err outside) if the operands are an unsupported/wrong operation.
+// If the coercion is possible, it returns a new data type as Some(DataType).
 pub fn temporal_add_sub_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
@@ -234,13 +233,11 @@ pub fn temporal_add_sub_coercion(
         (lhs, rhs, _) if is_interval(lhs) && is_interval(rhs) => {
             handle_interval_addition(lhs, rhs)
         }
-        // if two date/timestamp are being added/subtracted, return an error indicating that the operation is not supported
         (lhs, rhs, Operator::Minus)
             if (is_date(lhs) || is_timestamp(lhs))
                 && (is_date(rhs) || is_timestamp(rhs)) =>
         {
-            // TODO: support Minus
-            None
+            temporal_coercion(lhs, rhs)
         }
         // return None if no coercion is possible
         _ => None,
@@ -752,51 +749,6 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         }
         _ => None,
     }
-}
-
-/// Coercion rule for numerical types: The type that both lhs and rhs
-/// can be casted to for numerical calculation, while maintaining
-/// maximum precision
-fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    use arrow::datatypes::DataType::*;
-
-    // error on any non-numeric type
-    if !is_numeric(lhs_type) || !is_numeric(rhs_type) {
-        return None;
-    };
-
-    if lhs_type == rhs_type {
-        // same type => all good
-        return Some(lhs_type.clone());
-    }
-
-    // these are ordered from most informative to least informative so
-    // that the coercion removes the least amount of information
-    match (lhs_type, rhs_type) {
-        (Float64, _) | (_, Float64) => Some(Float64),
-        (_, Float32) | (Float32, _) => Some(Float32),
-        (Int64, _) | (_, Int64) => Some(Int64),
-        (Int32, _) | (_, Int32) => Some(Int32),
-        (Int16, _) | (_, Int16) => Some(Int16),
-        (Int8, _) | (_, Int8) => Some(Int8),
-        (UInt64, _) | (_, UInt64) => Some(UInt64),
-        (UInt32, _) | (_, UInt32) => Some(UInt32),
-        (UInt16, _) | (_, UInt16) => Some(UInt16),
-        (UInt8, _) | (_, UInt8) => Some(UInt8),
-        _ => None,
-    }
-}
-
-/// coercion rules for equality operations. This is a superset of all numerical coercion rules.
-fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    if lhs_type == rhs_type {
-        // same type => equality is possible
-        return Some(lhs_type.clone());
-    }
-    numerical_coercion(lhs_type, rhs_type)
-        .or_else(|| dictionary_coercion(lhs_type, rhs_type, true))
-        .or_else(|| temporal_coercion(lhs_type, rhs_type))
-        .or_else(|| null_coercion(lhs_type, rhs_type))
 }
 
 /// coercion rules from NULL type. Since NULL can be casted to most of types in arrow,
