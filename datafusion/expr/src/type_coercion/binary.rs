@@ -223,7 +223,7 @@ pub fn math_decimal_coercion(
                 .map(|value_type| Dictionary(key_type.clone(), Box::new(value_type)));
             (lhs_type, rhs_type)
         }
-        (_, Dictionary(_, value_type)) => {
+        (_, Dictionary(key_type, value_type)) => {
             let (lhs_type, value_type) = math_decimal_coercion(lhs_type, value_type);
             let rhs_type = value_type
                 .map(|value_type| Dictionary(key_type.clone(), Box::new(value_type)));
@@ -697,7 +697,6 @@ pub fn any_decimal(lhs_type: &DataType, rhs_type: &DataType) -> bool {
             is_decimal(lhs_type) || is_decimal(value_type)
         }
         (_, _) => is_decimal(lhs_type) || is_decimal(rhs_type),
-        _ => false,
     }
 }
 

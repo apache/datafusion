@@ -662,6 +662,9 @@ impl PhysicalExpr for BinaryExpr {
         let left_data_type = left_value.data_type();
         let right_data_type = right_value.data_type();
 
+        let schema = batch.schema();
+        let input_schema = schema.as_ref();
+
         match (&left_value, &left_data_type, &right_value, &right_data_type) {
             // Types are equal => valid
             (_, l, _, r) if l == r => {}
@@ -690,7 +693,7 @@ impl PhysicalExpr for BinaryExpr {
         let scalar_result = match (&left_value, &right_value) {
             (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
                 // if left is array and right is literal - use scalar operations
-                self.evaluate_array_scalar(array, scalar.clone())?
+                self.evaluate_array_scalar(array, scalar.clone(), input_schema)?
             }
             (ColumnarValue::Scalar(scalar), ColumnarValue::Array(array)) => {
                 // if right is literal and left is array - reverse operator and parameters
@@ -1029,9 +1032,10 @@ impl BinaryExpr {
         &self,
         array: &dyn Array,
         scalar: ScalarValue,
+        input_schema: &Schema,
     ) -> Result<Option<Result<ArrayRef>>> {
         let bool_type = &DataType::Boolean;
-        let result_type = &self.data_type;
+        let result_type = self.data_type(input_schema);
         let scalar_result = match &self.op {
             Operator::Lt => {
                 binary_array_op_dyn_scalar!(array, scalar, lt, bool_type)
