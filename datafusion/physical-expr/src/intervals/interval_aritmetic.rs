@@ -149,6 +149,30 @@ impl Display for Interval {
     }
 }
 
+macro_rules! intersect_bounds {
+    ($self:expr, $other:expr, $min_max:expr) => {{
+        let val = if $self.is_null() {
+            $other.clone()
+        } else if $other.is_null() {
+            $self.clone()
+        } else {
+            let inner = $min_max($self.get_bound_scalar(), $other.get_bound_scalar())?;
+            if $self != $other {
+                if inner == *$self.get_bound_scalar() {
+                    $self.clone()
+                } else {
+                    $other.clone()
+                }
+            } else if is_bound_closed(&$self, &$other) {
+                IntervalBound::Closed($other.get_bound_scalar().clone())
+            } else {
+                IntervalBound::Open($other.get_bound_scalar().clone())
+            }
+        };
+        val
+    }};
+}
+
 impl Interval {
     fn new(lower: IntervalBound, upper: IntervalBound) -> Interval {
         Interval { lower, upper }
@@ -332,62 +356,21 @@ impl Interval {
             // This None value signals an empty interval.
             return Ok(None);
         }
-        let lower = if self.lower.is_null() {
-            other.lower.clone()
-        } else if other.lower.is_null() {
-            self.lower.clone()
-        } else {
-            let max_scalar = max(
-                self.lower.get_bound_scalar(),
-                other.lower.get_bound_scalar(),
-            )?;
-            if self.lower != other.lower {
-                if max_scalar == *self.lower.get_bound_scalar() {
-                    self.lower.clone()
-                } else {
-                    other.lower.clone()
+
+        let lower = intersect_bounds!(self.lower, other.lower, max);
+
+        let upper = intersect_bounds!(self.upper, other.upper, min);
+
+        Ok(if !lower.is_null() && !upper.is_null() && lower == upper {
+            match (&lower, &upper) {
+                (IntervalBound::Closed(_), IntervalBound::Closed(_)) => {
+                    Some(Interval { lower, upper })
                 }
-            } else if is_bound_closed(&self.lower, &other.lower) {
-                IntervalBound::Closed(other.lower.get_bound_scalar().clone())
-            } else {
-                IntervalBound::Open(other.lower.get_bound_scalar().clone())
+                (_, _) => None,
             }
-        };
-        let upper = if self.upper.is_null() {
-            other.upper.clone()
-        } else if other.upper.is_null() {
-            self.upper.clone()
         } else {
-            let min_scalar = min(
-                self.upper.get_bound_scalar(),
-                other.upper.get_bound_scalar(),
-            )?;
-            if self.upper != other.upper {
-                if min_scalar == *self.upper.get_bound_scalar() {
-                    self.upper.clone()
-                } else {
-                    other.upper.clone()
-                }
-            } else if is_bound_closed(&self.upper, &other.upper) {
-                IntervalBound::Closed(other.upper.get_bound_scalar().clone())
-            } else {
-                IntervalBound::Open(other.upper.get_bound_scalar().clone())
-            }
-        };
-        Ok(
-            if !lower.is_null() && !upper.is_null() && (lower == upper) {
-                // This match handles such cases: [3, 4) ∩ [4, 5) is an empty interval,
-                // while [3, 4] ∩ [4, 5) is not.
-                match (&lower, &upper) {
-                    (IntervalBound::Closed(_), IntervalBound::Closed(_)) => {
-                        Some(Interval { lower, upper })
-                    }
-                    (_, _) => None,
-                }
-            } else {
-                Some(Interval { lower, upper })
-            },
-        )
+            Some(Interval { lower, upper })
+        })
     }
 
     /// Add the given interval (`other`) to this interval. Say we have
