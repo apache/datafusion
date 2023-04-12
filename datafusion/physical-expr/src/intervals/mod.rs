@@ -37,19 +37,21 @@ const FE_UPWARD: i32 = 0x00400000;
 const FE_DOWNWARD: i32 = 0x00800000;
 
 // Define constants for x86_64
-#[cfg(all(target_arch = "x86_64"))]
-const FE_UPWARD: i32 = 0x0800;
-#[cfg(all(target_arch = "x86_64"))]
-const FE_DOWNWARD: i32 = 0x0400;
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
+const FE_UPWARD: libc::c_int = 0x0800;
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
+const FE_DOWNWARD: libc::c_int = 0x0400;
 
-// Define a default constant for other architectures
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-const FE_UPWARD: i32 = 0x00000000;
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-const FE_DOWNWARD: i32 = 0x00000000;
-
+#[cfg(all(
+    any(target_arch = "x86", target_arch = "aarch64"),
+    not(target_os = "windows")
+))]
 extern crate libc;
 
+#[cfg(all(
+    any(target_arch = "x86", target_arch = "aarch64"),
+    not(target_os = "windows")
+))]
 extern "C" {
     fn fesetround(rount: i32);
     fn fegetround() -> i32;
@@ -228,7 +230,10 @@ pub fn alter_round_mode_for_float_operation<const UPPER: bool>(
     rhs: &ScalarValue,
     cls: Box<ScalarValueOperation>,
 ) -> Result<ScalarValue> {
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "aarch64"),
+        not(target_os = "windows")
+    ))]
     unsafe {
         let current = fegetround();
         fesetround(if UPPER { FE_UPWARD } else { FE_DOWNWARD });
@@ -236,7 +241,10 @@ pub fn alter_round_mode_for_float_operation<const UPPER: bool>(
         fesetround(current);
         res
     }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[cfg(any(
+        not(any(target_arch = "x86", target_arch = "aarch64")),
+        target_os = "windows"
+    ))]
     match cls(lhs, rhs) {
         Ok(ScalarValue::Float64(Some(val))) => Ok(ScalarValue::Float64(Some(if UPPER {
             next_up(val)

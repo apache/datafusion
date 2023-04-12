@@ -619,7 +619,10 @@ mod tests {
     capture_mode_change!(capture_mode_change_f32, create_f32_interval, f32, Float32);
     capture_mode_change!(capture_mode_change_f64, create_f64_interval, f64, Float64);
 
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "aarch64"),
+        not(target_os = "windows")
+    ))]
     #[test]
     fn test_add_intervals_lower_affected_f32() {
         let lower = f32::from_bits(1073741887);
@@ -627,7 +630,10 @@ mod tests {
         capture_mode_change_f32((lower, upper), (true, false));
     }
 
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "aarch64"),
+        not(target_os = "windows")
+    ))]
     #[test]
     fn test_add_intervals_upper_affected_f32() {
         let lower = f32::from_bits(1072693248);
@@ -635,7 +641,10 @@ mod tests {
         capture_mode_change_f32((lower, upper), (false, true));
     }
 
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "aarch64"),
+        not(target_os = "windows")
+    ))]
     #[test]
     fn test_add_intervals_lower_affected_f64() {
         let lower = 1.0;
@@ -643,7 +652,10 @@ mod tests {
         capture_mode_change_f64((lower, upper), (true, false));
     }
 
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "aarch64"),
+        not(target_os = "windows")
+    ))]
     #[test]
     fn test_add_intervals_upper_affected_f64() {
         let lower = 1.4999999999999998;
@@ -651,7 +663,10 @@ mod tests {
         capture_mode_change_f64((lower, upper), (false, true));
     }
 
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[cfg(any(
+        not(any(target_arch = "x86", target_arch = "aarch64")),
+        target_os = "windows"
+    ))]
     #[test]
     fn test_next_impl_add_intervals_f64() {
         let lower = 1.5;
@@ -659,7 +674,10 @@ mod tests {
         capture_mode_change_f64((lower, upper), (true, true));
     }
 
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[cfg(any(
+        not(any(target_arch = "x86", target_arch = "aarch64")),
+        target_os = "windows"
+    ))]
     #[test]
     fn test_next_impl_add_intervals_f32() {
         let lower = 1.5;
