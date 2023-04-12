@@ -123,6 +123,7 @@ pub struct ExprIntervalGraph {
 }
 
 impl ExprIntervalGraph {
+    /// Estimate size of bytes including `Self`.
     pub fn size(&self) -> usize {
         let node_memory_usage = self.graph.node_count()
             * (std::mem::size_of::<ExprIntervalGraphNode>()
@@ -130,7 +131,7 @@ impl ExprIntervalGraph {
         let edge_memory_usage = self.graph.edge_count()
             * (std::mem::size_of::<usize>() + std::mem::size_of::<NodeIndex>() * 2);
 
-        node_memory_usage + edge_memory_usage
+        std::mem::size_of_val(self) + node_memory_usage + edge_memory_usage
     }
 }
 
