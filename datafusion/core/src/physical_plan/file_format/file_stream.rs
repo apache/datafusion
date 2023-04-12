@@ -153,9 +153,9 @@ struct FileStreamMetrics {
     /// [`FileStream`] receives a stream for reading.
     ///
     /// If there are multiple files being scanned, the stream
-    /// will open the next file in the background while scanning the 
+    /// will open the next file in the background while scanning the
     /// current file. This metric will only capture time spent opening
-    /// while not also scanning. 
+    /// while not also scanning.
     pub time_opening: StartableTime,
     /// Wall clock time elapsed for file scanning + first record batch of decompression + decoding
     ///
