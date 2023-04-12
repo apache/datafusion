@@ -142,7 +142,6 @@ async fn main() -> datafusion::error::Result<()> {
 +---+--------+
 ```
 
-
 ## Extensibility
 
 DataFusion is designed to be extensible at all points. To that end, you can provide your own custom:
