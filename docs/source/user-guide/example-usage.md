@@ -26,7 +26,7 @@ In this example some simple processing is performed on the [`example.csv`](../..
 Add the following to your `Cargo.toml` file:
 
 ```toml
-datafusion = "11.0"
+datafusion = "22"
 tokio = "1.0"
 ```
 
@@ -169,7 +169,7 @@ To get started, add the following to your `Cargo.toml` file:
 
 ```toml
 [dependencies]
-datafusion = "11.0"
+datafusion = "22"
 ```
 
 ## Create a main function
@@ -216,7 +216,7 @@ worth noting that using the settings in the `[profile.release]` section will sig
 
 ```toml
 [dependencies]
-datafusion = { version = "11.0" , features = ["simd"]}
+datafusion = { version = "22.0" , features = ["simd"]}
 tokio = { version = "^1.0", features = ["rt-multi-thread"] }
 snmalloc-rs = "0.2"
 
