@@ -21,7 +21,6 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion::test_util::arrow_test_data;
 use datafusion_common::ScalarValue;
-use datafusion_expr::Subquery;
 
 /// This example demonstrates how to use the DataFrame API to create a subquery.
 #[tokio::main]
@@ -44,18 +43,15 @@ async fn where_scalar_subquery(ctx: &SessionContext) -> Result<()> {
     ctx.table("t1")
         .await?
         .filter(
-            Expr::ScalarSubquery(datafusion_expr::Subquery {
-                subquery: Arc::new(
-                    ctx.table("t2")
-                        .await?
-                        .filter(col("t1.c1").eq(col("t2.c1")))?
-                        .aggregate(vec![], vec![avg(col("t2.c2"))])?
-                        .select(vec![avg(col("t2.c2"))])?
-                        .into_unoptimized_plan(),
-                ),
-                outer_ref_columns: vec![],
-            })
-            .gt(lit(ScalarValue::UInt8(Some(0)))),
+            exists(Arc::new(
+                ctx.table("t2")
+                    .await?
+                    .filter(col("t1.c1").eq(col("t2.c1")))?
+                    .aggregate(vec![], vec![avg(col("t2.c2"))])?
+                    .select(vec![avg(col("t2.c2"))])?
+                    .into_unoptimized_plan(),
+            ))
+            .gt(lit(0u8)),
         )?
         .select(vec![col("t1.c1"), col("t1.c2")])?
         .limit(0, Some(3))?
@@ -68,21 +64,17 @@ async fn where_scalar_subquery(ctx: &SessionContext) -> Result<()> {
 async fn where_in_subquery(ctx: &SessionContext) -> Result<()> {
     ctx.table("t1")
         .await?
-        .filter(Expr::InSubquery {
-            expr: Box::new(col("t1.c2")),
-            subquery: Subquery {
-                subquery: Arc::new(
-                    ctx.table("t2")
-                        .await?
-                        .filter(col("t2.c1").gt(lit(ScalarValue::UInt8(Some(0)))))?
-                        .aggregate(vec![], vec![max(col("t2.c2"))])?
-                        .select(vec![max(col("t2.c2"))])?
-                        .into_unoptimized_plan(),
-                ),
-                outer_ref_columns: vec![],
-            },
-            negated: false,
-        })?
+        .filter(in_subquery(
+            col("t1.c2"),
+            Arc::new(
+                ctx.table("t2")
+                    .await?
+                    .filter(col("t2.c1").gt(lit(ScalarValue::UInt8(Some(0)))))?
+                    .aggregate(vec![], vec![max(col("t2.c2"))])?
+                    .select(vec![max(col("t2.c2"))])?
+                    .into_unoptimized_plan(),
+            ),
+        ))?
         .select(vec![col("t1.c1"), col("t1.c2")])?
         .limit(0, Some(3))?
         .show()
@@ -94,19 +86,13 @@ async fn where_in_subquery(ctx: &SessionContext) -> Result<()> {
 async fn where_exist_subquery(ctx: &SessionContext) -> Result<()> {
     ctx.table("t1")
         .await?
-        .filter(Expr::Exists {
-            subquery: Subquery {
-                subquery: Arc::new(
-                    ctx.table("t2")
-                        .await?
-                        .filter(col("t1.c1").eq(col("t2.c1")))?
-                        .select(vec![col("t2.c2")])?
-                        .into_unoptimized_plan(),
-                ),
-                outer_ref_columns: vec![],
-            },
-            negated: false,
-        })?
+        .filter(exists(Arc::new(
+            ctx.table("t2")
+                .await?
+                .filter(col("t1.c1").eq(col("t2.c1")))?
+                .select(vec![col("t2.c2")])?
+                .into_unoptimized_plan(),
+        )))?
         .select(vec![col("t1.c1"), col("t1.c2")])?
         .limit(0, Some(3))?
         .show()
