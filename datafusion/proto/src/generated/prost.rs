@@ -2658,6 +2658,7 @@ pub enum AggregateMode {
     Partial = 0,
     Final = 1,
     FinalPartitioned = 2,
+    Single = 3,
 }
 impl AggregateMode {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2669,6 +2670,7 @@ impl AggregateMode {
             AggregateMode::Partial => "PARTIAL",
             AggregateMode::Final => "FINAL",
             AggregateMode::FinalPartitioned => "FINAL_PARTITIONED",
+            AggregateMode::Single => "SINGLE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2677,6 +2679,7 @@ impl AggregateMode {
             "PARTIAL" => Some(Self::Partial),
             "FINAL" => Some(Self::Final),
             "FINAL_PARTITIONED" => Some(Self::FinalPartitioned),
+            "SINGLE" => Some(Self::Single),
             _ => None,
         }
     }
