@@ -294,7 +294,7 @@ pub fn aggr_test_schema_with_missing_col() -> SchemaRef {
 }
 
 // Return a static RecordBatch and its ordering for tests. RecordBatch is ordered by ts
-fn get_test_data1() -> Result<(RecordBatch, Vec<Expr>)> {
+fn get_test_data() -> Result<(RecordBatch, Vec<Expr>)> {
     let ts_field = Field::new("ts", DataType::Int32, false);
     let inc_field = Field::new("inc_col", DataType::Int32, false);
     let desc_field = Field::new("desc_col", DataType::Int32, false);
@@ -337,7 +337,7 @@ fn get_test_data1() -> Result<(RecordBatch, Vec<Expr>)> {
     Ok((batch, file_sort_order))
 }
 
-// Return a static RecordBatch and its ordering for tests. RecordBatch is ordered by low_card_col1, low_card_col2, inc_col
+// Return a static RecordBatch and its ordering for tests. RecordBatch is ordered by a, b, c
 fn get_test_data2() -> Result<(RecordBatch, Vec<Expr>)> {
     let a = Field::new("a", DataType::Int32, false);
     let b = Field::new("b", DataType::Int32, false);
@@ -396,7 +396,7 @@ pub async fn get_test_context(
     infinite_source: bool,
     session_config: SessionConfig,
 ) -> Result<SessionContext> {
-    get_test_context_helper(tmpdir, infinite_source, session_config, get_test_data1).await
+    get_test_context_helper(tmpdir, infinite_source, session_config, get_test_data).await
 }
 
 /// Creates a test_context with table name `annotated_data`, which has 100 rows.
