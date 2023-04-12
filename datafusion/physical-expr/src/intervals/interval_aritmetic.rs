@@ -107,6 +107,32 @@ impl IntervalBound {
         };
         Ok(res)
     }
+
+    pub fn intersect_bounds(
+        self_: &IntervalBound,
+        other: &IntervalBound,
+        min_max: fn(&ScalarValue, &ScalarValue) -> Result<ScalarValue>,
+    ) -> Result<IntervalBound> {
+        let val = if self_.is_null() {
+            other.clone()
+        } else if other.is_null() {
+            self_.clone()
+        } else {
+            let inner = min_max(self_.get_bound_scalar(), other.get_bound_scalar())?;
+            if self_ != other {
+                if inner == *self_.get_bound_scalar() {
+                    self_.clone()
+                } else {
+                    other.clone()
+                }
+            } else if is_bound_closed(self_, other) {
+                IntervalBound::Closed(other.get_bound_scalar().clone())
+            } else {
+                IntervalBound::Open(other.get_bound_scalar().clone())
+            }
+        };
+        Ok(val)
+    }
 }
 
 impl Display for IntervalBound {
@@ -147,30 +173,6 @@ impl Display for Interval {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "Interval [{}, {}]", self.lower, self.upper)
     }
-}
-
-macro_rules! intersect_bounds {
-    ($self:expr, $other:expr, $min_max:expr) => {{
-        let val = if $self.is_null() {
-            $other.clone()
-        } else if $other.is_null() {
-            $self.clone()
-        } else {
-            let inner = $min_max($self.get_bound_scalar(), $other.get_bound_scalar())?;
-            if $self != $other {
-                if inner == *$self.get_bound_scalar() {
-                    $self.clone()
-                } else {
-                    $other.clone()
-                }
-            } else if is_bound_closed(&$self, &$other) {
-                IntervalBound::Closed($other.get_bound_scalar().clone())
-            } else {
-                IntervalBound::Open($other.get_bound_scalar().clone())
-            }
-        };
-        val
-    }};
 }
 
 impl Interval {
@@ -357,9 +359,9 @@ impl Interval {
             return Ok(None);
         }
 
-        let lower = intersect_bounds!(self.lower, other.lower, max);
+        let lower = IntervalBound::intersect_bounds(&self.lower, &other.lower, max)?;
 
-        let upper = intersect_bounds!(self.upper, other.upper, min);
+        let upper = IntervalBound::intersect_bounds(&self.upper, &other.upper, min)?;
 
         Ok(if !lower.is_null() && !upper.is_null() && lower == upper {
             match (&lower, &upper) {
@@ -977,8 +979,8 @@ mod tests {
             ),
         ];
 
-        for case in cases {
-            assert_eq!(case.0.intersect(&case.1)?, case.2)
+        for (i, case) in cases.iter().enumerate() {
+            assert_eq!(case.0.intersect(&case.1)?, case.2, "{}", i)
         }
         Ok(())
     }
