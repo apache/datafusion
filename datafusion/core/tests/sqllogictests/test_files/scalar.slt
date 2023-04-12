@@ -31,6 +31,12 @@ CREATE TABLE t1(
   (3, 10000, 978, 2048)
 ;
 
+# pi scalar function
+query RRR rowsort
+select pi(), pi() / 2, pi() / 3;
+----
+3.14159265359 1.570796326795 1.047197551197
+
 # log scalar function
 query RR rowsort
 select log(2, 64) a, log(100) b union all select log(2, 8), log(10);
