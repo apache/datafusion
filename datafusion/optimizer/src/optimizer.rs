@@ -330,7 +330,7 @@ impl Optimizer {
         }
         log_plan("Final optimized plan", &new_plan);
         debug!("Optimizer took {} ms", start_time.elapsed().as_millis());
-        Ok(new_plan.clone())
+        Ok(new_plan)
     }
 
     fn optimize_node(
