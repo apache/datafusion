@@ -22,7 +22,10 @@ use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util::{round_upto_power_of_2, set_bit_raw, unset_bit_raw};
-use datafusion_common::cast::{as_binary_array, as_date32_array, as_date64_array, as_decimal128_array, as_string_array};
+use datafusion_common::cast::{
+    as_binary_array, as_date32_array, as_date64_array, as_decimal128_array,
+    as_string_array,
+};
 use datafusion_common::Result;
 use std::cmp::max;
 use std::sync::Arc;

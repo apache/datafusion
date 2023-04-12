@@ -143,7 +143,8 @@ impl AggregateExpr for Avg {
     ) -> Result<Box<dyn RowAccumulator>> {
         Ok(Box::new(AvgRowAccumulator::new(
             start_index,
-            self.sum_data_type.clone(),
+            &self.sum_data_type,
+            &self.rt_data_type,
         )))
     }
 
@@ -236,7 +237,7 @@ impl Accumulator for AvgAccumulator {
                 })
             }
             _ => Err(DataFusionError::Internal(
-                "Sum should be f64 on average".to_string(),
+                "Sum should be f64 or decimal128 on average".to_string(),
             )),
         }
     }
@@ -250,13 +251,19 @@ impl Accumulator for AvgAccumulator {
 struct AvgRowAccumulator {
     state_index: usize,
     sum_datatype: DataType,
+    return_data_type: DataType,
 }
 
 impl AvgRowAccumulator {
-    pub fn new(start_index: usize, sum_datatype: DataType) -> Self {
+    pub fn new(
+        start_index: usize,
+        sum_datatype: &DataType,
+        return_data_type: &DataType,
+    ) -> Self {
         Self {
             state_index: start_index,
-            sum_datatype,
+            sum_datatype: sum_datatype.clone(),
+            return_data_type: return_data_type.clone(),
         }
     }
 }
@@ -300,32 +307,37 @@ impl RowAccumulator for AvgRowAccumulator {
     fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
         match self.sum_datatype {
             DataType::Decimal128(p, s) => {
-                Ok(match accessor.get_u64_opt(self.state_index()) {
-                    None => ScalarValue::Decimal128(None, p, s),
-                    Some(0) => ScalarValue::Decimal128(None, p, s),
-                    Some(n) => ScalarValue::Decimal128(
-                        accessor
-                            .get_i128_opt(self.state_index() + 1)
-                            .map(|f| f / n as i128),
-                        p, s),
-                })
+                match accessor.get_u64_opt(self.state_index()) {
+                    None => Ok(ScalarValue::Decimal128(None, p, s)),
+                    Some(0) => Ok(ScalarValue::Decimal128(None, p, s)),
+                    Some(n) => {
+                        // now the sum_type and return type is not the same, need to convert the sum type to return type
+                        accessor.get_i128_opt(self.state_index() + 1).map_or_else(
+                            || Ok(ScalarValue::Decimal128(None, p, s)),
+                            |f| {
+                                calculate_result_decimal_for_avg(
+                                    f,
+                                    n as i128,
+                                    s,
+                                    &self.return_data_type,
+                                )
+                            },
+                        )
+                    }
+                }
             }
-            DataType::Float64 => {
-                Ok(match accessor.get_u64_opt(self.state_index()) {
-                    None => ScalarValue::Float64(None),
-                    Some(0) => ScalarValue::Float64(None),
-                    Some(n) => ScalarValue::Float64(
-                        accessor
-                            .get_f64_opt(self.state_index() + 1)
-                            .map(|f| f / n as f64),
-                    ),
-                })
-            }
-            _ => {
-                Err(DataFusionError::Internal(
-                    "Sum should be f64 on average".to_string(),
-                ))
-            }
+            DataType::Float64 => Ok(match accessor.get_u64_opt(self.state_index()) {
+                None => ScalarValue::Float64(None),
+                Some(0) => ScalarValue::Float64(None),
+                Some(n) => ScalarValue::Float64(
+                    accessor
+                        .get_f64_opt(self.state_index() + 1)
+                        .map(|f| f / n as f64),
+                ),
+            }),
+            _ => Err(DataFusionError::Internal(
+                "Sum should be f64 or decimal128 on average".to_string(),
+            )),
         }
     }
 

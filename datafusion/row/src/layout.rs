@@ -168,10 +168,8 @@ fn word_aligned_offsets(null_width: usize, schema: &Schema) -> (Vec<usize>, usiz
         // All of the current support types can fit into one single 8-bytes word except for Decimal128.
         // For Decimal128, its width is of two 8-bytes words.
         match f.data_type() {
-            DataType::Decimal128(_, _) => {
-                offset += 16
-            }
-            _ => offset += 8
+            DataType::Decimal128(_, _) => offset += 16,
+            _ => offset += 8,
         }
     }
     (offsets, offset - null_width)
