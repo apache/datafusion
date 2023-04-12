@@ -606,7 +606,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                 .register(context.memory_pool()),
         ));
         if let Some(g) = graph.as_ref() {
-            reservation.lock().grow(g.size());
+            reservation.lock().try_grow(g.size())?;
         }
 
         Ok(Box::pin(SymmetricHashJoinStream {
@@ -1065,11 +1065,18 @@ struct OneSideHashJoiner {
 
 impl OneSideHashJoiner {
     pub fn size(&self) -> usize {
-        self.input_buffer.get_array_memory_size()
-            + self.hashmap.size()
-            + self.row_hash_values.capacity() * std::mem::size_of::<u64>()
-            + self.visited_rows.capacity() * std::mem::size_of::<usize>()
-            + self.hashes_buffer.capacity() * std::mem::size_of::<u64>()
+        let mut size = 0;
+        size += std::mem::size_of_val(self);
+        size += std::mem::size_of_val(&self.build_side);
+        size += self.input_buffer.get_array_memory_size();
+        size += std::mem::size_of_val(&self.on);
+        size += self.hashmap.size();
+        size += self.row_hash_values.capacity() * std::mem::size_of::<u64>();
+        size += self.hashes_buffer.capacity() * std::mem::size_of::<u64>();
+        size += self.visited_rows.capacity() * std::mem::size_of::<usize>();
+        size += std::mem::size_of_val(&self.offset);
+        size += std::mem::size_of_val(&self.deleted_offset);
+        size
     }
     pub fn new(build_side: JoinSide, on: Vec<Column>, schema: SchemaRef) -> Self {
         Self {
@@ -1371,9 +1378,22 @@ fn combine_two_batches(
 
 impl SymmetricHashJoinStream {
     fn size(&self) -> usize {
-        self.left.size()
-            + self.right.size()
-            + self.graph.as_ref().map(|g| g.size()).unwrap_or(0)
+        let mut size = 0;
+        size += std::mem::size_of_val(&self.input_stream);
+        size += std::mem::size_of_val(&self.schema);
+        size += std::mem::size_of_val(&self.filter);
+        size += std::mem::size_of_val(&self.join_type);
+        size += self.left.size();
+        size += self.right.size();
+        size += std::mem::size_of_val(&self.column_indices);
+        size += self.graph.as_ref().map(|g| g.size()).unwrap_or(0);
+        size += std::mem::size_of_val(&self.left_sorted_filter_expr);
+        size += std::mem::size_of_val(&self.right_sorted_filter_expr);
+        size += std::mem::size_of_val(&self.random_state);
+        size += std::mem::size_of_val(&self.null_equals_null);
+        size += std::mem::size_of_val(&self.metrics);
+        size += std::mem::size_of_val(&self.final_result);
+        size
     }
     /// Polls the next result of the join operation.
     ///
@@ -1480,7 +1500,7 @@ impl SymmetricHashJoinStream {
                         combine_two_batches(&self.schema, equal_result, anti_result)?;
                     let capacity = self.size();
                     self.metrics.stream_memory_usage.set(capacity);
-                    self.reservation.lock().resize(capacity);
+                    self.reservation.lock().try_resize(capacity)?;
                     // Update the metrics if we have a batch; otherwise, continue the loop.
                     if let Some(batch) = &result {
                         self.metrics.output_batches.add(1);
