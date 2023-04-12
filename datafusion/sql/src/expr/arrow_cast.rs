@@ -246,7 +246,7 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::Comma)?;
         let timezone = self.parse_timezone("Timestamp")?;
         self.expect_token(Token::RParen)?;
-        Ok(DataType::Timestamp(time_unit, timezone))
+        Ok(DataType::Timestamp(time_unit, timezone.map(Into::into)))
     }
 
     /// Parses the next Time32 (called after `Time32` has been consumed)

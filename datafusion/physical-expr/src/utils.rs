@@ -613,7 +613,7 @@ mod tests {
     use datafusion_common::{Result, ScalarValue};
     use std::fmt::{Display, Formatter};
 
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_schema::{DataType, Field, Fields, Schema};
     use petgraph::visit::Bfs;
     use std::sync::Arc;
 
@@ -736,7 +736,7 @@ mod tests {
     #[test]
     fn test_get_indices_of_matching_exprs() {
         let empty_schema = &Arc::new(Schema {
-            fields: vec![],
+            fields: Fields::empty(),
             metadata: Default::default(),
         });
         let equal_properties = || EquivalenceProperties::new(empty_schema.clone());
@@ -926,10 +926,7 @@ mod tests {
             },
         ];
         let finer = Some(&finer[..]);
-        let empty_schema = &Arc::new(Schema {
-            fields: vec![],
-            metadata: Default::default(),
-        });
+        let empty_schema = &Arc::new(Schema::empty());
         assert!(ordering_satisfy(finer, crude, || {
             EquivalenceProperties::new(empty_schema.clone())
         }));

@@ -114,16 +114,16 @@ where
 {
     let left_values = left.values();
     let right_values = right.values();
-    let left_data = left.data();
-    let right_data = right.data();
+    let left_nulls = left.nulls();
+    let right_nulls = right.nulls();
 
-    let array_len = left_data.len().min(right_data.len());
+    let array_len = left.len().min(right.len());
     let distinct = arrow_buffer::MutableBuffer::collect_bool(array_len, |i| {
         op(
             left_values[i],
             right_values[i],
-            left_data.is_null(i),
-            right_data.is_null(i),
+            left_nulls.map(|x| x.is_null(i)).unwrap_or_default(),
+            right_nulls.map(|x| x.is_null(i)).unwrap_or_default(),
         )
     });
     let array_data = ArrayData::builder(arrow_schema::DataType::Boolean)

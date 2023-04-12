@@ -25,7 +25,7 @@ use crate::physical_plan::{
     memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning,
 };
 use arrow::array::{ArrayRef, NullArray};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use log::debug;
 
@@ -77,7 +77,7 @@ impl EmptyExec {
                         .map(|i| {
                             Field::new(format!("placeholder_{i}"), DataType::Null, true)
                         })
-                        .collect(),
+                        .collect::<Fields>(),
                 )),
                 (0..n_field)
                     .map(|_i| {

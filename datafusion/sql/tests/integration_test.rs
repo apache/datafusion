@@ -3061,8 +3061,8 @@ fn hive_aggregate_with_filter() -> Result<()> {
     let dialect = &HiveDialect {};
     let sql = "SELECT SUM(age) FILTER (WHERE age > 4) FROM person";
     let plan = logical_plan_with_dialect(sql, dialect)?;
-    let expected = "Projection: SUM(person.age) FILTER (WHERE age > Int64(4))\
-        \n  Aggregate: groupBy=[[]], aggr=[[SUM(person.age) FILTER (WHERE age > Int64(4))]]\
+    let expected = "Projection: SUM(person.age) FILTER (WHERE person.age > Int64(4))\
+        \n  Aggregate: groupBy=[[]], aggr=[[SUM(person.age) FILTER (WHERE person.age > Int64(4))]]\
         \n    TableScan: person"
         .to_string();
     assert_eq!(plan.display_indent().to_string(), expected);
@@ -3364,6 +3364,37 @@ fn test_select_distinct_order_by() {
     assert!(result.is_err());
     let err = result.err().unwrap();
     assert_eq!(err.to_string(), expected);
+}
+
+#[rstest]
+#[case::select_cluster_by_unsupported(
+    "SELECT customer_name, SUM(order_total) as total_order_amount FROM orders CLUSTER BY customer_name",
+    "This feature is not implemented: CLUSTER BY"
+)]
+#[case::select_lateral_view_unsupported(
+    "SELECT id, number FROM person LATERAL VIEW explode(numbers) exploded_table AS number",
+    "This feature is not implemented: LATERAL VIEWS"
+)]
+#[case::select_qualify_unsupported(
+    "SELECT i, p, o FROM person QUALIFY ROW_NUMBER() OVER (PARTITION BY p ORDER BY o) = 1",
+    "This feature is not implemented: QUALIFY"
+)]
+#[case::select_top_unsupported(
+    "SELECT TOP (5) * FROM person",
+    "This feature is not implemented: TOP"
+)]
+#[case::select_sort_by_unsupported(
+    "SELECT * FROM person SORT BY id",
+    "This feature is not implemented: SORT BY"
+)]
+#[case::select_into_unsupported(
+    "SELECT * INTO test FROM person",
+    "This feature is not implemented: INTO"
+)]
+#[test]
+fn test_select_unsupported_syntax_errors(#[case] sql: &str, #[case] error: &str) {
+    let err = logical_plan(sql).unwrap_err();
+    assert_eq!(err.to_string(), error)
 }
 
 #[test]

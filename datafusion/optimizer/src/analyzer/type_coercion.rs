@@ -866,7 +866,12 @@ mod test {
             DataType::Float64,
             Arc::new(DataType::Float64),
             Volatility::Immutable,
-            Arc::new(|_| Ok(Box::new(AvgAccumulator::try_new(&DataType::Float64)?))),
+            Arc::new(|_| {
+                Ok(Box::new(AvgAccumulator::try_new(
+                    &DataType::Float64,
+                    &DataType::Float64,
+                )?))
+            }),
             Arc::new(vec![DataType::UInt64, DataType::Float64]),
         );
         let udaf = Expr::AggregateUDF {
@@ -886,8 +891,12 @@ mod test {
             Arc::new(move |_| Ok(Arc::new(DataType::Float64)));
         let state_type: StateTypeFunction =
             Arc::new(move |_| Ok(Arc::new(vec![DataType::UInt64, DataType::Float64])));
-        let accumulator: AccumulatorFunctionImplementation =
-            Arc::new(|_| Ok(Box::new(AvgAccumulator::try_new(&DataType::Float64)?)));
+        let accumulator: AccumulatorFunctionImplementation = Arc::new(|_| {
+            Ok(Box::new(AvgAccumulator::try_new(
+                &DataType::Float64,
+                &DataType::Float64,
+            )?))
+        });
         let my_avg = AggregateUDF::new(
             "MY_AVG",
             &Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
@@ -998,8 +1007,40 @@ mod test {
         let expected =
             "Projection: CAST(a AS Decimal128(24, 4)) IN ([CAST(Int32(1) AS Decimal128(24, 4)), CAST(Int8(4) AS Decimal128(24, 4)), CAST(Int64(8) AS Decimal128(24, 4))]) AS a IN (Map { iter: Iter([Int32(1), Int8(4), Int64(8)]) })\
              \n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
-        Ok(())
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
+    }
+
+    #[test]
+    fn between_case() -> Result<()> {
+        let expr = col("a").between(
+            lit("2002-05-08"),
+            // (cast('2002-05-08' as date) + interval '1 months')
+            cast(lit("2002-05-08"), DataType::Date32)
+                + lit(ScalarValue::new_interval_ym(0, 1)),
+        );
+        let empty = empty_with_type(DataType::Utf8);
+        let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
+        let expected =
+            "Filter: a BETWEEN Utf8(\"2002-05-08\") AND CAST(CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\") AS Utf8)\
+            \n  EmptyRelation";
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
+    }
+
+    #[test]
+    fn between_infer_cheap_type() -> Result<()> {
+        let expr = col("a").between(
+            // (cast('2002-05-08' as date) + interval '1 months')
+            cast(lit("2002-05-08"), DataType::Date32)
+                + lit(ScalarValue::new_interval_ym(0, 1)),
+            lit("2002-12-08"),
+        );
+        let empty = empty_with_type(DataType::Utf8);
+        let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
+        // TODO: we should cast col(a).
+        let expected =
+            "Filter: CAST(a AS Date32) BETWEEN CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\") AND CAST(Utf8(\"2002-12-08\") AS Date32)\
+            \n  EmptyRelation";
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
     }
 
     #[test]

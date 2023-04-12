@@ -1030,7 +1030,7 @@ mod tests {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[test.a]], aggr=[[COUNT(test.b), COUNT(test.b) FILTER (WHERE c > Int32(42)) AS count2]]\
+        let expected = "Aggregate: groupBy=[[test.a]], aggr=[[COUNT(test.b), COUNT(test.b) FILTER (WHERE test.c > Int32(42)) AS count2]]\
         \n  TableScan: test projection=[a, b, c]";
 
         assert_optimized_plan_eq(&plan, expected)

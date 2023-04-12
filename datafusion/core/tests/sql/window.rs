@@ -147,7 +147,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_source_sorted_builtin() -> Result<()> {
-        let tmpdir = TempDir::new().unwrap();
+        let tmpdir = TempDir::new()?;
         let session_config = SessionConfig::new().with_target_partitions(1);
         let ctx = get_test_context(&tmpdir, false, session_config).await?;
 
@@ -222,7 +222,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_source_sorted_unbounded_preceding() -> Result<()> {
-        let tmpdir = TempDir::new().unwrap();
+        let tmpdir = TempDir::new()?;
         let session_config = SessionConfig::new().with_target_partitions(1);
         let ctx = get_test_context(&tmpdir, false, session_config).await?;
 
@@ -330,6 +330,60 @@ mod tests {
             "| 1            | 26           | 20          | 1           | 5          |",
             "| 1            | 29           | 21          | 1           | 5          |",
             "+--------------+--------------+-------------+-------------+------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_source_sorted_unbounded_source() -> Result<()> {
+        let tmpdir = TempDir::new().unwrap();
+        let session_config = SessionConfig::new().with_target_partitions(1);
+        // Use an unbounded source
+        let ctx = get_test_context(&tmpdir, true, session_config).await?;
+
+        let sql = "SELECT
+           SUM(inc_col) OVER(ORDER BY ts ASC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as sum1,
+           SUM(inc_col) OVER(ORDER BY ts DESC ROWS BETWEEN 3 PRECEDING AND UNBOUNDED FOLLOWING) as sum2,
+           COUNT(inc_col) OVER(ORDER BY ts ASC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as count1,
+           COUNT(inc_col) OVER(ORDER BY ts DESC ROWS BETWEEN 3 PRECEDING AND UNBOUNDED FOLLOWING) as count2
+           FROM annotated_data
+           ORDER BY ts ASC
+           LIMIT 5";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let expected = {
+            vec![
+                "ProjectionExec: expr=[sum1@0 as sum1, sum2@1 as sum2, count1@2 as count1, count2@3 as count2]",
+                "  GlobalLimitExec: skip=0, fetch=5",
+                "    ProjectionExec: expr=[SUM(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING@5 as sum1, SUM(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN 3 PRECEDING AND UNBOUNDED FOLLOWING@3 as sum2, COUNT(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING@6 as count1, COUNT(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN 3 PRECEDING AND UNBOUNDED FOLLOWING@4 as count2, ts@0 as ts]",
+                "      BoundedWindowAggExec: wdw=[SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(1)) }, COUNT(annotated_data.inc_col): Ok(Field { name: \"COUNT(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(1)) }]",
+                "        BoundedWindowAggExec: wdw=[SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(3)) }, COUNT(annotated_data.inc_col): Ok(Field { name: \"COUNT(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(3)) }]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        let actual_len = actual.len();
+        let actual_trim_last = &actual[..actual_len - 1];
+        assert_eq!(
+            expected, actual_trim_last,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+------+------+--------+--------+",
+            "| sum1 | sum2 | count1 | count2 |",
+            "+------+------+--------+--------+",
+            "| 6    | 31   | 2      | 4      |",
+            "| 16   | 51   | 3      | 5      |",
+            "| 31   | 72   | 4      | 6      |",
+            "| 51   | 98   | 5      | 7      |",
+            "| 72   | 127  | 6      | 8      |",
+            "+------+------+--------+--------+",
         ];
         assert_batches_eq!(expected, &actual);
         Ok(())

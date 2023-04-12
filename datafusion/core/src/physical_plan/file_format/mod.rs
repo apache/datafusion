@@ -532,7 +532,7 @@ where
     let mut builder = ArrayData::builder(data_type)
         .len(len)
         .add_buffer(sliced_key_buffer);
-    builder = builder.add_child_data(dict_vals.data().clone());
+    builder = builder.add_child_data(dict_vals.to_data());
     Arc::new(DictionaryArray::<UInt16Type>::from(
         builder.build().unwrap(),
     ))
