@@ -389,8 +389,8 @@ fn get_test_data2() -> Result<(RecordBatch, Vec<Expr>)> {
 }
 
 /// Creates a test_context with table name `annotated_data` which has 100 rows.
-// Columns in the table are low_card_col1, low_card_col2, inc_col, unsorted_col. Source is CsvExec which is ordered by
-// low_card_col1, low_card_col2, inc_col column.
+// Columns in the table are ts, inc_col, desc_col. Source is CsvExec which is ordered by
+// ts column.
 pub async fn get_test_context(
     tmpdir: &TempDir,
     infinite_source: bool,
@@ -400,8 +400,8 @@ pub async fn get_test_context(
 }
 
 /// Creates a test_context with table name `annotated_data` which has 100 rows.
-// Columns in the table are ts, inc_col, desc_col. Source is CsvExec which is ordered by
-// ts column.
+// Columns in the table are a, b, c, d. Source is CsvExec which is ordered by
+// a, b, c columns.
 pub async fn get_test_context2(
     tmpdir: &TempDir,
     infinite_source: bool,
