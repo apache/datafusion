@@ -73,7 +73,7 @@ impl AggregateExpr for Median {
     fn state_fields(&self) -> Result<Vec<Field>> {
         //Intermediate state is a list of the elements we have collected so far
         let field = Field::new("item", self.data_type.clone(), true);
-        let data_type = DataType::List(Box::new(field));
+        let data_type = DataType::List(Arc::new(field));
 
         Ok(vec![Field::new(
             format_state_name(&self.name, "median"),

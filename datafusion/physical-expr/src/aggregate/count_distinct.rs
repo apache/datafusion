@@ -70,13 +70,9 @@ impl AggregateExpr for DistinctCount {
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
-        Ok(vec![Field::new(
+        Ok(vec![Field::new_list(
             format_state_name(&self.name, "count distinct"),
-            DataType::List(Box::new(Field::new(
-                "item",
-                self.state_data_type.clone(),
-                true,
-            ))),
+            Field::new("item", self.state_data_type.clone(), true),
             false,
         )])
     }

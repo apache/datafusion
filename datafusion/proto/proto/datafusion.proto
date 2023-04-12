@@ -1259,6 +1259,10 @@ message WindowAggExecNode {
   Schema input_schema = 4;
 }
 
+message MaybeFilter {
+  PhysicalExprNode expr = 1;
+}
+
 message AggregateExecNode {
   repeated PhysicalExprNode group_expr = 1;
   repeated PhysicalExprNode aggr_expr = 2;
@@ -1270,6 +1274,7 @@ message AggregateExecNode {
   Schema input_schema = 7;
   repeated PhysicalExprNode null_expr = 8;
   repeated bool groups = 9;
+  repeated MaybeFilter filter_expr = 10;
 }
 
 message GlobalLimitExecNode {

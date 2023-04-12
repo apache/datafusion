@@ -29,10 +29,12 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 use futures::stream::BoxStream;
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use crate::physical_plan::filter::batch_filter;
 use futures::stream::{Stream, StreamExt};
 
 /// stream struct for aggregation without grouping columns
@@ -52,23 +54,32 @@ struct AggregateStreamInner {
     input: SendableRecordBatchStream,
     baseline_metrics: BaselineMetrics,
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
     accumulators: Vec<AccumulatorItem>,
     reservation: MemoryReservation,
     finished: bool,
 }
 
 impl AggregateStream {
+    #[allow(clippy::too_many_arguments)]
     /// Create a new AggregateStream
     pub fn new(
         mode: AggregateMode,
         schema: SchemaRef,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
         context: Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
         let aggregate_expressions = aggregate_expressions(&aggr_expr, &mode, 0)?;
+        let filter_expressions = match mode {
+            AggregateMode::Partial | AggregateMode::Single => filter_expr,
+            AggregateMode::Final | AggregateMode::FinalPartitioned => {
+                vec![None; aggr_expr.len()]
+            }
+        };
         let accumulators = create_accumulators(&aggr_expr)?;
 
         let reservation = MemoryConsumer::new(format!("AggregateStream[{partition}]"))
@@ -80,6 +91,7 @@ impl AggregateStream {
             input,
             baseline_metrics,
             aggregate_expressions,
+            filter_expressions,
             accumulators,
             reservation,
             finished: false,
@@ -97,9 +109,10 @@ impl AggregateStream {
                         let timer = elapsed_compute.timer();
                         let result = aggregate_batch(
                             &this.mode,
-                            &batch,
+                            batch,
                             &mut this.accumulators,
                             &this.aggregate_expressions,
+                            &this.filter_expressions,
                         );
 
                         timer.done();
@@ -169,29 +182,37 @@ impl RecordBatchStream for AggregateStream {
 /// TODO: Make this a member function
 fn aggregate_batch(
     mode: &AggregateMode,
-    batch: &RecordBatch,
+    batch: RecordBatch,
     accumulators: &mut [AccumulatorItem],
     expressions: &[Vec<Arc<dyn PhysicalExpr>>],
+    filters: &[Option<Arc<dyn PhysicalExpr>>],
 ) -> Result<usize> {
     let mut allocated = 0usize;
 
     // 1.1 iterate accumulators and respective expressions together
-    // 1.2 evaluate expressions
-    // 1.3 update / merge accumulators with the expressions' values
+    // 1.2 filter the batch if necessary
+    // 1.3 evaluate expressions
+    // 1.4 update / merge accumulators with the expressions' values
 
     // 1.1
     accumulators
         .iter_mut()
         .zip(expressions)
-        .try_for_each(|(accum, expr)| {
+        .zip(filters)
+        .try_for_each(|((accum, expr), filter)| {
             // 1.2
+            let batch = match filter {
+                Some(filter) => Cow::Owned(batch_filter(&batch, filter)?),
+                None => Cow::Borrowed(&batch),
+            };
+            // 1.3
             let values = &expr
                 .iter()
-                .map(|e| e.evaluate(batch))
+                .map(|e| e.evaluate(&batch))
                 .map(|r| r.map(|v| v.into_array(batch.num_rows())))
                 .collect::<Result<Vec<_>>>()?;
 
-            // 1.3
+            // 1.4
             let size_pre = accum.size();
             let res = match mode {
                 AggregateMode::Partial | AggregateMode::Single => {

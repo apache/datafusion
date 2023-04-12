@@ -54,6 +54,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                      input: final_input,
                      group_by: final_group_by,
                      aggr_expr: final_aggr_expr,
+                     filter_expr: final_filter_expr,
                      ..
                  }| {
                     if matches!(
@@ -69,6 +70,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                                      input: partial_input,
                                      group_by: input_group_by,
                                      aggr_expr: input_aggr_expr,
+                                     filter_expr: input_filter_expr,
                                      input_schema,
                                      ..
                                  }| {
@@ -81,11 +83,24 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                                             .all(|(final_expr, partial_expr)| {
                                                 final_expr.eq(partial_expr)
                                             })
+                                        && final_filter_expr.len()
+                                            == input_filter_expr.len()
+                                        && final_filter_expr
+                                            .iter()
+                                            .zip(input_filter_expr.iter())
+                                            .all(|(final_expr, partial_expr)| {
+                                                match (final_expr, partial_expr) {
+                                                    (Some(l), Some(r)) => l.eq(r),
+                                                    (None, None) => true,
+                                                    _ => false,
+                                                }
+                                            })
                                     {
                                         AggregateExec::try_new(
                                             AggregateMode::Single,
                                             input_group_by.clone(),
                                             input_aggr_expr.to_vec(),
+                                            input_filter_expr.to_vec(),
                                             partial_input.clone(),
                                             input_schema.clone(),
                                         )
@@ -199,6 +214,7 @@ mod tests {
                 AggregateMode::Partial,
                 PhysicalGroupBy::default(),
                 aggr_expr,
+                vec![],
                 input,
                 schema,
             )
@@ -216,6 +232,7 @@ mod tests {
                 AggregateMode::Final,
                 PhysicalGroupBy::default(),
                 aggr_expr,
+                vec![],
                 input,
                 schema,
             )
