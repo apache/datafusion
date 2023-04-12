@@ -73,8 +73,8 @@
 </p>
 <ul class="nav bd-sidenav">
  <li class="toctree-l1">
-  <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues">
-   Issue tracker
+  <a class="reference external" href="https://github.com/apache/arrow-datafusion">
+   Github and Issue Tracker
   </a>
  </li>
  <li class="toctree-l1">
@@ -83,13 +83,8 @@
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference external" href="https://docs.rs/datafusion/21.1.0/datafusion/">
+  <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">
    API Docs
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://github.com/apache/arrow-datafusion">
-   Github
   </a>
  </li>
  <li class="toctree-l1">
@@ -106,7 +101,7 @@
 <ul class="current nav bd-sidenav">
  <li class="toctree-l1">
   <a class="reference internal" href="introduction.html">
-   Features, and Usecases
+   Introduction
   </a>
  </li>
  <li class="toctree-l1">
@@ -115,28 +110,12 @@
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="users.html">
-   Known Users
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="comparison.html">
-   Comparisons to Other Projects
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="integration.html">
-   Integrations and Extensions
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="library.html">
-   Using DataFusion as a library
-  </a>
- </li>
- <li class="toctree-l1">
   <a class="reference internal" href="cli.html">
-   DataFusion Command-line SQL Utility
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     datafusion-cli
+    </span>
+   </code>
   </a>
  </li>
  <li class="toctree-l1">
@@ -146,7 +125,7 @@
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="expressions.html">
-   Expressions
+   Expression API
   </a>
  </li>
  <li class="toctree-l1 has-children">
@@ -214,11 +193,6 @@
  <li class="toctree-l1 current active">
   <a class="current reference internal" href="#">
    Frequently Asked Questions
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://docs.rs/crate/datafusion/">
-   Rust Crate Documentation
   </a>
  </li>
 </ul>
@@ -304,9 +278,27 @@
 
 <nav id="bd-toc-nav">
     <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#what-is-the-relationship-between-apache-arrow-datafusion-and-ballista">
-   What is the relationship between Apache Arrow, DataFusion, and Ballista?
+ <li class="toc-h1 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#">
+   Frequently Asked Questions
+  </a>
+  <ul class="visible nav section-nav flex-column">
+   <li class="toc-h2 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#what-is-the-relationship-between-apache-arrow-datafusion-and-ballista">
+     What is the relationship between Apache Arrow, DataFusion, and Ballista?
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h1 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#how-does-datafusion-compare-with-xyz">
+   How does DataFusion Compare with
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     XYZ
+    </span>
+   </code>
+   ?
   </a>
  </li>
 </ul>
@@ -366,6 +358,38 @@ model and computational kernels. It is designed to run within a single process, 
 for parallel query execution.</p>
 <p><a class="reference external" href="https://github.com/apache/arrow-ballista">Ballista</a> is a distributed compute platform built on DataFusion.</p>
 </section>
+</section>
+<section id="how-does-datafusion-compare-with-xyz">
+<h1>How does DataFusion Compare with <code class="docutils literal notranslate"><span class="pre">XYZ</span></code>?<a class="headerlink" href="#how-does-datafusion-compare-with-xyz" title="Permalink to this heading">¶</a></h1>
+<p>When compared to similar systems, DataFusion typically is:</p>
+<ol class="arabic simple">
+<li><p>Targeted at developers, rather than end users / data scientists.</p></li>
+<li><p>Designed to be embedded, rather than a complete file based SQL system.</p></li>
+<li><p>Governed by the <a class="reference external" href="https://www.apache.org/">Apache Software Foundation</a> process, rather than a single company or individual.</p></li>
+<li><p>Implemented in <code class="docutils literal notranslate"><span class="pre">Rust</span></code>, rather than <code class="docutils literal notranslate"><span class="pre">C/C++</span></code></p></li>
+</ol>
+<p>Here is a comparison with similar projects that may help understand
+when DataFusion might be be suitable and unsuitable for your needs:</p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://www.duckdb.org">DuckDB</a> is an open source, in process analytic database.
+Like DataFusion, it supports very fast execution, both from its custom file format
+and directly from parquet files. Unlike DataFusion, it is written in C/C++ and it
+is primarily used directly by users as a serverless database and query system rather
+than as a library for building such database systems.</p></li>
+<li><p><a class="reference external" href="http://pola.rs">Polars</a>: Polars is one of the fastest DataFrame
+libraries at the time of writing. Like DataFusion, it is also
+written in Rust and uses the Apache Arrow memory model, but unlike
+DataFusion it is not designed with as many extension points.</p></li>
+<li><p><a class="reference external" href="https://github.com/facebookincubator/velox">Facebook Velox</a>
+is an execution engine. Like DataFusion, Velox aims to
+provide a reusable foundation for building database-like systems. Unlike DataFusion,
+it is written in C/C++ and does not include a SQL frontend or planning / optimization
+framework.</p></li>
+<li><p><a class="reference external" href="https://github.com/datafuselabs/databend">Databend</a> is a complete
+database system. Like DataFusion it is also written in Rust and
+utilizes the Apache Arrow memory model, but unlike DataFusion it
+targets end-users rather than developers of other database systems.</p></li>
+</ul>
 </section>
 
 

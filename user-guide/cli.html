@@ -6,7 +6,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.19: https://docutils.sourceforge.io/" />
 
-    <title>DataFusion Command-line SQL Utility &#8212; Arrow DataFusion  documentation</title>
+    <title>datafusion-cli &#8212; Arrow DataFusion  documentation</title>
     
     <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -35,7 +35,7 @@
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="DataFrame API" href="dataframe.html" />
-    <link rel="prev" title="Using DataFusion as a library" href="library.html" />
+    <link rel="prev" title="Example Usage" href="example-usage.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -73,8 +73,8 @@
 </p>
 <ul class="nav bd-sidenav">
  <li class="toctree-l1">
-  <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues">
-   Issue tracker
+  <a class="reference external" href="https://github.com/apache/arrow-datafusion">
+   Github and Issue Tracker
   </a>
  </li>
  <li class="toctree-l1">
@@ -83,13 +83,8 @@
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference external" href="https://docs.rs/datafusion/21.1.0/datafusion/">
+  <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">
    API Docs
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://github.com/apache/arrow-datafusion">
-   Github
   </a>
  </li>
  <li class="toctree-l1">
@@ -106,7 +101,7 @@
 <ul class="current nav bd-sidenav">
  <li class="toctree-l1">
   <a class="reference internal" href="introduction.html">
-   Features, and Usecases
+   Introduction
   </a>
  </li>
  <li class="toctree-l1">
@@ -114,29 +109,13 @@
    Example Usage
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="users.html">
-   Known Users
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="comparison.html">
-   Comparisons to Other Projects
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="integration.html">
-   Integrations and Extensions
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="library.html">
-   Using DataFusion as a library
-  </a>
- </li>
  <li class="toctree-l1 current active">
   <a class="current reference internal" href="#">
-   DataFusion Command-line SQL Utility
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     datafusion-cli
+    </span>
+   </code>
   </a>
  </li>
  <li class="toctree-l1">
@@ -146,7 +125,7 @@
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="expressions.html">
-   Expressions
+   Expression API
   </a>
  </li>
  <li class="toctree-l1 has-children">
@@ -214,11 +193,6 @@
  <li class="toctree-l1">
   <a class="reference internal" href="faq.html">
    Frequently Asked Questions
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference external" href="https://docs.rs/crate/datafusion/">
-   Rust Crate Documentation
   </a>
  </li>
 </ul>
@@ -422,8 +396,8 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="datafusion-command-line-sql-utility">
-<h1>DataFusion Command-line SQL Utility<a class="headerlink" href="#datafusion-command-line-sql-utility" title="Permalink to this heading">¶</a></h1>
+<section id="datafusion-cli">
+<h1><code class="docutils literal notranslate"><span class="pre">datafusion-cli</span></code><a class="headerlink" href="#datafusion-cli" title="Permalink to this heading">¶</a></h1>
 <p>The DataFusion CLI is a command-line interactive SQL utility for executing
 queries against any supported data files. It is a convenient way to
 try DataFusion out with your own data sources, and test out its SQL support.</p>
@@ -814,11 +788,11 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v13.0.0
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="library.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="example-usage.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Using DataFusion as a library</p>
+            <p class="prev-next-title">Example Usage</p>
         </div>
     </a>
     <a class='right-next' id="next-link" href="dataframe.html" title="next page">
