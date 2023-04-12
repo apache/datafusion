@@ -80,7 +80,7 @@ struct MyAnalyzerRule {}
 
 impl AnalyzerRule for MyAnalyzerRule {
     fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
-        Self::analyze_internal(&plan)
+        Self::analyze_plan(plan)
     }
 
     fn name(&self) -> &str {
@@ -89,23 +89,19 @@ impl AnalyzerRule for MyAnalyzerRule {
 }
 
 impl MyAnalyzerRule {
-    fn analyze_internal(plan: &LogicalPlan) -> Result<LogicalPlan> {
-        // optimize child plans first
-        let mut new_inputs = plan
-            .inputs()
-            .iter()
-            .map(|p| Self::analyze_internal(p))
-            .collect::<Result<Vec<_>>>()?;
-
-        if let LogicalPlan::Filter(filter) = plan {
-            let predicate = Self::analyze_expr(filter.predicate.clone())?;
-            Ok(LogicalPlan::Filter(Filter::try_new(
-                predicate,
-                Arc::new(new_inputs.pop().unwrap()),
-            )?))
-        } else {
-            Ok(plan.with_new_inputs(&new_inputs)?)
-        }
+    fn analyze_plan(plan: LogicalPlan) -> Result<LogicalPlan> {
+        plan.transform(&|plan| {
+            Ok(match plan {
+                LogicalPlan::Filter(filter) => {
+                    let predicate = Self::analyze_expr(filter.predicate.clone())?;
+                    Transformed::Yes(LogicalPlan::Filter(Filter::try_new(
+                        predicate,
+                        filter.input,
+                    )?))
+                }
+                _ => Transformed::No(plan),
+            })
+        })
     }
 
     fn analyze_expr(expr: Expr) -> Result<Expr> {
