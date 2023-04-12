@@ -16,14 +16,13 @@
 // under the License.
 
 use crate::common::Result;
-use crate::physical_plan::sorts::cursor::{PrimitiveCursor, RowCursor};
+use crate::physical_plan::sorts::cursor::{FieldArray, FieldCursor, RowCursor};
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{PhysicalExpr, PhysicalSortExpr};
-use arrow::array::{Array, ArrowPrimitiveType};
+use arrow::array::Array;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
-use datafusion_common::cast::as_primitive_array;
 use futures::stream::{Fuse, StreamExt};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -144,7 +143,7 @@ impl PartitionedStream for RowCursorStream {
 }
 
 /// Specialized stream for sorts on single primitive columns
-pub struct PrimitiveCursorStream<T: ArrowPrimitiveType> {
+pub struct FieldCursorStream<T: FieldArray> {
     /// The physical expressions to sort by
     sort: PhysicalSortExpr,
     /// Input streams
@@ -152,16 +151,15 @@ pub struct PrimitiveCursorStream<T: ArrowPrimitiveType> {
     phantom: PhantomData<fn(T) -> T>,
 }
 
-impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveCursorStream<T> {
+impl<T: FieldArray> std::fmt::Debug for FieldCursorStream<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PrimitiveCursorStream")
-            .field("data_type", &T::DATA_TYPE)
             .field("num_streams", &self.streams)
             .finish()
     }
 }
 
-impl<T: ArrowPrimitiveType> PrimitiveCursorStream<T> {
+impl<T: FieldArray> FieldCursorStream<T> {
     pub fn new(sort: PhysicalSortExpr, streams: Vec<SendableRecordBatchStream>) -> Self {
         let streams = streams.into_iter().map(|s| s.fuse()).collect();
         Self {
@@ -171,24 +169,16 @@ impl<T: ArrowPrimitiveType> PrimitiveCursorStream<T> {
         }
     }
 
-    fn convert_batch(
-        &mut self,
-        batch: &RecordBatch,
-    ) -> Result<PrimitiveCursor<T::Native>> {
+    fn convert_batch(&mut self, batch: &RecordBatch) -> Result<FieldCursor<T::Values>> {
         let value = self.sort.expr.evaluate(batch)?;
         let array = value.into_array(batch.num_rows());
-        let array = as_primitive_array::<T>(array.as_ref())?;
-
-        Ok(PrimitiveCursor::new(
-            self.sort.options,
-            array.values().clone(),
-            array.null_count(),
-        ))
+        let array = array.as_any().downcast_ref::<T>().expect("field values");
+        Ok(FieldCursor::new(self.sort.options, array))
     }
 }
 
-impl<T: ArrowPrimitiveType> PartitionedStream for PrimitiveCursorStream<T> {
-    type Output = Result<(PrimitiveCursor<T::Native>, RecordBatch)>;
+impl<T: FieldArray> PartitionedStream for FieldCursorStream<T> {
+    type Output = Result<(FieldCursor<T::Values>, RecordBatch)>;
 
     fn partitions(&self) -> usize {
         self.streams.0.len()

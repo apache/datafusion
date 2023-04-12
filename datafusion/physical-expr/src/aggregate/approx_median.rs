@@ -17,6 +17,7 @@
 
 //! Defines physical expressions for APPROX_MEDIAN that can be evaluated MEDIAN at runtime during query execution
 
+use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::{lit, ApproxPercentileCont};
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{datatypes::DataType, datatypes::Field};
@@ -80,5 +81,19 @@ impl AggregateExpr for ApproxMedian {
 
     fn name(&self) -> &str {
         &self.name
+    }
+}
+
+impl PartialEq<dyn Any> for ApproxMedian {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && self.data_type == x.data_type
+                    && self.expr.eq(&x.expr)
+                    && self.approx_percentile == x.approx_percentile
+            })
+            .unwrap_or(false)
     }
 }

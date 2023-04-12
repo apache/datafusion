@@ -69,6 +69,10 @@ pub enum AggregateMode {
     /// with Hash repartitioning on the group keys. If a group key is
     /// duplicated, duplicate groups would be produced
     FinalPartitioned,
+    /// Applies the entire logical aggregation operation in a single operator,
+    /// as opposed to Partial / Final modes which apply the logical aggregation using
+    /// two operators.
+    Single,
 }
 
 /// Group By expression modes
@@ -170,6 +174,24 @@ impl PhysicalGroupBy {
     /// Returns true if this `PhysicalGroupBy` has no group expressions
     pub fn is_empty(&self) -> bool {
         self.expr.is_empty()
+    }
+}
+
+impl PartialEq for PhysicalGroupBy {
+    fn eq(&self, other: &PhysicalGroupBy) -> bool {
+        self.expr.len() == other.expr.len()
+            && self
+                .expr
+                .iter()
+                .zip(other.expr.iter())
+                .all(|((expr1, name1), (expr2, name2))| expr1.eq(expr2) && name1 == name2)
+            && self.null_expr.len() == other.null_expr.len()
+            && self
+                .null_expr
+                .iter()
+                .zip(other.null_expr.iter())
+                .all(|((expr1, name1), (expr2, name2))| expr1.eq(expr2) && name1 == name2)
+            && self.groups == other.groups
     }
 }
 
@@ -447,8 +469,8 @@ impl ExecutionPlan for AggregateExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         match &self.mode {
-            AggregateMode::Partial => {
-                // Partial Aggregation will not change the output partitioning but need to respect the Alias
+            AggregateMode::Partial | AggregateMode::Single => {
+                // Partial and Single Aggregation will not change the output partitioning but need to respect the Alias
                 let input_partition = self.input.output_partitioning();
                 match input_partition {
                     Partitioning::Hash(exprs, part) => {
@@ -498,7 +520,9 @@ impl ExecutionPlan for AggregateExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         match &self.mode {
-            AggregateMode::Partial => vec![Distribution::UnspecifiedDistribution],
+            AggregateMode::Partial | AggregateMode::Single => {
+                vec![Distribution::UnspecifiedDistribution]
+            }
             AggregateMode::FinalPartitioned => {
                 vec![Distribution::HashPartitioned(self.output_group_expr())]
             }
@@ -667,7 +691,9 @@ fn create_schema(
                 fields.extend(expr.state_fields()?.iter().cloned())
             }
         }
-        AggregateMode::Final | AggregateMode::FinalPartitioned => {
+        AggregateMode::Final
+        | AggregateMode::FinalPartitioned
+        | AggregateMode::Single => {
             // in final mode, the field with the final result of the accumulator
             for expr in aggr_expr {
                 fields.push(expr.field()?)
@@ -693,7 +719,7 @@ fn aggregate_expressions(
     col_idx_base: usize,
 ) -> Result<Vec<Vec<Arc<dyn PhysicalExpr>>>> {
     match mode {
-        AggregateMode::Partial => Ok(aggr_expr
+        AggregateMode::Partial | AggregateMode::Single => Ok(aggr_expr
             .iter()
             .map(|agg| {
                 let pre_cast_type = if let Some(Sum {
@@ -791,7 +817,7 @@ fn create_row_accumulators(
 }
 
 /// returns a vector of ArrayRefs, where each entry corresponds to either the
-/// final value (mode = Final) or states (mode = Partial)
+/// final value (mode = Final, FinalPartitioned and Single) or states (mode = Partial)
 fn finalize_aggregation(
     accumulators: &[AccumulatorItem],
     mode: &AggregateMode,
@@ -810,7 +836,9 @@ fn finalize_aggregation(
                 .collect::<Result<Vec<_>>>()?;
             Ok(a.iter().flatten().cloned().collect::<Vec<_>>())
         }
-        AggregateMode::Final | AggregateMode::FinalPartitioned => {
+        AggregateMode::Final
+        | AggregateMode::FinalPartitioned
+        | AggregateMode::Single => {
             // merge the state to the final value
             accumulators
                 .iter()
