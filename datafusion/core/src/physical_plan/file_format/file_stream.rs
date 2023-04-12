@@ -157,7 +157,7 @@ struct FileStreamMetrics {
     /// Time between when the [`FileStream`] requests data from the
     /// stream and when the first [`RecordBatch`] is produced.
     pub time_scanning_until_data: StartableTime,
-    /// total elapsed wall clock time for for scanning + record batch decompression / decoding
+    /// Total elapsed wall clock time for for scanning + record batch decompression / decoding
     ///
     /// Sum of time between when the [`FileStream`] requests data from
     /// the stream and when a [`RecordBatch`] is produced for all
