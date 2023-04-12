@@ -2070,7 +2070,6 @@ mod tests {
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
     }
-    
 
     #[rstest]
     #[tokio::test(flavor = "multi_thread")]
@@ -2112,7 +2111,7 @@ mod tests {
             Field::new("left", DataType::Int32, true),
             Field::new("right", DataType::Int32, true),
         ]);
-        let filter_expr = join_expr_tests_fixture(
+        let filter_expr = join_expr_tests_fixture_i32(
             case_expr,
             col("left", &intermediate_schema)?,
             col("right", &intermediate_schema)?,
@@ -2822,8 +2821,13 @@ mod tests {
             expr: col("r_float", right_schema)?,
             options: SortOptions::default(),
         }];
-        let (left, right) =
-            create_memory_table(left_batch, right_batch, left_sorted, right_sorted, 13)?;
+        let (left, right) = create_memory_table(
+            left_batch,
+            right_batch,
+            Some(left_sorted),
+            Some(right_sorted),
+            13,
+        )?;
 
         let on = vec![(
             Column::new_with_schema("lc1", left_schema)?,
@@ -2851,7 +2855,7 @@ mod tests {
         ];
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
 
-        experiment(left, right, filter, join_type, on, task_ctx).await?;
+        experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
     }
 }
