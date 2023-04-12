@@ -61,17 +61,12 @@ async fn window_frame_creation_type_checking() -> Result<()> {
 }
 
 mod tests {
-    use crate::sql::execute_to_batches;
-    use datafusion::assert_batches_eq;
-    use datafusion::physical_plan::displayable;
+    use super::*;
     use datafusion::test_util::get_test_context;
-    use datafusion_common::Result;
-    use datafusion_execution::config::SessionConfig;
-    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_source_sorted_aggregate() -> Result<()> {
-        let tmpdir = TempDir::new().unwrap();
+        let tmpdir = TempDir::new()?;
         let session_config = SessionConfig::new().with_target_partitions(1);
         let ctx = get_test_context(&tmpdir, false, session_config).await?;
 

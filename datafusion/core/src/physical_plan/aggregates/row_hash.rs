@@ -602,7 +602,6 @@ impl GroupedHashAggregateStream {
             let mut batch_indices: UInt32Builder = UInt32Builder::with_capacity(0);
             let mut offsets = vec![0];
             let mut offset_so_far = 0;
-
             for &group_idx in groups_with_rows.iter() {
                 let indices = &self.aggr_state.group_states[group_idx].indices;
                 batch_indices.append_slice(indices);
@@ -610,6 +609,7 @@ impl GroupedHashAggregateStream {
                 offsets.push(offset_so_far);
             }
             let batch_indices = batch_indices.finish();
+
             let row_filter_values =
                 get_optional_filters(&row_filter_values, &batch_indices);
             let normal_filter_values =
