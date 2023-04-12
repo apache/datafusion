@@ -70,6 +70,7 @@ macro_rules! assert_metrics {
 
 macro_rules! test_expression {
     ($SQL:expr, $EXPECTED:expr) => {
+        println!("Input:\n  {}\nExpected:\n  {}\n", $SQL, $EXPECTED);
         let ctx = SessionContext::new();
         let sql = format!("SELECT {}", $SQL);
         let actual = execute(&ctx, sql.as_str()).await;
@@ -1144,20 +1145,6 @@ async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordB
     ctx.sql(sql).await?.collect().await
 }
 
-/// Execute query and return results as a Vec of RecordBatches or an error
-async fn try_execute_to_batches(
-    ctx: &SessionContext,
-    sql: &str,
-) -> Result<Vec<RecordBatch>> {
-    let dataframe = ctx.sql(sql).await?;
-    let logical_schema = dataframe.schema().clone();
-    let (state, plan) = dataframe.into_parts();
-
-    let optimized = state.optimize(&plan)?;
-    assert_eq!(&logical_schema, optimized.schema().as_ref());
-    DataFrame::new(state, optimized).collect().await
-}
-
 /// Execute query and return results as a Vec of RecordBatches
 async fn execute_to_batches(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
     let df = ctx.sql(sql).await.unwrap();
@@ -1296,7 +1283,7 @@ where
     make_timestamp_tz_table::<A>(None)
 }
 
-fn make_timestamp_tz_table<A>(tz: Option<String>) -> Result<Arc<MemTable>>
+fn make_timestamp_tz_table<A>(tz: Option<Arc<str>>) -> Result<Arc<MemTable>>
 where
     A: ArrowTimestampType<Native = i64>,
 {
@@ -1331,8 +1318,52 @@ where
     Ok(Arc::new(table))
 }
 
-fn make_timestamp_nano_table() -> Result<Arc<MemTable>> {
-    make_timestamp_table::<TimestampNanosecondType>()
+fn make_timestamp_tz_sub_table<A>(
+    tz1: Option<Arc<str>>,
+    tz2: Option<Arc<str>>,
+) -> Result<Arc<MemTable>>
+where
+    A: ArrowTimestampType<Native = i64>,
+{
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("ts1", DataType::Timestamp(A::UNIT, tz1.clone()), false),
+        Field::new("ts2", DataType::Timestamp(A::UNIT, tz2.clone()), false),
+        Field::new("val", DataType::Int32, true),
+    ]));
+
+    let divisor = match A::UNIT {
+        TimeUnit::Nanosecond => 1,
+        TimeUnit::Microsecond => 1000,
+        TimeUnit::Millisecond => 1_000_000,
+        TimeUnit::Second => 1_000_000_000,
+    };
+
+    let timestamps1 = vec![
+        1_678_892_420_000_000_000i64 / divisor, //2023-03-15T15:00:20.000_000_000
+        1_678_892_410_000_000_000i64 / divisor, //2023-03-15T15:00:10.000_000_000
+        1_678_892_430_000_000_000i64 / divisor, //2023-03-15T15:00:30.000_000_000
+    ];
+    let timestamps2 = vec![
+        1_678_892_400_000_000_000i64 / divisor, //2023-03-15T15:00:00.000_000_000
+        1_678_892_400_000_000_000i64 / divisor, //2023-03-15T15:00:00.000_000_000
+        1_678_892_400_000_000_000i64 / divisor, //2023-03-15T15:00:00.000_000_000
+    ];
+
+    let array1 =
+        PrimitiveArray::<A>::from_iter_values(timestamps1).with_timezone_opt(tz1);
+    let array2 =
+        PrimitiveArray::<A>::from_iter_values(timestamps2).with_timezone_opt(tz2);
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(array1),
+            Arc::new(array2),
+            Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+        ],
+    )?;
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+    Ok(Arc::new(table))
 }
 
 /// Return a new table provider that has a single Int32 column with

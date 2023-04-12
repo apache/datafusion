@@ -16,7 +16,7 @@
 // under the License.
 
 use async_recursion::async_recursion;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion::common::{DFField, DFSchema, DFSchemaRef};
 use datafusion::logical_expr::{
     aggregate_function, window_function::find_df_window_func, BinaryExpr, Case, Expr,
@@ -32,6 +32,7 @@ use datafusion::{
     prelude::{Column, SessionContext},
     scalar::ScalarValue,
 };
+use substrait::proto::expression::Literal;
 use substrait::proto::{
     aggregate_function::AggregationInvocation,
     expression::{
@@ -55,6 +56,13 @@ use datafusion::logical_expr::expr::Sort;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+
+use crate::variation_const::{
+    DATE_32_TYPE_REF, DATE_64_TYPE_REF, DECIMAL_128_TYPE_REF, DECIMAL_256_TYPE_REF,
+    DEFAULT_CONTAINER_TYPE_REF, DEFAULT_TYPE_REF, LARGE_CONTAINER_TYPE_REF,
+    TIMESTAMP_MICRO_TYPE_REF, TIMESTAMP_MILLI_TYPE_REF, TIMESTAMP_NANO_TYPE_REF,
+    TIMESTAMP_SECOND_TYPE_REF, UNSIGNED_INTEGER_TYPE_REF,
+};
 
 pub fn name_to_op(name: &str) -> Result<Operator> {
     match name {
@@ -445,7 +453,12 @@ pub async fn from_substrait_sorts(
         let asc_nullfirst = match &s.sort_kind {
             Some(k) => match k {
                 Direction(d) => {
-                    let direction: SortDirection = unsafe { ::std::mem::transmute(*d) };
+                    let Some(direction) = SortDirection::from_i32(*d) else {
+                        return Err(DataFusionError::NotImplemented(
+                            format!("Unsupported Substrait SortDirection value {d}"),
+                        ))
+                    };
+
                     match direction {
                         SortDirection::AscNullsFirst => Ok((true, true)),
                         SortDirection::AscNullsLast => Ok((true, false)),
@@ -682,109 +695,8 @@ pub async fn from_substrait_rex(
             }
         }
         Some(RexType::Literal(lit)) => {
-            match &lit.literal_type {
-                Some(LiteralType::I8(n)) => {
-                    if lit.type_variation_reference == 0 {
-                        Ok(Arc::new(Expr::Literal(ScalarValue::Int8(Some(*n as i8)))))
-                    } else if lit.type_variation_reference == 1 {
-                        Ok(Arc::new(Expr::Literal(ScalarValue::UInt8(Some(*n as u8)))))
-                    } else {
-                        Err(DataFusionError::Substrait(format!(
-                            "Unknown type variation reference {}",
-                            lit.type_variation_reference
-                        )))
-                    }
-                }
-                Some(LiteralType::I16(n)) => {
-                    if lit.type_variation_reference == 0 {
-                        Ok(Arc::new(Expr::Literal(ScalarValue::Int16(Some(*n as i16)))))
-                    } else if lit.type_variation_reference == 1 {
-                        Ok(Arc::new(Expr::Literal(ScalarValue::UInt16(Some(
-                            *n as u16,
-                        )))))
-                    } else {
-                        Err(DataFusionError::Substrait(format!(
-                            "Unknown type variation reference {}",
-                            lit.type_variation_reference
-                        )))
-                    }
-                }
-                Some(LiteralType::I32(n)) => {
-                    if lit.type_variation_reference == 0 {
-                        Ok(Arc::new(Expr::Literal(ScalarValue::Int32(Some(*n)))))
-                    } else if lit.type_variation_reference == 1 {
-                        Ok(Arc::new(Expr::Literal(ScalarValue::UInt32(Some(unsafe {
-                            std::mem::transmute_copy::<i32, u32>(n)
-                        })))))
-                    } else {
-                        Err(DataFusionError::Substrait(format!(
-                            "Unknown type variation reference {}",
-                            lit.type_variation_reference
-                        )))
-                    }
-                }
-                Some(LiteralType::I64(n)) => {
-                    if lit.type_variation_reference == 0 {
-                        Ok(Arc::new(Expr::Literal(ScalarValue::Int64(Some(*n)))))
-                    } else if lit.type_variation_reference == 1 {
-                        Ok(Arc::new(Expr::Literal(ScalarValue::UInt64(Some(unsafe {
-                            std::mem::transmute_copy::<i64, u64>(n)
-                        })))))
-                    } else {
-                        Err(DataFusionError::Substrait(format!(
-                            "Unknown type variation reference {}",
-                            lit.type_variation_reference
-                        )))
-                    }
-                }
-                Some(LiteralType::Boolean(b)) => {
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Boolean(Some(*b)))))
-                }
-                Some(LiteralType::Date(d)) => {
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Date32(Some(*d)))))
-                }
-                Some(LiteralType::Fp32(f)) => {
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Float32(Some(*f)))))
-                }
-                Some(LiteralType::Fp64(f)) => {
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Float64(Some(*f)))))
-                }
-                Some(LiteralType::Decimal(d)) => {
-                    let value: [u8; 16] = d.value.clone().try_into().or(Err(
-                        DataFusionError::Substrait(
-                            "Failed to parse decimal value".to_string(),
-                        ),
-                    ))?;
-                    let p = d.precision.try_into().map_err(|e| {
-                        DataFusionError::Substrait(format!(
-                            "Failed to parse decimal precision: {e}"
-                        ))
-                    })?;
-                    let s = d.scale.try_into().map_err(|e| {
-                        DataFusionError::Substrait(format!(
-                            "Failed to parse decimal scale: {e}"
-                        ))
-                    })?;
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Decimal128(
-                        Some(std::primitive::i128::from_le_bytes(value)),
-                        p,
-                        s,
-                    ))))
-                }
-                Some(LiteralType::String(s)) => {
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Utf8(Some(s.clone())))))
-                }
-                Some(LiteralType::Binary(b)) => Ok(Arc::new(Expr::Literal(
-                    ScalarValue::Binary(Some(b.clone())),
-                ))),
-                Some(LiteralType::Null(ntype)) => {
-                    Ok(Arc::new(Expr::Literal(from_substrait_null(ntype)?)))
-                }
-                _ => Err(DataFusionError::NotImplemented(format!(
-                    "Unsupported literal_type: {:?}",
-                    lit.literal_type
-                ))),
-            }
+            let scalar_value = from_substrait_literal(lit)?;
+            Ok(Arc::new(Expr::Literal(scalar_value)))
         }
         Some(RexType::Cast(cast)) => match cast.as_ref().r#type.as_ref() {
             Some(output_type) => Ok(Arc::new(Expr::Cast(Cast::new(
@@ -855,13 +767,104 @@ fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
     match &dt.kind {
         Some(s_kind) => match s_kind {
             r#type::Kind::Bool(_) => Ok(DataType::Boolean),
-            r#type::Kind::I8(_) => Ok(DataType::Int8),
-            r#type::Kind::I16(_) => Ok(DataType::Int16),
-            r#type::Kind::I32(_) => Ok(DataType::Int32),
-            r#type::Kind::I64(_) => Ok(DataType::Int64),
-            r#type::Kind::Decimal(d) => {
-                Ok(DataType::Decimal128(d.precision as u8, d.scale as i8))
+            r#type::Kind::I8(integer) => match integer.type_variation_reference {
+                DEFAULT_TYPE_REF => Ok(DataType::Int8),
+                UNSIGNED_INTEGER_TYPE_REF => Ok(DataType::UInt8),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ))),
+            },
+            r#type::Kind::I16(integer) => match integer.type_variation_reference {
+                DEFAULT_TYPE_REF => Ok(DataType::Int16),
+                UNSIGNED_INTEGER_TYPE_REF => Ok(DataType::UInt16),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ))),
+            },
+            r#type::Kind::I32(integer) => match integer.type_variation_reference {
+                DEFAULT_TYPE_REF => Ok(DataType::Int32),
+                UNSIGNED_INTEGER_TYPE_REF => Ok(DataType::UInt32),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ))),
+            },
+            r#type::Kind::I64(integer) => match integer.type_variation_reference {
+                DEFAULT_TYPE_REF => Ok(DataType::Int64),
+                UNSIGNED_INTEGER_TYPE_REF => Ok(DataType::UInt64),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ))),
+            },
+            r#type::Kind::Fp32(_) => Ok(DataType::Float32),
+            r#type::Kind::Fp64(_) => Ok(DataType::Float64),
+            r#type::Kind::Timestamp(ts) => match ts.type_variation_reference {
+                TIMESTAMP_SECOND_TYPE_REF => {
+                    Ok(DataType::Timestamp(TimeUnit::Second, None))
+                }
+                TIMESTAMP_MILLI_TYPE_REF => {
+                    Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
+                }
+                TIMESTAMP_MICRO_TYPE_REF => {
+                    Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
+                }
+                TIMESTAMP_NANO_TYPE_REF => {
+                    Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+                }
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ))),
+            },
+            r#type::Kind::Date(date) => match date.type_variation_reference {
+                DATE_32_TYPE_REF => Ok(DataType::Date32),
+                DATE_64_TYPE_REF => Ok(DataType::Date64),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ))),
+            },
+            r#type::Kind::Binary(binary) => match binary.type_variation_reference {
+                DEFAULT_CONTAINER_TYPE_REF => Ok(DataType::Binary),
+                LARGE_CONTAINER_TYPE_REF => Ok(DataType::LargeBinary),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ))),
+            },
+            r#type::Kind::FixedBinary(fixed) => {
+                Ok(DataType::FixedSizeBinary(fixed.length))
             }
+            r#type::Kind::String(string) => match string.type_variation_reference {
+                DEFAULT_CONTAINER_TYPE_REF => Ok(DataType::Utf8),
+                LARGE_CONTAINER_TYPE_REF => Ok(DataType::LargeUtf8),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ))),
+            },
+            r#type::Kind::List(list) => {
+                let inner_type =
+                    from_substrait_type(list.r#type.as_ref().ok_or_else(|| {
+                        DataFusionError::Substrait(
+                            "List type must have inner type".to_string(),
+                        )
+                    })?)?;
+                let field = Arc::new(Field::new("list_item", inner_type, true));
+                match list.type_variation_reference {
+                    DEFAULT_CONTAINER_TYPE_REF => Ok(DataType::List(field)),
+                    LARGE_CONTAINER_TYPE_REF => Ok(DataType::LargeList(field)),
+                    v => Err(DataFusionError::NotImplemented(format!(
+                        "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                    )))?,
+                }
+            }
+            r#type::Kind::Decimal(d) => match d.type_variation_reference {
+                DECIMAL_128_TYPE_REF => {
+                    Ok(DataType::Decimal128(d.precision as u8, d.scale as i8))
+                }
+                DECIMAL_256_TYPE_REF => {
+                    Ok(DataType::Decimal256(d.precision as u8, d.scale as i8))
+                }
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ))),
+            },
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported Substrait type: {s_kind:?}"
             ))),
@@ -910,20 +913,192 @@ fn from_substrait_bound(
     }
 }
 
+pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
+    let scalar_value = match &lit.literal_type {
+        Some(LiteralType::Boolean(b)) => ScalarValue::Boolean(Some(*b)),
+        Some(LiteralType::I8(n)) => match lit.type_variation_reference {
+            DEFAULT_TYPE_REF => ScalarValue::Int8(Some(*n as i8)),
+            UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt8(Some(*n as u8)),
+            others => {
+                return Err(DataFusionError::Substrait(format!(
+                    "Unknown type variation reference {others}",
+                )));
+            }
+        },
+        Some(LiteralType::I16(n)) => match lit.type_variation_reference {
+            DEFAULT_TYPE_REF => ScalarValue::Int16(Some(*n as i16)),
+            UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt16(Some(*n as u16)),
+            others => {
+                return Err(DataFusionError::Substrait(format!(
+                    "Unknown type variation reference {others}",
+                )));
+            }
+        },
+        Some(LiteralType::I32(n)) => match lit.type_variation_reference {
+            DEFAULT_TYPE_REF => ScalarValue::Int32(Some(*n)),
+            UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt32(Some(*n as u32)),
+            others => {
+                return Err(DataFusionError::Substrait(format!(
+                    "Unknown type variation reference {others}",
+                )));
+            }
+        },
+        Some(LiteralType::I64(n)) => match lit.type_variation_reference {
+            DEFAULT_TYPE_REF => ScalarValue::Int64(Some(*n)),
+            UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt64(Some(*n as u64)),
+            others => {
+                return Err(DataFusionError::Substrait(format!(
+                    "Unknown type variation reference {others}",
+                )));
+            }
+        },
+        Some(LiteralType::Fp32(f)) => ScalarValue::Float32(Some(*f)),
+        Some(LiteralType::Fp64(f)) => ScalarValue::Float64(Some(*f)),
+        Some(LiteralType::Timestamp(t)) => match lit.type_variation_reference {
+            TIMESTAMP_SECOND_TYPE_REF => ScalarValue::TimestampSecond(Some(*t), None),
+            TIMESTAMP_MILLI_TYPE_REF => ScalarValue::TimestampMillisecond(Some(*t), None),
+            TIMESTAMP_MICRO_TYPE_REF => ScalarValue::TimestampMicrosecond(Some(*t), None),
+            TIMESTAMP_NANO_TYPE_REF => ScalarValue::TimestampNanosecond(Some(*t), None),
+            others => {
+                return Err(DataFusionError::Substrait(format!(
+                    "Unknown type variation reference {others}",
+                )));
+            }
+        },
+        Some(LiteralType::Date(d)) => ScalarValue::Date32(Some(*d)),
+        Some(LiteralType::String(s)) => match lit.type_variation_reference {
+            DEFAULT_CONTAINER_TYPE_REF => ScalarValue::Utf8(Some(s.clone())),
+            LARGE_CONTAINER_TYPE_REF => ScalarValue::LargeUtf8(Some(s.clone())),
+            others => {
+                return Err(DataFusionError::Substrait(format!(
+                    "Unknown type variation reference {others}",
+                )));
+            }
+        },
+        Some(LiteralType::Binary(b)) => match lit.type_variation_reference {
+            DEFAULT_CONTAINER_TYPE_REF => ScalarValue::Binary(Some(b.clone())),
+            LARGE_CONTAINER_TYPE_REF => ScalarValue::LargeBinary(Some(b.clone())),
+            others => {
+                return Err(DataFusionError::Substrait(format!(
+                    "Unknown type variation reference {others}",
+                )));
+            }
+        },
+        Some(LiteralType::FixedBinary(b)) => {
+            ScalarValue::FixedSizeBinary(b.len() as _, Some(b.clone()))
+        }
+        Some(LiteralType::Decimal(d)) => {
+            let value: [u8; 16] =
+                d.value
+                    .clone()
+                    .try_into()
+                    .or(Err(DataFusionError::Substrait(
+                        "Failed to parse decimal value".to_string(),
+                    )))?;
+            let p = d.precision.try_into().map_err(|e| {
+                DataFusionError::Substrait(format!(
+                    "Failed to parse decimal precision: {e}"
+                ))
+            })?;
+            let s = d.scale.try_into().map_err(|e| {
+                DataFusionError::Substrait(format!("Failed to parse decimal scale: {e}"))
+            })?;
+            ScalarValue::Decimal128(
+                Some(std::primitive::i128::from_le_bytes(value)),
+                p,
+                s,
+            )
+        }
+        Some(LiteralType::Null(ntype)) => from_substrait_null(ntype)?,
+        _ => {
+            return Err(DataFusionError::NotImplemented(format!(
+                "Unsupported literal_type: {:?}",
+                lit.literal_type
+            )))
+        }
+    };
+
+    Ok(scalar_value)
+}
+
 fn from_substrait_null(null_type: &Type) -> Result<ScalarValue> {
     if let Some(kind) = &null_type.kind {
         match kind {
-            r#type::Kind::I8(_) => Ok(ScalarValue::Int8(None)),
-            r#type::Kind::I16(_) => Ok(ScalarValue::Int16(None)),
-            r#type::Kind::I32(_) => Ok(ScalarValue::Int32(None)),
-            r#type::Kind::I64(_) => Ok(ScalarValue::Int64(None)),
+            r#type::Kind::Bool(_) => Ok(ScalarValue::Boolean(None)),
+            r#type::Kind::I8(integer) => match integer.type_variation_reference {
+                DEFAULT_TYPE_REF => Ok(ScalarValue::Int8(None)),
+                UNSIGNED_INTEGER_TYPE_REF => Ok(ScalarValue::UInt8(None)),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {kind:?}"
+                ))),
+            },
+            r#type::Kind::I16(integer) => match integer.type_variation_reference {
+                DEFAULT_TYPE_REF => Ok(ScalarValue::Int16(None)),
+                UNSIGNED_INTEGER_TYPE_REF => Ok(ScalarValue::UInt16(None)),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {kind:?}"
+                ))),
+            },
+            r#type::Kind::I32(integer) => match integer.type_variation_reference {
+                DEFAULT_TYPE_REF => Ok(ScalarValue::Int32(None)),
+                UNSIGNED_INTEGER_TYPE_REF => Ok(ScalarValue::UInt32(None)),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {kind:?}"
+                ))),
+            },
+            r#type::Kind::I64(integer) => match integer.type_variation_reference {
+                DEFAULT_TYPE_REF => Ok(ScalarValue::Int64(None)),
+                UNSIGNED_INTEGER_TYPE_REF => Ok(ScalarValue::UInt64(None)),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {kind:?}"
+                ))),
+            },
+            r#type::Kind::Fp32(_) => Ok(ScalarValue::Float32(None)),
+            r#type::Kind::Fp64(_) => Ok(ScalarValue::Float64(None)),
+            r#type::Kind::Timestamp(ts) => match ts.type_variation_reference {
+                TIMESTAMP_SECOND_TYPE_REF => Ok(ScalarValue::TimestampSecond(None, None)),
+                TIMESTAMP_MILLI_TYPE_REF => {
+                    Ok(ScalarValue::TimestampMillisecond(None, None))
+                }
+                TIMESTAMP_MICRO_TYPE_REF => {
+                    Ok(ScalarValue::TimestampMicrosecond(None, None))
+                }
+                TIMESTAMP_NANO_TYPE_REF => {
+                    Ok(ScalarValue::TimestampNanosecond(None, None))
+                }
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {kind:?}"
+                ))),
+            },
+            r#type::Kind::Date(date) => match date.type_variation_reference {
+                DATE_32_TYPE_REF => Ok(ScalarValue::Date32(None)),
+                DATE_64_TYPE_REF => Ok(ScalarValue::Date64(None)),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {kind:?}"
+                ))),
+            },
+            r#type::Kind::Binary(binary) => match binary.type_variation_reference {
+                DEFAULT_CONTAINER_TYPE_REF => Ok(ScalarValue::Binary(None)),
+                LARGE_CONTAINER_TYPE_REF => Ok(ScalarValue::LargeBinary(None)),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {kind:?}"
+                ))),
+            },
+            // FixedBinary is not supported because `None` doesn't have length
+            r#type::Kind::String(string) => match string.type_variation_reference {
+                DEFAULT_CONTAINER_TYPE_REF => Ok(ScalarValue::Utf8(None)),
+                LARGE_CONTAINER_TYPE_REF => Ok(ScalarValue::LargeUtf8(None)),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {kind:?}"
+                ))),
+            },
             r#type::Kind::Decimal(d) => Ok(ScalarValue::Decimal128(
                 None,
                 d.precision as u8,
                 d.scale as i8,
             )),
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported null kind: {kind:?}"
+                "Unsupported Substrait type: {kind:?}"
             ))),
         }
     } else {

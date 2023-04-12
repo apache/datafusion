@@ -622,6 +622,17 @@ async fn test_not_expressions() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
+    let sql = "SELECT not(1), not(0)";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+--------------+--------------+",
+        "| NOT Int64(1) | NOT Int64(0) |",
+        "+--------------+--------------+",
+        "| -2           | -1           |",
+        "+--------------+--------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
     let sql = "SELECT null, not(null)";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -638,9 +649,7 @@ async fn test_not_expressions() -> Result<()> {
     match result {
         Ok(_) => panic!("expected error"),
         Err(e) => {
-            assert_contains!(e.to_string(),
-                             "NOT 'Literal { value: Utf8(\"hi\") }' can't be evaluated because the expression's type is Utf8, not boolean or NULL"
-            );
+            assert_contains!(e.to_string(), "Can't NOT or BITWISE_NOT datatype: 'Utf8'");
         }
     }
     Ok(())
@@ -676,12 +685,19 @@ async fn test_boolean_expressions() -> Result<()> {
 #[tokio::test]
 async fn test_mathematical_expressions_with_null() -> Result<()> {
     test_expression!("sqrt(NULL)", "NULL");
+    test_expression!("cbrt(NULL)", "NULL");
     test_expression!("sin(NULL)", "NULL");
     test_expression!("cos(NULL)", "NULL");
     test_expression!("tan(NULL)", "NULL");
     test_expression!("asin(NULL)", "NULL");
     test_expression!("acos(NULL)", "NULL");
     test_expression!("atan(NULL)", "NULL");
+    test_expression!("sinh(NULL)", "NULL");
+    test_expression!("cosh(NULL)", "NULL");
+    test_expression!("tanh(NULL)", "NULL");
+    test_expression!("asinh(NULL)", "NULL");
+    test_expression!("acosh(NULL)", "NULL");
+    test_expression!("atanh(NULL)", "NULL");
     test_expression!("floor(NULL)", "NULL");
     test_expression!("ceil(NULL)", "NULL");
     test_expression!("round(NULL)", "NULL");
@@ -843,83 +859,83 @@ async fn test_interval_expressions() -> Result<()> {
     // day nano intervals
     test_expression!(
         "interval '1'",
-        "0 years 0 mons 0 days 0 hours 0 mins 1.000 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 1.000000000 secs"
     );
     test_expression!(
         "interval '1 second'",
-        "0 years 0 mons 0 days 0 hours 0 mins 1.000 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 1.000000000 secs"
     );
     test_expression!(
         "interval '500 milliseconds'",
-        "0 years 0 mons 0 days 0 hours 0 mins 0.500 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 0.500000000 secs"
     );
     test_expression!(
         "interval '5 second'",
-        "0 years 0 mons 0 days 0 hours 0 mins 5.000 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs"
     );
     test_expression!(
         "interval '0.5 minute'",
-        "0 years 0 mons 0 days 0 hours 0 mins 30.000 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs"
     );
     test_expression!(
         "interval '.5 minute'",
-        "0 years 0 mons 0 days 0 hours 0 mins 30.000 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs"
     );
     test_expression!(
         "interval '5 minute'",
-        "0 years 0 mons 0 days 0 hours 5 mins 0.000 secs"
+        "0 years 0 mons 0 days 0 hours 5 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '5 minute 1 second'",
-        "0 years 0 mons 0 days 0 hours 5 mins 1.000 secs"
+        "0 years 0 mons 0 days 0 hours 5 mins 1.000000000 secs"
     );
     test_expression!(
         "interval '1 hour'",
-        "0 years 0 mons 0 days 1 hours 0 mins 0.000 secs"
+        "0 years 0 mons 0 days 1 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '5 hour'",
-        "0 years 0 mons 0 days 5 hours 0 mins 0.000 secs"
+        "0 years 0 mons 0 days 5 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 day'",
-        "0 years 0 mons 1 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 1 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 week'",
-        "0 years 0 mons 7 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 7 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '2 weeks'",
-        "0 years 0 mons 14 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 14 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 day 1'",
-        "0 years 0 mons 1 days 0 hours 0 mins 1.000 secs"
+        "0 years 0 mons 1 days 0 hours 0 mins 1.000000000 secs"
     );
     test_expression!(
         "interval '0.5'",
-        "0 years 0 mons 0 days 0 hours 0 mins 0.500 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 0.500000000 secs"
     );
     test_expression!(
         "interval '0.5 day 1'",
-        "0 years 0 mons 0 days 12 hours 0 mins 1.000 secs"
+        "0 years 0 mons 0 days 12 hours 0 mins 1.000000000 secs"
     );
     test_expression!(
         "interval '0.49 day'",
-        "0 years 0 mons 0 days 11 hours 45 mins 36.000 secs"
+        "0 years 0 mons 0 days 11 hours 45 mins 36.000000000 secs"
     );
     test_expression!(
         "interval '0.499 day'",
-        "0 years 0 mons 0 days 11 hours 58 mins 33.600 secs"
+        "0 years 0 mons 0 days 11 hours 58 mins 33.600000000 secs"
     );
     test_expression!(
         "interval '0.4999 day'",
-        "0 years 0 mons 0 days 11 hours 59 mins 51.360 secs"
+        "0 years 0 mons 0 days 11 hours 59 mins 51.360000000 secs"
     );
     test_expression!(
         "interval '0.49999 day'",
-        "0 years 0 mons 0 days 11 hours 59 mins 59.136 secs"
+        "0 years 0 mons 0 days 11 hours 59 mins 59.136000000 secs"
     );
     test_expression!(
         "interval '0.49999999999 day'",
@@ -927,69 +943,69 @@ async fn test_interval_expressions() -> Result<()> {
     );
     test_expression!(
         "interval '5 day'",
-        "0 years 0 mons 5 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 5 days 0 hours 0 mins 0.000000000 secs"
     );
     // Hour is ignored, this matches PostgreSQL
     test_expression!(
         "interval '5 day' hour",
-        "0 years 0 mons 5 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 5 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '5 day 4 hours 3 minutes 2 seconds 100 milliseconds'",
-        "0 years 0 mons 5 days 4 hours 3 mins 2.100 secs"
+        "0 years 0 mons 5 days 4 hours 3 mins 2.100000000 secs"
     );
     // month intervals
     test_expression!(
         "interval '0.5 month'",
-        "0 years 0 mons 15 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 15 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '0.5' month",
-        "0 years 0 mons 15 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 15 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 month'",
-        "0 years 1 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 1 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1' MONTH",
-        "0 years 1 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 1 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '5 month'",
-        "0 years 5 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 5 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '13 month'",
-        "1 years 1 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 13 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '0.5 year'",
-        "0 years 6 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 6 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 year'",
-        "1 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 12 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 decade'",
-        "10 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 120 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '2 decades'",
-        "20 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 240 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 century'",
-        "100 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 1200 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '2 year'",
-        "2 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 24 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '2' year",
-        "2 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 24 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     // complex
     test_expression!(
@@ -1625,6 +1641,18 @@ async fn csv_query_sqrt_sqrt() -> Result<()> {
     let actual = execute(&ctx, sql).await;
     // sqrt(sqrt(c12=0.9294097332465232)) = 0.9818650561397431
     let expected = vec![vec!["0.9818650561397431"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_cbrt_cbrt() -> Result<()> {
+    let ctx = create_ctx();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT cbrt(cbrt(c12)) FROM aggregate_test_100 LIMIT 1";
+    let actual = execute(&ctx, sql).await;
+    // cbrt(cbrt(c12=0.9294097332465232)) = 0.9918990366780552
+    let expected = vec![vec!["0.9918990366780552"]];
     assert_float_eq(&expected, &actual);
     Ok(())
 }

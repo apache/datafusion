@@ -38,11 +38,11 @@ use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::expressions::NoOp;
+use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, AggregateExpr,
     PhysicalExpr,
 };
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// The EnforceDistribution rule ensures that distribution requirements are met
@@ -252,6 +252,7 @@ fn adjust_input_keys_ordering(
         mode,
         group_by,
         aggr_expr,
+        filter_expr,
         input,
         input_schema,
         ..
@@ -264,6 +265,7 @@ fn adjust_input_keys_ordering(
                     &parent_required,
                     group_by,
                     aggr_expr,
+                    filter_expr,
                     input.clone(),
                     input_schema,
                 )?),
@@ -369,6 +371,7 @@ fn reorder_aggregate_keys(
     parent_required: &[Arc<dyn PhysicalExpr>],
     group_by: &PhysicalGroupBy,
     aggr_expr: &[Arc<dyn AggregateExpr>],
+    filter_expr: &[Option<Arc<dyn PhysicalExpr>>],
     agg_input: Arc<dyn ExecutionPlan>,
     input_schema: &SchemaRef,
 ) -> Result<PlanWithKeyRequirements> {
@@ -398,6 +401,7 @@ fn reorder_aggregate_keys(
                     mode,
                     group_by,
                     aggr_expr,
+                    filter_expr,
                     input,
                     input_schema,
                     ..
@@ -416,6 +420,7 @@ fn reorder_aggregate_keys(
                             AggregateMode::Partial,
                             new_partial_group_by,
                             aggr_expr.clone(),
+                            filter_expr.clone(),
                             input.clone(),
                             input_schema.clone(),
                         )?))
@@ -446,6 +451,7 @@ fn reorder_aggregate_keys(
                         AggregateMode::FinalPartitioned,
                         new_group_by,
                         aggr_expr.to_vec(),
+                        filter_expr.to_vec(),
                         partial_agg,
                         input_schema.clone(),
                     )?);
@@ -485,30 +491,6 @@ fn reorder_aggregate_keys(
             }
         }
     }
-}
-
-fn map_columns_before_projection(
-    parent_required: &[Arc<dyn PhysicalExpr>],
-    proj_exprs: &[(Arc<dyn PhysicalExpr>, String)],
-) -> Vec<Arc<dyn PhysicalExpr>> {
-    let mut column_mapping = HashMap::new();
-    for (expression, name) in proj_exprs.iter() {
-        if let Some(column) = expression.as_any().downcast_ref::<Column>() {
-            column_mapping.insert(name.clone(), column.clone());
-        };
-    }
-    let new_required: Vec<Arc<dyn PhysicalExpr>> = parent_required
-        .iter()
-        .filter_map(|r| {
-            if let Some(column) = r.as_any().downcast_ref::<Column>() {
-                column_mapping.get(column.name())
-            } else {
-                None
-            }
-        })
-        .map(|e| Arc::new(e.clone()) as Arc<dyn PhysicalExpr>)
-        .collect::<Vec<_>>();
-    new_required
 }
 
 fn shift_right_required(
@@ -1026,6 +1008,30 @@ mod tests {
         ))
     }
 
+    // Created a sorted parquet exec with multiple files
+    fn parquet_exec_multiple_sorted(
+        output_ordering: Option<Vec<PhysicalSortExpr>>,
+    ) -> Arc<ParquetExec> {
+        Arc::new(ParquetExec::new(
+            FileScanConfig {
+                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+                file_schema: schema(),
+                file_groups: vec![
+                    vec![PartitionedFile::new("x".to_string(), 100)],
+                    vec![PartitionedFile::new("y".to_string(), 100)],
+                ],
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering,
+                infinite_source: false,
+            },
+            None,
+            None,
+        ))
+    }
+
     fn projection_exec_with_alias(
         input: Arc<dyn ExecutionPlan>,
         alias_pairs: Vec<(String, String)>,
@@ -1067,10 +1073,12 @@ mod tests {
                 AggregateMode::FinalPartitioned,
                 final_grouping,
                 vec![],
+                vec![],
                 Arc::new(
                     AggregateExec::try_new(
                         AggregateMode::Partial,
                         group_by,
+                        vec![],
                         vec![],
                         input,
                         schema.clone(),
@@ -2108,7 +2116,7 @@ mod tests {
         }];
 
         // Scan some sorted parquet files
-        let exec = parquet_exec_with_sort(Some(sort_key.clone()));
+        let exec = parquet_exec_multiple_sorted(Some(sort_key.clone()));
 
         // CoalesceBatchesExec to mimic behavior after a filter
         let exec = Arc::new(CoalesceBatchesExec::new(exec, 4096));
@@ -2121,7 +2129,7 @@ mod tests {
         let expected = &[
             "SortPreservingMergeExec: [a@0 ASC]",
             "CoalesceBatchesExec: target_batch_size=4096",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[a@0 ASC], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, output_ordering=[a@0 ASC], projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, exec);
         Ok(())

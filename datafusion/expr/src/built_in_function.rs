@@ -36,12 +36,22 @@ pub enum BuiltinScalarFunction {
     Atan,
     /// atan2
     Atan2,
+    /// acosh
+    Acosh,
+    /// asinh
+    Asinh,
+    /// atanh
+    Atanh,
+    /// cbrt
+    Cbrt,
     /// ceil
     Ceil,
     /// coalesce
     Coalesce,
     /// cos
     Cos,
+    /// cos
+    Cosh,
     /// Digest
     Digest,
     /// exp
@@ -64,10 +74,14 @@ pub enum BuiltinScalarFunction {
     Signum,
     /// sin
     Sin,
+    /// sinh
+    Sinh,
     /// sqrt
     Sqrt,
     /// tan
     Tan,
+    /// tanh
+    Tanh,
     /// trunc
     Trunc,
 
@@ -198,9 +212,13 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Asin => Volatility::Immutable,
             BuiltinScalarFunction::Atan => Volatility::Immutable,
             BuiltinScalarFunction::Atan2 => Volatility::Immutable,
+            BuiltinScalarFunction::Acosh => Volatility::Immutable,
+            BuiltinScalarFunction::Asinh => Volatility::Immutable,
+            BuiltinScalarFunction::Atanh => Volatility::Immutable,
             BuiltinScalarFunction::Ceil => Volatility::Immutable,
             BuiltinScalarFunction::Coalesce => Volatility::Immutable,
             BuiltinScalarFunction::Cos => Volatility::Immutable,
+            BuiltinScalarFunction::Cosh => Volatility::Immutable,
             BuiltinScalarFunction::Exp => Volatility::Immutable,
             BuiltinScalarFunction::Floor => Volatility::Immutable,
             BuiltinScalarFunction::Ln => Volatility::Immutable,
@@ -211,8 +229,11 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Round => Volatility::Immutable,
             BuiltinScalarFunction::Signum => Volatility::Immutable,
             BuiltinScalarFunction::Sin => Volatility::Immutable,
+            BuiltinScalarFunction::Sinh => Volatility::Immutable,
             BuiltinScalarFunction::Sqrt => Volatility::Immutable,
+            BuiltinScalarFunction::Cbrt => Volatility::Immutable,
             BuiltinScalarFunction::Tan => Volatility::Immutable,
+            BuiltinScalarFunction::Tanh => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
@@ -290,9 +311,13 @@ impl FromStr for BuiltinScalarFunction {
             "acos" => BuiltinScalarFunction::Acos,
             "asin" => BuiltinScalarFunction::Asin,
             "atan" => BuiltinScalarFunction::Atan,
+            "acosh" => BuiltinScalarFunction::Acosh,
+            "asinh" => BuiltinScalarFunction::Asinh,
+            "atanh" => BuiltinScalarFunction::Atanh,
             "atan2" => BuiltinScalarFunction::Atan2,
             "ceil" => BuiltinScalarFunction::Ceil,
             "cos" => BuiltinScalarFunction::Cos,
+            "cosh" => BuiltinScalarFunction::Cosh,
             "exp" => BuiltinScalarFunction::Exp,
             "floor" => BuiltinScalarFunction::Floor,
             "ln" => BuiltinScalarFunction::Ln,
@@ -303,8 +328,11 @@ impl FromStr for BuiltinScalarFunction {
             "round" => BuiltinScalarFunction::Round,
             "signum" => BuiltinScalarFunction::Signum,
             "sin" => BuiltinScalarFunction::Sin,
+            "sinh" => BuiltinScalarFunction::Sinh,
             "sqrt" => BuiltinScalarFunction::Sqrt,
+            "cbrt" => BuiltinScalarFunction::Cbrt,
             "tan" => BuiltinScalarFunction::Tan,
+            "tanh" => BuiltinScalarFunction::Tanh,
             "trunc" => BuiltinScalarFunction::Trunc,
 
             // conditional functions

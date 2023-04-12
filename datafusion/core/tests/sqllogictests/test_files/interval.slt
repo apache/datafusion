@@ -1,0 +1,184 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+# Use `interval` SQL literal syntax
+# the types should be the same: https://github.com/apache/arrow-datafusion/issues/5801
+query TT
+select
+  arrow_typeof(interval '5 months'),
+  arrow_typeof(interval '5 days 3 nanoseconds')
+----
+Interval(MonthDayNano) Interval(MonthDayNano)
+
+
+## This is incredibly confusing but document it in tests:
+#
+# years is parsed as a column name
+# year is parsed as part of the interval type.
+#
+# postgres=# select interval '5' year;
+#  interval
+# ----------
+#  5 years
+# (1 row)
+#
+# postgres=# select interval '5' years;
+#   years
+# ----------
+#  00:00:05
+# (1 row)
+query ?
+select interval '5' years
+----
+0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs
+
+
+# check all different kinds of intervals
+query ?
+select interval '5' year
+----
+0 years 60 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+select interval '5' month
+----
+0 years 5 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+select interval '5' months
+----
+0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs
+
+query ?
+select interval '5' week
+----
+0 years 0 mons 35 days 0 hours 0 mins 0.000000000 secs
+
+
+query ?
+select interval '5' day
+----
+0 years 0 mons 5 days 0 hours 0 mins 0.000000000 secs
+
+query ?
+select interval '5' hour
+----
+0 years 0 mons 0 days 5 hours 0 mins 0.000000000 secs
+
+## This seems wrong (5 mons)
+query ?
+select interval '5' hours
+----
+0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs
+
+query ?
+select interval '5' minute
+----
+0 years 0 mons 0 days 0 hours 5 mins 0.000000000 secs
+
+query ?
+select interval '5' second
+----
+0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs
+
+query ?
+select interval '5' millisecond
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.005000000 secs
+
+query ?
+select interval '5' milliseconds
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.005000000 secs
+
+query ?
+select interval '5' microsecond
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.000005000 secs
+
+query ?
+select interval '5' microseconds
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.000005000 secs
+
+query ?
+select interval '5' nanosecond
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.000000005 secs
+
+query ?
+select interval '5' nanoseconds
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.000000005 secs
+
+
+
+
+
+
+
+# Use interval SQL type
+query TT
+select
+  arrow_typeof('5 months'::interval),
+  arrow_typeof('5 days 3 nanoseconds'::interval)
+----
+Interval(MonthDayNano) Interval(MonthDayNano)
+
+# cast with explicit cast sytax
+query TT
+select
+  arrow_typeof(cast ('5 months' as interval)),
+  arrow_typeof(cast ('5 days 3 nanoseconds' as interval))
+----
+Interval(MonthDayNano) Interval(MonthDayNano)
+
+
+statement ok
+create table t (i interval) as values (interval '5 days 3 nanoseconds');
+
+query ?T rowsort
+select
+  i,
+  arrow_typeof(i)
+from t;
+----
+0 years 0 mons 5 days 0 hours 0 mins 0.000000003 secs Interval(MonthDayNano)
+
+
+statement ok
+drop table t;
+
+# Create tables with interval values
+statement ok
+create table t (i interval) as values ('5 days 3 nanoseconds'::interval);
+
+statement ok
+insert into t values ('6 days 7 nanoseconds'::interval)
+
+query ?T rowsort
+select
+  i,
+  arrow_typeof(i)
+from t;
+----
+0 years 0 mons 5 days 0 hours 0 mins 0.000000003 secs Interval(MonthDayNano)
+0 years 0 mons 6 days 0 hours 0 mins 0.000000007 secs Interval(MonthDayNano)
+
+statement ok
+drop table t;

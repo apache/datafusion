@@ -195,8 +195,12 @@ impl CaseExpr {
                 _ => when_value,
             };
             let when_value = when_value.into_array(batch.num_rows());
-            let when_value = as_boolean_array(&when_value)
-                .expect("WHEN expression did not return a BooleanArray");
+            let when_value = as_boolean_array(&when_value).map_err(|e| {
+                DataFusionError::Context(
+                    "WHEN expression did not return a BooleanArray".to_string(),
+                    Box::new(e),
+                )
+            })?;
 
             let then_value = self.when_then_expr[i]
                 .1

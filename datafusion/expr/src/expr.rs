@@ -277,7 +277,7 @@ impl Display for BinaryExpr {
 }
 
 /// CASE expression
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Case {
     /// Optional base expression that can be compared to literal values in the "when" expressions
     pub expr: Option<Box<Expr>>,
@@ -773,6 +773,26 @@ impl Expr {
     /// Return `IsNotUnknown(Box(self))`
     pub fn is_not_unknown(self) -> Expr {
         Expr::IsNotUnknown(Box::new(self))
+    }
+
+    /// return `self BETWEEN low AND high`
+    pub fn between(self, low: Expr, high: Expr) -> Expr {
+        Expr::Between(Between::new(
+            Box::new(self),
+            false,
+            Box::new(low),
+            Box::new(high),
+        ))
+    }
+
+    /// return `self NOT BETWEEN low AND high`
+    pub fn not_between(self, low: Expr, high: Expr) -> Expr {
+        Expr::Between(Between::new(
+            Box::new(self),
+            true,
+            Box::new(low),
+            Box::new(high),
+        ))
     }
 
     pub fn try_into_col(&self) -> Result<Column> {

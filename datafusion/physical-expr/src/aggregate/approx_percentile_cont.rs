@@ -210,9 +210,9 @@ impl AggregateExpr for ApproxPercentileCont {
                 DataType::Float64,
                 false,
             ),
-            Field::new(
+            Field::new_list(
                 format_state_name(&self.name, "centroids"),
-                DataType::List(Box::new(Field::new("item", DataType::Float64, true))),
+                Field::new("item", DataType::Float64, true),
                 false,
             ),
         ])

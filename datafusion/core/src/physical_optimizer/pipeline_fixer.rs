@@ -25,26 +25,17 @@
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::join_selection::swap_hash_join;
-use crate::physical_optimizer::pipeline_checker::{
-    check_finiteness_requirements, PipelineStatePropagator,
-};
+use crate::physical_optimizer::pipeline_checker::PipelineStatePropagator;
 use crate::physical_optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::joins::utils::JoinSide;
-use crate::physical_plan::joins::{
-    convert_sort_expr_with_filter_schema, HashJoinExec, PartitionMode,
-    SymmetricHashJoinExec,
-};
+use crate::physical_plan::joins::{HashJoinExec, PartitionMode, SymmetricHashJoinExec};
 use crate::physical_plan::ExecutionPlan;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::DataFusionError;
 use datafusion_expr::logical_plan::JoinType;
-use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr, Column, Literal};
-use datafusion_physical_expr::intervals::{is_datatype_supported, is_operator_supported};
-use datafusion_physical_expr::PhysicalExpr;
 
 use std::sync::Arc;
 
-/// The [PipelineFixer] rule tries to modify a given plan so that it can
+/// The [`PipelineFixer`] rule tries to modify a given plan so that it can
 /// accommodate its infinite sources, if there are any. If this is not
 /// possible, the rule emits a diagnostic error message.
 #[derive(Default)]
@@ -56,10 +47,10 @@ impl PipelineFixer {
         Self {}
     }
 }
-/// [PipelineFixer] subrules are functions of this type. Such functions take a
-/// single [PipelineStatePropagator] argument, which stores state variables
-/// indicating the unboundedness status of the current [ExecutionPlan] as
-/// the [PipelineFixer] rule traverses the entire plan tree.
+/// [`PipelineFixer`] subrules are functions of this type. Such functions take a
+/// single [`PipelineStatePropagator`] argument, which stores state variables
+/// indicating the unboundedness status of the current [`ExecutionPlan`] as
+/// the `PipelineFixer` rule traverses the entire plan tree.
 type PipelineFixerSubrule =
     dyn Fn(PipelineStatePropagator) -> Option<Result<PipelineStatePropagator>>;
 
@@ -92,62 +83,6 @@ impl PhysicalOptimizerRule for PipelineFixer {
     }
 }
 
-/// Indicates whether interval arithmetic is supported for the given expression.
-/// Currently, we do not support all [PhysicalExpr]s for interval calculations.
-/// We do not support every type of [Operator]s either. Over time, this check
-/// will relax as more types of [PhysicalExpr]s and [Operator]s are supported.
-/// Currently, [CastExpr], [BinaryExpr], [Column] and [Literal] is supported.
-fn check_support(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    let expr_any = expr.as_any();
-    let expr_supported = if let Some(binary_expr) = expr_any.downcast_ref::<BinaryExpr>()
-    {
-        is_operator_supported(binary_expr.op())
-    } else {
-        expr_any.is::<Column>() || expr_any.is::<Literal>() || expr_any.is::<CastExpr>()
-    };
-    expr_supported && expr.children().iter().all(check_support)
-}
-
-/// This function returns whether a given hash join is replaceable by a
-/// symmetric hash join. Basically, the requirement is that involved
-/// [PhysicalExpr]s, [Operator]s and data types need to be supported,
-/// and order information must cover every column in the filter expression.
-fn is_suitable_for_symmetric_hash_join(hash_join: &HashJoinExec) -> Result<bool> {
-    if let Some(filter) = hash_join.filter() {
-        let left = hash_join.left();
-        if let Some(left_ordering) = left.output_ordering() {
-            let right = hash_join.right();
-            if let Some(right_ordering) = right.output_ordering() {
-                let expr_supported = check_support(filter.expression());
-                let left_convertible = convert_sort_expr_with_filter_schema(
-                    &JoinSide::Left,
-                    filter,
-                    &left.schema(),
-                    &left_ordering[0],
-                )?
-                .is_some();
-                let right_convertible = convert_sort_expr_with_filter_schema(
-                    &JoinSide::Right,
-                    filter,
-                    &right.schema(),
-                    &right_ordering[0],
-                )?
-                .is_some();
-                let fields_supported = filter
-                    .schema()
-                    .fields()
-                    .iter()
-                    .all(|f| is_datatype_supported(f.data_type()));
-                return Ok(expr_supported
-                    && fields_supported
-                    && left_convertible
-                    && right_convertible);
-            }
-        }
-    }
-    Ok(false)
-}
-
 /// This subrule checks if one can replace a hash join with a symmetric hash
 /// join so that the pipeline does not break due to the join operation in
 /// question. If possible, it makes this replacement; otherwise, it has no
@@ -160,23 +95,19 @@ fn hash_join_convert_symmetric_subrule(
         let ub_flags = input.children_unbounded;
         let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
         let new_plan = if left_unbounded && right_unbounded {
-            match is_suitable_for_symmetric_hash_join(hash_join) {
-                Ok(true) => SymmetricHashJoinExec::try_new(
-                    hash_join.left().clone(),
-                    hash_join.right().clone(),
-                    hash_join
-                        .on()
-                        .iter()
-                        .map(|(l, r)| (l.clone(), r.clone()))
-                        .collect(),
-                    hash_join.filter().unwrap().clone(),
-                    hash_join.join_type(),
-                    hash_join.null_equals_null(),
-                )
-                .map(|e| Arc::new(e) as _),
-                Ok(false) => Ok(plan),
-                Err(e) => return Some(Err(e)),
-            }
+            SymmetricHashJoinExec::try_new(
+                hash_join.left().clone(),
+                hash_join.right().clone(),
+                hash_join
+                    .on()
+                    .iter()
+                    .map(|(l, r)| (l.clone(), r.clone()))
+                    .collect(),
+                hash_join.filter().cloned(),
+                hash_join.join_type(),
+                hash_join.null_equals_null(),
+            )
+            .map(|e| Arc::new(e) as _)
         } else {
             Ok(plan)
         };
@@ -298,14 +229,23 @@ fn apply_subrules_and_check_finiteness_requirements(
             input = value;
         }
     }
-    check_finiteness_requirements(input)
+    let is_unbounded = input
+        .plan
+        .unbounded_output(&input.children_unbounded)
+        // Treat the cases where executor cannot be run on unbounded data
+        // as generating unbounded data. These executors may be fixed during optimization
+        // (Sort will be removed, Window will be swapped etc.), If cannot
+        // be fixed Pipeline checker will generate error anyway.
+        .unwrap_or(true);
+    input.unbounded = is_unbounded;
+    Ok(Transformed::Yes(input))
 }
 
 #[cfg(test)]
 mod util_tests {
-    use crate::physical_optimizer::pipeline_fixer::check_support;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
+    use datafusion_physical_expr::intervals::check_support;
     use datafusion_physical_expr::PhysicalExpr;
     use std::sync::Arc;
 

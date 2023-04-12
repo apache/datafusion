@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::{ArrayRef, Int64Array, Int8Array, StringArray};
-use arrow::datatypes::{Field, Schema};
+use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use datafusion::assert_batches_sorted_eq;
@@ -147,15 +147,15 @@ impl ParquetFileReaderFactory for InMemoryParquetFileReaderFactory {
 
 fn create_batch(columns: Vec<(&str, ArrayRef)>) -> RecordBatch {
     columns.into_iter().fold(
-        RecordBatch::new_empty(Arc::new(Schema::new(vec![]))),
+        RecordBatch::new_empty(Arc::new(Schema::empty())),
         |batch, (field_name, arr)| add_to_batch(&batch, field_name, arr.clone()),
     )
 }
 
 fn add_to_batch(batch: &RecordBatch, field_name: &str, array: ArrayRef) -> RecordBatch {
-    let mut fields = batch.schema().fields().clone();
+    let mut fields = SchemaBuilder::from(batch.schema().fields());
     fields.push(Field::new(field_name, array.data_type().clone(), true));
-    let schema = Arc::new(Schema::new(fields));
+    let schema = Arc::new(fields.finish());
 
     let mut columns = batch.columns().to_vec();
     columns.push(array);

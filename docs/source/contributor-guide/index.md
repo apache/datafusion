@@ -23,15 +23,17 @@ We welcome and encourage contributions of all kinds, such as:
 
 1. Tickets with issue reports of feature requests
 2. Documentation improvements
-3. Code (PR or PR Review)
+3. Code, both PR and (especially) PR Review.
 
-In addition to submitting new PRs, we have a healthy tradition of community members helping review each other's PRs. Doing so is a great way to help the community as well as get more familiar with Rust and the relevant codebases.
+In addition to submitting new PRs, we have a healthy tradition of community members reviewing each other's PRs. Doing so is a great way to help the community as well as get more familiar with Rust and the relevant codebases.
 
 You can find a curated
 [good-first-issue](https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
 list to help you get started.
 
-# Pull Requests
+# Developer's guide
+
+## Pull Requests
 
 We welcome pull requests (PRs) from anyone from the community.
 
@@ -39,7 +41,10 @@ DataFusion is a very active fast-moving project and we try to review and merge P
 
 Review bandwidth is currently our most limited resource, and we highly encourage reviews by the broader community. If you are waiting for your PR to be reviewed, consider helping review other PRs that are waiting. Such review both helps the reviewer to learn the codebase and become more expert, as well as helps identify issues in the PR (such as lack of test coverage), that can be addressed and make future reviews faster and more efficient.
 
-## Merging PRs
+Things to help look for in a PR:
+
+1. Is the feature or fix covered sufficiently with tests (see `Test Organization` below)?
+2. Is the code clear, and fits the style of the existing codebase?
 
 Since we are a worldwide community, we have contributors in many timezones who review and comment. To ensure anyone who wishes has an opportunity to review a PR, our committers try to ensure that at least 24 hours passes between when a "major" PR is approved and when it is merged.
 
@@ -50,11 +55,11 @@ A "major" PR means there is a substantial change in design or a change in the AP
 3. Non-controversial build-related changes (clippy, version upgrades etc.)
 4. Smaller non-controversial feature additions
 
-# Developer's guide
+## Getting Started
 
 This section describes how you can get started at developing DataFusion.
 
-## Windows setup
+### Windows setup
 
 ```shell
 wget https://az792536.vo.msecnd.net/vms/VMBuild_20190311/VirtualBox/MSEdge/MSEdge.Win10.VirtualBox.zip
@@ -63,7 +68,7 @@ git-bash.exe
 cargo build
 ```
 
-## Protoc Installation
+### Protoc Installation
 
 Compiling DataFusion from sources requires an installed version of the protobuf compiler, `protoc`.
 
@@ -85,7 +90,7 @@ libprotoc 3.12.4
 
 Alternatively a binary release can be downloaded from the [Release Page](https://github.com/protocolbuffers/protobuf/releases) or [built from source](https://github.com/protocolbuffers/protobuf/blob/main/src/README.md).
 
-## Bootstrap environment
+### Bootstrap environment
 
 DataFusion is written in Rust and it uses a standard rust toolkit:
 
@@ -110,40 +115,42 @@ or run them all at once:
 
 - [dev/rust_lint.sh](../../../dev/rust_lint.sh)
 
-## Test Organization
+### Test Organization
+
+Tests are very important to ensure that improvemens or fixes are not accidentally broken during subsequent refactorings.
 
 DataFusion has several levels of tests in its [Test
 Pyramid](https://martinfowler.com/articles/practical-test-pyramid.html)
-and tries to follow [Testing Organization](https://doc.rust-lang.org/book/ch11-03-test-organization.html) in the The Book.
+and tries to follow rust standard [Testing Organization](https://doc.rust-lang.org/book/ch11-03-test-organization.html) in the The Book.
 
 This section highlights the most important test modules that exist
 
-### Unit tests
+#### Unit tests
 
-Tests for the code in an individual module are defined in the same source file with a `test` module, following Rust convention
+Tests for the code in an individual module are defined in the same source file with a `test` module, following Rust convention.
 
-### Rust Integration Tests
+#### Rust Integration Tests
 
-There are several tests of the public interface of the DataFusion library in the [tests](../../../datafusion/core/tests) directory.
+There are several tests of the public interface of the DataFusion library in the [tests](https://github.com/apache/arrow-datafusion/tree/main/datafusion/core/tests) directory.
 
 You can run these tests individually using a command such as
 
 ```shell
-cargo test -p datafusion --tests sql_integration
+cargo test -p datafusion --test sql_integration
 ```
 
-One very important test is the [sql_integration](../../../datafusion/core/tests/sql_integration.rs) test which validates DataFusion's ability to run a large assortment of SQL queries against an assortment of data setups.
+One very important test is the [sql_integration](https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sql_integration.rs) test which validates DataFusion's ability to run a large assortment of SQL queries against an assortment of data setups.
 
-### sqllogictests Tests
+#### sqllogictests Tests
 
-The [sqllogictests](../../../datafusion/core/tests/sqllogictests) also validate DataFusion SQL against an assortment of data setups.
+The [sqllogictests](https://github.com/apache/arrow-datafusion/tree/main/datafusion/core/tests/sqllogictests) also validate DataFusion SQL against an assortment of data setups.
 
 Data Driven tests have many benefits including being easier to write and maintain. We are in the process of [migrating sql_integration tests](https://github.com/apache/arrow-datafusion/issues/4460) and encourage
 you to add new tests using sqllogictests if possible.
 
-## Benchmarks
+### Benchmarks
 
-### Criterion Benchmarks
+#### Criterion Benchmarks
 
 [Criterion](https://docs.rs/criterion/latest/criterion/index.html) is a statistics-driven micro-benchmarking framework used by DataFusion for evaluating the performance of specific code-paths. In particular, the criterion benchmarks help to both guide optimisation efforts, and prevent performance regressions within DataFusion.
 
@@ -153,7 +160,7 @@ Criterion integrates with Cargo's built-in [benchmark support](https://doc.rust-
 cargo bench --bench BENCHMARK_NAME
 ```
 
-A full list of benchmarks can be found [here](../../../datafusion/core/benches).
+A full list of benchmarks can be found [here](https://github.com/apache/arrow-datafusion/tree/main/datafusion/core/benches).
 
 _[cargo-criterion](https://github.com/bheisler/cargo-criterion) may also be used for more advanced reporting._
 
@@ -171,13 +178,15 @@ If the environment variable `PARQUET_FILE` is set, the benchmark will run querie
 
 The benchmark will automatically remove any generated parquet file on exit, however, if interrupted (e.g. by CTRL+C) it will not. This can be useful for analysing the particular file after the fact, or preserving it to use with `PARQUET_FILE` in subsequent runs.
 
-### Upstream Benchmark Suites
+#### Upstream Benchmark Suites
 
-Instructions and tooling for running upstream benchmark suites against DataFusion can be found in [benchmarks](../../../benchmarks).
+Instructions and tooling for running upstream benchmark suites against DataFusion can be found in [benchmarks](https://github.com/apache/arrow-datafusion/tree/main/benchmarks).
 
 These are valuable for comparative evaluation against alternative Arrow implementations and query engines.
 
-## How to add a new scalar function
+## HOWTOs
+
+### How to add a new scalar function
 
 Below is a checklist of what you need to do to add a new scalar function to DataFusion:
 
@@ -197,7 +206,7 @@ Below is a checklist of what you need to do to add a new scalar function to Data
 - In [expr/src/expr_fn.rs](../../../datafusion/expr/src/expr_fn.rs), add:
   - a new entry of the `unary_scalar_expr!` macro for the new function.
 
-## How to add a new aggregate function
+### How to add a new aggregate function
 
 Below is a checklist of what you need to do to add a new aggregate function to DataFusion:
 
@@ -215,7 +224,7 @@ Below is a checklist of what you need to do to add a new aggregate function to D
   - tests to the function.
 - In [tests/sql](../../../datafusion/core/tests/sql), add a new test where the function is called through SQL against well known data and returns the expected result.
 
-## How to display plans graphically
+### How to display plans graphically
 
 The query plans represented by `LogicalPlan` nodes can be graphically
 rendered using [Graphviz](https://www.graphviz.org/).
@@ -238,7 +247,7 @@ dot -Tpdf < /tmp/plan.dot > /tmp/plan.pdf
 
 ## Specifications
 
-We formalize DataFusion semantics and behaviors through specification
+We formalize some DataFusion semantics and behaviors through specification
 documents. These specifications are useful to be used as references to help
 resolve ambiguities during development or code reviews.
 

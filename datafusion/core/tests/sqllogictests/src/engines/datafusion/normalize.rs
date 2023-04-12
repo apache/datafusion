@@ -135,10 +135,18 @@ fn workspace_root() -> object_store::path::Path {
         .expect("parent of datafusion")
         .to_string_lossy();
 
-    object_store::path::Path::parse(workspace_root).unwrap()
+    let sanitized_workplace_root = if cfg!(windows) {
+        // Object store paths are delimited with `/`, e.g. `D:/a/arrow-datafusion/arrow-datafusion/testing/data/csv/aggregate_test_100.csv`.
+        // The default windows delimiter is `\`, so the workplace path is `D:\a\arrow-datafusion\arrow-datafusion`.
+        workspace_root.replace(std::path::MAIN_SEPARATOR, object_store::path::DELIMITER)
+    } else {
+        workspace_root.to_string()
+    };
+
+    object_store::path::Path::parse(sanitized_workplace_root).unwrap()
 }
 
-// holds the root directory (
+// holds the root directory
 lazy_static! {
     static ref WORKSPACE_ROOT: object_store::path::Path = workspace_root();
 }

@@ -334,7 +334,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     input,
                     Arc::new((&input_schema).try_into()?),
                     vec![],
-                    None,
                 )?))
             }
             PhysicalPlanType::Aggregate(hash_agg) => {
@@ -404,6 +403,18 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 let physical_schema: SchemaRef =
                     SchemaRef::new((&input_schema).try_into()?);
 
+                let physical_filter_expr = hash_agg
+                    .filter_expr
+                    .iter()
+                    .map(|expr| {
+                        let x = expr
+                            .expr
+                            .as_ref()
+                            .map(|e| parse_physical_expr(e, registry, &physical_schema));
+                        x.transpose()
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
                 let physical_aggr_expr: Vec<Arc<dyn AggregateExpr>> = hash_agg
                     .aggr_expr
                     .iter()
@@ -451,6 +462,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     agg_mode,
                     PhysicalGroupBy::new(group_expr, null_expr, groups),
                     physical_aggr_expr,
+                    physical_filter_expr,
                     input,
                     Arc::new((&input_schema).try_into()?),
                 )?))
@@ -614,12 +626,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 } else {
                     Some(sort.fetch as usize)
                 };
-                Ok(Arc::new(SortExec::new_with_partitioning(
-                    exprs,
-                    input,
-                    sort.preserve_partitioning,
-                    fetch,
-                )))
+                let new_sort = SortExec::new(exprs, input)
+                    .with_fetch(fetch)
+                    .with_preserve_partitioning(sort.preserve_partitioning);
+
+                Ok(Arc::new(new_sort))
             }
             PhysicalPlanType::SortPreservingMerge(sort) => {
                 let input: Arc<dyn ExecutionPlan> =
@@ -866,6 +877,12 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 .map(|expr| expr.1.to_owned())
                 .collect();
 
+            let filter = exec
+                .filter_expr()
+                .iter()
+                .map(|expr| expr.to_owned().try_into())
+                .collect::<Result<Vec<_>>>()?;
+
             let agg = exec
                 .aggr_expr()
                 .iter()
@@ -913,6 +930,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         group_expr,
                         group_expr_name: group_names,
                         aggr_expr: agg,
+                        filter_expr: filter,
                         aggr_expr_name: agg_names,
                         mode: agg_mode as i32,
                         input: Some(Box::new(input)),
@@ -1380,16 +1398,20 @@ mod roundtrip_tests {
         let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
             vec![(col("a", &schema)?, "unused".to_string())];
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
-            col("b", &schema)?,
-            "AVG(b)".to_string(),
-            DataType::Float64,
-        ))];
+        let aggregates: Vec<Arc<dyn AggregateExpr>> =
+            vec![Arc::new(Avg::new_with_pre_cast(
+                col("b", &schema)?,
+                "AVG(b)".to_string(),
+                DataType::Float64,
+                DataType::Float64,
+                true,
+            ))];
 
         roundtrip_test(Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
             PhysicalGroupBy::new_single(groups.clone()),
             aggregates.clone(),
+            vec![None],
             Arc::new(EmptyExec::new(false, schema.clone())),
             schema,
         )?))
@@ -1439,11 +1461,10 @@ mod roundtrip_tests {
                 },
             },
         ];
-        roundtrip_test(Arc::new(SortExec::try_new(
+        roundtrip_test(Arc::new(SortExec::new(
             sort_exprs,
             Arc::new(EmptyExec::new(false, schema)),
-            None,
-        )?))
+        )))
     }
 
     #[test]
@@ -1468,19 +1489,15 @@ mod roundtrip_tests {
             },
         ];
 
-        roundtrip_test(Arc::new(SortExec::new_with_partitioning(
+        roundtrip_test(Arc::new(SortExec::new(
             sort_exprs.clone(),
             Arc::new(EmptyExec::new(false, schema.clone())),
-            false,
-            None,
         )))?;
 
-        roundtrip_test(Arc::new(SortExec::new_with_partitioning(
-            sort_exprs,
-            Arc::new(EmptyExec::new(false, schema)),
-            true,
-            None,
-        )))
+        roundtrip_test(Arc::new(
+            SortExec::new(sort_exprs, Arc::new(EmptyExec::new(false, schema)))
+                .with_preserve_partitioning(true),
+        ))
     }
 
     #[test]
@@ -1605,6 +1622,7 @@ mod roundtrip_tests {
             AggregateMode::Final,
             PhysicalGroupBy::new_single(groups),
             aggregates.clone(),
+            vec![None],
             Arc::new(EmptyExec::new(false, schema.clone())),
             schema,
         )?))
@@ -1635,11 +1653,7 @@ mod roundtrip_tests {
     fn roundtrip_get_indexed_field() -> Result<()> {
         let fields = vec![
             Field::new("id", DataType::Int64, true),
-            Field::new(
-                "a",
-                DataType::List(Box::new(Field::new("item", DataType::Float64, true))),
-                true,
-            ),
+            Field::new_list("a", Field::new("item", DataType::Float64, true), true),
         ];
 
         let schema = Schema::new(fields);

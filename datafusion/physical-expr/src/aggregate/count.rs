@@ -19,14 +19,16 @@
 
 use std::any::Any;
 use std::fmt::Debug;
+use std::ops::BitAnd;
 use std::sync::Arc;
 
 use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::{AggregateExpr, PhysicalExpr};
-use arrow::array::Int64Array;
+use arrow::array::{Array, Int64Array};
 use arrow::compute;
 use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::Field};
+use arrow_buffer::BooleanBuffer;
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
@@ -41,7 +43,7 @@ pub struct Count {
     name: String,
     data_type: DataType,
     nullable: bool,
-    expr: Arc<dyn PhysicalExpr>,
+    exprs: Vec<Arc<dyn PhysicalExpr>>,
 }
 
 impl Count {
@@ -53,10 +55,42 @@ impl Count {
     ) -> Self {
         Self {
             name: name.into(),
-            expr,
+            exprs: vec![expr],
             data_type,
             nullable: true,
         }
+    }
+
+    pub fn new_with_multiple_exprs(
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
+        name: impl Into<String>,
+        data_type: DataType,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            exprs,
+            data_type,
+            nullable: true,
+        }
+    }
+}
+
+/// count null values for multiple columns
+/// for each row if one column value is null, then null_count + 1
+fn null_count_for_multiple_cols(values: &[ArrayRef]) -> usize {
+    if values.len() > 1 {
+        let result_bool_buf: Option<BooleanBuffer> = values
+            .iter()
+            .map(|a| a.nulls())
+            .fold(None, |acc, b| match (acc, b) {
+                (Some(acc), Some(b)) => Some(acc.bitand(b.inner())),
+                (Some(acc), None) => Some(acc),
+                (None, Some(b)) => Some(b.inner().clone()),
+                _ => None,
+            });
+        result_bool_buf.map_or(0, |b| values[0].len() - b.count_set_bits())
+    } else {
+        values[0].null_count()
     }
 }
 
@@ -83,7 +117,7 @@ impl AggregateExpr for Count {
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
+        self.exprs.clone()
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
@@ -137,13 +171,13 @@ impl Accumulator for CountAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = &values[0];
-        self.count += (array.len() - array.null_count()) as i64;
+        self.count += (array.len() - null_count_for_multiple_cols(values)) as i64;
         Ok(())
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = &values[0];
-        self.count -= (array.len() - array.null_count()) as i64;
+        self.count -= (array.len() - null_count_for_multiple_cols(values)) as i64;
         Ok(())
     }
 
@@ -183,7 +217,7 @@ impl RowAccumulator for CountRowAccumulator {
         accessor: &mut RowAccessor,
     ) -> Result<()> {
         let array = &values[0];
-        let delta = (array.len() - array.null_count()) as u64;
+        let delta = (array.len() - null_count_for_multiple_cols(values)) as u64;
         accessor.add_u64(self.state_index, delta);
         Ok(())
     }
@@ -269,5 +303,42 @@ mod tests {
         let a: ArrayRef =
             Arc::new(LargeStringArray::from(vec!["a", "bb", "ccc", "dddd", "ad"]));
         generic_test_op!(a, DataType::LargeUtf8, Count, ScalarValue::from(5i64))
+    }
+
+    #[test]
+    fn count_multi_cols() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(2),
+            None,
+            None,
+            Some(3),
+            None,
+        ]));
+        let b: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(2),
+            None,
+            Some(3),
+            Some(4),
+        ]));
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a, b])?;
+
+        let agg = Arc::new(Count::new_with_multiple_exprs(
+            vec![col("a", &schema)?, col("b", &schema)?],
+            "bla".to_string(),
+            DataType::Int64,
+        ));
+        let actual = aggregate(&batch, agg)?;
+        let expected = ScalarValue::from(2i64);
+
+        assert_eq!(expected, actual);
+        Ok(())
     }
 }

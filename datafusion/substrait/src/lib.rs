@@ -18,6 +18,7 @@
 pub mod logical_plan;
 pub mod physical_plan;
 pub mod serializer;
+pub mod variation_const;
 
 // Re-export substrait crate
 pub use substrait;

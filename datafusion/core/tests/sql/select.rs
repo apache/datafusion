@@ -278,9 +278,9 @@ async fn use_between_expression_in_select_query() -> Result<()> {
 #[tokio::test]
 async fn query_get_indexed_field() -> Result<()> {
     let ctx = SessionContext::new();
-    let schema = Arc::new(Schema::new(vec![Field::new(
+    let schema = Arc::new(Schema::new(vec![Field::new_list(
         "some_list",
-        DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
+        Field::new("item", DataType::Int64, true),
         false,
     )]));
     let builder = PrimitiveBuilder::<Int64Type>::with_capacity(3);
@@ -317,11 +317,11 @@ async fn query_get_indexed_field() -> Result<()> {
 #[tokio::test]
 async fn query_nested_get_indexed_field() -> Result<()> {
     let ctx = SessionContext::new();
-    let nested_dt = DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
+    let nested_dt = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
     // Nested schema of { "some_list": [[i64]] }
     let schema = Arc::new(Schema::new(vec![Field::new(
         "some_list",
-        DataType::List(Box::new(Field::new("item", nested_dt.clone(), true))),
+        DataType::List(Arc::new(Field::new("item", nested_dt.clone(), true))),
         false,
     )]));
 
@@ -380,12 +380,12 @@ async fn query_nested_get_indexed_field() -> Result<()> {
 #[tokio::test]
 async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
     let ctx = SessionContext::new();
-    let nested_dt = DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
+    let nested_dt = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
     // Nested schema of { "some_struct": { "bar": [i64] } }
     let struct_fields = vec![Field::new("bar", nested_dt.clone(), true)];
     let schema = Arc::new(Schema::new(vec![Field::new(
         "some_struct",
-        DataType::Struct(struct_fields.clone()),
+        DataType::Struct(struct_fields.clone().into()),
         false,
     )]));
 
@@ -670,7 +670,7 @@ async fn sort_on_window_null_string() -> Result<()> {
     ])
     .unwrap();
 
-    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(2));
+    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(1));
     ctx.register_batch("test", batch)?;
 
     let sql =
@@ -689,7 +689,8 @@ async fn sort_on_window_null_string() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-    let sql = "SELECT d2, row_number() OVER (partition by d2) as rn1 FROM test";
+    let sql =
+        "SELECT d2, row_number() OVER (partition by d2) as rn1 FROM test ORDER BY d2 asc";
     let actual = execute_to_batches(&ctx, sql).await;
     // NULLS LAST
     let expected = vec![
@@ -704,7 +705,7 @@ async fn sort_on_window_null_string() -> Result<()> {
     assert_batches_eq!(expected, &actual);
 
     let sql =
-        "SELECT d2, row_number() OVER (partition by d2 order by d2 desc) as rn1 FROM test";
+        "SELECT d2, row_number() OVER (partition by d2 order by d2 desc) as rn1 FROM test ORDER BY d2 desc";
 
     let actual = execute_to_batches(&ctx, sql).await;
     // NULLS FIRST

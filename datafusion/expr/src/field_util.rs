@@ -41,7 +41,7 @@ pub fn get_indexed_field(data_type: &DataType, key: &ScalarValue) -> Result<Fiel
                     None => Err(DataFusionError::Plan(format!(
                         "Field {s} not found in struct"
                     ))),
-                    Some(f) => Ok(f.clone()),
+                    Some(f) => Ok(f.as_ref().clone()),
                 }
             }
         }
