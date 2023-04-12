@@ -142,57 +142,6 @@ async fn main() -> datafusion::error::Result<()> {
 +---+--------+
 ```
 
-# Using DataFusion as a library
-
-## Create a new project
-
-```shell
-cargo new hello_datafusion
-```
-
-```shell
-$ cd hello_datafusion
-$ tree .
-.
-├── Cargo.toml
-└── src
-    └── main.rs
-
-1 directory, 2 files
-```
-
-## Default Configuration
-
-DataFusion is [published on crates.io](https://crates.io/crates/datafusion), and is [well documented on docs.rs](https://docs.rs/datafusion/).
-
-To get started, add the following to your `Cargo.toml` file:
-
-```toml
-[dependencies]
-datafusion = "22"
-```
-
-## Create a main function
-
-Update the main.rs file with your first datafusion application based on [Example usage](https://arrow.apache.org/datafusion/user-guide/example-usage.html)
-
-```rust
-use datafusion::prelude::*;
-
-#[tokio::main]
-async fn main() -> datafusion::error::Result<()> {
-  // register the table
-  let ctx = SessionContext::new();
-  ctx.register_csv("test", "<PATH_TO_YOUR_CSV_FILE>", CsvReadOptions::new()).await?;
-
-  // create a plan to run a SQL query
-  let df = ctx.sql("SELECT * FROM test").await?;
-
-  // execute and print results
-  df.show().await?;
-  Ok(())
-}
-```
 
 ## Extensibility
 
