@@ -279,12 +279,12 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                         let new_left = if let Some(lhs_type) = coerced_lhs_type {
                             left.clone().cast_to(&lhs_type, &self.schema)?
                         } else {
-                            left.clone()
+                            left.as_ref().clone()
                         };
                         let new_right = if let Some(rhs_type) = coerced_rhs_type {
                             right.clone().cast_to(&rhs_type, &self.schema)?
                         } else {
-                            right.clone()
+                            right.as_ref().clone()
                         };
                         let expr = Expr::BinaryExpr(BinaryExpr::new(
                             Box::new(new_left),

@@ -577,7 +577,7 @@ fn create_decimal_type(precision: u8, scale: i8) -> DataType {
 /// Two sides of the mathematics operation will be coerced to the same type. Note
 /// that we don't coerce the decimal operands in analysis phase, but do it in the
 /// execution phase because this is not idempotent.
-fn coercion_decimal_mathematics_type(
+pub fn coercion_decimal_mathematics_type(
     mathematics_op: &Operator,
     left_decimal_type: &DataType,
     right_decimal_type: &DataType,
@@ -604,7 +604,7 @@ fn coercion_decimal_mathematics_type(
 /// Returns the output type of applying mathematics operations on decimal types.
 /// The rule is from spark. Note that this is different to the coerced type applied
 /// to two sides of the arithmetic operation.
-fn decimal_op_mathematics_type(
+pub fn decimal_op_mathematics_type(
     mathematics_op: &Operator,
     left_decimal_type: &DataType,
     right_decimal_type: &DataType,
@@ -1003,6 +1003,9 @@ mod tests {
             &left_decimal_type,
             &right_decimal_type,
         );
+        assert_eq!(DataType::Decimal128(20, 4), result.unwrap());
+        let result =
+            decimal_op_mathematics_type(&op, &left_decimal_type, &right_decimal_type);
         assert_eq!(DataType::Decimal128(31, 7), result.unwrap());
         let op = Operator::Divide;
         let result = coercion_decimal_mathematics_type(
@@ -1010,6 +1013,9 @@ mod tests {
             &left_decimal_type,
             &right_decimal_type,
         );
+        assert_eq!(DataType::Decimal128(20, 4), result.unwrap());
+        let result =
+            decimal_op_mathematics_type(&op, &left_decimal_type, &right_decimal_type);
         assert_eq!(DataType::Decimal128(35, 24), result.unwrap());
         let op = Operator::Modulo;
         let result = coercion_decimal_mathematics_type(
@@ -1017,6 +1023,9 @@ mod tests {
             &left_decimal_type,
             &right_decimal_type,
         );
+        assert_eq!(DataType::Decimal128(20, 4), result.unwrap());
+        let result =
+            decimal_op_mathematics_type(&op, &left_decimal_type, &right_decimal_type);
         assert_eq!(DataType::Decimal128(11, 4), result.unwrap());
     }
 
@@ -1272,45 +1281,101 @@ mod tests {
             Operator::Multiply,
             DataType::Float64
         );
-        // decimal
-        // bug: https://github.com/apache/arrow-datafusion/issues/3387 will be fixed in the next pr
-        // test_coercion_binary_rule!(
-        //     DataType::Decimal128(10, 2),
-        //     DataType::Decimal128(10, 2),
-        //     Operator::Plus,
-        //     DataType::Decimal128(11, 2)
-        // );
-        test_coercion_binary_rule!(
+        // TODO add other data type
+        Ok(())
+    }
+
+    fn test_math_decimal_coercion_rule(
+        lhs_type: DataType,
+        rhs_type: DataType,
+        mathematics_op: Operator,
+        expected_lhs_type: Option<DataType>,
+        expected_rhs_type: Option<DataType>,
+        expected_coerced_type: DataType,
+        expected_output_type: DataType,
+    ) {
+        // The coerced types for lhs and rhs, if any of them is not decimal
+        let (l, r) = math_decimal_coercion(&lhs_type, &rhs_type);
+        assert_eq!(l, expected_lhs_type);
+        assert_eq!(r, expected_rhs_type);
+
+        let lhs_type = l.unwrap_or(lhs_type);
+        let rhs_type = r.unwrap_or(rhs_type);
+
+        // The coerced type of decimal math expression, applied during expression evaluation
+        let coerced_type =
+            coercion_decimal_mathematics_type(&mathematics_op, &lhs_type, &rhs_type)
+                .unwrap();
+        assert_eq!(coerced_type, expected_coerced_type);
+
+        // The output type of decimal math expression
+        let output_type =
+            decimal_op_mathematics_type(&mathematics_op, &lhs_type, &rhs_type).unwrap();
+        assert_eq!(output_type, expected_output_type);
+    }
+
+    #[test]
+    fn test_coercion_arithmetic_decimal() -> Result<()> {
+        test_math_decimal_coercion_rule(
+            DataType::Decimal128(10, 2),
+            DataType::Decimal128(10, 2),
+            Operator::Plus,
+            None,
+            None,
+            DataType::Decimal128(11, 2),
+            DataType::Decimal128(11, 2),
+        );
+
+        test_math_decimal_coercion_rule(
             DataType::Int32,
             DataType::Decimal128(10, 2),
             Operator::Plus,
-            DataType::Decimal128(13, 2)
+            Some(DataType::Decimal128(10, 0)),
+            None,
+            DataType::Decimal128(13, 2),
+            DataType::Decimal128(13, 2),
         );
-        test_coercion_binary_rule!(
+
+        test_math_decimal_coercion_rule(
             DataType::Int32,
             DataType::Decimal128(10, 2),
             Operator::Minus,
-            DataType::Decimal128(13, 2)
+            Some(DataType::Decimal128(10, 0)),
+            None,
+            DataType::Decimal128(13, 2),
+            DataType::Decimal128(13, 2),
         );
-        test_coercion_binary_rule!(
+
+        test_math_decimal_coercion_rule(
             DataType::Int32,
             DataType::Decimal128(10, 2),
             Operator::Multiply,
-            DataType::Decimal128(21, 2)
+            Some(DataType::Decimal128(10, 0)),
+            None,
+            DataType::Decimal128(12, 2),
+            DataType::Decimal128(21, 2),
         );
-        test_coercion_binary_rule!(
+
+        test_math_decimal_coercion_rule(
             DataType::Int32,
             DataType::Decimal128(10, 2),
             Operator::Divide,
-            DataType::Decimal128(23, 11)
+            Some(DataType::Decimal128(10, 0)),
+            None,
+            DataType::Decimal128(12, 2),
+            DataType::Decimal128(23, 11),
         );
-        test_coercion_binary_rule!(
+
+        test_math_decimal_coercion_rule(
             DataType::Int32,
             DataType::Decimal128(10, 2),
             Operator::Modulo,
-            DataType::Decimal128(10, 2)
+            Some(DataType::Decimal128(10, 0)),
+            None,
+            DataType::Decimal128(12, 2),
+            DataType::Decimal128(10, 2),
         );
-        // TODO add other data type
+
         Ok(())
     }
 

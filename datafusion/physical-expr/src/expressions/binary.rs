@@ -50,7 +50,7 @@ use arrow::compute::kernels::comparison::{
     eq_dyn_utf8_scalar, gt_dyn_utf8_scalar, gt_eq_dyn_utf8_scalar, lt_dyn_utf8_scalar,
     lt_eq_dyn_utf8_scalar, neq_dyn_utf8_scalar,
 };
-use arrow::compute::{try_unary, unary};
+use arrow::compute::{try_unary, unary, CastOptions};
 use arrow::datatypes::*;
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
@@ -82,6 +82,7 @@ use arrow::datatypes::{DataType, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 
 use super::column::Column;
+use crate::expressions::cast_column;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::intervals::{apply_operator, Interval};
 use crate::physical_expr::down_cast_any_ref;
@@ -95,7 +96,9 @@ use datafusion_common::cast::{
 use datafusion_common::scalar::*;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::type_coercion::binary::binary_operator_data_type;
+use datafusion_expr::type_coercion::binary::{
+    binary_operator_data_type, coercion_decimal_mathematics_type,
+};
 use datafusion_expr::{ColumnarValue, Operator};
 
 /// Binary expression
@@ -383,12 +386,14 @@ macro_rules! compute_primitive_op_dyn_scalar {
 /// LEFT is Decimal or Dictionary array of decimal values, RIGHT is scalar value
 /// OP_TYPE is the return type of scalar function
 macro_rules! compute_primitive_decimal_op_dyn_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr, $RET_TYPE:expr) => {{
         // generate the scalar function name, such as add_decimal_dyn_scalar,
         // from the $OP parameter (which could have a value of add) and the
         // suffix _decimal_dyn_scalar
         if let Some(value) = $RIGHT {
-            Ok(paste::expr! {[<$OP _decimal_dyn_scalar>]}($LEFT, value)?)
+            Ok(paste::expr! {[<$OP _decimal_dyn_scalar>]}(
+                $LEFT, value, $RET_TYPE,
+            )?)
         } else {
             // when the $RIGHT is a NULL, generate a NULL array of $OP_TYPE
             Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
@@ -437,15 +442,15 @@ macro_rules! binary_string_array_op {
 /// The binary_primitive_array_op macro only evaluates for primitive types
 /// like integers and floats.
 macro_rules! binary_primitive_array_op_dyn {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $RET_TYPE:expr) => {{
         match $LEFT.data_type() {
             DataType::Decimal128(_, _) => {
-                Ok(paste::expr! {[<$OP _decimal>]}(&$LEFT, &$RIGHT)?)
+                Ok(paste::expr! {[<$OP _decimal>]}(&$LEFT, &$RIGHT, $RET_TYPE)?)
             }
             DataType::Dictionary(_, value_type)
                 if matches!(value_type.as_ref(), &DataType::Decimal128(_, _)) =>
             {
-                Ok(paste::expr! {[<$OP _decimal>]}(&$LEFT, &$RIGHT)?)
+                Ok(paste::expr! {[<$OP _decimal>]}(&$LEFT, &$RIGHT, $RET_TYPE)?)
             }
             _ => Ok(Arc::new(
                 $OP(&$LEFT, &$RIGHT).map_err(|err| DataFusionError::ArrowError(err))?,
@@ -458,13 +463,13 @@ macro_rules! binary_primitive_array_op_dyn {
 /// The binary_primitive_array_op_dyn_scalar macro only evaluates for primitive
 /// types like integers and floats.
 macro_rules! binary_primitive_array_op_dyn_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $RET_TYPE:expr) => {{
         // unwrap underlying (non dictionary) value
         let right = unwrap_dict_value($RIGHT);
         let op_type = $LEFT.data_type();
 
         let result: Result<Arc<dyn Array>> = match right {
-            ScalarValue::Decimal128(v, _, _) => compute_primitive_decimal_op_dyn_scalar!($LEFT, v, $OP, op_type),
+            ScalarValue::Decimal128(v, _, _) => compute_primitive_decimal_op_dyn_scalar!($LEFT, v, $OP, op_type, $RET_TYPE),
             ScalarValue::Int8(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int8Type),
             ScalarValue::Int16(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int16Type),
             ScalarValue::Int32(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int32Type),
@@ -689,11 +694,29 @@ impl PhysicalExpr for BinaryExpr {
             }
         }
 
+        // Coerce decimal types to the same scale and precision
+        let coerced_type = coercion_decimal_mathematics_type(
+            &self.op,
+            &left_data_type,
+            &right_data_type,
+        );
+        let (left_value, right_value) = if let Some(coerced_type) = coerced_type {
+            let options = CastOptions { safe: true };
+            let left_value = cast_column(&left_value, &coerced_type, &options)?;
+            let right_value = cast_column(&right_value, &coerced_type, &options)?;
+            (left_value, right_value)
+        } else {
+            // No need to coerce if it is not decimal or not math operation
+            (left_value, right_value)
+        };
+
+        let result_type = self.data_type(input_schema)?;
+
         // Attempt to use special kernels if one input is scalar and the other is an array
         let scalar_result = match (&left_value, &right_value) {
             (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
                 // if left is array and right is literal - use scalar operations
-                self.evaluate_array_scalar(array, scalar.clone(), input_schema)?
+                self.evaluate_array_scalar(array, scalar.clone(), &result_type)?
             }
             (ColumnarValue::Scalar(scalar), ColumnarValue::Array(array)) => {
                 // if right is literal and left is array - reverse operator and parameters
@@ -711,8 +734,14 @@ impl PhysicalExpr for BinaryExpr {
             left_value.into_array(batch.num_rows()),
             right_value.into_array(batch.num_rows()),
         );
-        self.evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type)
-            .map(|a| ColumnarValue::Array(a))
+        self.evaluate_with_resolved_args(
+            left,
+            &left_data_type,
+            right,
+            &right_data_type,
+            &result_type,
+        )
+        .map(|a| ColumnarValue::Array(a))
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -1032,10 +1061,9 @@ impl BinaryExpr {
         &self,
         array: &dyn Array,
         scalar: ScalarValue,
-        input_schema: &Schema,
+        result_type: &DataType,
     ) -> Result<Option<Result<ArrayRef>>> {
         let bool_type = &DataType::Boolean;
-        let result_type = self.data_type(input_schema);
         let scalar_result = match &self.op {
             Operator::Lt => {
                 binary_array_op_dyn_scalar!(array, scalar, lt, bool_type)
@@ -1056,19 +1084,29 @@ impl BinaryExpr {
                 binary_array_op_dyn_scalar!(array, scalar, neq, bool_type)
             }
             Operator::Plus => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, add)
+                binary_primitive_array_op_dyn_scalar!(array, scalar, add, result_type)
             }
             Operator::Minus => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, subtract)
+                binary_primitive_array_op_dyn_scalar!(
+                    array,
+                    scalar,
+                    subtract,
+                    result_type
+                )
             }
             Operator::Multiply => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, multiply)
+                binary_primitive_array_op_dyn_scalar!(
+                    array,
+                    scalar,
+                    multiply,
+                    result_type
+                )
             }
             Operator::Divide => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, divide)
+                binary_primitive_array_op_dyn_scalar!(array, scalar, divide, result_type)
             }
             Operator::Modulo => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, modulus)
+                binary_primitive_array_op_dyn_scalar!(array, scalar, modulus, result_type)
             }
             Operator::RegexMatch => binary_string_array_flag_op_scalar!(
                 array,
@@ -1149,6 +1187,7 @@ impl BinaryExpr {
         left_data_type: &DataType,
         right: Arc<dyn Array>,
         right_data_type: &DataType,
+        result_type: &DataType,
     ) -> Result<ArrayRef> {
         match &self.op {
             Operator::Lt => lt_dyn(&left, &right),
@@ -1170,16 +1209,20 @@ impl BinaryExpr {
             Operator::IsNotDistinctFrom => {
                 binary_array_op!(left, right, is_not_distinct_from)
             }
-            Operator::Plus => binary_primitive_array_op_dyn!(left, right, add_dyn),
-            Operator::Minus => binary_primitive_array_op_dyn!(left, right, subtract_dyn),
+            Operator::Plus => {
+                binary_primitive_array_op_dyn!(left, right, add_dyn, result_type)
+            }
+            Operator::Minus => {
+                binary_primitive_array_op_dyn!(left, right, subtract_dyn, result_type)
+            }
             Operator::Multiply => {
-                binary_primitive_array_op_dyn!(left, right, multiply_dyn)
+                binary_primitive_array_op_dyn!(left, right, multiply_dyn, result_type)
             }
             Operator::Divide => {
-                binary_primitive_array_op_dyn!(left, right, divide_dyn_opt)
+                binary_primitive_array_op_dyn!(left, right, divide_dyn_opt, result_type)
             }
             Operator::Modulo => {
-                binary_primitive_array_op_dyn!(left, right, modulus_dyn)
+                binary_primitive_array_op_dyn!(left, right, modulus_dyn, result_type)
             }
             Operator::And => {
                 if left_data_type == &DataType::Boolean {
