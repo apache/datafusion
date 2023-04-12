@@ -150,6 +150,9 @@ impl<T: ByteArrayType> FieldArray for GenericByteArray<T> {
     type Values = Self;
 
     fn values(&self) -> Self::Values {
+        // Once https://github.com/apache/arrow-rs/pull/4048 is released
+        // Could potentially destructure array into buffers to reduce codegen,
+        // in a similar vein to what is done for PrimitiveArray
         self.clone()
     }
 }
