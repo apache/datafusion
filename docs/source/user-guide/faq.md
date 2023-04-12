@@ -42,7 +42,7 @@ When compared to similar systems, DataFusion typically is:
 Here is a comparison with similar projects that may help understand
 when DataFusion might be be suitable and unsuitable for your needs:
 
-- [DuckDB](http://www.duckdb.org) is an open source, in process analytic database.
+- [DuckDB](https://www.duckdb.org) is an open source, in process analytic database.
   Like DataFusion, it supports very fast execution, both from its custom file format
   and directly from parquet files. Unlike DataFusion, it is written in C/C++ and it
   is primarily used directly by users as a serverless database and query system rather
@@ -51,7 +51,7 @@ when DataFusion might be be suitable and unsuitable for your needs:
 - [Polars](http://pola.rs): Polars is one of the fastest DataFrame
   libraries at the time of writing. Like DataFusion, it is also
   written in Rust and uses the Apache Arrow memory model, but unlike
-  DataFusion it does not provide SQL nor as many extension points.
+  DataFusion it is not designed with as many extension points.
 
 - [Facebook Velox](https://engineering.fb.com/2022/08/31/open-source/velox/)
   is an execution engine. Like DataFusion, Velox aims to
