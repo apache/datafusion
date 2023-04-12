@@ -27,6 +27,7 @@ use crate::aggregate::row_accumulator::{
 use crate::aggregate::sum;
 use crate::aggregate::sum::sum_batch;
 use crate::aggregate::utils::calculate_result_decimal_for_avg;
+use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute;
@@ -156,6 +157,20 @@ impl AggregateExpr for Avg {
             &self.sum_data_type,
             &self.rt_data_type,
         )?))
+    }
+}
+
+impl PartialEq<dyn Any> for Avg {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && self.sum_data_type == x.sum_data_type
+                    && self.rt_data_type == x.rt_data_type
+                    && self.expr.eq(&x.expr)
+            })
+            .unwrap_or(false)
     }
 }
 

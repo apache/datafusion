@@ -155,7 +155,7 @@ impl GroupedHashAggregateStream {
         let all_aggregate_expressions =
             aggregates::aggregate_expressions(&aggr_expr, &mode, start_idx)?;
         let filter_expressions = match mode {
-            AggregateMode::Partial => filter_expr,
+            AggregateMode::Partial | AggregateMode::Single => filter_expr,
             AggregateMode::Final | AggregateMode::FinalPartitioned => {
                 vec![None; aggr_expr.len()]
             }
@@ -447,7 +447,7 @@ impl GroupedHashAggregateStream {
                         state_accessor
                             .point_to(0, group_state.aggregation_buffer.as_mut_slice());
                         match self.mode {
-                            AggregateMode::Partial => {
+                            AggregateMode::Partial | AggregateMode::Single => {
                                 accumulator.update_batch(&values, &mut state_accessor)
                             }
                             AggregateMode::FinalPartitioned | AggregateMode::Final => {
@@ -470,7 +470,9 @@ impl GroupedHashAggregateStream {
                         )?;
                         let size_pre = accumulator.size();
                         let res = match self.mode {
-                            AggregateMode::Partial => accumulator.update_batch(&values),
+                            AggregateMode::Partial | AggregateMode::Single => {
+                                accumulator.update_batch(&values)
+                            }
                             AggregateMode::FinalPartitioned | AggregateMode::Final => {
                                 // note: the aggregation here is over states, not values, thus the merge
                                 accumulator.merge_batch(&values)
@@ -632,7 +634,9 @@ impl GroupedHashAggregateStream {
             AggregateMode::Partial => {
                 read_as_batch(&state_buffers, &self.row_aggr_schema, RowType::WordAligned)
             }
-            AggregateMode::Final | AggregateMode::FinalPartitioned => {
+            AggregateMode::Final
+            | AggregateMode::FinalPartitioned
+            | AggregateMode::Single => {
                 let mut results = vec![];
                 for (idx, acc) in self.row_accumulators.iter().enumerate() {
                     let mut state_accessor =
@@ -674,15 +678,15 @@ impl GroupedHashAggregateStream {
                                 .expect("Unexpected accumulator state in hash aggregate")
                         }),
                     ),
-                    AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                        ScalarValue::iter_to_array(group_state_chunk.iter().map(
-                            |group_state| {
-                                group_state.accumulator_set[idx].evaluate().expect(
-                                    "Unexpected accumulator state in hash aggregate",
-                                )
-                            },
-                        ))
-                    }
+                    AggregateMode::Final
+                    | AggregateMode::FinalPartitioned
+                    | AggregateMode::Single => ScalarValue::iter_to_array(
+                        group_state_chunk.iter().map(|group_state| {
+                            group_state.accumulator_set[idx]
+                                .evaluate()
+                                .expect("Unexpected accumulator state in hash aggregate")
+                        }),
+                    ),
                 }?;
                 // Cast output if needed (e.g. for types like Dictionary where
                 // the intermediate GroupByScalar type was not the same as the
