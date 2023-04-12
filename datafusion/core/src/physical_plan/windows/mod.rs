@@ -390,7 +390,7 @@ mod tests {
 
             fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
                 let array = &values[0];
-                self.0 += (array.len() - array.data().null_count()) as i64;
+                self.0 += (array.len() - array.null_count()) as i64;
                 Ok(())
             }
 

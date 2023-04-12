@@ -133,7 +133,7 @@ async fn timestamp_minmax() -> Result<()> {
     let ctx = SessionContext::new();
     let table_a = make_timestamp_tz_table::<TimestampMillisecondType>(None)?;
     let table_b =
-        make_timestamp_tz_table::<TimestampNanosecondType>(Some("+00:00".to_owned()))?;
+        make_timestamp_tz_table::<TimestampNanosecondType>(Some("+00:00".into()))?;
     ctx.register_table("table_a", table_a)?;
     ctx.register_table("table_b", table_b)?;
 
@@ -156,10 +156,9 @@ async fn timestamp_coercion() -> Result<()> {
     {
         let ctx = SessionContext::new();
         let table_a =
-            make_timestamp_tz_table::<TimestampSecondType>(Some("+00:00".to_owned()))?;
-        let table_b = make_timestamp_tz_table::<TimestampMillisecondType>(Some(
-            "+00:00".to_owned(),
-        ))?;
+            make_timestamp_tz_table::<TimestampSecondType>(Some("+00:00".into()))?;
+        let table_b =
+            make_timestamp_tz_table::<TimestampMillisecondType>(Some("+00:00".into()))?;
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
@@ -1030,8 +1029,8 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
 async fn timestamp_sub_with_tz() -> Result<()> {
     let ctx = SessionContext::new();
     let table_a = make_timestamp_tz_sub_table::<TimestampMillisecondType>(
-        Some("America/Los_Angeles".to_string()),
-        Some("Europe/Istanbul".to_string()),
+        Some("America/Los_Angeles".into()),
+        Some("Europe/Istanbul".into()),
     )?;
     ctx.register_table("table_a", table_a)?;
 

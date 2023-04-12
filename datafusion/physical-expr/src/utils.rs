@@ -734,10 +734,7 @@ mod tests {
 
     #[test]
     fn test_get_indices_of_matching_exprs() {
-        let empty_schema = &Arc::new(Schema {
-            fields: vec![],
-            metadata: Default::default(),
-        });
+        let empty_schema = &Arc::new(Schema::empty());
         let equal_properties = || EquivalenceProperties::new(empty_schema.clone());
         let list1: Vec<Arc<dyn PhysicalExpr>> = vec![
             Arc::new(Column::new("a", 0)),
@@ -925,10 +922,7 @@ mod tests {
             },
         ];
         let finer = Some(&finer[..]);
-        let empty_schema = &Arc::new(Schema {
-            fields: vec![],
-            metadata: Default::default(),
-        });
+        let empty_schema = &Arc::new(Schema::empty());
         assert!(ordering_satisfy(finer, crude, || {
             EquivalenceProperties::new(empty_schema.clone())
         }));
