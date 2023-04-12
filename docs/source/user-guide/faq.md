@@ -53,7 +53,7 @@ when DataFusion might be be suitable and unsuitable for your needs:
   written in Rust and uses the Apache Arrow memory model, but unlike
   DataFusion it is not designed with as many extension points.
 
-- [Facebook Velox](https://engineering.fb.com/2022/08/31/open-source/velox/)
+- [Facebook Velox](https://github.com/facebookincubator/velox)
   is an execution engine. Like DataFusion, Velox aims to
   provide a reusable foundation for building database-like systems. Unlike DataFusion,
   it is written in C/C++ and does not include a SQL frontend or planning / optimization
