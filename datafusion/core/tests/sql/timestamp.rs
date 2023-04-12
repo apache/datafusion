@@ -133,7 +133,7 @@ async fn timestamp_minmax() -> Result<()> {
     let ctx = SessionContext::new();
     let table_a = make_timestamp_tz_table::<TimestampMillisecondType>(None)?;
     let table_b =
-        make_timestamp_tz_table::<TimestampNanosecondType>(Some("+00:00".to_owned()))?;
+        make_timestamp_tz_table::<TimestampNanosecondType>(Some("+00:00".into()))?;
     ctx.register_table("table_a", table_a)?;
     ctx.register_table("table_b", table_b)?;
 
@@ -156,10 +156,9 @@ async fn timestamp_coercion() -> Result<()> {
     {
         let ctx = SessionContext::new();
         let table_a =
-            make_timestamp_tz_table::<TimestampSecondType>(Some("+00:00".to_owned()))?;
-        let table_b = make_timestamp_tz_table::<TimestampMillisecondType>(Some(
-            "+00:00".to_owned(),
-        ))?;
+            make_timestamp_tz_table::<TimestampSecondType>(Some("+00:00".into()))?;
+        let table_b =
+            make_timestamp_tz_table::<TimestampMillisecondType>(Some("+00:00".into()))?;
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
@@ -705,6 +704,58 @@ async fn cast_timestamp_before_1970() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_arrow_typeof() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select arrow_typeof(date_trunc('minute', to_timestamp_seconds(61)));";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+----------------------------------------------------------------------+",
+        "| arrowtypeof(datetrunc(Utf8(\"minute\"),totimestampseconds(Int64(61)))) |",
+        "+----------------------------------------------------------------------+",
+        "| Timestamp(Second, None)                                              |",
+        "+----------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "select arrow_typeof(date_trunc('second', to_timestamp_millis(61)));";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------------------------------------------------------+",
+        "| arrowtypeof(datetrunc(Utf8(\"second\"),totimestampmillis(Int64(61)))) |",
+        "+---------------------------------------------------------------------+",
+        "| Timestamp(Millisecond, None)                                        |",
+        "+---------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "select arrow_typeof(date_trunc('millisecond', to_timestamp_micros(61)));";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+--------------------------------------------------------------------------+",
+        "| arrowtypeof(datetrunc(Utf8(\"millisecond\"),totimestampmicros(Int64(61)))) |",
+        "+--------------------------------------------------------------------------+",
+        "| Timestamp(Microsecond, None)                                             |",
+        "+--------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "select arrow_typeof(date_trunc('microsecond', to_timestamp(61)));";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+--------------------------------------------------------------------+",
+        "| arrowtypeof(datetrunc(Utf8(\"microsecond\"),totimestamp(Int64(61)))) |",
+        "+--------------------------------------------------------------------+",
+        "| Timestamp(Nanosecond, None)                                        |",
+        "+--------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn cast_timestamp_to_timestamptz() -> Result<()> {
     let ctx = SessionContext::new();
     let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
@@ -978,8 +1029,8 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
 async fn timestamp_sub_with_tz() -> Result<()> {
     let ctx = SessionContext::new();
     let table_a = make_timestamp_tz_sub_table::<TimestampMillisecondType>(
-        Some("America/Los_Angeles".to_string()),
-        Some("Europe/Istanbul".to_string()),
+        Some("America/Los_Angeles".into()),
+        Some("Europe/Istanbul".into()),
     )?;
     ctx.register_table("table_a", table_a)?;
 

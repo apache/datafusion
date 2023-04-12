@@ -241,7 +241,9 @@ macro_rules! compute_utf8_op_scalar {
             .as_any()
             .downcast_ref::<$DT>()
             .expect("compute_op failed to downcast left side array");
-        if let ScalarValue::Utf8(Some(string_value)) = $RIGHT {
+        if let ScalarValue::Utf8(Some(string_value))
+        | ScalarValue::LargeUtf8(Some(string_value)) = $RIGHT
+        {
             Ok(Arc::new(paste::expr! {[<$OP _utf8_scalar>]}(
                 &ll,
                 &string_value,
@@ -415,6 +417,7 @@ macro_rules! binary_string_array_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         match $LEFT.data_type() {
             DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
+            DataType::LargeUtf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, LargeStringArray),
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for binary operation '{}' on string arrays",
                 other, stringify!($OP)
@@ -610,7 +613,7 @@ macro_rules! compute_utf8_flag_op_scalar {
             .downcast_ref::<$ARRAYTYPE>()
             .expect("compute_utf8_flag_op_scalar failed to downcast array");
 
-        if let ScalarValue::Utf8(Some(string_value)) = $RIGHT {
+        if let ScalarValue::Utf8(Some(string_value))|ScalarValue::LargeUtf8(Some(string_value)) = $RIGHT {
             let flag = if $FLAG { Some("i") } else { None };
             let mut array =
                 paste::expr! {[<$OP _utf8_scalar>]}(&ll, &string_value, flag)?;
@@ -1244,8 +1247,10 @@ macro_rules! ts_sub_op {
         let prim_array_rhs = $caster(&$rhs)?;
         let ret: PrimitiveArray<$type_out> =
             arrow::compute::try_binary(prim_array_lhs, prim_array_rhs, |ts1, ts2| {
-                let (parsed_lhs_tz, parsed_rhs_tz) =
-                    (parse_timezones($lhs_tz)?, parse_timezones($rhs_tz)?);
+                let (parsed_lhs_tz, parsed_rhs_tz) = (
+                    parse_timezones($lhs_tz.as_deref())?,
+                    parse_timezones($rhs_tz.as_deref())?,
+                );
                 let (naive_lhs, naive_rhs) = calculate_naives::<$mode>(
                     ts1.mul_wrapping($coef),
                     parsed_lhs_tz,

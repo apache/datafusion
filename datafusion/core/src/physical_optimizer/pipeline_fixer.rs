@@ -229,13 +229,16 @@ fn apply_subrules_and_check_finiteness_requirements(
             input = value;
         }
     }
-    input
+    let is_unbounded = input
         .plan
         .unbounded_output(&input.children_unbounded)
-        .map(|value| {
-            input.unbounded = value;
-            Transformed::Yes(input)
-        })
+        // Treat the cases where executor cannot be run on unbounded data
+        // as generating unbounded data. These executors may be fixed during optimization
+        // (Sort will be removed, Window will be swapped etc.), If cannot
+        // be fixed Pipeline checker will generate error anyway.
+        .unwrap_or(true);
+    input.unbounded = is_unbounded;
+    Ok(Transformed::Yes(input))
 }
 
 #[cfg(test)]
