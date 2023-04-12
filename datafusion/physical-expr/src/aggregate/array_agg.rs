@@ -17,6 +17,7 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
+use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::ArrayRef;
@@ -83,6 +84,19 @@ impl AggregateExpr for ArrayAgg {
 
     fn name(&self) -> &str {
         &self.name
+    }
+}
+
+impl PartialEq<dyn Any> for ArrayAgg {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && self.input_data_type == x.input_data_type
+                    && self.expr.eq(&x.expr)
+            })
+            .unwrap_or(false)
     }
 }
 
