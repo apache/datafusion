@@ -524,6 +524,12 @@ enum ScalarFunction {
   CurrentTime = 71;
   Uuid = 72;
   Cbrt = 73;
+  Acosh = 74;
+  Asinh = 75;
+  Atanh = 76;
+  Sinh = 77;
+  Cosh = 78;
+  Tanh = 79;
 }
 
 message ScalarFunctionNode {
@@ -1252,6 +1258,10 @@ message WindowAggExecNode {
   Schema input_schema = 4;
 }
 
+message MaybeFilter {
+  PhysicalExprNode expr = 1;
+}
+
 message AggregateExecNode {
   repeated PhysicalExprNode group_expr = 1;
   repeated PhysicalExprNode aggr_expr = 2;
@@ -1263,6 +1273,7 @@ message AggregateExecNode {
   Schema input_schema = 7;
   repeated PhysicalExprNode null_expr = 8;
   repeated bool groups = 9;
+  repeated MaybeFilter filter_expr = 10;
 }
 
 message GlobalLimitExecNode {

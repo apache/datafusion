@@ -16,9 +16,6 @@
 // under the License.
 
 use super::*;
-use ::parquet::arrow::arrow_writer::ArrowWriter;
-use ::parquet::file::properties::WriterProperties;
-use datafusion::execution::options::ReadOptions;
 
 #[tokio::test]
 async fn window_frame_creation_type_checking() -> Result<()> {
@@ -63,118 +60,15 @@ async fn window_frame_creation_type_checking() -> Result<()> {
     .await
 }
 
-fn split_record_batch(batch: RecordBatch, n_split: usize) -> Vec<RecordBatch> {
-    let n_chunk = batch.num_rows() / n_split;
-    let mut res = vec![];
-    for i in 0..n_split - 1 {
-        let chunk = batch.slice(i * n_chunk, n_chunk);
-        res.push(chunk);
-    }
-    let start = (n_split - 1) * n_chunk;
-    let len = batch.num_rows() - start;
-    res.push(batch.slice(start, len));
-    res
-}
-
-fn get_test_data(n_split: usize) -> Result<Vec<RecordBatch>> {
-    let ts_field = Field::new("ts", DataType::Int32, false);
-    let inc_field = Field::new("inc_col", DataType::Int32, false);
-    let desc_field = Field::new("desc_col", DataType::Int32, false);
-
-    let schema = Arc::new(Schema::new(vec![ts_field, inc_field, desc_field]));
-
-    let batch = RecordBatch::try_new(
-        schema,
-        vec![
-            Arc::new(Int32Array::from_slice([
-                1, 1, 5, 9, 10, 11, 16, 21, 22, 26, 26, 28, 31, 33, 38, 42, 47, 51, 53,
-                53, 58, 63, 67, 68, 70, 72, 72, 76, 81, 85, 86, 88, 91, 96, 97, 98, 100,
-                101, 102, 104, 104, 108, 112, 113, 113, 114, 114, 117, 122, 126, 131,
-                131, 136, 136, 136, 139, 141, 146, 147, 147, 152, 154, 159, 161, 163,
-                164, 167, 172, 173, 177, 180, 185, 186, 191, 195, 195, 199, 203, 207,
-                210, 213, 218, 221, 224, 226, 230, 232, 235, 238, 238, 239, 244, 245,
-                247, 250, 254, 258, 262, 264, 264,
-            ])),
-            Arc::new(Int32Array::from_slice([
-                1, 5, 10, 15, 20, 21, 26, 29, 30, 33, 37, 40, 43, 44, 45, 49, 51, 53, 58,
-                61, 65, 70, 75, 78, 83, 88, 90, 91, 95, 97, 100, 105, 109, 111, 115, 119,
-                120, 124, 126, 129, 131, 135, 140, 143, 144, 147, 148, 149, 151, 155,
-                156, 159, 160, 163, 165, 170, 172, 177, 181, 182, 186, 187, 192, 196,
-                197, 199, 203, 207, 209, 213, 214, 216, 219, 221, 222, 225, 226, 231,
-                236, 237, 242, 245, 247, 248, 253, 254, 259, 261, 266, 269, 272, 275,
-                278, 283, 286, 289, 291, 296, 301, 305,
-            ])),
-            Arc::new(Int32Array::from_slice([
-                100, 98, 93, 91, 86, 84, 81, 77, 75, 71, 70, 69, 64, 62, 59, 55, 50, 45,
-                41, 40, 39, 36, 31, 28, 23, 22, 17, 13, 10, 6, 5, 2, 1, -1, -4, -5, -6,
-                -8, -12, -16, -17, -19, -24, -25, -29, -34, -37, -42, -47, -48, -49, -53,
-                -57, -58, -61, -65, -67, -68, -71, -73, -75, -76, -78, -83, -87, -91,
-                -95, -98, -101, -105, -106, -111, -114, -116, -120, -125, -128, -129,
-                -134, -139, -142, -143, -146, -150, -154, -158, -163, -168, -172, -176,
-                -181, -184, -189, -193, -196, -201, -203, -208, -210, -213,
-            ])),
-        ],
-    )?;
-    Ok(split_record_batch(batch, n_split))
-}
-
-fn write_test_data_to_parquet(tmpdir: &TempDir, n_split: usize) -> Result<()> {
-    let batches = get_test_data(n_split)?;
-    for (i, batch) in batches.into_iter().enumerate() {
-        let target_file = tmpdir.path().join(format!("{i}.parquet"));
-        let file = File::create(target_file).unwrap();
-        // Default writer properties
-        let props = WriterProperties::builder().build();
-        let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
-
-        writer.write(&batch).expect("Writing batch");
-
-        // writer must be closed to write footer
-        writer.close().unwrap();
-    }
-    Ok(())
-}
-
-async fn get_test_context(tmpdir: &TempDir, n_batch: usize) -> Result<SessionContext> {
-    let session_config = SessionConfig::new().with_target_partitions(1);
-    let ctx = SessionContext::with_config(session_config);
-
-    let parquet_read_options = ParquetReadOptions::default();
-    let file_sort_order = [col("ts")]
-        .into_iter()
-        .map(|e| {
-            let ascending = true;
-            let nulls_first = false;
-            e.sort(ascending, nulls_first)
-        })
-        .collect::<Vec<_>>();
-
-    let options_sort = parquet_read_options
-        .to_listing_options(&ctx.copied_config())
-        .with_file_sort_order(Some(file_sort_order));
-
-    write_test_data_to_parquet(tmpdir, n_batch)?;
-    let provided_schema = None;
-    let sql_definition = None;
-    ctx.register_listing_table(
-        "annotated_data",
-        tmpdir.path().to_string_lossy(),
-        options_sort.clone(),
-        provided_schema,
-        sql_definition,
-    )
-    .await
-    .unwrap();
-    Ok(ctx)
-}
-
 mod tests {
     use super::*;
+    use datafusion::test_util::get_test_context;
 
     #[tokio::test]
     async fn test_source_sorted_aggregate() -> Result<()> {
-        let tmpdir = TempDir::new().unwrap();
-        let ctx = get_test_context(&tmpdir, 1).await?;
+        let tmpdir = TempDir::new()?;
+        let session_config = SessionConfig::new().with_target_partitions(1);
+        let ctx = get_test_context(&tmpdir, false, session_config).await?;
 
         let sql = "SELECT
             SUM(inc_col) OVER(ORDER BY ts RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING) as sum1,
@@ -248,8 +142,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_source_sorted_builtin() -> Result<()> {
-        let tmpdir = TempDir::new().unwrap();
-        let ctx = get_test_context(&tmpdir, 1).await?;
+        let tmpdir = TempDir::new()?;
+        let session_config = SessionConfig::new().with_target_partitions(1);
+        let ctx = get_test_context(&tmpdir, false, session_config).await?;
 
         let sql = "SELECT
             FIRST_VALUE(inc_col) OVER(ORDER BY ts RANGE BETWEEN 10 PRECEDING and 1 FOLLOWING) as fv1,
@@ -322,8 +217,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_source_sorted_unbounded_preceding() -> Result<()> {
-        let tmpdir = TempDir::new().unwrap();
-        let ctx = get_test_context(&tmpdir, 1).await?;
+        let tmpdir = TempDir::new()?;
+        let session_config = SessionConfig::new().with_target_partitions(1);
+        let ctx = get_test_context(&tmpdir, false, session_config).await?;
 
         let sql = "SELECT
             SUM(inc_col) OVER(ORDER BY ts ASC RANGE BETWEEN UNBOUNDED PRECEDING AND 5 FOLLOWING) as sum1,
@@ -382,7 +278,8 @@ mod tests {
     #[tokio::test]
     async fn test_source_sorted_unbounded_preceding_builtin() -> Result<()> {
         let tmpdir = TempDir::new().unwrap();
-        let ctx = get_test_context(&tmpdir, 1).await?;
+        let session_config = SessionConfig::new().with_target_partitions(1);
+        let ctx = get_test_context(&tmpdir, false, session_config).await?;
 
         let sql = "SELECT
            FIRST_VALUE(inc_col) OVER(ORDER BY ts ASC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as first_value1,
@@ -428,6 +325,60 @@ mod tests {
             "| 1            | 26           | 20          | 1           | 5          |",
             "| 1            | 29           | 21          | 1           | 5          |",
             "+--------------+--------------+-------------+-------------+------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_source_sorted_unbounded_source() -> Result<()> {
+        let tmpdir = TempDir::new().unwrap();
+        let session_config = SessionConfig::new().with_target_partitions(1);
+        // Use an unbounded source
+        let ctx = get_test_context(&tmpdir, true, session_config).await?;
+
+        let sql = "SELECT
+           SUM(inc_col) OVER(ORDER BY ts ASC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as sum1,
+           SUM(inc_col) OVER(ORDER BY ts DESC ROWS BETWEEN 3 PRECEDING AND UNBOUNDED FOLLOWING) as sum2,
+           COUNT(inc_col) OVER(ORDER BY ts ASC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as count1,
+           COUNT(inc_col) OVER(ORDER BY ts DESC ROWS BETWEEN 3 PRECEDING AND UNBOUNDED FOLLOWING) as count2
+           FROM annotated_data
+           ORDER BY ts ASC
+           LIMIT 5";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let expected = {
+            vec![
+                "ProjectionExec: expr=[sum1@0 as sum1, sum2@1 as sum2, count1@2 as count1, count2@3 as count2]",
+                "  GlobalLimitExec: skip=0, fetch=5",
+                "    ProjectionExec: expr=[SUM(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING@5 as sum1, SUM(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN 3 PRECEDING AND UNBOUNDED FOLLOWING@3 as sum2, COUNT(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING@6 as count1, COUNT(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN 3 PRECEDING AND UNBOUNDED FOLLOWING@4 as count2, ts@0 as ts]",
+                "      BoundedWindowAggExec: wdw=[SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(1)) }, COUNT(annotated_data.inc_col): Ok(Field { name: \"COUNT(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(1)) }]",
+                "        BoundedWindowAggExec: wdw=[SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(3)) }, COUNT(annotated_data.inc_col): Ok(Field { name: \"COUNT(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(3)) }]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        let actual_len = actual.len();
+        let actual_trim_last = &actual[..actual_len - 1];
+        assert_eq!(
+            expected, actual_trim_last,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+------+------+--------+--------+",
+            "| sum1 | sum2 | count1 | count2 |",
+            "+------+------+--------+--------+",
+            "| 6    | 31   | 2      | 4      |",
+            "| 16   | 51   | 3      | 5      |",
+            "| 31   | 72   | 4      | 6      |",
+            "| 51   | 98   | 5      | 7      |",
+            "| 72   | 127  | 6      | 8      |",
+            "+------+------+--------+--------+",
         ];
         assert_batches_eq!(expected, &actual);
         Ok(())

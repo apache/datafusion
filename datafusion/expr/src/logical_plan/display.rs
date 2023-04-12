@@ -257,7 +257,7 @@ mod tests {
 
     #[test]
     fn test_display_empty_schema() {
-        let schema = Schema::new(vec![]);
+        let schema = Schema::empty();
         assert_eq!("[]", format!("{}", display_schema(&schema)));
     }
 
