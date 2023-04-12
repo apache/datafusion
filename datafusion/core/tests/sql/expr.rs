@@ -622,6 +622,17 @@ async fn test_not_expressions() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
+    let sql = "SELECT not(1), not(0)";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+--------------+--------------+",
+        "| NOT Int64(1) | NOT Int64(0) |",
+        "+--------------+--------------+",
+        "| -2           | -1           |",
+        "+--------------+--------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
     let sql = "SELECT null, not(null)";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -638,9 +649,7 @@ async fn test_not_expressions() -> Result<()> {
     match result {
         Ok(_) => panic!("expected error"),
         Err(e) => {
-            assert_contains!(e.to_string(),
-                             "NOT 'Literal { value: Utf8(\"hi\") }' can't be evaluated because the expression's type is Utf8, not boolean or NULL"
-            );
+            assert_contains!(e.to_string(), "Can't NOT or BITWISE_NOT datatype: 'Utf8'");
         }
     }
     Ok(())

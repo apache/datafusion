@@ -23,6 +23,7 @@ use std::ops::BitAnd;
 use std::sync::Arc;
 
 use crate::aggregate::row_accumulator::RowAccumulator;
+use crate::aggregate::utils::down_cast_any_ref;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::{Array, Int64Array};
 use arrow::compute;
@@ -81,7 +82,7 @@ fn null_count_for_multiple_cols(values: &[ArrayRef]) -> usize {
     if values.len() > 1 {
         let result_bool_buf: Option<BooleanBuffer> = values
             .iter()
-            .map(|a| a.data().nulls())
+            .map(|a| a.nulls())
             .fold(None, |acc, b| match (acc, b) {
                 (Some(acc), Some(b)) => Some(acc.bitand(b.inner())),
                 (Some(acc), None) => Some(acc),
@@ -149,6 +150,25 @@ impl AggregateExpr for Count {
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(CountAccumulator::new()))
+    }
+}
+
+impl PartialEq<dyn Any> for Count {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && self.data_type == x.data_type
+                    && self.nullable == x.nullable
+                    && self.exprs.len() == x.exprs.len()
+                    && self
+                        .exprs
+                        .iter()
+                        .zip(x.exprs.iter())
+                        .all(|(expr1, expr2)| expr1.eq(expr2))
+            })
+            .unwrap_or(false)
     }
 }
 
@@ -250,8 +270,8 @@ impl RowAccumulator for CountRowAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
     use crate::expressions::tests::aggregate;
+    use crate::expressions::{col, lit};
     use crate::generic_test_op;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
@@ -339,6 +359,32 @@ mod tests {
         let expected = ScalarValue::from(2i64);
 
         assert_eq!(expected, actual);
+        Ok(())
+    }
+
+    #[test]
+    fn count_eq() -> Result<()> {
+        let count = Count::new(lit(1i8), "COUNT(1)".to_string(), DataType::Int64);
+        let arc_count: Arc<dyn AggregateExpr> = Arc::new(Count::new(
+            lit(1i8),
+            "COUNT(1)".to_string(),
+            DataType::Int64,
+        ));
+        let box_count: Box<dyn AggregateExpr> = Box::new(Count::new(
+            lit(1i8),
+            "COUNT(1)".to_string(),
+            DataType::Int64,
+        ));
+        let count2 = Count::new(lit(1i8), "COUNT(2)".to_string(), DataType::Int64);
+
+        assert!(arc_count.eq(&box_count));
+        assert!(box_count.eq(&arc_count));
+        assert!(arc_count.eq(&count));
+        assert!(count.eq(&box_count));
+        assert!(count.eq(&arc_count));
+
+        assert!(count2.ne(&arc_count));
+
         Ok(())
     }
 }

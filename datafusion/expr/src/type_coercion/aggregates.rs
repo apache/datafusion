@@ -266,8 +266,7 @@ fn check_arg_count(
         TypeSignature::VariadicAny => {
             if input_types.is_empty() {
                 return Err(DataFusionError::Plan(format!(
-                    "The function {:?} expects at least one argument",
-                    agg_fun
+                    "The function {agg_fun:?} expects at least one argument"
                 )));
             }
         }

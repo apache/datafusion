@@ -362,6 +362,7 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Tan => Arc::new(math_expressions::tan),
         BuiltinScalarFunction::Tanh => Arc::new(math_expressions::tanh),
         BuiltinScalarFunction::Trunc => Arc::new(math_expressions::trunc),
+        BuiltinScalarFunction::Pi => Arc::new(math_expressions::pi),
         BuiltinScalarFunction::Power => {
             Arc::new(|args| make_scalar_function(math_expressions::power)(args))
         }
@@ -2763,6 +2764,7 @@ mod tests {
 
         let funs = [
             BuiltinScalarFunction::Now,
+            BuiltinScalarFunction::Pi,
             BuiltinScalarFunction::Random,
             BuiltinScalarFunction::Uuid,
         ];
@@ -2798,7 +2800,7 @@ mod tests {
         assert_eq!(
             expr.data_type(&schema)?,
             // type equals to a common coercion
-            DataType::FixedSizeList(Box::new(Field::new("item", expected_type, true)), 2)
+            DataType::FixedSizeList(Arc::new(Field::new("item", expected_type, true)), 2)
         );
 
         // evaluate works
@@ -2860,7 +2862,7 @@ mod tests {
         // type is correct
         assert_eq!(
             expr.data_type(&schema)?,
-            DataType::List(Box::new(Field::new("item", DataType::Utf8, true)))
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)))
         );
 
         // evaluate works
@@ -2899,7 +2901,7 @@ mod tests {
         // type is correct
         assert_eq!(
             expr.data_type(&schema)?,
-            DataType::List(Box::new(Field::new("item", DataType::Utf8, true)))
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)))
         );
 
         // evaluate works

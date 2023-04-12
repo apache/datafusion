@@ -187,6 +187,10 @@ config_namespace! {
         /// When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
         pub enable_ident_normalization: bool, default = true
 
+        /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
+        /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
+        pub dialect: String, default = "generic".to_string()
+
     }
 }
 

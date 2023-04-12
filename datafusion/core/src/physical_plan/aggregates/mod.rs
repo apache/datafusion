@@ -66,6 +66,10 @@ pub enum AggregateMode {
     /// with Hash repartitioning on the group keys. If a group key is
     /// duplicated, duplicate groups would be produced
     FinalPartitioned,
+    /// Applies the entire logical aggregation operation in a single operator,
+    /// as opposed to Partial / Final modes which apply the logical aggregation using
+    /// two operators.
+    Single,
 }
 
 /// Represents `GROUP BY` clause in the plan (including the more general GROUPING SET)
@@ -148,6 +152,24 @@ impl PhysicalGroupBy {
     }
 }
 
+impl PartialEq for PhysicalGroupBy {
+    fn eq(&self, other: &PhysicalGroupBy) -> bool {
+        self.expr.len() == other.expr.len()
+            && self
+                .expr
+                .iter()
+                .zip(other.expr.iter())
+                .all(|((expr1, name1), (expr2, name2))| expr1.eq(expr2) && name1 == name2)
+            && self.null_expr.len() == other.null_expr.len()
+            && self
+                .null_expr
+                .iter()
+                .zip(other.null_expr.iter())
+                .all(|((expr1, name1), (expr2, name2))| expr1.eq(expr2) && name1 == name2)
+            && self.groups == other.groups
+    }
+}
+
 enum StreamType {
     AggregateStream(AggregateStream),
     GroupedHashAggregateStream(GroupedHashAggregateStream),
@@ -171,6 +193,8 @@ pub struct AggregateExec {
     pub(crate) group_by: PhysicalGroupBy,
     /// Aggregate expressions
     pub(crate) aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+    /// FILTER (WHERE clause) expression for each aggregate expression
+    pub(crate) filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied
@@ -192,6 +216,7 @@ impl AggregateExec {
         mode: AggregateMode,
         group_by: PhysicalGroupBy,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
@@ -221,6 +246,7 @@ impl AggregateExec {
             mode,
             group_by,
             aggr_expr,
+            filter_expr,
             input,
             schema,
             input_schema,
@@ -258,6 +284,11 @@ impl AggregateExec {
         &self.aggr_expr
     }
 
+    /// FILTER (WHERE clause) expression for each aggregate expression
+    pub fn filter_expr(&self) -> &[Option<Arc<dyn PhysicalExpr>>] {
+        &self.filter_expr
+    }
+
     /// Input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
@@ -281,6 +312,7 @@ impl AggregateExec {
                 self.mode,
                 self.schema.clone(),
                 self.aggr_expr.clone(),
+                self.filter_expr.clone(),
                 input,
                 baseline_metrics,
                 context,
@@ -293,6 +325,7 @@ impl AggregateExec {
                     self.schema.clone(),
                     self.group_by.clone(),
                     self.aggr_expr.clone(),
+                    self.filter_expr.clone(),
                     input,
                     baseline_metrics,
                     batch_size,
@@ -317,8 +350,8 @@ impl ExecutionPlan for AggregateExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         match &self.mode {
-            AggregateMode::Partial => {
-                // Partial Aggregation will not change the output partitioning but need to respect the Alias
+            AggregateMode::Partial | AggregateMode::Single => {
+                // Partial and Single Aggregation will not change the output partitioning but need to respect the Alias
                 let input_partition = self.input.output_partitioning();
                 match input_partition {
                     Partitioning::Hash(exprs, part) => {
@@ -361,7 +394,9 @@ impl ExecutionPlan for AggregateExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         match &self.mode {
-            AggregateMode::Partial => vec![Distribution::UnspecifiedDistribution],
+            AggregateMode::Partial | AggregateMode::Single => {
+                vec![Distribution::UnspecifiedDistribution]
+            }
             AggregateMode::FinalPartitioned => {
                 vec![Distribution::HashPartitioned(self.output_group_expr())]
             }
@@ -391,6 +426,7 @@ impl ExecutionPlan for AggregateExec {
             self.mode,
             self.group_by.clone(),
             self.aggr_expr.clone(),
+            self.filter_expr.clone(),
             children[0].clone(),
             self.input_schema.clone(),
         )?))
@@ -529,7 +565,9 @@ fn create_schema(
                 fields.extend(expr.state_fields()?.iter().cloned())
             }
         }
-        AggregateMode::Final | AggregateMode::FinalPartitioned => {
+        AggregateMode::Final
+        | AggregateMode::FinalPartitioned
+        | AggregateMode::Single => {
             // in final mode, the field with the final result of the accumulator
             for expr in aggr_expr {
                 fields.push(expr.field()?)
@@ -555,7 +593,7 @@ fn aggregate_expressions(
     col_idx_base: usize,
 ) -> Result<Vec<Vec<Arc<dyn PhysicalExpr>>>> {
     match mode {
-        AggregateMode::Partial => Ok(aggr_expr
+        AggregateMode::Partial | AggregateMode::Single => Ok(aggr_expr
             .iter()
             .map(|agg| {
                 let pre_cast_type = if let Some(Sum {
@@ -653,7 +691,7 @@ fn create_row_accumulators(
 }
 
 /// returns a vector of ArrayRefs, where each entry corresponds to either the
-/// final value (mode = Final) or states (mode = Partial)
+/// final value (mode = Final, FinalPartitioned and Single) or states (mode = Partial)
 fn finalize_aggregation(
     accumulators: &[AccumulatorItem],
     mode: &AggregateMode,
@@ -672,7 +710,9 @@ fn finalize_aggregation(
                 .collect::<Result<Vec<_>>>()?;
             Ok(a.iter().flatten().cloned().collect::<Vec<_>>())
         }
-        AggregateMode::Final | AggregateMode::FinalPartitioned => {
+        AggregateMode::Final
+        | AggregateMode::FinalPartitioned
+        | AggregateMode::Single => {
             // merge the state to the final value
             accumulators
                 .iter()
@@ -700,6 +740,20 @@ fn evaluate_many(
 ) -> Result<Vec<Vec<ArrayRef>>> {
     expr.iter()
         .map(|expr| evaluate(expr, batch))
+        .collect::<Result<Vec<_>>>()
+}
+
+fn evaluate_optional(
+    expr: &[Option<Arc<dyn PhysicalExpr>>],
+    batch: &RecordBatch,
+) -> Result<Vec<Option<ArrayRef>>> {
+    expr.iter()
+        .map(|expr| {
+            expr.as_ref()
+                .map(|expr| expr.evaluate(batch))
+                .transpose()
+                .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+        })
         .collect::<Result<Vec<_>>>()
 }
 
@@ -839,6 +893,7 @@ mod tests {
             AggregateMode::Partial,
             grouping_set.clone(),
             aggregates.clone(),
+            vec![None],
             input,
             input_schema.clone(),
         )?);
@@ -881,6 +936,7 @@ mod tests {
             AggregateMode::Final,
             final_grouping_set,
             aggregates,
+            vec![None],
             merge,
             input_schema,
         )?);
@@ -944,6 +1000,7 @@ mod tests {
             AggregateMode::Partial,
             grouping_set.clone(),
             aggregates.clone(),
+            vec![None],
             input,
             input_schema.clone(),
         )?);
@@ -976,6 +1033,7 @@ mod tests {
             AggregateMode::Final,
             final_grouping_set,
             aggregates,
+            vec![None],
             merge,
             input_schema,
         )?);
@@ -1191,6 +1249,7 @@ mod tests {
                 AggregateMode::Partial,
                 groups,
                 aggregates,
+                vec![None; 3],
                 input.clone(),
                 input_schema.clone(),
             )?);
@@ -1246,6 +1305,7 @@ mod tests {
             AggregateMode::Partial,
             groups.clone(),
             aggregates.clone(),
+            vec![None],
             blocking_exec,
             schema,
         )?);
@@ -1284,6 +1344,7 @@ mod tests {
             AggregateMode::Partial,
             groups,
             aggregates.clone(),
+            vec![None],
             blocking_exec,
             schema,
         )?);
