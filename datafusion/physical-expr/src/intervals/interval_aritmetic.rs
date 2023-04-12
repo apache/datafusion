@@ -620,7 +620,7 @@ mod tests {
     capture_mode_change!(capture_mode_change_f64, create_f64_interval, f64, Float64);
 
     #[cfg(all(
-        any(target_arch = "x86", target_arch = "aarch64"),
+        any(target_arch = "x86_64", target_arch = "aarch64"),
         not(target_os = "windows")
     ))]
     #[test]
@@ -631,7 +631,7 @@ mod tests {
     }
 
     #[cfg(all(
-        any(target_arch = "x86", target_arch = "aarch64"),
+        any(target_arch = "x86_64", target_arch = "aarch64"),
         not(target_os = "windows")
     ))]
     #[test]
@@ -642,7 +642,7 @@ mod tests {
     }
 
     #[cfg(all(
-        any(target_arch = "x86", target_arch = "aarch64"),
+        any(target_arch = "x86_64", target_arch = "aarch64"),
         not(target_os = "windows")
     ))]
     #[test]
@@ -653,7 +653,7 @@ mod tests {
     }
 
     #[cfg(all(
-        any(target_arch = "x86", target_arch = "aarch64"),
+        any(target_arch = "x86_64", target_arch = "aarch64"),
         not(target_os = "windows")
     ))]
     #[test]
@@ -664,7 +664,7 @@ mod tests {
     }
 
     #[cfg(any(
-        not(any(target_arch = "x86", target_arch = "aarch64")),
+        not(any(target_arch = "x86_64", target_arch = "aarch64")),
         target_os = "windows"
     ))]
     #[test]
@@ -675,7 +675,7 @@ mod tests {
     }
 
     #[cfg(any(
-        not(any(target_arch = "x86", target_arch = "aarch64")),
+        not(any(target_arch = "x86_64", target_arch = "aarch64")),
         target_os = "windows"
     ))]
     #[test]

@@ -31,25 +31,25 @@ use std::ops::{Add, BitAnd, Sub};
 type ScalarValueOperation = dyn FnOnce(&ScalarValue, &ScalarValue) -> Result<ScalarValue>;
 
 // Define constants for ARM
-#[cfg(all(target_arch = "aarch64"))]
+#[cfg(all(target_arch = "aarch64", not(target_os = "windows")))]
 const FE_UPWARD: i32 = 0x00400000;
-#[cfg(all(target_arch = "aarch64"))]
+#[cfg(all(target_arch = "aarch64", not(target_os = "windows")))]
 const FE_DOWNWARD: i32 = 0x00800000;
 
 // Define constants for x86_64
 #[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
-const FE_UPWARD: libc::c_int = 0x0800;
+const FE_UPWARD: i32 = 0x0800;
 #[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
-const FE_DOWNWARD: libc::c_int = 0x0400;
+const FE_DOWNWARD: i32 = 0x0400;
 
 #[cfg(all(
-    any(target_arch = "x86", target_arch = "aarch64"),
+    any(target_arch = "x86_64", target_arch = "aarch64"),
     not(target_os = "windows")
 ))]
 extern crate libc;
 
 #[cfg(all(
-    any(target_arch = "x86", target_arch = "aarch64"),
+    any(target_arch = "x86_64", target_arch = "aarch64"),
     not(target_os = "windows")
 ))]
 extern "C" {
@@ -231,7 +231,7 @@ pub fn alter_round_mode_for_float_operation<const UPPER: bool>(
     cls: Box<ScalarValueOperation>,
 ) -> Result<ScalarValue> {
     #[cfg(all(
-        any(target_arch = "x86", target_arch = "aarch64"),
+        any(target_arch = "x86_64", target_arch = "aarch64"),
         not(target_os = "windows")
     ))]
     unsafe {
@@ -242,7 +242,7 @@ pub fn alter_round_mode_for_float_operation<const UPPER: bool>(
         res
     }
     #[cfg(any(
-        not(any(target_arch = "x86", target_arch = "aarch64")),
+        not(any(target_arch = "x86_64", target_arch = "aarch64")),
         target_os = "windows"
     ))]
     match cls(lhs, rhs) {
