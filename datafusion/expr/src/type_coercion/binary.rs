@@ -17,7 +17,7 @@
 
 //! Coercion rules for matching argument types for binary operators
 
-use crate::type_coercion::{is_date, is_interval, is_numeric, is_timestamp};
+use crate::type_coercion::{is_date, is_decimal, is_interval, is_numeric, is_timestamp};
 use crate::Operator;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
@@ -35,9 +35,57 @@ pub fn binary_operator_data_type(
     op: &Operator,
     rhs_type: &DataType,
 ) -> Result<DataType> {
-    // validate that it is possible to perform the operation on incoming types.
-    // (or the return datatype cannot be inferred)
-    let result_type = coerce_types(lhs_type, op, rhs_type)?;
+    let result_type = if !any_decimal(lhs_type, rhs_type) {
+        // validate that it is possible to perform the operation on incoming types.
+        // (or the return datatype cannot be inferred)
+        coerce_types(lhs_type, op, rhs_type)?
+    } else {
+        let lhs_type = match lhs_type {
+            DataType::Decimal128(_, _) | DataType::Null => lhs_type.clone(),
+            DataType::Dictionary(_, value_type)
+                if matches!(**value_type, DataType::Decimal128(_, _)) =>
+            {
+                lhs_type.clone()
+            }
+            _ => coerce_numeric_type_to_decimal(lhs_type).ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "Could not coerce numeric type to decimal: {:?}",
+                    lhs_type
+                ))
+            })?,
+        };
+
+        let rhs_type = match rhs_type {
+            DataType::Decimal128(_, _) | DataType::Null => rhs_type.clone(),
+            DataType::Dictionary(_, value_type)
+                if matches!(**value_type, DataType::Decimal128(_, _)) =>
+            {
+                rhs_type.clone()
+            }
+            _ => coerce_numeric_type_to_decimal(rhs_type).ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "Could not coerce numeric type to decimal: {:?}",
+                    rhs_type
+                ))
+            })?,
+        };
+
+        match op {
+            // For Plus and Minus, the result type is the same as the input type which is already promoted
+            Operator::Plus
+            | Operator::Minus
+            | Operator::Divide
+            | Operator::Multiply
+            | Operator::Modulo => decimal_op_mathematics_type(op, &lhs_type, &rhs_type)
+                .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "Could not get return type for {:?} between {:?} and {:?}",
+                    op, lhs_type, rhs_type
+                ))
+            })?,
+            _ => coerce_types(&lhs_type, op, &rhs_type)?,
+        }
+    };
 
     match op {
         // operators that return a boolean
@@ -152,6 +200,46 @@ pub fn coerce_types(
             ),
         )),
         Some(t) => Ok(t)
+    }
+}
+
+/// Coercion rules for mathematics operators between decimal and non-decimal types.
+pub fn math_decimal_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> (Option<DataType>, Option<DataType>) {
+    use arrow::datatypes::DataType::*;
+
+    if both_decimal(lhs_type, rhs_type) {
+        return (None, None);
+    }
+
+    match (lhs_type, rhs_type) {
+        (Null, dec_type @ Decimal128(_, _)) => (Some(dec_type.clone()), None),
+        (dec_type @ Decimal128(_, _), Null) => (None, Some(dec_type.clone())),
+        (Dictionary(key_type, value_type), _) => {
+            let (value_type, rhs_type) = math_decimal_coercion(value_type, rhs_type);
+            let lhs_type = value_type
+                .map(|value_type| Dictionary(key_type.clone(), Box::new(value_type)));
+            (lhs_type, rhs_type)
+        }
+        (_, Dictionary(_, value_type)) => {
+            let (lhs_type, value_type) = math_decimal_coercion(lhs_type, value_type);
+            let rhs_type = value_type
+                .map(|value_type| Dictionary(key_type.clone(), Box::new(value_type)));
+            (lhs_type, rhs_type)
+        }
+        (Decimal128(_, _), Float32 | Float64) => (Some(Float64), Some(Float64)),
+        (Float32 | Float64, Decimal128(_, _)) => (Some(Float64), Some(Float64)),
+        (Decimal128(_, _), _) => {
+            let converted_decimal_type = coerce_numeric_type_to_decimal(rhs_type);
+            (None, converted_decimal_type)
+        }
+        (_, Decimal128(_, _)) => {
+            let converted_decimal_type = coerce_numeric_type_to_decimal(lhs_type);
+            (converted_decimal_type, None)
+        }
+        _ => (None, None),
     }
 }
 
@@ -452,12 +540,6 @@ fn mathematics_numerical_coercion(
     // these are ordered from most informative to least informative so
     // that the coercion removes the least amount of information
     match (lhs_type, rhs_type) {
-        (Decimal128(_, _), Decimal128(_, _)) => {
-            coercion_decimal_mathematics_type(mathematics_op, lhs_type, rhs_type)
-        }
-        (Null, dec_type @ Decimal128(_, _)) | (dec_type @ Decimal128(_, _), Null) => {
-            Some(dec_type.clone())
-        }
         (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
             mathematics_numerical_coercion(mathematics_op, lhs_value_type, rhs_value_type)
         }
@@ -469,30 +551,6 @@ fn mathematics_numerical_coercion(
         }
         (_, Dictionary(_, value_type)) => {
             mathematics_numerical_coercion(mathematics_op, lhs_type, value_type)
-        }
-        (Decimal128(_, _), Float32 | Float64) => Some(Float64),
-        (Float32 | Float64, Decimal128(_, _)) => Some(Float64),
-        (Decimal128(_, _), _) => {
-            let converted_decimal_type = coerce_numeric_type_to_decimal(rhs_type);
-            match converted_decimal_type {
-                None => None,
-                Some(right_decimal_type) => coercion_decimal_mathematics_type(
-                    mathematics_op,
-                    lhs_type,
-                    &right_decimal_type,
-                ),
-            }
-        }
-        (_, Decimal128(_, _)) => {
-            let converted_decimal_type = coerce_numeric_type_to_decimal(lhs_type);
-            match converted_decimal_type {
-                None => None,
-                Some(left_decimal_type) => coercion_decimal_mathematics_type(
-                    mathematics_op,
-                    &left_decimal_type,
-                    rhs_type,
-                ),
-            }
         }
         (Float64, _) | (_, Float64) => Some(Float64),
         (_, Float32) | (Float32, _) => Some(Float32),
@@ -515,7 +573,38 @@ fn create_decimal_type(precision: u8, scale: i8) -> DataType {
     )
 }
 
+/// Returns the coerced type of applying mathematics operations on decimal types.
+/// Two sides of the mathematics operation will be coerced to the same type. Note
+/// that we don't coerce the decimal operands in analysis phase, but do it in the
+/// execution phase because this is not idempotent.
 fn coercion_decimal_mathematics_type(
+    mathematics_op: &Operator,
+    left_decimal_type: &DataType,
+    right_decimal_type: &DataType,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (left_decimal_type, right_decimal_type) {
+        // The promotion rule from spark
+        // https://github.com/apache/spark/blob/c20af535803a7250fef047c2bf0fe30be242369d/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/DecimalPrecision.scala#L35
+        (Decimal128(_, _), Decimal128(_, _)) => match mathematics_op {
+            Operator::Plus | Operator::Minus => decimal_op_mathematics_type(
+                mathematics_op,
+                left_decimal_type,
+                right_decimal_type,
+            ),
+            Operator::Multiply | Operator::Divide | Operator::Modulo => {
+                get_wider_decimal_type(left_decimal_type, right_decimal_type)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Returns the output type of applying mathematics operations on decimal types.
+/// The rule is from spark. Note that this is different to the coerced type applied
+/// to two sides of the arithmetic operation.
+fn decimal_op_mathematics_type(
     mathematics_op: &Operator,
     left_decimal_type: &DataType,
     right_decimal_type: &DataType,
@@ -579,6 +668,36 @@ fn both_numeric_or_null_and_numeric(lhs_type: &DataType, rhs_type: &DataType) ->
             is_numeric(lhs_type) && is_numeric(value_type)
         }
         _ => is_numeric(lhs_type) && is_numeric(rhs_type),
+    }
+}
+
+/// Determine if at least of one of lhs and rhs is decimal, and the other must be NULL or decimal
+fn both_decimal(lhs_type: &DataType, rhs_type: &DataType) -> bool {
+    match (lhs_type, rhs_type) {
+        (_, DataType::Null) => is_decimal(lhs_type),
+        (DataType::Null, _) => is_decimal(rhs_type),
+        (DataType::Decimal128(_, _), DataType::Decimal128(_, _)) => true,
+        (DataType::Dictionary(_, value_type), _) => {
+            is_decimal(value_type) && is_decimal(rhs_type)
+        }
+        (_, DataType::Dictionary(_, value_type)) => {
+            is_decimal(lhs_type) && is_decimal(value_type)
+        }
+        _ => false,
+    }
+}
+
+/// Determine if at least of one of lhs and rhs is decimal
+pub fn any_decimal(lhs_type: &DataType, rhs_type: &DataType) -> bool {
+    match (lhs_type, rhs_type) {
+        (DataType::Dictionary(_, value_type), _) => {
+            is_decimal(value_type) || is_decimal(rhs_type)
+        }
+        (_, DataType::Dictionary(_, value_type)) => {
+            is_decimal(lhs_type) || is_decimal(value_type)
+        }
+        (_, _) => is_decimal(lhs_type) || is_decimal(rhs_type),
+        _ => false,
     }
 }
 

@@ -1031,6 +1031,7 @@ impl BinaryExpr {
         scalar: ScalarValue,
     ) -> Result<Option<Result<ArrayRef>>> {
         let bool_type = &DataType::Boolean;
+        let result_type = &self.data_type;
         let scalar_result = match &self.op {
             Operator::Lt => {
                 binary_array_op_dyn_scalar!(array, scalar, lt, bool_type)
