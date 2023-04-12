@@ -64,7 +64,7 @@ pub fn add_sort_above(
 ) -> Result<()> {
     // If the ordering requirement is already satisfied, do not add a sort.
     if !ordering_satisfy(node.output_ordering(), Some(&sort_expr), || {
-        node.equivalence_properties()
+        node.ordering_equivalence_properties()
     }) {
         let new_sort = SortExec::new(sort_expr, node.clone());
 

@@ -19,8 +19,10 @@ use crate::expressions::Column;
 
 use arrow::datatypes::SchemaRef;
 
+use arrow_schema::SortOptions;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::hash::Hash;
 
 /// Equivalence Properties is a vec of EquivalentClass.
 #[derive(Debug, Clone)]
@@ -175,6 +177,235 @@ impl EquivalentClass {
     }
 }
 
+/// Equivalence Properties is a vec of EquivalentClass.
+#[derive(Debug, Clone)]
+pub struct OrderingEquivalenceProperties {
+    classes: Vec<OrderingEquivalentClass>,
+    schema: SchemaRef,
+}
+
+impl OrderingEquivalenceProperties {
+    pub fn new(schema: SchemaRef) -> Self {
+        OrderingEquivalenceProperties {
+            classes: vec![],
+            schema,
+        }
+    }
+
+    pub fn classes(&self) -> &[OrderingEquivalentClass] {
+        &self.classes
+    }
+
+    pub fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+
+    pub fn extend<I: IntoIterator<Item = OrderingEquivalentClass>>(&mut self, iter: I) {
+        for ec in iter {
+            for column in ec.iter() {
+                assert_eq!(
+                    column.col.name(),
+                    self.schema.fields()[column.col.index()].name()
+                );
+            }
+            self.classes.push(ec)
+        }
+    }
+
+    /// Add new equal conditions into the EquivalenceProperties, the new equal conditions are usually comming from the
+    /// equality predicates in Join or Filter
+    pub fn add_equal_conditions(
+        &mut self,
+        new_conditions: (&OrderedColumn, &OrderedColumn),
+    ) {
+        assert_eq!(
+            new_conditions.0.col.name(),
+            self.schema.fields()[new_conditions.0.col.index()].name()
+        );
+        assert_eq!(
+            new_conditions.1.col.name(),
+            self.schema.fields()[new_conditions.1.col.index()].name()
+        );
+        let mut idx1: Option<usize> = None;
+        let mut idx2: Option<usize> = None;
+        for (idx, class) in self.classes.iter_mut().enumerate() {
+            let contains_first = class.contains(new_conditions.0);
+            let contains_second = class.contains(new_conditions.1);
+            match (contains_first, contains_second) {
+                (true, false) => {
+                    class.insert(new_conditions.1.clone());
+                    idx1 = Some(idx);
+                }
+                (false, true) => {
+                    class.insert(new_conditions.0.clone());
+                    idx2 = Some(idx);
+                }
+                (true, true) => {
+                    idx1 = Some(idx);
+                    idx2 = Some(idx);
+                    break;
+                }
+                (false, false) => {}
+            }
+        }
+
+        match (idx1, idx2) {
+            (Some(idx_1), Some(idx_2)) if idx_1 != idx_2 => {
+                // need to merge the two existing EquivalentClasses
+                let second_eq_class = self.classes.get(idx_2).unwrap().clone();
+                let first_eq_class = self.classes.get_mut(idx_1).unwrap();
+                for prop in second_eq_class.iter() {
+                    if !first_eq_class.contains(prop) {
+                        first_eq_class.insert(prop.clone());
+                    }
+                }
+                self.classes.remove(idx_2);
+            }
+            (None, None) => {
+                // adding new pairs
+                self.classes.push(OrderingEquivalentClass::new(
+                    new_conditions.0.clone(),
+                    vec![new_conditions.1.clone()],
+                ));
+            }
+            _ => {}
+        }
+    }
+}
+
+impl From<Column> for OrderedColumn {
+    fn from(value: Column) -> Self {
+        OrderedColumn {
+            col: value,
+            options: None,
+        }
+    }
+}
+
+impl From<EquivalentClass> for OrderingEquivalentClass {
+    fn from(value: EquivalentClass) -> Self {
+        OrderingEquivalentClass {
+            head: value.head.into(),
+            others: value
+                .others
+                .into_iter()
+                .map(|elem| elem.into())
+                .collect::<HashSet<OrderedColumn>>(),
+        }
+    }
+}
+
+impl From<EquivalenceProperties> for OrderingEquivalenceProperties {
+    fn from(value: EquivalenceProperties) -> Self {
+        OrderingEquivalenceProperties {
+            classes: value
+                .classes
+                .into_iter()
+                .map(|elem| elem.into())
+                .collect::<Vec<_>>(),
+            schema: value.schema,
+        }
+    }
+}
+
+#[derive(Clone, Hash, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+/// Remove below struct once, SortOptions support Hashing
+pub struct SortOptions2 {
+    /// Whether to sort in descending order
+    pub descending: bool,
+    /// Whether to sort nulls first
+    pub nulls_first: bool,
+}
+
+impl From<SortOptions> for SortOptions2 {
+    fn from(value: SortOptions) -> Self {
+        SortOptions2 {
+            descending: value.descending,
+            nulls_first: value.nulls_first,
+        }
+    }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+pub struct OrderedColumn {
+    pub col: Column,
+    pub options: Option<SortOptions2>,
+}
+/// Equivalent Class is a set of Columns that are known to have the same value in all tuples in a relation
+/// Equivalent Class is generated by equality predicates, typically equijoin conditions and equality conditions in filters.
+#[derive(Debug, Clone)]
+pub struct OrderingEquivalentClass {
+    /// First element in the EquivalentClass
+    head: OrderedColumn,
+    /// Other equal columns
+    others: HashSet<OrderedColumn>,
+}
+
+impl OrderingEquivalentClass {
+    pub fn new(head: OrderedColumn, others: Vec<OrderedColumn>) -> Self {
+        OrderingEquivalentClass {
+            head,
+            others: HashSet::from_iter(others),
+        }
+    }
+
+    pub fn head(&self) -> &OrderedColumn {
+        &self.head
+    }
+
+    pub fn others(&self) -> &HashSet<OrderedColumn> {
+        &self.others
+    }
+
+    pub fn contains(&self, col: &OrderedColumn) -> bool {
+        let mut contain = false;
+        for elem in &self.others {
+            if elem.col == col.col {
+                contain = match (&elem.options, &col.options) {
+                    (Some(options_lhs), Some(options_rhs)) => options_lhs == options_rhs,
+                    _ => true,
+                };
+                if contain {
+                    break;
+                }
+            }
+        }
+        self.head.col == col.col || contain
+    }
+
+    pub fn insert(&mut self, col: OrderedColumn) -> bool {
+        self.others.insert(col)
+    }
+
+    pub fn remove(&mut self, col: &OrderedColumn) -> bool {
+        let removed = self.others.remove(col);
+        if !removed && *col == self.head {
+            let one_col = self.others.iter().next().cloned();
+            if let Some(col) = one_col {
+                let removed = self.others.remove(&col);
+                self.head = col;
+                removed
+            } else {
+                false
+            }
+        } else {
+            true
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &'_ OrderedColumn> {
+        std::iter::once(&self.head).chain(self.others.iter())
+    }
+
+    pub fn len(&self) -> usize {
+        self.others.len() + 1
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 /// Project Equivalence Properties.
 /// 1) Add Alias, Alias can introduce additional equivalence properties,
 ///    For example:  Projection(a, a as a1, a as a2)
@@ -207,6 +438,74 @@ pub fn project_equivalence_properties(
         for column in class.iter() {
             if column.index() >= schema.fields().len()
                 || schema.fields()[column.index()].name() != column.name()
+            {
+                columns_to_remove.push(column.clone());
+            }
+        }
+        for column in columns_to_remove {
+            class.remove(&column);
+        }
+    }
+    ec_classes.retain(|props| props.len() > 1);
+    output_eq.extend(ec_classes);
+}
+
+/// Project Equivalence Properties.
+/// 1) Add Alias, Alias can introduce additional equivalence properties,
+///    For example:  Projection(a, a as a1, a as a2)
+/// 2) Truncate the EquivalentClasses that are not in the output schema
+pub fn project_equivalence_properties_ordered(
+    input_eq: OrderingEquivalenceProperties,
+    alias_map: &HashMap<Column, Vec<Column>>,
+    output_eq: &mut OrderingEquivalenceProperties,
+) {
+    let mut ec_classes = input_eq.classes().to_vec();
+    for (column, columns) in alias_map {
+        let mut find_match = false;
+        for class in ec_classes.iter_mut() {
+            let mut matching_entry = None;
+            if class.head.col.eq(column) {
+                matching_entry = Some(class.head.clone());
+            }
+            if matching_entry.is_none() {
+                for elem in &class.others {
+                    if elem.col.eq(column) {
+                        matching_entry = Some(elem.clone());
+                        break;
+                    }
+                }
+            }
+            if let Some(elem) = matching_entry {
+                // Matching entry found
+                for col in columns {
+                    let ordered_column = OrderedColumn {
+                        col: col.clone(),
+                        options: elem.options,
+                    };
+                    class.insert(ordered_column);
+                }
+                find_match = true;
+                break;
+            }
+        }
+        if !find_match {
+            let new_columns = columns
+                .iter()
+                .map(|elem| elem.clone().into())
+                .collect::<Vec<_>>();
+            ec_classes.push(OrderingEquivalentClass::new(
+                column.clone().into(),
+                new_columns,
+            ));
+        }
+    }
+
+    let schema = output_eq.schema();
+    for class in ec_classes.iter_mut() {
+        let mut columns_to_remove = vec![];
+        for column in class.iter() {
+            if column.col.index() >= schema.fields().len()
+                || schema.fields()[column.col.index()].name() != column.col.name()
             {
                 columns_to_remove.push(column.clone());
             }

@@ -188,8 +188,8 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     }
 
     /// Get the EquivalenceProperties within the plan
-    fn ordering_equivalence_properties(&self) -> EquivalenceProperties {
-        self.equivalence_properties()
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        self.equivalence_properties().into()
     }
 
     /// Get a list of child execution plans that provide the input for this plan. The returned list
@@ -672,6 +672,7 @@ pub mod windows;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties;
 pub use datafusion_physical_expr::{
     expressions, functions, hash_utils, type_coercion, udf,
 };

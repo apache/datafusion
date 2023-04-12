@@ -48,6 +48,9 @@ use std::task::{Context, Poll};
 
 use crate::physical_plan::windows::calc_requirements;
 use datafusion_common::utils::evaluate_partition_ranges;
+use datafusion_physical_expr::equivalence::{
+    OrderedColumn, OrderingEquivalenceProperties, OrderingEquivalentClass, SortOptions2,
+};
 use datafusion_physical_expr::expressions::{Column, RowNumber};
 use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PartitionBatchState, PartitionBatches, PartitionKey,
@@ -58,6 +61,7 @@ use datafusion_physical_expr::{
 };
 use indexmap::IndexMap;
 use log::debug;
+
 /// Window execution plan
 #[derive(Debug)]
 pub struct BoundedWindowAggExec {
@@ -184,11 +188,15 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     /// Get the EquivalenceProperties within the plan
-    fn ordering_equivalence_properties(&self) -> EquivalenceProperties {
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         // We need to update schema. Hence we do not use input.ordering_equivalence_properties() directly.
-        let mut res = EquivalenceProperties::new(self.schema());
+        let mut res = OrderingEquivalenceProperties::new(self.schema());
         let eq_properties = self.equivalence_properties();
-        let eq_classes = eq_properties.classes().to_vec();
+        let eq_classes = eq_properties
+            .classes()
+            .iter()
+            .map(|elem| (*elem).clone().into())
+            .collect::<Vec<OrderingEquivalentClass>>();
         res.extend(eq_classes);
         let mut eq_classes = vec![];
         let out_ordering = self.output_ordering().unwrap_or(&[]);
@@ -203,8 +211,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
                             .get_built_in_func_expr()
                             .as_any()
                             .is::<RowNumber>()
-                            // ASCENDING
-                            && !first.options.descending
                         {
                             let tmp = self
                                 .schema
@@ -212,7 +218,18 @@ impl ExecutionPlan for BoundedWindowAggExec {
                             if let Some((idx, elem)) = tmp {
                                 let new_col = Column::new(elem.name(), idx);
                                 columns.push(new_col.clone());
-                                res.add_equal_conditions((column, &new_col));
+                                let lhs = OrderedColumn {
+                                    col: column.clone(),
+                                    options: Some(first.options.into()),
+                                };
+                                let rhs = OrderedColumn {
+                                    col: new_col,
+                                    options: Some(SortOptions2 {
+                                        descending: false,
+                                        nulls_first: false,
+                                    }), // ASC, NULLS LAST
+                                };
+                                res.add_equal_conditions((&lhs, &rhs));
                             }
                         }
                     }

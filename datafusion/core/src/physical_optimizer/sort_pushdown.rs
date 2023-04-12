@@ -124,7 +124,7 @@ pub(crate) fn pushdown_sorts(
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         let mut new_plan = plan.clone();
         if !ordering_satisfy_requirement(plan.output_ordering(), parent_required, || {
-            plan.equivalence_properties()
+            plan.ordering_equivalence_properties()
         }) {
             // If the current plan is a SortExec, modify it to satisfy parent requirements:
             let parent_required_expr = PhysicalSortRequirement::to_sort_exprs(
@@ -154,7 +154,7 @@ pub(crate) fn pushdown_sorts(
     } else {
         // Executors other than SortExec
         if ordering_satisfy_requirement(plan.output_ordering(), parent_required, || {
-            plan.equivalence_properties()
+            plan.ordering_equivalence_properties()
         }) {
             // Satisfies parent requirements, immediately return.
             return Ok(Transformed::Yes(SortPushDown {
@@ -279,12 +279,12 @@ fn determine_children_requirement(
     child_plan: Arc<dyn ExecutionPlan>,
 ) -> RequirementsCompatibility {
     if requirements_compatible(request_child, parent_required, || {
-        child_plan.equivalence_properties()
+        child_plan.ordering_equivalence_properties()
     }) {
         // request child requirements are more specific, no need to push down the parent requirements
         RequirementsCompatibility::Satisfy
     } else if requirements_compatible(parent_required, request_child, || {
-        child_plan.equivalence_properties()
+        child_plan.ordering_equivalence_properties()
     }) {
         // parent requirements are more specific, adjust the request child requirements and push down the new requirements
         let adjusted = parent_required.map(|r| r.to_vec());
