@@ -793,9 +793,9 @@ fn update_filter_expr_interval(
     let unbounded = IntervalBound::make_unbounded(value.get_datatype())?;
     // Update the interval with lower and upper bounds based on the sort option:
     let interval = if sorted_expr.origin_sorted_expr().options.descending {
-        Interval::new(unbounded, IntervalBound::Closed(value))
+        Interval::new(unbounded, IntervalBound::new(value, false))
     } else {
-        Interval::new(IntervalBound::Closed(value), unbounded)
+        Interval::new(IntervalBound::new(value, false), unbounded)
     };
     // Set the calculated interval for the sorted filter expression:
     sorted_expr.set_interval(interval);
@@ -832,9 +832,9 @@ fn determine_prune_length(
 
     // Get the lower or upper interval based on the sort direction
     let target = if origin_sorted_expr.options.descending {
-        interval.upper.get_value().clone()
+        interval.upper.value.clone()
     } else {
-        interval.lower.get_value().clone()
+        interval.lower.value.clone()
     };
 
     // Perform binary search on the array to determine the length of the record batch to be pruned

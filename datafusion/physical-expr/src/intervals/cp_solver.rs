@@ -173,8 +173,8 @@ impl ExprIntervalGraphNode {
         if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
             let value = literal.value();
             let interval = Interval::new(
-                IntervalBound::Closed(value.clone()),
-                IntervalBound::Closed(value.clone()),
+                IntervalBound::new(value.clone(), false),
+                IntervalBound::new(value.clone(), false),
             );
             ExprIntervalGraphNode::new_with_interval(expr, interval)
         } else {
@@ -245,10 +245,10 @@ fn comparison_operator_target(datatype: &DataType, op: &Operator) -> Result<Inte
     let unbounded = IntervalBound::make_unbounded(datatype)?;
     let zero = ScalarValue::new_zero(datatype)?;
     Ok(match *op {
-        Operator::GtEq => Interval::new(IntervalBound::Closed(zero), unbounded),
-        Operator::Gt => Interval::new(IntervalBound::Open(zero), unbounded),
-        Operator::LtEq => Interval::new(unbounded, IntervalBound::Closed(zero)),
-        Operator::Lt => Interval::new(unbounded, IntervalBound::Open(zero)),
+        Operator::GtEq => Interval::new(IntervalBound::new(zero, false), unbounded),
+        Operator::Gt => Interval::new(IntervalBound::new(zero, true), unbounded),
+        Operator::LtEq => Interval::new(unbounded, IntervalBound::new(zero, false)),
+        Operator::Lt => Interval::new(unbounded, IntervalBound::new(zero, true)),
         _ => unreachable!(),
     })
 }
@@ -428,8 +428,8 @@ impl ExprIntervalGraph {
     ///  let intervals = vec![(
     ///     left_index,
     ///     Interval::new(
-    ///         IntervalBound::Open(ScalarValue::Int32(Some(10))),
-    ///         IntervalBound::Open(ScalarValue::Int32(Some(20))),
+    ///         IntervalBound::new(ScalarValue::Int32(Some(10)), true),
+    ///         IntervalBound::new(ScalarValue::Int32(Some(20)), true),
     ///     ),
     ///     )];
     ///  // Evaluate bounds for the composite expression:
@@ -437,8 +437,8 @@ impl ExprIntervalGraph {
     ///  assert_eq!(
     ///     graph.evaluate_bounds().unwrap(),
     ///     &Interval::new(
-    ///         IntervalBound::Open(ScalarValue::Int32(Some(20))),
-    ///         IntervalBound::Open(ScalarValue::Int32(Some(30))),
+    ///         IntervalBound::new(ScalarValue::Int32(Some(20)), true),
+    ///         IntervalBound::new(ScalarValue::Int32(Some(30)), true),
     ///     )
     ///  )
     ///
@@ -503,20 +503,15 @@ impl ExprIntervalGraph {
         leaf_bounds: &mut [(usize, Interval)],
     ) -> Result<PropagationResult> {
         self.assign_intervals(leaf_bounds);
-        match self.evaluate_bounds()? {
-            Interval {
-                lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                upper: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-            } => Ok(PropagationResult::Infeasible),
-            Interval {
-                lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-            } => {
-                let result = self.propagate_constraints();
-                self.update_intervals(leaf_bounds);
-                result
-            }
-            _ => Ok(PropagationResult::CannotPropagate),
+        let bounds = self.evaluate_bounds()?;
+        if bounds == &Interval::CERTAINLY_FALSE {
+            Ok(PropagationResult::Infeasible)
+        } else if bounds == &Interval::UNCERTAIN {
+            let result = self.propagate_constraints();
+            self.update_intervals(leaf_bounds);
+            result
+        } else {
+            Ok(PropagationResult::CannotPropagate)
         }
     }
 }
@@ -562,15 +557,15 @@ mod tests {
             (
                 exprs_with_interval.0.clone(),
                 Interval::new(
-                    IntervalBound::Open(ScalarValue::Int32(left_interval.0)),
-                    IntervalBound::Open(ScalarValue::Int32(left_interval.1)),
+                    IntervalBound::new(ScalarValue::Int32(left_interval.0), false),
+                    IntervalBound::new(ScalarValue::Int32(left_interval.1), false),
                 ),
             ),
             (
                 exprs_with_interval.1.clone(),
                 Interval::new(
-                    IntervalBound::Open(ScalarValue::Int32(right_interval.0)),
-                    IntervalBound::Open(ScalarValue::Int32(right_interval.1)),
+                    IntervalBound::new(ScalarValue::Int32(right_interval.0), false),
+                    IntervalBound::new(ScalarValue::Int32(right_interval.1), false),
                 ),
             ),
         ];
@@ -578,15 +573,15 @@ mod tests {
             (
                 exprs_with_interval.0.clone(),
                 Interval::new(
-                    IntervalBound::Open(ScalarValue::Int32(left_waited.0)),
-                    IntervalBound::Open(ScalarValue::Int32(left_waited.1)),
+                    IntervalBound::new(ScalarValue::Int32(left_waited.0), false),
+                    IntervalBound::new(ScalarValue::Int32(left_waited.1), false),
                 ),
             ),
             (
                 exprs_with_interval.1.clone(),
                 Interval::new(
-                    IntervalBound::Open(ScalarValue::Int32(right_waited.0)),
-                    IntervalBound::Open(ScalarValue::Int32(right_waited.1)),
+                    IntervalBound::new(ScalarValue::Int32(right_waited.0), false),
+                    IntervalBound::new(ScalarValue::Int32(right_waited.1), false),
                 ),
             ),
         ];
@@ -607,10 +602,14 @@ mod tests {
 
         let exp_result = graph.update_ranges(&mut col_stat_nodes[..])?;
         assert_eq!(exp_result, result);
-        col_stat_nodes
-            .iter()
-            .zip(expected_nodes.iter())
-            .for_each(|((_, res), (_, expected))| assert_eq!(res, expected));
+        col_stat_nodes.iter().zip(expected_nodes.iter()).for_each(
+            |((_, res), (_, expected))| {
+                // NOTE: These randomized tests only check the correnctness of
+                //       endpoint values, not open/closedness.
+                assert_eq!(res.lower.value, expected.lower.value);
+                assert_eq!(res.upper.value, expected.upper.value);
+            },
+        );
         Ok(())
     }
 
